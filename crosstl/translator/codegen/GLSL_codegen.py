@@ -41128,6 +41128,20 @@ complex64_t crossgl_complex64_mod_assign(
             if numeric_trait_call is not None:
                 return numeric_trait_call
 
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                # A buffer parameter or reinterpreted view is rewritten as an
+                # offset into the buffer it reads, so its length is computed
+                # from that buffer's length, not one element's.
+                storage_binding = self.glsl_storage_pointer_binding(
+                    func_expr.object, self.glsl_storage_pointer_aliases()
+                )
+                if storage_binding is not None:
+                    return self.structured_buffer_length_expression(func_expr.object)
+
             func_name = None
             if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
@@ -41191,23 +41205,6 @@ complex64_t crossgl_complex64_mod_assign(
                     # One buffer of an array of storage blocks holds its elements in a member.
                     buffer = self.generate_expression(func_expr.object)
                     return f"{buffer}.{instance_member}.length()"
-
-            if (
-                isinstance(func_expr, MemberAccessNode)
-                and func_expr.member == "length"
-                and not expr.args
-            ):
-                # A buffer parameter is rewritten as an offset into the buffer it
-                # reads, so its length is that buffer's, not one element's.
-                storage_binding = self.glsl_storage_pointer_binding(
-                    func_expr.object, self.glsl_storage_pointer_aliases()
-                )
-                if (
-                    storage_binding is not None
-                    and "pointer_reinterpretation" not in storage_binding
-                    and "byte_offset" not in storage_binding
-                ):
-                    return self.structured_buffer_length_expression(func_expr.object)
 
             get_dimensions = self.glsl_structured_buffer_get_dimensions(
                 func_expr, expr.args
@@ -45226,15 +45223,81 @@ complex64_t crossgl_complex64_mod_assign(
             rendered_offset = self.glsl_workgroup_pointer_offset_expression(
                 storage_binding
             )
+            if (
+                "pointer_reinterpretation" in storage_binding
+                or "byte_offset" in storage_binding
+            ):
+                count_expr = self.glsl_reinterpreted_storage_length_expression(
+                    root,
+                    storage_binding,
+                    source_location=getattr(buffer_arg, "source_location", None),
+                )
+            else:
+                count_expr = f"{root}.length()"
             if rendered_offset in {"0", "0u"}:
-                return f"{root}.length()"
-            return f"({root}.length() - int({rendered_offset}))"
+                return count_expr
+            return f"({count_expr} - int({rendered_offset}))"
         buffer = self.generate_expression(buffer_arg)
         buffer_name = self.expression_name(buffer_arg)
         instance_member = self.structured_buffer_instance_members.get(buffer_name)
         if instance_member:
             return f"{buffer}.{instance_member}.length()"
         return f"{buffer}.length()"
+
+    def glsl_reinterpreted_storage_length_expression(
+        self, root, storage_binding, *, source_location=None
+    ):
+        """Return the GLSL ``int`` element count for a reinterpreted or byte-offset view."""
+        reinterpretation = storage_binding.get("pointer_reinterpretation")
+        byte_offset = str(storage_binding.get("byte_offset", "0"))
+        if reinterpretation is None:
+            if byte_offset in {"0", "0u"}:
+                return f"{root}.length()"
+            raise OpenGLStoragePointerError(
+                "OpenGL storage pointer length() cannot be computed for a "
+                "byte-offset view without element layout",
+                reason="storage-view-length-byte-offset-unsupported",
+                source_location=source_location,
+            )
+
+        source_layout = reinterpretation.get("source_layout")
+        target_layout = reinterpretation.get("target_layout")
+        target_width = reinterpretation.get("target_width", 1)
+        if (
+            source_layout is None
+            or target_layout is None
+            or not isinstance(target_width, int)
+            or target_width < 1
+            or source_layout.byte_width < 1
+            or target_layout.byte_width < 1
+        ):
+            raise OpenGLStoragePointerError(
+                "OpenGL storage pointer length() requires known source and "
+                "target element layouts",
+                reason="storage-view-length-layout-unknown",
+                source_location=source_location,
+            )
+
+        source_elem_size = source_layout.byte_width
+        view_elem_size = target_layout.byte_width * target_width
+        if byte_offset in {"0", "0u"}:
+            if source_elem_size == view_elem_size:
+                return f"{root}.length()"
+            if source_elem_size % view_elem_size == 0:
+                return f"({root}.length() * {source_elem_size // view_elem_size})"
+            if view_elem_size % source_elem_size == 0:
+                return f"({root}.length() / {view_elem_size // source_elem_size})"
+            return f"(({root}.length() * {source_elem_size}) / {view_elem_size})"
+
+        total_bytes = (
+            f"{root}.length()"
+            if source_elem_size == 1
+            else f"({root}.length() * {source_elem_size})"
+        )
+        remaining_bytes = f"({total_bytes} - int({byte_offset}))"
+        if view_elem_size == 1:
+            return remaining_bytes
+        return f"({remaining_bytes} / {view_elem_size})"
 
     def structured_buffer_counter_reference(self, buffer_arg):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
