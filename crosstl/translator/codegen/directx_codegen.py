@@ -24078,16 +24078,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         return None
 
+    def hlsl_alias_target_type_name(self, type_name):
+        """Follow source typedefs to the spelling of the type they alias."""
+
+        aliases = getattr(self, "hlsl_type_aliases", {})
+        seen = set()
+        while type_name in aliases and type_name not in seen:
+            seen.add(type_name)
+            type_name = self.type_name_string(aliases[type_name])
+        return type_name
+
     def hlsl_pointer_reinterpret_binding(self, expression, binding):
         target_type = getattr(expression.target_type, "pointee_type", None)
         target_type_name = self.type_name_string(target_type)
         mapped_target_type = self.map_type(target_type_name)
-        view_type_name = (
+        # A pointer declared through a typedef, such as an array of
+        # ``const device float16_t*``, views the typedef's scalar.
+        view_type_name = self.hlsl_alias_target_type_name(
             binding.get("view_element_type")
             or binding.get("source_element_type")
             or binding.get("element_type")
         )
-        source_type_name = binding.get("source_element_type") or view_type_name
+        source_type_name = (
+            self.hlsl_alias_target_type_name(binding.get("source_element_type"))
+            or view_type_name
+        )
         # A one-scalar wrapper record backs the view with its member's words.
         view_layout, _ = reinterpret_source_layout(view_type_name, self.structs_by_name)
         source_layout, source_member = reinterpret_source_layout(
