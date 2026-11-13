@@ -4334,6 +4334,22 @@ class WGSLCodeGen(
             return None
         return "\n\n".join(self._half_conversion_helpers.values())
 
+    def half_conversion_float_operand(self, argument):
+        """``argument`` of ``f32tof16`` as an ``f32`` value or vector, and its width (``None`` for a scalar).
+
+        HLSL converts an integer operand to ``float`` before it packs it, as for any ``float`` parameter; WGSL has no
+        implicit conversion, so ``vec2<f32>(k, 0.0)`` with an ``i32`` ``k`` does not compile.
+        """
+        arg_type = self.expression_type(argument)
+        vector = self.vector_shape(arg_type)
+        if vector is None:
+            return self.generate_expression_for_target(argument, "float"), None
+        elem_type, width = vector
+        rendered = self.generate_expression(argument)
+        if elem_type != "f32":
+            rendered = f"vec{width}<f32>({rendered})"
+        return rendered, width
+
     def generate_f32tof16_call(self, node):
         """HLSL ``f32tof16`` as WGSL ``pack2x16float``."""
         if len(node.arguments) != 1:
@@ -4341,13 +4357,9 @@ class WGSLCodeGen(
                 f"WGSL target supports f32tof16() with exactly 1 argument; "
                 f"got {len(node.arguments)}"
             )
-        argument = node.arguments[0]
-        arg_type = self.expression_type(argument)
-        vector = self.vector_shape(arg_type)
-        if vector is None:
-            arg_expr = self.generate_expression(argument)
+        arg_expr, width = self.half_conversion_float_operand(node.arguments[0])
+        if width is None:
             return f"pack2x16float(vec2<f32>({arg_expr}, 0.0))"
-        _elem_type, width = vector
         components = ["x", "y", "z", "w"][:width]
         helper_name = f"crosstl_pack2x16float_vec{width}"
         if helper_name not in self._half_conversion_helpers:
@@ -4357,7 +4369,6 @@ class WGSLCodeGen(
                 f"    return vec{width}<u32>({', '.join(elements)});\n"
                 f"}}"
             )
-        arg_expr = self.generate_expression(argument)
         return f"{helper_name}({arg_expr})"
 
     def generate_f16tof32_call(self, node):
@@ -4374,15 +4385,12 @@ class WGSLCodeGen(
             and not self.is_user_function_name("f32tof16")
             and len(argument.arguments) == 1
         ):
-            inner = argument.arguments[0]
-            inner_type = self.expression_type(inner)
-            vector = self.vector_shape(inner_type)
-            if vector is None:
-                inner_expr = self.generate_expression(inner)
+            inner_expr, width = self.half_conversion_float_operand(
+                argument.arguments[0]
+            )
+            if width is None:
                 return f"unpack2x16float(pack2x16float(vec2<f32>({inner_expr}, 0.0))).x"
-            _elem_type, width = vector
             if width == 2:
-                inner_expr = self.generate_expression(inner)
                 return f"unpack2x16float(pack2x16float({inner_expr}))"
             components = ["x", "y", "z", "w"][:width]
             helper_name = f"crosstl_unpack_pack2x16float_vec{width}"
@@ -4396,7 +4404,6 @@ class WGSLCodeGen(
                     f"    return vec{width}<f32>({', '.join(elements)});\n"
                     f"}}"
                 )
-            inner_expr = self.generate_expression(inner)
             return f"{helper_name}({inner_expr})"
 
         arg_type = self.expression_type(argument)

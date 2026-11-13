@@ -5914,6 +5914,38 @@ def test_wgsl_codegen_lowers_f32tof16_and_f16tof32(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+
+def test_wgsl_codegen_half_conversion_converts_integer_operands(tmp_path):
+    # f32tof16 takes a float, so HLSL converts an integer operand first; WGSL needs the conversion written out.
+    shader = """
+    shader TestHalfConversionIntegers {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* iin;
+            buffer ivec3* i3in;
+            buffer uint* u_out;
+            buffer uvec3* u3_out;
+            buffer float* f_out;
+            void main() {
+                int k = iin[0];
+                u_out[0] = f32tof16(k) + f32tof16(2);
+                u3_out[0] = f32tof16(i3in[0]);
+                f_out[0] = f16tof32(f32tof16(k)) + f16tof32(k);
+            }
+        }
+    }
+    """
+    source = tmp_path / "half_conv_int.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "pack2x16float(vec2<f32>(f32(k), 0.0))" in generated
+    assert "pack2x16float(vec2<f32>(f32(2), 0.0))" in generated
+    assert "crosstl_pack2x16float_vec3(vec3<f32>(i3in[0]))" in generated
+    assert "unpack2x16float(pack2x16float(vec2<f32>(f32(k), 0.0))).x" in generated
+    assert "unpack2x16float(u32(k)).x" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
 @pytest.mark.parametrize("func_name", ["f32tof16", "f16tof32"])
 def test_wgsl_codegen_half_conversion_argument_count_errors(func_name):
     shader_zero = f"""
