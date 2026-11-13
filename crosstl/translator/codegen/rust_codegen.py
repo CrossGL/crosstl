@@ -1451,9 +1451,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
             self.required_mesh_helpers.add("dispatch_mesh")
-                return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
-                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
-            return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args)}) }}"
+            if len(args) == 4:
+                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args)}) }}"
+            return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
         raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
 
     def generate_required_rust_mesh_helpers(self):
@@ -1468,6 +1468,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 "}\n\n"
             )
         if "dispatch_mesh" in self.required_mesh_helpers:
+            code += (
+                "pub fn _crossgl_dispatch_mesh_without_payload("
+                "x: u32, y: u32, z: u32) {
+                "    let _ = (x, y, z);
+                "}
+            )
+        return code
 
     def rust_stage_attribute_arguments(self, func, attribute_name):
         """Return arguments for a Rust-relevant stage control attribute."""
