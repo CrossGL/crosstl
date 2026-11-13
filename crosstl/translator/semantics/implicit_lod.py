@@ -73,6 +73,10 @@ EXPLICIT_LOD_TARGETS = frozenset(
 
 # Targets whose compute-stage samples are rewritten to the base level, without the base-level stages' refusals.
 _COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl"})
+# Targets whose compute-stage samples are rewritten to the base level, with refusals like base-level stages.
+_COMPUTE_REFUSE_TARGETS = frozenset({"wgsl", "slang"})
+# All targets that rewrite compute-stage samples to the base level.
+_COMPUTE_REWRITE_TARGETS = _COMPUTE_BASE_LEVEL_TARGETS | _COMPUTE_REFUSE_TARGETS
 _COMPUTE_STAGES = frozenset({"compute"})
 
 # Targets that print CrossGL itself and keep the program unchanged.
@@ -450,7 +454,7 @@ def legalize_implicit_lod(program, target) -> None:
     reach = _StageReach(program, graph)
     rewrite = target in EXPLICIT_LOD_TARGETS
     rewritten_stages = BASE_LEVEL_STAGES
-    if target in _COMPUTE_BASE_LEVEL_TARGETS:
+    if target in _COMPUTE_BASE_LEVEL_TARGETS or target in _COMPUTE_REFUSE_TARGETS:
         rewritten_stages = BASE_LEVEL_STAGES | _COMPUTE_STAGES
 
     clone_groups = set()
@@ -476,6 +480,10 @@ def legalize_implicit_lod(program, target) -> None:
         stage_node = graph.stage_of(index)
         # Base-level stages refuse derivative-dependent operations; a compute stage only has its samples rewritten.
         refusing = reach.stages[index] & BASE_LEVEL_STAGES
+        # For targets where compute stages also refuse derivative-dependent operations, treat them like base-level.
+        if target in _COMPUTE_REFUSE_TARGETS:
+            refusing = refusing | (reach.stages[index] & _COMPUTE_STAGES)
+
         stage = sorted(refusing or reach.stages[index] & rewritten_stages)[0]
         refuse = bool(refusing)
         if function.name in clone_names:
