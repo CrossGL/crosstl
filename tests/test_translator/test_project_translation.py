@@ -44,6 +44,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.project.host_reflection import (
     REFLECTION_INCOMPLETE_OUTPUT,
     REFLECTION_TOOL_UNAVAILABLE,
@@ -197,11 +201,14 @@ def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
     dxc = shutil.which("dxc")
     if dxc:
         output_path = tmp_path / "shader.dxil"
+        profile = dxc_profile_for_source("cs_6_0", hlsl_code)
+        compiler_arguments = dxc_compiler_arguments_for_source(hlsl_code)
         compile_result = subprocess.run(
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                profile,
+                *compiler_arguments,
                 "-E",
                 "CSMain",
                 str(shader_path),
@@ -1534,7 +1541,8 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert builtin["valueProvenance"]["kind"] == "source-default"
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
-        "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
+        "void foo(in float4 p[arraySize], VertexInput input, "
+        "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
     # The project gives the specialization constants their default values, which size the input members.

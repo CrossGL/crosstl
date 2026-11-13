@@ -13,6 +13,7 @@ reports from several runners can be merged first.
 
 from __future__ import annotations
 
+from . import spellings
 from .model import Score
 from .semantic import BORROWED
 
@@ -22,8 +23,12 @@ _PRECEDENCE = ("supported", "wrong", "refused", "untested")
 
 
 def _spelled(feature: dict) -> str:
-    # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name.
-    return (feature.get("crossgl") or feature["name"]).split("<", 1)[0]
+    # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name, and so
+    # is an operation CrossGL writes as an expression, as Slang's ``WorkgroupSize`` (``ivec3(gl_WorkGroupSize)``).
+    spelled = feature.get("crossgl") or feature["name"]
+    if spellings.is_expression(spelled):
+        return feature["name"]
+    return spelled.split("<", 1)[0]
 
 
 def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:

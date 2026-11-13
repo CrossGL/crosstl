@@ -341,3 +341,180 @@ def test_spirv_generic_calls_on_buffer_pointer(tmp_path):
     assert "sel2_float" in specialized_names
     assert not codegen.refusals.reasons
     _compile(tmp_path, "vulkan", code)
+
+
+ISSUE_3762_SHADERS = {
+    "1_pick_float": (
+        """
+    shader P {
+        T pick<T>(T x) { return x; }
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float x = 1.0;
+                int i = 0;
+                outp[i] = pick(pick(x));
+            }
+        }
+    }
+    """
+    ),
+    "2_sel2_float": (
+        """
+    shader P {
+        T sel2<T>(T a, T b) { return a; }
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float x = 1.0;
+                int i = 0;
+                outp[i] = sel2(sel2(x, x), x);
+            }
+        }
+    }
+    """
+    ),
+    "3_sel2_vec2": (
+        """
+    shader P {
+        T sel2<T>(T a, T b) { return a; }
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec2 w = vec2(1.0, 2.0);
+                int i = 0;
+                outp[i] = sel2(sel2(w, w), w).x;
+            }
+        }
+    }
+    """
+    ),
+    "4_sel_overload": (
+        """
+    shader P {
+        T sel<T>(T a) { return a; }
+        T sel<T>(T a, T b) { return b; }
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec2 w = vec2(1.0, 2.0);
+                int i = 0;
+                outp[i] = sel(sel(w, w), w).x;
+            }
+        }
+    }
+    """
+    ),
+    "5_pick_vec3": (
+        """
+    shader P {
+        T pick<T>(T x) { return x; }
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec3 v = vec3(1.0, 2.0, 3.0);
+                int i = 0;
+                outp[i] = pick(pick(v)).x;
+            }
+        }
+    }
+    """
+    ),
+}
+
+ISSUE_3762_EXPECTED = {
+    "1_pick_float": {
+        "opengl": "pick_float",
+        "directx": "pick_float",
+        "metal": "pick_float",
+        "slang": "pick_float",
+        "cuda": "pick_float",
+        "hip": "pick_float",
+        "wgsl": "pick_f32",
+        "vulkan": "pick_float",
+    },
+    "2_sel2_float": {
+        "opengl": "sel2_float",
+        "directx": "sel2_float",
+        "metal": "sel2_float",
+        "slang": "sel2_float",
+        "cuda": "sel2_float",
+        "hip": "sel2_float",
+        "wgsl": "sel2_f32",
+        "vulkan": "sel2_float",
+    },
+    "3_sel2_vec2": {
+        "opengl": "sel2_vec2",
+        "directx": "sel2_float2",
+        "metal": "sel2_float2",
+        "slang": "sel2_vec2",
+        "cuda": "sel2_vec2",
+        "hip": "sel2_float2",
+        "wgsl": "sel2_vec2_f32",
+        "vulkan": "sel2_v2float",
+    },
+    "4_sel_overload": {
+        "opengl": "sel_vec2_overload1",
+        "directx": "sel_float2_overload1",
+        "metal": "sel_float2_overload1",
+        "slang": "sel_vec2_overload1",
+        "cuda": "sel_vec2_overload1",
+        "hip": "sel_float2_overload1",
+        "wgsl": "sel_vec2_f32",
+        "vulkan": "sel_v2float_overload1",
+    },
+    "5_pick_vec3": {
+        "opengl": "pick_vec3",
+        "directx": "pick_float3",
+        "metal": "pick_float3",
+        "slang": "pick_vec3",
+        "cuda": "pick_vec3",
+        "hip": "pick_float3",
+        "wgsl": "pick_vec3_f32",
+        "vulkan": "pick_v3float",
+    },
+}
+
+ISSUE_3762_BACKENDS = [
+    "opengl",
+    "directx",
+    "metal",
+    "slang",
+    "cuda",
+    "hip",
+    "wgsl",
+    "vulkan",
+]
+
+
+@pytest.mark.parametrize("backend", ISSUE_3762_BACKENDS)
+@pytest.mark.parametrize("case_name", sorted(ISSUE_3762_SHADERS))
+def test_issue_3762_nested_generic_calls(tmp_path, case_name, backend):
+    path = tmp_path / "shader.cgl"
+    path.write_text(ISSUE_3762_SHADERS[case_name], encoding="utf-8")
+
+    expected_func = ISSUE_3762_EXPECTED[case_name][backend]
+
+    if backend == "vulkan":
+        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
+        assert "OpFunctionCall" in code
+        specialized_names = set(codegen.generic_function_specialized_names.values())
+        assert expected_func in specialized_names
+        assert not any(
+            name.endswith("_T") or "_T_overload" in name for name in specialized_names
+        )
+        assert not codegen.refusals.reasons
+        _compile(tmp_path, "vulkan", code)
+    else:
+        code = crosstl.translate(str(path), backend=backend, format_output=False)
+        assert not re.search(r"\b(pick|sel2|sel)_T(_overload\d+)?\b", code), code
+        assert not re.search(r"\bT\s+(?:pick|sel2|sel)_T\b", code), code
+        assert (
+            expected_func in code
+        ), f"Expected {expected_func} in {backend} output:\n{code}"
+        _compile(tmp_path, backend, code)

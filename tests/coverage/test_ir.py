@@ -70,6 +70,12 @@ def test_a_call_that_spells_its_generic_arguments_is_keyed_by_its_name():
     assert list(by_name(entry)) == ["slang/bit_cast"]
 
 
+def test_an_operation_crossgl_writes_as_an_expression_is_keyed_by_its_name():
+    spelled = {"crossgl": "ivec3(gl_WorkGroupSize)"}
+    entry = ir.build([row("slang", ("WorkgroupSize", "supported", spelled))])
+    assert list(by_name(entry)) == ["slang/WorkgroupSize"]
+
+
 def test_input_rows_do_not_widen_the_universe():
     entry = ir.build([{**row("glsl", ("abs", "supported", {})), "direction": "input"}])
     assert entry is None

@@ -725,6 +725,11 @@ from .union_lanes import (
 from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 from .workgroup_size_extents import fold_workgroup_size_extents
+from .written_function_names import (
+    HLSL_CALLABLE_FUNCTION_NAMES,
+    HLSL_PAYLOAD_ACCESS_QUALIFIER,
+    refuse_written_foreign_calls,
+)
 from .written_type_names import (
     HLSL_TYPE_NAMES,
     refuse_written_foreign_types,
@@ -3090,6 +3095,8 @@ class HLSLCodeGen(
             "isampler2DMSArray": "Texture2DMSArray<int4>",
             "usampler2DMS": "Texture2DMS<uint4>",
             "usampler2DMSArray": "Texture2DMSArray<uint4>",
+            "sampler1DShadow": "Texture1D",
+            "sampler1DArrayShadow": "Texture1DArray",
             "sampler2DShadow": "Texture2D",
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
@@ -3766,6 +3773,12 @@ class HLSLCodeGen(
                 code,
                 self.written_foreign_type_names,
                 self.LOWERING_REFUSAL_TYPE.label,
+            )
+            refuse_written_foreign_calls(
+                code,
+                HLSL_CALLABLE_FUNCTION_NAMES,
+                self.LOWERING_REFUSAL_TYPE.label,
+                (HLSL_PAYLOAD_ACCESS_QUALIFIER,),
             )
         finally:
             self.written_foreign_type_names = None
@@ -4583,6 +4596,8 @@ class HLSLCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
+            global_types=self.global_variable_types,
+            ast=ast,
         )
         if generic_function_specializations:
             specialized_functions = list(generic_function_specializations.values())
@@ -46393,6 +46408,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_shadow_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",

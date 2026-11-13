@@ -76,8 +76,15 @@ def test_wgsl_counts_zero_bits_with_the_crossgl_functions_metal_names():
 def test_wgsl_packs_8_bit_integers_with_the_hlsl_functions():
     assert spellings.spelling("wgsl", "pack4xI8", set()) == "pack_s8"
     assert spellings.spelling("wgsl", "unpack4xU8", set()) == "unpack_u8u32"
-    # pack_clamp_u8 clamps signed components, and pack4xU8Clamp unsigned ones.
-    assert spellings.spelling("wgsl", "pack4xU8Clamp", set()) == "pack4xU8Clamp"
+    # pack_clamp_u8 clamps signed components, so pack4xU8Clamp packs unsigned ones min() has clamped to 255.
+    assert (
+        spellings.spelling("wgsl", "pack4xU8Clamp", set())
+        == "pack_u8(min({0}, uvec4(255u)))"
+    )
+    assert (
+        spellings.spelling("wgsl", "dot4I8Packed", set())
+        == "dot4add_i8packed({0}, {1}, 0)"
+    )
 
 
 WGSL_TEXTURES = """
@@ -113,10 +120,20 @@ def test_wgsl_texture_functions_take_a_2d_texture_and_call_glsl_from_crossgl():
     compare = features["textureSampleCompareLevel"].counterpart
     # WGSL always samples level 0, so the CrossGL probe passes the level as a constant.
     assert compare.params[-1] == Param(Type("float"), "const")
-    assert features["textureSampleBaseClampToEdge"].counterpart is None
-    # CrossGL has no clamp-to-edge sample, so the operation is a gap rather than an untested probe.
-    assert features["textureSampleBaseClampToEdge"].crossgl == ""
-    assert "half a texel" in features["textureSampleBaseClampToEdge"].note
+    clamped = features["textureSampleBaseClampToEdge"]
+    # CrossGL samples level 0 at coordinates clamped half a texel inside the edge, with a combined sampler.
+    assert [p.type for p in clamped.counterpart.params] == [
+        Type.other("sampler2D"),
+        Type("float", (2,)),
+    ]
+    assert clamped.crossgl.startswith("textureLod({0}, clamp({1}, vec2(0.5) / ")
+    assert clamped.crossgl.endswith(", 0.0)")
+    assert spellings.named(clamped.crossgl) == [
+        "textureLod",
+        "clamp",
+        "textureSize",
+        "textureSize",
+    ]
 
 
 WGSL_WORKGROUP = """

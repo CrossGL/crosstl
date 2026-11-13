@@ -78,6 +78,8 @@ COUNT_SHAPE_KEY = "specializationCountsByShape"
 # Each pinned digest and the positive integer pinned with it.
 PIN_FIELDS = {HASH_FIELD: SIZE_FIELD, MATERIALIZATION_FIELD: COUNT_FIELD}
 NATIVE_IDENTITY_KEYS = ("dxilSha256",)
+# black's line length; .pre-commit-config.yaml keeps the default.
+PYTHON_LINE_LENGTH = 88
 TOTAL_KEY = "generatedSizeBytesTotal"
 RANGE_KEY = "generatedSizeRange"
 MAX_CASCADE_ROUNDS = 10
@@ -726,6 +728,24 @@ def _constant(node: ast.AST, kind: type) -> Any:
     return None
 
 
+def _tuple_literal(text: str, start: int, end: int, items: Sequence[str]) -> str:
+    """A tuple literal that replaces ``text[start:end]``, laid out as black lays
+    it out there.
+
+    It stays on one line when that line fits. Otherwise black puts each item on
+    its own line with a trailing comma, one indent deeper than the line.
+    """
+
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    line_end = len(text) if line_end < 0 else line_end
+    flat = f"({', '.join(items)})"
+    if (start - line_start) + len(flat) + (line_end - end) <= PYTHON_LINE_LENGTH:
+        return flat
+    indent = re.match(r"[ \t]*", text[line_start:start]).group()
+    return "(\n" + "".join(f"{indent}    {item},\n" for item in items) + indent + ")"
+
+
 def _python_mirror_edits(text: str, old: tuple, new: tuple, report: Report):
     """Python literals that restate a contract total or range bound."""
 
@@ -752,11 +772,11 @@ def _python_mirror_edits(text: str, old: tuple, new: tuple, report: Report):
                     for element in node.elts
                 )
                 if values in (pair, pair[::-1]):
-                    entry, size = json.dumps(after["entryPoint"]), after["sizeBytes"]
-                    literal = (
-                        f"({entry}, {size})" if values == pair else f"({size}, {entry})"
-                    )
-                    edits.append((*_span(node, starts), literal))
+                    items = [json.dumps(after["entryPoint"]), str(after["sizeBytes"])]
+                    if values != pair:
+                        items.reverse()
+                    start, end = _span(node, starts)
+                    edits.append((start, end, _tuple_literal(text, start, end, items)))
                     report.applied["mirroredRanges"] += 1
             elif isinstance(node, ast.Dict):
                 keys = [_constant(key, str) if key else None for key in node.keys]

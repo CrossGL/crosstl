@@ -115,6 +115,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_array_values import (
@@ -172,6 +173,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .slang_buffer_lengths import slang_glsl_buffer_block_length
 from .slang_byte_address_words import (
     SlangThreeComponentAccess,
@@ -606,6 +608,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
+                collect_constant_and_cbuffer_member_types(
+                    self, ast, type_renderer=self.convert_type_node_to_string
+                ),
+                ast=ast,
             )
             if generic_function_specializations:
                 specialized_functions = list(generic_function_specializations.values())
@@ -10035,6 +10041,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
+            clock_name = getattr(func_expr, "name", func_expr)
+            if (
+                clock_name in SHADER_CLOCK_BUILTINS
+                and clock_name not in self.user_function_names
+            ):
+                return refuse_shader_clock_call("Slang", clock_name)
             ray_query_call = self.slang_ray_query_call_parts(node)
             if ray_query_call is not None:
                 operation, query_expr, args = ray_query_call

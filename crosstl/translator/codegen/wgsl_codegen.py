@@ -94,6 +94,7 @@ from .wgsl_buffer_atomics import (
     WGSLCompareExchangeLoop,
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
+from .wgsl_comparison_samplers import WGSLComparisonSamplerUnsupportedError
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_cube_texture_offsets import (
@@ -122,8 +123,12 @@ from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
+    MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
+    mixed_integer_call_is_unsigned,
     wgsl_bitwise_operands,
+    wgsl_mixed_integer_call_arguments,
+    wgsl_mixed_integer_operands,
     wgsl_shift_amount,
 )
 from .wgsl_integer_textures import (
@@ -343,6 +348,8 @@ class WGSLCodeGen(
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
         "bitfieldReverse": "reverseBits",
+        "clz": "countLeadingZeros",
+        "ctz": "countTrailingZeros",
         "faceforward": "faceForward",
         "packHalf2x16": "pack2x16float",
         "packSnorm2x16": "pack2x16snorm",
@@ -670,6 +677,8 @@ class WGSLCodeGen(
         "allmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
         "memorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
     }
+    WGSL_ACCESS_MODE_IDENTIFIERS = frozenset({"read", "write", "read_write"})
+    _used_access_mode_identifiers = frozenset()
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",
         "Self",
@@ -882,6 +891,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
@@ -889,6 +899,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -966,6 +977,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
@@ -973,6 +985,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -1060,6 +1073,17 @@ class WGSLCodeGen(
             if not generic_functions.is_generic(func)
         ]
 
+        self.collect_struct_type_metadata(structs)
+        self._struct_member_types.update(
+            self.builtin_option_specialization_member_types(
+                self._builtin_option_specializations
+            )
+        )
+        self._used_access_mode_identifiers = self.used_access_mode_identifiers(
+            global_variable_nodes,
+            stage_resource_parameters,
+            all_function_nodes,
+        )
         self.collect_identifier_metadata(
             structs,
             cbuffers,
@@ -1067,12 +1091,6 @@ class WGSLCodeGen(
             global_variable_nodes,
             stage_resource_parameters,
             concrete_helper_function_nodes,
-        )
-        self.collect_struct_type_metadata(structs)
-        self._struct_member_types.update(
-            self.builtin_option_specialization_member_types(
-                self._builtin_option_specializations
-            )
         )
         self.collect_cbuffer_member_identifier_metadata(cbuffers)
         self._cbuffer_member_accesses = self.cbuffer_member_accesses(cbuffers)
@@ -1087,6 +1105,17 @@ class WGSLCodeGen(
             self.function_resource_member_parameters(ast, target_stage)
         )
         self._module_variable_types = {}
+        for constant in constants:
+            name = getattr(constant, "name", "")
+            if not name:
+                continue
+            const_type = getattr(
+                constant, "const_type", getattr(constant, "vtype", None)
+            )
+            if const_type is None and getattr(constant, "value", None) is not None:
+                const_type = self.expression_type(constant.value)
+            if const_type is not None:
+                self._module_variable_types[name] = const_type
         for node in global_variable_nodes:
             name = getattr(node, "name", "")
             if not name:
@@ -1235,6 +1264,10 @@ class WGSLCodeGen(
         frexp_modf_helpers = wgsl_frexp_modf_helpers(self)
         if frexp_modf_helpers:
             emitted_sections.append(frexp_modf_helpers)
+
+        half_conversion_helpers = self.generate_half_conversion_helpers()
+        if half_conversion_helpers:
+            emitted_sections.append(half_conversion_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -3776,6 +3809,9 @@ class WGSLCodeGen(
             if expr.operator in BITWISE_OPERATORS:
                 left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
                 return f"({left} {expr.operator} {right})"
+            if expr.operator in MIXED_INTEGER_OPERATORS:
+                left, right = wgsl_mixed_integer_operands(self, expr.left, expr.right)
+                return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
                 f"{self.generate_expression(expr.right)})"
@@ -4034,6 +4070,13 @@ class WGSLCodeGen(
             function_name
         ):
             return self.generate_derivative_call(node, derivative_name, function_name)
+        if (
+            normalized_name in {"min", "max"}
+            and len(node.arguments) == 2
+            and not self.is_user_function_name(function_name)
+        ):
+            args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            return f"{normalized_name}({args[0]}, {args[1]})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
@@ -4064,6 +4107,14 @@ class WGSLCodeGen(
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)
+        if function_name == "f32tof16" and not self.is_user_function_name(
+            function_name
+        ):
+            return self.generate_f32tof16_call(node)
+        if function_name == "f16tof32" and not self.is_user_function_name(
+            function_name
+        ):
+            return self.generate_f16tof32_call(node)
         if function_name == "mod":
             return self.generate_mod_call(node)
         if function_name == "fmod" and not self.is_user_function_name(function_name):
@@ -4100,6 +4151,22 @@ class WGSLCodeGen(
         if generic_constructor is not None:
             args = self.generate_call_arguments(function_name, node.arguments)
             return f"{generic_constructor}({args})"
+        if function_name in self._structs_by_name and not self.is_user_function_name(
+            function_name
+        ):
+            struct = self._structs_by_name[function_name]
+            member_types = [
+                member.member_type
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
+            ]
+            # Only a call with one argument per member: zip would drop any argument past the last member.
+            if member_types and len(node.arguments) == len(member_types):
+                args = ", ".join(
+                    self.generate_expression_for_target(arg, member_type)
+                    for arg, member_type in zip(node.arguments, member_types)
+                )
+                return f"{self.type_name_string(function_name)}({args})"
         resolved_function = None
         if isinstance(node.function, IdentifierNode):
             resolved_function = self.resolve_function_overload(
@@ -4273,6 +4340,111 @@ class WGSLCodeGen(
         lanes = self.vector_component_count(self.expression_type(argument))
         target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
         return f"bitcast<{target}>({self.generate_expression(argument)})"
+
+    def generate_half_conversion_helpers(self):
+        """The helper functions used for half float vector packing/unpacking."""
+        if not getattr(self, "_half_conversion_helpers", None):
+            return None
+        return "\n\n".join(self._half_conversion_helpers.values())
+
+    def half_conversion_float_operand(self, argument):
+        """``argument`` of ``f32tof16`` as an ``f32`` value or vector, and its width (``None`` for a scalar).
+
+        HLSL converts an integer operand to ``float`` before it packs it, as for any ``float`` parameter; WGSL has no
+        implicit conversion, so ``vec2<f32>(k, 0.0)`` with an ``i32`` ``k`` does not compile.
+        """
+        arg_type = self.expression_type(argument)
+        vector = self.vector_shape(arg_type)
+        if vector is None:
+            return self.generate_expression_for_target(argument, "float"), None
+        elem_type, width = vector
+        rendered = self.generate_expression(argument)
+        if elem_type != "f32":
+            rendered = f"vec{width}<f32>({rendered})"
+        return rendered, width
+
+    def generate_f32tof16_call(self, node):
+        """HLSL ``f32tof16`` as WGSL ``pack2x16float``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports f32tof16() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        arg_expr, width = self.half_conversion_float_operand(node.arguments[0])
+        if width is None:
+            return f"pack2x16float(vec2<f32>({arg_expr}, 0.0))"
+        components = ["x", "y", "z", "w"][:width]
+        helper_name = f"crosstl_pack2x16float_vec{width}"
+        if helper_name not in self._half_conversion_helpers:
+            elements = [f"pack2x16float(vec2<f32>(v.{c}, 0.0))" for c in components]
+            self._half_conversion_helpers[helper_name] = (
+                f"fn {helper_name}(v: vec{width}<f32>) -> vec{width}<u32> {{\n"
+                f"    return vec{width}<u32>({', '.join(elements)});\n"
+                f"}}"
+            )
+        return f"{helper_name}({arg_expr})"
+
+    def generate_f16tof32_call(self, node):
+        """HLSL ``f16tof32`` as WGSL ``unpack2x16float``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports f16tof32() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        if (
+            isinstance(argument, FunctionCallNode)
+            and self.expression_name(argument.function) == "f32tof16"
+            and not self.is_user_function_name("f32tof16")
+            and len(argument.arguments) == 1
+        ):
+            inner_expr, width = self.half_conversion_float_operand(
+                argument.arguments[0]
+            )
+            if width is None:
+                return f"unpack2x16float(pack2x16float(vec2<f32>({inner_expr}, 0.0))).x"
+            if width == 2:
+                return f"unpack2x16float(pack2x16float({inner_expr}))"
+            components = ["x", "y", "z", "w"][:width]
+            helper_name = f"crosstl_unpack_pack2x16float_vec{width}"
+            if helper_name not in self._half_conversion_helpers:
+                elements = [
+                    f"unpack2x16float(pack2x16float(vec2<f32>(v.{c}, 0.0))).x"
+                    for c in components
+                ]
+                self._half_conversion_helpers[helper_name] = (
+                    f"fn {helper_name}(v: vec{width}<f32>) -> vec{width}<f32> {{\n"
+                    f"    return vec{width}<f32>({', '.join(elements)});\n"
+                    f"}}"
+                )
+            return f"{helper_name}({inner_expr})"
+
+        arg_type = self.expression_type(argument)
+        vector = self.vector_shape(arg_type)
+        if vector is None:
+            arg_expr = self.generate_expression(argument)
+            if self.integer_scalar_type(arg_type) == "i32":
+                arg_expr = f"u32({arg_expr})"
+            return f"unpack2x16float({arg_expr}).x"
+        elem_type, width = vector
+        components = ["x", "y", "z", "w"][:width]
+        arg_type_name = "i32" if elem_type == "i32" else "u32"
+        prefix = "i" if elem_type == "i32" else ""
+        helper_name = f"crosstl_unpack2x16float_{prefix}vec{width}"
+        if helper_name not in self._half_conversion_helpers:
+            elements = []
+            for c in components:
+                comp = f"v.{c}"
+                if elem_type == "i32":
+                    comp = f"u32({comp})"
+                elements.append(f"unpack2x16float({comp}).x")
+            self._half_conversion_helpers[helper_name] = (
+                f"fn {helper_name}(v: vec{width}<{arg_type_name}>) -> vec{width}<f32> {{\n"
+                f"    return vec{width}<f32>({', '.join(elements)});\n"
+                f"}}"
+            )
+        arg_expr = self.generate_expression(argument)
+        return f"{helper_name}({arg_expr})"
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:
@@ -4626,11 +4798,8 @@ class WGSLCodeGen(
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
         if vector_type_name is None:
-            return (
-                "clamp("
-                + ", ".join(self.generate_expression(arg) for arg in node.arguments)
-                + ")"
-            )
+            args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            return f"clamp({', '.join(args)})"
         lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
         upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
         return f"clamp({value_expr}, {lower}, {upper})"
@@ -5010,6 +5179,29 @@ class WGSLCodeGen(
                 function_name, self.generate_expression(texture_expr)
             )
 
+    def refuse_comparison_sampler(
+        self, sampler, function_name, texture, builtin_name, *, bias=False
+    ):
+        if not self.is_comparison_sampler_type(self.expression_type(sampler)):
+            return
+        sampler_name = self.generate_expression(sampler)
+        texture_name = (
+            texture if isinstance(texture, str) else self.generate_expression(texture)
+        )
+        if bias:
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                texture_name,
+                f"textureSampleBias takes a sampler, but {sampler_name} is "
+                "a comparison sampler",
+            )
+        raise WGSLComparisonSamplerUnsupportedError(
+            function_name,
+            texture_name,
+            builtin_name,
+            sampler_name,
+        )
+
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
         # The coordinate follows the texture, or the texture and sampler. On
         # an array texture it becomes ``coordinate, layer``.
@@ -5087,6 +5279,9 @@ class WGSLCodeGen(
                     "textureSampleLevel"
                     if self._current_stage_name == "compute"
                     else "textureSample"
+                )
+                self.refuse_comparison_sampler(
+                    second, function_name, texture, sample_function
                 )
                 level_argument = (
                     ", 0.0" if sample_function == "textureSampleLevel" else ""
@@ -5173,13 +5368,9 @@ class WGSLCodeGen(
             sampler_name = self.texture_sampler_expression(texture)
         else:
             sampler_name = self.generate_expression(sampler)
-            if self.is_comparison_sampler_type(self.expression_type(sampler)):
-                raise WGSLTextureBiasUnsupportedError(
-                    function_name,
-                    texture_name,
-                    f"textureSampleBias takes a sampler, but {sampler_name} is "
-                    "a comparison sampler",
-                )
+            self.refuse_comparison_sampler(
+                sampler, function_name, texture_name, "textureSampleBias", bias=True
+            )
         bias_type = self.expression_type(bias)
         if bias_type is not None and self.scalar_type_name(bias_type) not in {
             "f32",
@@ -5227,6 +5418,9 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             texture, sampler, coords, level = args
+            self.refuse_comparison_sampler(
+                sampler, function_name, texture, "textureSampleLevel"
+            )
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
@@ -5240,16 +5434,28 @@ class WGSLCodeGen(
         )
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
+        if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleLevel"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleLevel", function_name, args, implicit=4, explicit=5
         )
 
     def generate_texture_sample_grad_call(self, function_name, args):
+        if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleGrad"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=4, explicit=5
         )
 
     def generate_texture_sample_grad_offset_call(self, function_name, args):
+        if len(args) == 6:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleGrad"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=5, explicit=6
         )
@@ -5261,6 +5467,9 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             if self.is_sampler_type(self.expression_type(args[1])):
+                self.refuse_comparison_sampler(
+                    args[1], function_name, args[0], "textureSample"
+                )
                 return self.generate_texture_builtin_call(
                     "textureSample", function_name, args, implicit=3, explicit=4
                 )
@@ -5273,6 +5482,9 @@ class WGSLCodeGen(
                 f"{self.generate_expression(bias)}, {self.generate_expression(offset)})"
             )
         if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleBias", bias=True
+            )
             call_args = self.generate_texture_call_args(
                 args, function_name=function_name, implicit=4, explicit=5
             )
@@ -6655,6 +6867,54 @@ class WGSLCodeGen(
                 modes[parameter.name] = access
         return modes
 
+    def used_access_mode_identifiers(
+        self, global_variables, stage_resource_parameters, functions
+    ):
+        modes = set(
+            self.module_storage_access_modes(
+                global_variables, stage_resource_parameters
+            ).values()
+        )
+        for variable in global_variables:
+            qualifier_names = {
+                str(qualifier).lower()
+                for qualifier in getattr(variable, "qualifiers", []) or []
+            }
+            if (
+                not self.structured_buffer_access(getattr(variable, "var_type", None))
+                and not self.is_glsl_buffer_block_variable(variable)
+                and ("buffer" in qualifier_names or "storage" in qualifier_names)
+            ):
+                modes.add("read_write")
+        for function in functions:
+            for parameter in getattr(function, "parameters", []) or []:
+                if self.is_buffer_pointer_type(
+                    getattr(parameter, "param_type", None),
+                    getattr(parameter, "qualifiers", ()),
+                ):
+                    modes.add("read_write")
+        modes.update(
+            self.inferred_storage_texture_access_modes(
+                global_variables, stage_resource_parameters, functions
+            ).values()
+        )
+        for node in list(global_variables) + list(stage_resource_parameters):
+            type_name = self.resource_type_name(self.declared_resource_type(node)) or ""
+            if self.STORAGE_TEXTURE_DIMENSION_MAP.get(type_name) is None:
+                continue
+            explicit_access = explicit_image_access(
+                node, self.generate_attribute_argument
+            )
+            if explicit_access is not None:
+                modes.add(explicit_access)
+                continue
+            names = self.resource_qualifier_attribute_names(node)
+            if "constant" in names:
+                modes.add("read")
+            elif names & {"rw", "coherent"}:
+                modes.add("read_write")
+        return modes & self.WGSL_ACCESS_MODE_IDENTIFIERS
+
     def inferred_storage_texture_access_modes(
         self, global_variables, stage_resource_parameters, functions
     ):
@@ -7570,6 +7830,20 @@ class WGSLCodeGen(
                 vector = self.vector_shape(self.expression_type(expr.arguments[0]))
                 return "int" if vector is None else f"vec{vector[1]}<i32>"
             if (
+                function_name == "f32tof16"
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "u32" if vector is None else f"vec{vector[1]}<u32>"
+            if (
+                function_name == "f16tof32"
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "f32" if vector is None else f"vec{vector[1]}<f32>"
+            if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
                 and not expr.arguments
@@ -7597,6 +7871,13 @@ class WGSLCodeGen(
                 if operand is not None:
                     element, columns, rows = operand
                     return f"mat{rows}x{columns}<{element}>"
+            if (
+                function_name in {"min", "max", "clamp"}
+                and not self.is_user_function_name(function_name)
+                and mixed_integer_call_is_unsigned(self, expr.arguments)
+            ):
+                # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
+                return "u32"
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
@@ -7707,6 +7988,8 @@ class WGSLCodeGen(
             return right_type
         if left_scalar is not None and left_scalar == right_scalar:
             return left_scalar
+        if {left_scalar, right_scalar} == {"i32", "u32"}:
+            return "u32"
         if left_type == right_type:
             return left_type
         return None
@@ -8172,6 +8455,7 @@ class WGSLCodeGen(
         name = str(name)
         return (
             name in self.WGSL_RESERVED_IDENTIFIERS
+            or name in self._used_access_mode_identifiers
             or name == "_"
             or name.startswith("__")
         )

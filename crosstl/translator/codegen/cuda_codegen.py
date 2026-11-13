@@ -78,6 +78,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
@@ -327,6 +328,8 @@ class CudaCodeGen(
         self.cuda_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -454,6 +457,8 @@ class CudaCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast_node)),
+            collect_constant_and_cbuffer_member_types(self, ast_node),
+            ast=ast_node,
         )
         self.function_return_types.update(
             {
@@ -472,6 +477,8 @@ class CudaCodeGen(
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -1190,9 +1197,18 @@ class CudaCodeGen(
             for var in global_vars
             if getattr(var, "name", None)
         }
-        for stage in (getattr(node, "stages", {}) or {}).values():
+        for stage_type, stage in (getattr(node, "stages", {}) or {}).items():
+            stage_name = (
+                str(stage_type).split(".")[-1].lower()
+                if hasattr(stage_type, "name")
+                else str(stage_type).lower()
+            )
             for var in getattr(stage, "local_variables", []) or []:
                 if self.is_cuda_shared_variable(var):
+                    continue
+                if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
+                    # A stage-local input that names a compute built-in is the
+                    # built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -1536,6 +1552,9 @@ class CudaCodeGen(
                 if stage_name is None and is_output_parameter(param):
                     # out and inout copy back to the caller; a C++ reference binds it.
                     declarator = reference_declarator(declarator, param_name)
+                declarator = self.apply_restrict_qualifier_to_declaration(
+                    declarator, param_name, param
+                )
                 params.append(declarator)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
@@ -2644,6 +2663,33 @@ class CudaCodeGen(
             return role
         return None
 
+    def cuda_stage_local_builtin_role(self, stage_name, var):
+        """Return the compute built-in role for a stage-local input variable.
+
+        A stage-local ``@input`` variable carrying a compute built-in semantic
+        (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``, the
+        shape the SPIR-V importer writes for a GLSL compute shader that reads
+        ``gl_GlobalInvocationID``) is the built-in itself, not a variable to
+        declare: CUDA has no such global, and a file-scope declaration would
+        be an uninitialised host global that the kernel must not read. A
+        variable whose name is a compute built-in and which is declared as a
+        stage input is the same built-in even when the semantic spelling is
+        missing.
+        """
+        if stage_name != "compute":
+            return None
+        role = self.cuda_compute_builtin_parameter_role(stage_name, var)
+        if role is not None:
+            return role
+        if self.cuda_compute_builtin_role_for_name(getattr(var, "name", None)) is None:
+            return None
+        if any(
+            str(getattr(attr, "name", "")).lower() == "input"
+            for attr in getattr(var, "attributes", []) or []
+        ):
+            return self.cuda_compute_builtin_role_for_name(var.name)
+        return None
+
     def cuda_compute_builtin_expression(self, role, component=None):
         """Return the CUDA expression for a CrossGL compute built-in role."""
         local_index = self.cuda_thread_block_linear_index_expression()
@@ -3540,6 +3586,12 @@ class CudaCodeGen(
             if warp_sync_call is not None:
                 return warp_sync_call
 
+            shader_clock_call = self.generate_cuda_shader_clock_call(
+                func_name, raw_args
+            )
+            if shader_clock_call is not None:
+                return shader_clock_call
+
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
@@ -4310,6 +4362,74 @@ class CudaCodeGen(
         suffix = suffix.replace(" ", "_").replace("*", "_ptr")
         suffix = suffix.replace("&", "_ref").replace("::", "_")
         return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
+
+    CUDA_SHADER_CLOCK_BUILTINS = {
+        "clockARB",
+        "clock2x32ARB",
+        "clockRealtimeEXT",
+        "clockRealtime2x32EXT",
+    }
+
+    # The CrossGL result types, so arithmetic on a 2x32 pair goes through the
+    # uint2 helpers as it does for any other uvec2 value.
+    CUDA_SHADER_CLOCK_RESULT_TYPES = {
+        "clockARB": "uint64_t",
+        "clock2x32ARB": "uvec2",
+        "clockRealtimeEXT": "uint64_t",
+        "clockRealtime2x32EXT": "uvec2",
+    }
+
+    def generate_cuda_shader_clock_call(self, func_name, raw_args):
+        """GL_ARB_shader_clock and GL_EXT_shader_realtime_clock built-ins.
+
+        clockARB reads the per-multiprocessor counter, which is CUDA's clock64().
+        clockRealtimeEXT reads the device-wide nanosecond timer, the PTX %globaltimer
+        register. The 2x32 forms return the same counter as a uint2 (low, high).
+        """
+        if func_name not in self.CUDA_SHADER_CLOCK_BUILTINS:
+            return None
+        if raw_args:
+            raise ValueError(
+                f"CUDA shader clock builtin {func_name} requires 0 arguments; "
+                f"got {len(raw_args)}"
+            )
+        if func_name == "clockARB":
+            return "clock64()"
+        if func_name == "clockRealtimeEXT":
+            return self.require_cuda_realtime_clock_helper()
+        if func_name == "clock2x32ARB":
+            return self.require_cuda_clock_pair_helper(
+                "cgl_cuda_clock2x32", "(unsigned long long)clock64()"
+            )
+        realtime = self.require_cuda_realtime_clock_helper()
+        return self.require_cuda_clock_pair_helper(
+            "cgl_cuda_realtime_clock2x32", realtime
+        )
+
+    def require_cuda_realtime_clock_helper(self):
+        helper_name = "cgl_cuda_realtime_clock"
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline unsigned long long {helper_name}()\n"
+                "{\n"
+                "    unsigned long long timer;\n"
+                '    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(timer));\n'
+                "    return timer;\n"
+                "}"
+            )
+        return f"{helper_name}()"
+
+    def require_cuda_clock_pair_helper(self, helper_name, source):
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline uint2 {helper_name}()\n"
+                "{\n"
+                f"    unsigned long long ticks = {source};\n"
+                "    return make_uint2((unsigned int)ticks, "
+                "(unsigned int)(ticks >> 32));\n"
+                "}"
+            )
+        return f"{helper_name}()"
 
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
         expected_counts = CUDA_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
@@ -6470,17 +6590,70 @@ class CudaCodeGen(
             diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
+        builtin_component = self.cuda_compute_builtin_index_component(node)
+        if builtin_component is not None:
+            return builtin_component
         if hasattr(node, "array_expr"):
             array = self.visit(node.array_expr)
         else:
             array = self.visit(node.array)
 
-        if hasattr(node, "index_expr"):
-            index = self.visit(node.index_expr)
-        else:
-            index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            if hasattr(node, "index_expr"):
+                index = self.visit(node.index_expr)
+            else:
+                index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
 
         return f"{array}[{index}]"
+
+    def cuda_compute_builtin_index_component(self, node):
+        """Return the component expression for a constant subscript of a compute built-in.
+
+        ``gl_GlobalInvocationID[0]`` reads the ``.x`` component: a CUDA
+        ``uint3`` has no subscript operator, so the ``make_uint3(...)[0]`` the
+        generic path would emit does not compile. A user symbol with a
+        built-in name shadows the built-in and keeps the generic subscript. A
+        non-constant or out-of-range subscript, a subscript of the scalar
+        local-invocation index, or a write to a built-in component has no
+        faithful CUDA lowering and is refused instead.
+        """
+        array_node = getattr(node, "array_expr", getattr(node, "array", None))
+        if not isinstance(array_node, IdentifierNode):
+            return None
+        name = getattr(array_node, "name", None)
+        if name in self.stage_builtin_aliases:
+            role = self.stage_builtin_aliases[name]
+        elif self.cuda_identifier_shadows_compute_builtin(name):
+            return None
+        else:
+            role = self.cuda_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
+            raise CudaLoweringRefused(
+                [f"cannot assign to a component of compute built-in '{name}' in CUDA"]
+            )
+        index_node = getattr(node, "index_expr", getattr(node, "index", None))
+        index = self.literal_int_value(index_node)
+        if index is None or index not in (0, 1, 2):
+            raise CudaLoweringRefused(
+                [
+                    (
+                        f"cannot subscript compute built-in '{name}' with a "
+                        "non-constant index in CUDA; use .x, .y or .z"
+                    )
+                ]
+            )
+        component = "xyz"[index]
+        expression = self.cuda_compute_builtin_expression(role, component)
+        if expression is None:
+            raise CudaLoweringRefused(
+                [f"compute built-in '{name}' has no '.{component}' component in CUDA"]
+            )
+        return expression
 
     def visit_ArrayLiteralNode(self, node):
         elements = ", ".join(self.visit(element) for element in node.elements)
@@ -7788,6 +7961,8 @@ class CudaCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            if func_name in self.CUDA_SHADER_CLOCK_RESULT_TYPES:
+                return self.CUDA_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args

@@ -17,13 +17,23 @@ from ..ast import LiteralNode, UnaryOpNode
 
 __all__ = [
     "BITWISE_OPERATORS",
+    "MIXED_INTEGER_OPERATORS",
     "SHIFT_OPERATORS",
+    "is_abstract_integer_literal",
+    "mixed_integer_call_is_unsigned",
     "wgsl_bitwise_operands",
+    "wgsl_mixed_integer_call_arguments",
+    "wgsl_mixed_integer_operands",
     "wgsl_shift_amount",
 ]
 
 SHIFT_OPERATORS = frozenset({"<<", ">>"})
 BITWISE_OPERATORS = frozenset({"&", "|", "^"})
+MIXED_INTEGER_COMPARISON_OPERATORS = frozenset({"<", "<=", ">", ">=", "==", "!="})
+MIXED_INTEGER_ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
+MIXED_INTEGER_OPERATORS = (
+    MIXED_INTEGER_COMPARISON_OPERATORS | MIXED_INTEGER_ARITHMETIC_OPERATORS
+)
 
 
 def _type_name(codegen, vtype):
@@ -48,6 +58,56 @@ def _is_non_negative_integer_literal(expr):
         and not isinstance(expr.value, bool)
         and expr.value >= 0
     )
+
+
+def is_abstract_integer_literal(expr):
+    """True if ``expr`` is an untyped non-negative integer literal, an abstract int in WGSL."""
+    if isinstance(expr, UnaryOpNode) and expr.operator == "+":
+        return is_abstract_integer_literal(expr.operand)
+    if not (
+        isinstance(expr, LiteralNode)
+        and isinstance(expr.value, int)
+        and not isinstance(expr.value, bool)
+        and expr.value >= 0
+    ):
+        return False
+    literal_type = getattr(expr, "literal_type", None)
+    if literal_type is not None:
+        type_name = str(getattr(literal_type, "name", literal_type))
+        if type_name in {"uint", "u32"}:
+            return False
+    return True
+
+
+def wgsl_mixed_integer_call_arguments(codegen, arguments):
+    """The WGSL spellings of arguments to min, max or clamp with mixed integer types."""
+    arg_scalars = [
+        codegen.scalar_type_name(codegen.expression_type(arg)) for arg in arguments
+    ]
+    rendered = [codegen.generate_expression(arg) for arg in arguments]
+    if "u32" in arg_scalars:
+        for i, arg in enumerate(arguments):
+            if arg_scalars[i] == "i32" and not is_abstract_integer_literal(arg):
+                rendered[i] = f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
+    return rendered
+
+
+def mixed_integer_call_is_unsigned(codegen, arguments):
+    """Whether min, max or clamp of ``arguments`` mixes ``uint`` and ``int`` values, so its WGSL call is ``u32``.
+
+    Abstract integer literals take the other arguments' type and do not count.
+    """
+    scalars = {
+        codegen.scalar_type_name(codegen.expression_type(arg))
+        for arg in arguments
+        if not is_abstract_integer_literal(arg)
+    }
+    return scalars == {"i32", "u32"}
+
+
+def wgsl_mixed_integer_operands(codegen, left, right):
+    """The WGSL spellings of mixed signed/unsigned integer operands."""
+    return tuple(wgsl_mixed_integer_call_arguments(codegen, (left, right)))
 
 
 def wgsl_shift_amount(codegen, amount, shifted_type, rendered=None):

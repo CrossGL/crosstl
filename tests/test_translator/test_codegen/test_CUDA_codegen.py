@@ -1823,6 +1823,116 @@ class TestCudaCodeGen:
         assert "SV_DispatchThreadID" not in cuda_code
         assert "SV_GroupID" not in cuda_code
 
+    def test_stage_input_global_invocation_id_reads_as_cuda_builtin(self):
+        # CrossGL #4193: the SPIR-V importer writes a compute shader's
+        # gl_GlobalInvocationID as a stage-scope @input variable. CUDA has no
+        # such global, so the variable must not be declared as a host global
+        # and its reads must lower to the built-in expression.
+        source_code = """
+        shader main {
+            struct B0 {
+                float fin[];
+            };
+            RWStructuredBuffer<B0> b0 @set(0) @binding(0);
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+                void main() {
+                    uint i;
+                    i = gl_GlobalInvocationID[0];
+                    b0[0].fin[i] = b0[0].fin[i] * 2.0;
+                    return;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint3 gl_GlobalInvocationID;" not in cuda_code
+        assert "gl_GlobalInvocationID" not in cuda_code
+        assert "i = (blockIdx.x * blockDim.x + threadIdx.x);" in cuda_code
+        assert "make_uint3(" not in cuda_code.split("compute_main()")[1]
+        assert "b0[0].fin[i] = (b0[0].fin[i] * 2.0f);" in cuda_code
+
+    def test_compute_builtin_constant_subscripts_read_components(self):
+        # A uint3 built-in has no subscript operator, so a constant subscript
+        # reads the matching component instead of emitting make_uint3(...)[0].
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint a = gl_GlobalInvocationID[0];
+                    uint b = gl_GlobalInvocationID[1];
+                    uint c = gl_GlobalInvocationID[2];
+                    uint d = gl_LocalInvocationID[2];
+                    uint3 g = gl_GlobalInvocationID;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint a = (blockIdx.x * blockDim.x + threadIdx.x);" in cuda_code
+        assert "uint b = (blockIdx.y * blockDim.y + threadIdx.y);" in cuda_code
+        assert "uint c = (blockIdx.z * blockDim.z + threadIdx.z);" in cuda_code
+        assert "uint d = threadIdx.z;" in cuda_code
+        assert (
+            "uint3 g = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in cuda_code
+        assert ")[0]" not in cuda_code
+        assert ")[1]" not in cuda_code
+        assert ")[2]" not in cuda_code
+
+    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
+        non_constant_source = """
+        shader TestShader {
+            compute {
+                void main(uint i) {
+                    uint a = gl_GlobalInvocationID[i];
+                }
+            }
+        }
+        """
+        with pytest.raises(CudaLoweringRefused, match="non-constant index"):
+            CudaCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+
+        write_source = """
+        shader TestShader {
+            compute {
+                void main() {
+                    gl_GlobalInvocationID[0] = 1u;
+                }
+            }
+        }
+        """
+        with pytest.raises(CudaLoweringRefused, match="cannot assign to a component"):
+            CudaCodeGen().generate(Parser(Lexer(write_source).tokens).parse())
+
+    def test_compute_builtin_subscript_in_an_assigned_index_is_read(self):
+        # The built-in subscript is the index of the assigned element, a read, not the assignment's target.
+        source_code = """
+        shader TestShader {
+            buffer float* outp;
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    outp[gl_GlobalInvocationID[0]] = 1.0;
+                    outp[outp_index(gl_LocalInvocationID[1])] += 2.0;
+                }
+            }
+            uint outp_index(uint i) { return i; }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "outp[(blockIdx.x * blockDim.x + threadIdx.x)] = 1.0f;" in cuda_code
+        assert "outp[outp_index(threadIdx.y)] += 2.0f;" in cuda_code
+
     def test_vector_swizzles_emit_cuda_make_functions(self):
         source_code = """
         shader TestShader {
@@ -10972,6 +11082,34 @@ class TestCudaCodeGen:
         assert "__device__ const float* __restrict__ scale;" in cuda_code
         assert "__device__ float* __restrict__ outp;" in cuda_code
         assert "__restrict__ const" not in cuda_code
+
+    def test_restrict_buffer_parameters_keep_restrict_in_cuda(self):
+        # #4191: a helper's restrict pointer parameter lost the qualifier.
+        source_code = """
+        shader Probe {
+            restrict buffer float* fin;
+            restrict buffer float* outp;
+            float twice(restrict buffer float* p, uint i) {
+                return p[i] * 2.0;
+            }
+            float plain(buffer float* q, uint i) {
+                return q[i];
+            }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    outp[i] = twice(fin, i) + plain(fin, i);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float twice(float* __restrict__ p, uint i)" in cuda_code
+        assert "float plain(float* q, uint i)" in cuda_code
 
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
         source_code = """
@@ -20582,6 +20720,80 @@ class TestCudaCodeGen:
         assert "float readBack = results[index];" in cuda_code
         assert "RWStructuredBuffer<" not in cuda_code
         assert ".Store(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_shader_clock_builtins_lower_to_cuda_clocks(self):
+        source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint64_t t = cgl_cuda_realtime_clock();" in cuda_code
+        assert "uint64_t u = clock64();" in cuda_code
+        assert "uint2 r = cgl_cuda_realtime_clock2x32();" in cuda_code
+        assert "uint2 s = cgl_cuda_clock2x32();" in cuda_code
+        assert 'asm volatile("mov.u64 %0, %%globaltimer;"' in cuda_code
+        assert "clockRealtimeEXT" not in cuda_code
+        assert "clockARB" not in cuda_code
+        assert "clockRealtime2x32EXT" not in cuda_code
+        assert "clock2x32ARB" not in cuda_code
+
+    def test_shader_clock_builtin_with_arguments_is_refused_for_cuda(self):
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                void main() {
+                    out_buf[0] = clockARB(1);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match=r"clockARB requires 0 arguments"):
+            CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_shader_clock_pair_arithmetic_uses_uint2_helpers_for_cuda(self, tmp_path):
+        # CUDA's uint2 has no operators: a 2x32 clock read used directly as an
+        # operand must go through the same helpers as any other uvec2 value.
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uvec2* pair_buf;
+                void main() {
+                    pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+                    pair_buf[1] = clock2x32ARB() * 2u;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        compact = "".join(cuda_code.split())
+
+        assert (
+            "pair_buf[0]=cgl_uint2_add(cgl_cuda_clock2x32(),cgl_cuda_realtime_clock2x32());"
+            in compact
+        )
+        assert "pair_buf[1]=cgl_uint2_mul_scalar(cgl_cuda_clock2x32(),2u);" in compact
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
 

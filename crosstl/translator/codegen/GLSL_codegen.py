@@ -240,7 +240,10 @@ from .generic_function_utils import (
     reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
-from .generic_global_types import glsl_preliminary_global_variable_types
+from .generic_global_types import (
+    collect_constant_and_cbuffer_member_types,
+    glsl_preliminary_global_variable_types,
+)
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -3492,6 +3495,8 @@ class GLSLCodeGen(
             "sampler2DMSArray": "sampler2DMSArray",
             "samplerExternalOES": "samplerExternalOES",
             "__samplerExternal2DY2YEXT": "__samplerExternal2DY2YEXT",
+            "sampler1DShadow": "sampler1DShadow",
+            "sampler1DArrayShadow": "sampler1DArrayShadow",
             "sampler2DShadow": "sampler2DShadow",
             "sampler2DArrayShadow": "sampler2DArrayShadow",
             "samplerCubeShadow": "samplerCubeShadow",
@@ -4340,10 +4345,40 @@ class GLSLCodeGen(
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
+        lines.extend(self.glsl_shader_clock_extension_lines(ast))
         scalar_layout = scalar_block_layout_extension_line(self, ast)
         if scalar_layout is not None:
             lines.append(scalar_layout)
         return lines
+
+    GLSL_SHADER_CLOCK_EXTENSIONS = {
+        "clockARB": "GL_ARB_shader_clock",
+        "clock2x32ARB": "GL_ARB_shader_clock",
+        "clockRealtimeEXT": "GL_EXT_shader_realtime_clock",
+        "clockRealtime2x32EXT": "GL_EXT_shader_realtime_clock",
+    }
+
+    def glsl_shader_clock_extension_lines(self, ast):
+        """The shader clock built-ins are only declared once their extension is requested."""
+        enabled = {
+            extension
+            for extension in set(self.GLSL_SHADER_CLOCK_EXTENSIONS.values())
+            if any(
+                extension in str(getattr(directive, "content", "") or "")
+                for directive in getattr(ast, "preprocessors", []) or []
+            )
+        }
+        needed = {
+            self.GLSL_SHADER_CLOCK_EXTENSIONS[name]
+            for node in self.walk_ast(ast)
+            if isinstance(node, FunctionCallNode)
+            for name in [self.function_call_name(node)]
+            if name in self.GLSL_SHADER_CLOCK_EXTENSIONS
+        }
+        return [
+            f"#extension {extension} : require"
+            for extension in sorted(needed - enabled)
+        ]
 
     def uses_glsl_debug_printf(self, ast):
         """HLSL's ``printf`` (a SPIR-V-only DXC feature) is GLSL's ``debugPrintfEXT``."""
@@ -9428,9 +9463,20 @@ class GLSLCodeGen(
         self.global_variable_types = glsl_preliminary_global_variable_types(
             self, ast, target_stage
         )
+        generic_collection_global_types = {
+            **collect_constant_and_cbuffer_member_types(
+                self,
+                ast,
+                cbuffers=self.glsl_cbuffer_nodes(ast, target_stage),
+            ),
+            **self.glsl_constant_types,
+            **self.global_variable_types,
+        }
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
+            global_types=generic_collection_global_types,
+            ast=ast,
         )
         if generic_function_specializations:
             additional_generic_enum_specializations = (
@@ -38276,7 +38322,7 @@ complex64_t crossgl_complex64_mod_assign(
         texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
         if not texture_type:
             return None
-        if texture_type.endswith(("1D", "Buffer")):
+        if texture_type.endswith(("1D", "1DShadow", "Buffer")):
             return "int"
         if texture_type.endswith(
             (
@@ -41114,6 +41160,20 @@ complex64_t crossgl_complex64_mod_assign(
             if numeric_trait_call is not None:
                 return numeric_trait_call
 
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                # A buffer parameter or reinterpreted view is rewritten as an
+                # offset into the buffer it reads, so its length is computed
+                # from that buffer's length, not one element's.
+                storage_binding = self.glsl_storage_pointer_binding(
+                    func_expr.object, self.glsl_storage_pointer_aliases()
+                )
+                if storage_binding is not None:
+                    return self.structured_buffer_length_expression(func_expr.object)
+
             func_name = None
             if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
@@ -41177,23 +41237,6 @@ complex64_t crossgl_complex64_mod_assign(
                     # One buffer of an array of storage blocks holds its elements in a member.
                     buffer = self.generate_expression(func_expr.object)
                     return f"{buffer}.{instance_member}.length()"
-
-            if (
-                isinstance(func_expr, MemberAccessNode)
-                and func_expr.member == "length"
-                and not expr.args
-            ):
-                # A buffer parameter is rewritten as an offset into the buffer it
-                # reads, so its length is that buffer's, not one element's.
-                storage_binding = self.glsl_storage_pointer_binding(
-                    func_expr.object, self.glsl_storage_pointer_aliases()
-                )
-                if (
-                    storage_binding is not None
-                    and "pointer_reinterpretation" not in storage_binding
-                    and "byte_offset" not in storage_binding
-                ):
-                    return self.structured_buffer_length_expression(func_expr.object)
 
             get_dimensions = self.glsl_structured_buffer_get_dimensions(
                 func_expr, expr.args
@@ -45212,15 +45255,81 @@ complex64_t crossgl_complex64_mod_assign(
             rendered_offset = self.glsl_workgroup_pointer_offset_expression(
                 storage_binding
             )
+            if (
+                "pointer_reinterpretation" in storage_binding
+                or "byte_offset" in storage_binding
+            ):
+                count_expr = self.glsl_reinterpreted_storage_length_expression(
+                    root,
+                    storage_binding,
+                    source_location=getattr(buffer_arg, "source_location", None),
+                )
+            else:
+                count_expr = f"{root}.length()"
             if rendered_offset in {"0", "0u"}:
-                return f"{root}.length()"
-            return f"({root}.length() - int({rendered_offset}))"
+                return count_expr
+            return f"({count_expr} - int({rendered_offset}))"
         buffer = self.generate_expression(buffer_arg)
         buffer_name = self.expression_name(buffer_arg)
         instance_member = self.structured_buffer_instance_members.get(buffer_name)
         if instance_member:
             return f"{buffer}.{instance_member}.length()"
         return f"{buffer}.length()"
+
+    def glsl_reinterpreted_storage_length_expression(
+        self, root, storage_binding, *, source_location=None
+    ):
+        """Return the GLSL ``int`` element count for a reinterpreted or byte-offset view."""
+        reinterpretation = storage_binding.get("pointer_reinterpretation")
+        byte_offset = str(storage_binding.get("byte_offset", "0"))
+        if reinterpretation is None:
+            if byte_offset in {"0", "0u"}:
+                return f"{root}.length()"
+            raise OpenGLStoragePointerError(
+                "OpenGL storage pointer length() cannot be computed for a "
+                "byte-offset view without element layout",
+                reason="storage-view-length-byte-offset-unsupported",
+                source_location=source_location,
+            )
+
+        source_layout = reinterpretation.get("source_layout")
+        target_layout = reinterpretation.get("target_layout")
+        target_width = reinterpretation.get("target_width", 1)
+        if (
+            source_layout is None
+            or target_layout is None
+            or not isinstance(target_width, int)
+            or target_width < 1
+            or source_layout.byte_width < 1
+            or target_layout.byte_width < 1
+        ):
+            raise OpenGLStoragePointerError(
+                "OpenGL storage pointer length() requires known source and "
+                "target element layouts",
+                reason="storage-view-length-layout-unknown",
+                source_location=source_location,
+            )
+
+        source_elem_size = source_layout.byte_width
+        view_elem_size = target_layout.byte_width * target_width
+        if byte_offset in {"0", "0u"}:
+            if source_elem_size == view_elem_size:
+                return f"{root}.length()"
+            if source_elem_size % view_elem_size == 0:
+                return f"({root}.length() * {source_elem_size // view_elem_size})"
+            if view_elem_size % source_elem_size == 0:
+                return f"({root}.length() / {view_elem_size // source_elem_size})"
+            return f"(({root}.length() * {source_elem_size}) / {view_elem_size})"
+
+        total_bytes = (
+            f"{root}.length()"
+            if source_elem_size == 1
+            else f"({root}.length() * {source_elem_size})"
+        )
+        remaining_bytes = f"({total_bytes} - int({byte_offset}))"
+        if view_elem_size == 1:
+            return remaining_bytes
+        return f"({remaining_bytes} / {view_elem_size})"
 
     def structured_buffer_counter_reference(self, buffer_arg):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
@@ -48203,6 +48312,8 @@ complex64_t crossgl_complex64_mod_assign(
             offset_dimension = {
                 "sampler1D": 1,
                 "sampler1DArray": 1,
+                "sampler1DShadow": 1,
+                "sampler1DArrayShadow": 1,
                 "sampler2D": 2,
                 "sampler2DArray": 2,
                 "sampler2DShadow": 2,
@@ -48228,6 +48339,8 @@ complex64_t crossgl_complex64_mod_assign(
                 gradient_dimension = {
                     "sampler1D": 1,
                     "sampler1DArray": 1,
+                    "sampler1DShadow": 1,
+                    "sampler1DArrayShadow": 1,
                     "sampler2D": 2,
                     "sampler2DArray": 2,
                     "sampler2DShadow": 2,
@@ -48250,6 +48363,8 @@ complex64_t crossgl_complex64_mod_assign(
             query_lod_coordinate_dimension = {
                 "sampler1D": 1,
                 "sampler1DArray": 2,
+                "sampler1DShadow": 1,
+                "sampler1DArrayShadow": 2,
                 "sampler2D": 2,
                 "sampler2DArray": 3,
                 "sampler2DShadow": 2,
@@ -48870,9 +48985,23 @@ complex64_t crossgl_complex64_mod_assign(
             "sampler2DShadow",
             "sampler2DArrayShadow",
         }
-        compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
-        compare_lod_types = {"sampler2DShadow"}
+        # GLSL 4.60 section 8.9.2: textureOffset and textureGradOffset take
+        # every 1D and 2D shadow sampler; textureGatherOffset only the 2D ones.
+        compare_offset_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+        gather_compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
+        compare_lod_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
+            "sampler2DShadow",
+        }
         compare_grad_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",
@@ -48887,7 +49016,7 @@ complex64_t crossgl_complex64_mod_assign(
             "compare_grad": texture_type in compare_grad_types,
             "compare_lod_offset": texture_type in compare_lod_types,
             "compare_grad_offset": texture_type in compare_offset_types,
-            "gather_compare_offset": texture_type in compare_offset_types,
+            "gather_compare_offset": texture_type in gather_compare_offset_types,
         }
 
     def texture_gather_supported(self, texture_type):
@@ -49304,6 +49433,10 @@ complex64_t crossgl_complex64_mod_assign(
         texture_type = self.resource_base_type(texture_type)
         if texture_type == "samplerCubeArrayShadow":
             return None
+        if texture_type == "sampler1DShadow":
+            # GLSL 4.60 section 8.9.2: texture(sampler1DShadow, vec3 P)
+            # takes (u, unused, Dref); the second component is unused.
+            return f"vec3({coord}, 0.0, {compare})"
         constructor = (
             "vec4"
             if texture_type in {
@@ -58635,6 +58768,8 @@ complex64_t crossgl_complex64_mod_assign(
             "samplerCube",
             "sampler2DArray",
             "samplerCubeArray",
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",

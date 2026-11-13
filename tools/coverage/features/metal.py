@@ -345,10 +345,13 @@ def parse(
         spelling, counterpart = spellings.spelling("metal", name, glsl_names), None
         note = "" if signature else "no overload takes only value types"
         if name in spellings.COUNTERPARTS["metal"]:
-            spelling, counterpart = prototype(spellings.COUNTERPARTS["metal"][name])
+            called, counterpart = prototype(spellings.COUNTERPARTS["metal"][name])
+            # An expression spelling takes the counterpart's arguments in place of Metal's.
+            if not spellings.is_expression(spelling):
+                spelling = called
         elif signature and any(p.type.opaque in ENUMS for p in signature.params):
             spelling = ""
-            note = "CrossGL has no operation that takes a memory order or memory flags"
+            note = "no CrossGL operation is listed for this function's memory order or memory flags"
         elif explicit and spelling == name:
             # CrossGL calls a function it has no name of its own for by Metal's name, with the same template
             # arguments, which neither language deduces from the result.

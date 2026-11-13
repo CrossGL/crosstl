@@ -85,6 +85,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .image_access_contracts import (
     explicit_image_format,
     image_format_channel_count,
@@ -94,6 +95,7 @@ from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
 
 
@@ -1661,6 +1663,8 @@ class MojoCodeGen:
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast)),
+            collect_constant_and_cbuffer_member_types(self, ast),
+            ast=ast,
         )
         for func in generic_function_specializations.values():
             self.register_function_return_type(func)
@@ -8999,6 +9003,12 @@ class MojoCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            if (
+                func_name in SHADER_CLOCK_BUILTINS
+                and not self.is_user_defined_function(func_name)
+            ):
+                return refuse_shader_clock_call("Mojo", func_name)
 
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,
