@@ -4596,6 +4596,8 @@ class HLSLCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
+            global_types=self.global_variable_types,
+            ast=ast,
         )
         if generic_function_specializations:
             specialized_functions = list(generic_function_specializations.values())

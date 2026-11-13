@@ -111,6 +111,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -906,6 +907,8 @@ class HipCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(node)),
+            collect_constant_and_cbuffer_member_types(self, node),
+            ast=node,
         )
         self.function_return_types.update(
             {
