@@ -32706,18 +32706,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_byteaddress_interlocked_operations(self):
         return {
             "InterlockedAdd": ((2, 3), ((1, "value"),), 2),
+            "InterlockedAdd64": ((2, 3), ((1, "value"),), 2),
             "InterlockedMin": ((2, 3), ((1, "value"),), 2),
+            "InterlockedMin64": ((2, 3), ((1, "value"),), 2),
             "InterlockedMax": ((2, 3), ((1, "value"),), 2),
+            "InterlockedMax64": ((2, 3), ((1, "value"),), 2),
             "InterlockedAnd": ((2, 3), ((1, "value"),), 2),
+            "InterlockedAnd64": ((2, 3), ((1, "value"),), 2),
             "InterlockedOr": ((2, 3), ((1, "value"),), 2),
+            "InterlockedOr64": ((2, 3), ((1, "value"),), 2),
             "InterlockedXor": ((2, 3), ((1, "value"),), 2),
+            "InterlockedXor64": ((2, 3), ((1, "value"),), 2),
             "InterlockedExchange": ((2, 3), ((1, "value"),), 2),
+            "InterlockedExchange64": ((2, 3), ((1, "value"),), 2),
             "InterlockedCompareExchange": (
                 (4,),
                 ((1, "compare value"), (2, "value")),
                 3,
             ),
+            "InterlockedCompareExchange64": (
+                (4,),
+                ((1, "compare value"), (2, "value")),
+                3,
+            ),
             "InterlockedCompareStore": (
+                (3,),
+                ((1, "compare value"), (2, "value")),
+                None,
+            ),
+            "InterlockedCompareStore64": (
                 (3,),
                 ((1, "compare value"), (2, "value")),
                 None,
@@ -32839,6 +32856,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         kind = self.scalar_expression_kind(expr)
         if kind == "uint":
             return True
+        if kind == "uint64_t":
+            return True
         if kind == "int":
             value = self.literal_int_value(expr, self.literal_int_constants)
             return value is not None and value >= 0
@@ -32948,11 +32967,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and not self.hlsl_byteaddress_interlocked_uint_input_matches(args[1])
         )
         if not signed:
+        is_64bit = method_name.endswith("64")
             for index, role in value_roles:
                 self.validate_hlsl_byteaddress_interlocked_uint_input(
                     method_name, args, index, role
                 )
-        if original_index is not None and len(args) > original_index:
+            method_name in {"InterlockedMin", "InterlockedMax", "InterlockedMin64", "InterlockedMax64"}
             self.validate_hlsl_byteaddress_interlocked_original(
                 method_name, args[original_index], signed
             )
@@ -32963,13 +32983,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 arg, "int" if signed and index == 1 else "uint"
             )
             for index, arg in enumerate(args)
-        ]
+                method_name, args[original_index], signed or is_64bit
         return f"{receiver}.{method_name}({', '.join(rendered_args)})"
 
     def collect_comparison_resources(self, root):
+        signed_type = "int64_t" if is_64bit else "int"
+        unsigned_type = "uint64_t" if is_64bit else "uint"
         texture_names = set()
         sampler_names = set()
-        visited = set()
+                arg, signed_type if signed and index == 1 else unsigned_type
         global_resource_types = self.collect_global_texture_types(root)
         comparison_funcs = self.comparison_texture_function_names()
 
