@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- WGSL output writes HLSL's `f32tof16` and `f16tof32` with `pack2x16float` and `unpack2x16float`: `f32tof16(x)` becomes `pack2x16float(vec2<f32>(x, 0.0))`, which keeps the half in the low 16 bits, and `f16tof32(h)` becomes `unpack2x16float(h).x`, with helpers for vectors. It used to copy both calls into the output, which naga rejects (`no definition in scope for identifier: f32tof16`) (#4407).
+
 ---
 
 ## [3.7.0] - 2026-11-13
