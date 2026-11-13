@@ -755,9 +755,12 @@ class HipParser:
             "xor": "^",
             "xor_eq": "^=",
         }
-        return alternative_operators.get(
-            self.current_token.value, self.current_token.value
-        )
+        value = self.current_token.value
+        # An ISO C++ alternative token (``and``, ``not_eq``) is spelled as its operator; any other operator token
+        # is already the operator.
+        if value in alternative_operators:
+            return alternative_operators[value]
+        return value
 
     def is_declarator_name_token(self):
         return self.match(*self.DECLARATOR_NAME_TOKENS)

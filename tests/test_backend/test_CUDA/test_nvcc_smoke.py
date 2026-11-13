@@ -8,6 +8,7 @@ import pytest
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from tests.lowering_refusal_helpers import cuda_import_partial_output
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
@@ -64,12 +65,13 @@ def test_native_cuda_pipeline_primitives_parse_and_compile_if_available(tmp_path
     parser = CudaParser(tokens)
     ast = parser.parse()
 
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
     assert "// Kernel: pipeline_primitive_smoke" in crossgl
-    assert "// cuda pipeline.memcpy_async not directly supported in CrossGL" in crossgl
-    assert "// cuda pipeline.commit not directly supported in CrossGL" in crossgl
-    assert "// cuda pipeline.wait_prior not directly supported in CrossGL" in crossgl
-    assert "// cuda pipeline.arrive_on not directly supported in CrossGL" in crossgl
+    # The asynchronous copies and their waits are refused, never dropped.
+    for member in ("memcpy_async(", "commit()", "wait_prior(0)", "arrive_on(barrier)"):
+        assert f"CUDA pipeline.{member}" in message
     assert "__pipeline_memcpy_async" not in crossgl
 
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)

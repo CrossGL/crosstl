@@ -1,14 +1,6 @@
 {
  "schemaVersion": 1,
  "sites": {
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.visit_AtomicOperationNode::identity-fallback": 1,
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.visit_CudaBuiltinNode::identity-fallback": 1,
-  "crosstl/backend/CUDA/CudaParser.py::CudaParser.normalized_operator_value::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.convert_hip_type_to_crossgl::identity-fallback": 2,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.format_fixed_scalar_representation_query::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.record_member_narrow_external_storage_type::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.visit_HipBuiltinNode::identity-fallback": 1,
-  "crosstl/backend/HIP/HipParser.py::HipParser.normalized_operator_value::identity-fallback": 1,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression::identity-fallback": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.rust_resource_placeholder_diagnostic_comment::fallback-text": 1,
   "crosstl/translator/parser.py::Parser.parse_function::empty-block-recovery": 1

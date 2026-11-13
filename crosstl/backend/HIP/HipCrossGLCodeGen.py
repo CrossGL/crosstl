@@ -14,6 +14,7 @@ from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
@@ -68,8 +69,14 @@ class HipSurfaceByteOffsetError(TranslationDiagnostic):
     code = CODE_PREFIX + "hip-surface-byte-offset-unproven"
 
 
-class HipToCrossGLConverter:
-    """Serialize HIP backend AST nodes back into CrossGL source."""
+class HipToCrossGLConverter(ImportRefusalMixin):
+    """Serialize HIP backend AST nodes back into CrossGL source.
+
+    A HIP construct with no faithful CrossGL form is refused with :class:`HipImportRefused`; no CrossGL program is
+    returned while a refusal is pending.
+    """
+
+    IMPORT_REFUSAL_TYPE = HipImportRefused
 
     SOURCE_LANGUAGE_NAME = "HIP"
     ERASE_CONCRETE_TYPE_ALIASES = True
@@ -596,6 +603,10 @@ class HipToCrossGLConverter:
         self.function_body_depth = 0
 
     def generate(self, ast_node):
+        """Render ``ast_node`` as CrossGL, or raise :class:`HipImportRefused` listing every construct it cannot carry."""
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
         self.source_identifier_names = source_identifier_names(ast_node)
@@ -6027,8 +6038,8 @@ class HipToCrossGLConverter:
                     f"{output_name} maps to a tiled partition of the current workgroup"
                 )
             else:
-                self.emit(
-                    f"// cooperative_groups {group_kind} for {output_name} not directly supported in CrossGL"
+                self.refuse_import(
+                    f"HIP cooperative_groups {group_kind} '{output_name}': CrossGL has no group of this kind"
                 )
             return
 
@@ -6893,7 +6904,7 @@ class HipToCrossGLConverter:
                 owner, template_args[0], resolving
             )
 
-        type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+        type_name = self.canonical_cpp_scalar_type(type_name)
         qualified_enum_name = (
             f"{self.record_display_name(owner)}::{type_name}" if owner else type_name
         )
@@ -7576,7 +7587,7 @@ class HipToCrossGLConverter:
             type_name = self.strip_elaborated_record_type_keyword(
                 self.strip_type_qualifiers(type_name)
             ).strip()
-            type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+            type_name = self.canonical_cpp_scalar_type(type_name)
 
         byte_count = self.HIP_FIXED_SCALAR_REPRESENTATION_BYTES.get(type_name)
         return str(byte_count) if byte_count is not None else None
@@ -8048,10 +8059,9 @@ class HipToCrossGLConverter:
         if function_name not in {"clock", "clock64", "wall_clock64"}:
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* HIP device timer {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP device timer {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            "0",
         )
 
     def format_hip_load_cache_intrinsic_call(
@@ -8077,10 +8087,10 @@ class HipToCrossGLConverter:
         ):
             return self.visit(raw_args[0].operand)
 
-        args_text = ", ".join(formatted_args)
-        return (
-            f"(/* hip load cache intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
+            "address",
+            "0",
         )
 
     def format_hip_warp_intrinsic_call(self, function_name, args):
@@ -8200,10 +8210,9 @@ class HipToCrossGLConverter:
         return f"({predicate} != 0)"
 
     def format_unsupported_hip_warp_intrinsic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* hip warp intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP warp intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
+            "0",
         )
 
     def format_cooperative_group_call(self, node):
@@ -8272,9 +8281,8 @@ class HipToCrossGLConverter:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name, "vec3<u32>(0, 0, 0)"
             )
-        return (
-            f"// cooperative_groups {group_kind}.{member_name} "
-            "not directly supported in CrossGL"
+        return self.refuse_import(
+            f"HIP cooperative_groups {group_kind}.{member_name} has no CrossGL form"
         )
 
     def format_cooperative_group_tile_shuffle(
@@ -8322,9 +8330,9 @@ class HipToCrossGLConverter:
     def format_unsupported_cooperative_group_expression(
         self, group_kind, member, fallback="0"
     ):
-        return (
-            f"(/* cooperative_groups {group_kind}.{member} "
-            f"not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"HIP cooperative_groups {group_kind}.{member} has no CrossGL form",
+            fallback,
         )
 
     def cooperative_group_declaration_metadata(self, node):
@@ -8739,10 +8747,10 @@ class HipToCrossGLConverter:
         }:
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* HIP block-wide sync vote {function_name} predicate: {args_text} "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP block-wide sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
+            "reduces a predicate",
+            "0",
         )
 
     def format_vector_component_access(self, expression, component):
@@ -9056,10 +9064,7 @@ class HipToCrossGLConverter:
         return f"texelFetch({texture_name}, {coordinate}, 0)"
 
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
-        return (
-            f"(/* hip {kind}.{member} not directly supported in CrossGL */ "
-            f"{fallback})"
-        )
+        return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)
 
     def format_hip_surface_read(
         self, function_name, args, dimensions, value_type, raw_args=None
@@ -9715,11 +9720,14 @@ class HipToCrossGLConverter:
 
         crossgl_func = self.convert_hip_builtin_function(operation)
         expression = f"{crossgl_func}({args_str})"
-        if scope is not None:
-            return (
-                f"(/* hip {scope}-scope atomic {node.operation} lowered to "
-                f"{crossgl_func}; scope not preserved */ {expression})"
+        if scope == "system":
+            return self.refuse_import(
+                f"HIP {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
+                "atomic for the host and peer devices",
+                expression,
             )
+        # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
+        # thread on the device, which includes the block.
         return expression
 
     def is_get_method_call(self, node):
@@ -9760,9 +9768,10 @@ class HipToCrossGLConverter:
             args = ", ".join(self.visit(arg) for arg in node.args)
             placement = ", ".join(self.visit(arg) for arg in placement_args)
             fallback = self.visit(placement_args[0]) if placement_args else "nullptr"
-            return (
-                f"(/* HIP placement new: new({placement}) {target_type}({args}) "
-                f"not directly supported in CrossGL */ {fallback})"
+            return self.refuse_import(
+                f"HIP placement new({placement}) {target_type}({args}): CrossGL has no object construction "
+                "in place",
+                fallback,
             )
 
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
@@ -9775,10 +9784,8 @@ class HipToCrossGLConverter:
 
     def visit_DeleteNode(self, node):
         target = self.visit(node.expression)
-        if node.is_array:
-            self.emit(f"// delete array: {target}")
-        else:
-            self.emit(f"// delete: {target}")
+        form = "delete[]" if node.is_array else "delete"
+        self.refuse_import(f"HIP {form} {target}: CrossGL has no device heap")
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
@@ -10055,25 +10062,35 @@ class HipToCrossGLConverter:
             self.emit("workgroupBarrier();")
         elif node.sync_type == "hipDeviceSynchronize":
             self.emit("// HIP device synchronize")
+        elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
+            # __syncwarp over the whole warp waits for every lane and orders their memory accesses, as
+            # subgroupBarrier does for the subgroup.
+            self.emit("subgroupBarrier();")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
+            self.refuse_import(
+                f"HIP __syncwarp({args}): CrossGL has no barrier over a subset of the subgroup"
+            )
         else:
-            self.emit(f"// {node.sync_type}();")
+            self.refuse_import(f"HIP {node.sync_type}() has no CrossGL form")
+
+    def is_full_warp_mask(self, args):
+        """Whether ``__syncwarp`` arguments name every lane: none, or an all-ones 32- or 64-bit literal mask."""
+        if not args:
+            return True
+        if len(args) != 1:
+            return False
+        value = self.visit(args[0]).strip().rstrip("uUlL")
+        try:
+            return int(value, 0) in (0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF)
+        except ValueError:
+            return False
 
     def visit_HipAsmNode(self, node):
         volatility = " volatile" if node.is_volatile else ""
-        self.emit(f"// HIP inline assembly{volatility}: {node.template}")
-        if node.outputs:
-            self.emit(
-                f"// HIP inline assembly outputs: {self.format_hip_asm_operands(node.outputs)}"
-            )
-        if node.inputs:
-            self.emit(
-                f"// HIP inline assembly inputs: {self.format_hip_asm_operands(node.inputs)}"
-            )
-        if node.clobbers:
-            self.emit(f"// HIP inline assembly clobbers: {', '.join(node.clobbers)}")
+        self.refuse_import(
+            f"HIP inline asm{volatility}({node.template}): CrossGL has no inline assembly"
+        )
 
     def format_hip_asm_operands(self, operands):
         formatted = []
@@ -10103,7 +10120,8 @@ class HipToCrossGLConverter:
             "warpSize": "32",
         }
 
-        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
+        # The parser builds this node only for the five built-ins builtin_map covers, flat ones included.
+        base_name = builtin_map[node.builtin_name]
         if hasattr(node, "component") and node.component:
             return f"{base_name}.{node.component}"
         else:
@@ -10392,7 +10410,7 @@ class HipToCrossGLConverter:
             hip_type = self.resolve_type_alias(hip_type)
         hip_type = self.strip_elaborated_record_type_keyword(hip_type)
         hip_type = self.resolve_namespace_alias_name(hip_type)
-        hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
+        hip_type = self.canonical_cpp_scalar_type(hip_type)
         matrix_type = self.convert_native_matrix_helper_name_to_crossgl(hip_type)
         if matrix_type is not None:
             return matrix_type
@@ -10498,7 +10516,19 @@ class HipToCrossGLConverter:
         if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
             # A struct named after a CrossGL keyword is declared under its renamed name.
             return self.sanitize_identifier_name(hip_type)
-        return type_mapping.get(hip_type, hip_type)
+        if hip_type in type_mapping:
+            return type_mapping[hip_type]
+        # A type the program declares, or a HIP built-in type carried into the IR as a plain name; each generator
+        # maps the built-ins it knows and refuses the rest (written_type_names).
+        return hip_type
+
+    def canonical_cpp_scalar_type(self, type_name):
+        """``type_name`` with a namespace-qualified ``<cstdint>`` spelling (``std::uint32_t``, ``hip::std::size_t``)
+        replaced by its plain spelling; any other name is already plain and is returned unchanged.
+        """
+        if type_name in self.CPP_SCALAR_TYPE_ALIASES:
+            return self.CPP_SCALAR_TYPE_ALIASES[type_name]
+        return type_name
 
     def is_decltype_type_name(self, type_name):
         return isinstance(type_name, str) and type_name.strip().startswith("decltype(")

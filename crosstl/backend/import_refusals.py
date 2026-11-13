@@ -15,7 +15,9 @@ from crosstl.translator.codegen.lowering_refusals import LoweringRefusals
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 __all__ = [
+    "CudaImportRefused",
     "DirectXImportRefused",
+    "HipImportRefused",
     "ImportRefusalMixin",
     "ImportRefused",
     "MetalImportRefused",
@@ -52,6 +54,22 @@ class DirectXImportRefused(ImportRefused):
     source_name = "directx"
     label = "HLSL"
     code = f"{CODE_PREFIX}directx-import-unsupported"
+
+
+class CudaImportRefused(ImportRefused):
+    """One or more CUDA C++ constructs have no faithful CrossGL representation."""
+
+    source_name = "cuda"
+    label = "CUDA"
+    code = f"{CODE_PREFIX}cuda-import-unsupported"
+
+
+class HipImportRefused(ImportRefused):
+    """One or more HIP C++ constructs have no faithful CrossGL representation."""
+
+    source_name = "hip"
+    label = "HIP"
+    code = f"{CODE_PREFIX}hip-import-unsupported"
 
 
 class MetalImportRefused(ImportRefused):

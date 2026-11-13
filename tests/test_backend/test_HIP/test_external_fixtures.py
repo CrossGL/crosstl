@@ -20,7 +20,10 @@ from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
-from tests.lowering_refusal_helpers import hip_partial_output
+from tests.lowering_refusal_helpers import (
+    hip_import_partial_output,
+    hip_partial_output,
+)
 
 EXTERNAL_FIXTURE_SOURCES = {
     "rocm_examples": {
@@ -159,6 +162,13 @@ def assert_crossgl_reparses(source):
     ast, crossgl = generate_crossgl_from_hip(source)
     CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
     return ast, crossgl
+
+
+def refused_crossgl_from_hip(source):
+    """The HIP AST, the CrossGL rendered around the refused constructs, and the refusal message."""
+    ast = parse_hip_source(source)
+    crossgl, message = hip_import_partial_output(HipToCrossGLConverter().generate, ast)
+    return ast, crossgl, message
 
 
 def generate_hip_from_crossgl(source):
@@ -572,19 +582,19 @@ def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     reduce_sum = ast.statements[0]
-
     assert reduce_sum.params[0]["type"] == "thread_group"
     assert (
         "u32 reduce_sum(cooperative_groups_thread_group g, ptr<u32> x, u32 val)"
         in crossgl
     )
-    assert (
-        "cooperative_groups thread_group.thread_rank not directly supported" in crossgl
-    )
-    assert "cooperative_groups thread_group.size not directly supported" in crossgl
-    assert "cooperative_groups thread_group.sync not directly supported" in crossgl
+    # The group behind a thread_group parameter is not known: its barrier was dropped, racing the reduction.
+    for member in ("thread_rank", "size", "sync"):
+        assert (
+            f"HIP cooperative_groups thread_group.{member} has no CrossGL form"
+            in message
+        )
     assert (
         "cooperative_groups thread_block thread_block_group maps to the current "
         "workgroup"
@@ -1120,7 +1130,7 @@ def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     asm_stmt = ast.statements[0].body[2]
     launch = ast.statements[1].body[0]
 
@@ -1132,8 +1142,11 @@ def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     assert asm_stmt.inputs[0].constraint == '"v"'
     assert asm_stmt.inputs[0].expression.array == "in"
     assert isinstance(launch, KernelLaunchNode)
-    assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in crossgl
-    assert '// HIP inline assembly outputs: "=v"(out[((x * width) + y)])' in crossgl
+    assert (
+        'HIP inline asm volatile("v_mov_b32_e32 %0, %1"): CrossGL has no inline assembly'
+        in message
+    )
+    assert "v_mov_b32" not in crossgl
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<vec3<u32>((width / 8), "
         "(width / 8), 1), vec3<u32>(8, 8, 1), 0, hipStreamDefault>>>()" in crossgl
@@ -1296,20 +1309,17 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     body = ast.statements[0].body
-
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
     assert isinstance(body[1], AtomicOperationNode)
     assert body[1].operation == "atomicOr_system"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    assert "hip system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
-    assert "hip system-scope atomic atomicOr_system lowered to atomicOr" in crossgl
-    assert (
-        "hip system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
-    ) in crossgl
+    # A device-scoped atomic is not atomic for the host and peer devices.
+    for name in ("atomicAdd_system", "atomicOr_system", "atomicCAS_system"):
+        assert f"HIP {name}: CrossGL atomics are device-scoped" in message
     assert "atomicAdd(bins[gl_LocalInvocationID.x], 1u)" in crossgl
     assert "atomicOr(flags, old)" in crossgl
     assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
@@ -1922,14 +1932,13 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     kernel = ast.statements[0]
-
     assert kernel.params[1]["name"] == "in"
     assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
-    assert "hip warp intrinsic __shfl(val, ((y * width) + x))" in crossgl
-    assert "hip warp intrinsic __shfl_sync" in crossgl
+    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" in message
+    assert "HIP warp intrinsic __shfl_sync" in message
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
         "0, hipStreamDefault>>>()"
