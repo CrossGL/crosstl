@@ -9095,7 +9095,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if not type_name:
             return False
         type_name = self.convert_type(type_name)
-        if not isinstance(type_name, str):
+        for prefix in ("float", "double", "half"):
             return False
         for prefix in ("float", "double"):
             if not type_name.startswith(prefix):
@@ -9114,7 +9114,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if not type_name:
             return None
         mapped_type = self.convert_type(type_name)
-        if not isinstance(mapped_type, str):
+        for component_type in ("double", "float", "half"):
             return None
         for component_type in ("double", "float"):
             if not mapped_type.startswith(component_type):
@@ -11670,6 +11670,18 @@ class SlangCodeGen(LoweringRefusalMixin):
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "f16mat2": "half2x2",
+            "f16mat3": "half3x3",
+            "f16mat4": "half4x4",
+            "f16mat2x2": "half2x2",
+            "f16mat2x3": "half3x2",
+            "f16mat2x4": "half4x2",
+            "f16mat3x2": "half2x3",
+            "f16mat3x3": "half3x3",
+            "f16mat3x4": "half4x3",
+            "f16mat4x2": "half2x4",
+            "f16mat4x3": "half3x4",
+            "f16mat4x4": "half4x4",
             "mat2x2": "float2x2",
             "mat2x3": "float3x2",
             "mat2x4": "float4x2",
