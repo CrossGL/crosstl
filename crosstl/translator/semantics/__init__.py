@@ -3,8 +3,8 @@
 ``apply_rule_carrying(program, source, target)`` annotates the CrossGL AST with the rules ``source`` defines
 (:mod:`.annotate`) and lowers them for ``target`` (:mod:`.lower`) as the rule table says (:mod:`.rule_table`).
 It runs on every translation between parsing the CrossGL AST and target code generation.  Each semantic pass is
-documented in its own module; see :mod:`.local_structs`, :mod:`.stage_bound_functions`, :mod:`.struct_methods`,
-:mod:`.half`, :mod:`.narrow`, :mod:`.warp`, and the other submodules of :mod:`crosstl.translator.semantics`.
+documented in its own module (see the submodules of :mod:`crosstl.translator.semantics`).  The definitive
+ordered list of passes and their sequencing constraints is :data:`_PASSES` in this module.
 See also docs/source/adr/0001-rule-carrying.md.
 """
 
@@ -233,126 +233,144 @@ from .written_stage_inputs import copy_written_stage_inputs
 # ---------------------------------------------------------------------------
 # Ordered sequence of semantic passes run by apply_rule_carrying.
 #
-# Each entry is a callable ``(program, report) -> None`` (or a value that is
-# ignored).  To add a new pass, import it at the top of this file and insert
-# a lambda in the right position here — no changes to apply_rule_carrying
-# itself are needed.
+# Each entry is a ``(function, arg_keys)`` pair where ``arg_keys`` is a tuple
+# of strings drawn from ``{"program", "source", "target"}``.  Using named
+# pairs rather than lambdas means that tracebacks from a failing pass show
+# the real function name instead of ``<lambda>``.
+#
+# To add a new pass: import it at the top of this file and insert a
+# ``(function, arg_keys)`` pair at the right position.  No changes to
+# ``apply_rule_carrying`` itself are needed.
+#
+# Ordering constraints (why each pass sits where it does):
+#   - hoist_local_structs: local structures must move to module scope before
+#     member functions are converted to free functions (lower_struct_methods).
+#   - fill_generic_struct_defaults: generic defaults must be filled before
+#     struct methods are lowered.
+#   - bind_stage_functions: stage binding must precede struct-method lowering
+#     so that stage-bound methods are correctly attributed.
+#   - lower_struct_methods: member functions become free functions before any
+#     pass that relies on a flat function namespace.
+#   - lower_relative_vertex_ids: gl_RelativeVertexID must be resolved before
+#     spell_slang_vertex_indices so that SV_VertexID is spelled correctly.
+#   - legalize_half_floats / legalize_narrow_integers / wrap_narrow_arithmetic:
+#     width-reducing passes run last, after all structural rewrites.
 # ---------------------------------------------------------------------------
 _PASSES = [
-    lambda p, r: hoist_local_structs(p, r.target),
-    lambda p, r: fill_generic_struct_defaults(p, r.target),
-    lambda p, r: bind_stage_functions(p),
-    lambda p, r: lower_struct_methods(p, r.target),
-    lambda p, r: hoist_stage_constant_blocks(p, r.target),
-    lambda p, r: distribute_block_matrix_orders(p, r.target),
-    lambda p, r: resolve_template_assertions(p, r.target),
-    lambda p, r: refuse_undeclared_types(p, r.target),
-    lambda p, r: record_undeclared_identifiers(p, r.target),
-    lambda p, r: refuse_undeclared_functions(p, r.target),
-    lambda p, r: lower_void_casts(p, r.target),
-    lambda p, r: refuse_void_values(p, r.target),
-    lambda p, r: resolve_builtin_names(p, r.target),
-    lambda p, r: refuse_misplaced_builtins(p, r.target),
-    lambda p, r: refuse_misplaced_builtin_identifiers(p, r.target),
-    lambda p, r: lower_relative_vertex_ids(p, r.target),
-    lambda p, r: refuse_ambiguous_matrix_spellings(p, r.target),
-    lambda p, r: refuse_hit_objects(p, r.target),
-    lambda p, r: refuse_shader_execution_reordering(p, r.target),
-    lambda p, r: refuse_metal_runtime_types(p, r.target),
-    lambda p, r: fold_constant_calls(p, r.target),
-    lambda p, r: fold_binding_constants(p, r.target),
-    lambda p, r: fold_constant_extents(p, r.target),
-    lambda p, r: fold_stage_layout_counts(p, r.target),
-    lambda p, r: resolve_intrinsic_named_functions(p),
-    lambda p, r: rename_colliding_functions(p),
-    lambda p, r: hoist_stage_private_variables(p, r.target),
-    lambda p, r: hoist_static_locals(p, r.target),
-    lambda p, r: lower_device_private_globals(p, r.target),
-    lambda p, r: orient_row_major_buffer_struct_members(p, r.target),
-    lambda p, r: store_row_major_members_transposed(p, r.target),
-    lambda p, r: store_row_major_constant_members_transposed(p, r.target),
-    lambda p, r: legalize_texel_offsets(p, r.target),
-    lambda p, r: fold_sizeof_values(p, r.target),
-    lambda p, r: resolve_type_aliases(p, r.target),
-    lambda p, r: orient_row_major_struct_members(p, r.target),
-    lambda p, r: resolve_static_assertions(p, r.target),
-    lambda p, r: zero_empty_scalar_initializers(p, r.target),
-    lambda p, r: lower_metal_math_spellings(p, r.target),
-    lambda p, r: lower_float_relations(p, r.target),
-    lambda p, r: lower_enum_values(p, r.target),
-    lambda p, r: lower_device_struct_references(p, r.target),
-    lambda p, r: separate_initializer_scopes(p, r.source, r.target),
-    lambda p, r: canonicalize_texture_swizzles(p),
-    lambda p, r: expand_scalar_swizzles(p),
-    lambda p, r: lower_aggregate_equality(p, r.target),
-    lambda p, r: lower_vector_logic(p, r.target),
-    lambda p, r: lower_boolean_reductions(p, r.target),
-    lambda p, r: lower_subpass_inputs(p, r.target),
-    lambda p, r: strip_non_uniform_qualifiers(p, r.target),
-    lambda p, r: canonicalize_atomic_calls(p, r.target),
-    lambda p, r: hlsl_out_argument_atomics(p, r.target),
-    lambda p, r: lower_shading_rate_flags(p, r.target),
-    lambda p, r: refuse_mixed_metal_barycentrics(p, r.target),
-    lambda p, r: declare_builtin_outputs(p, r.target),
-    lambda p, r: spell_slang_vertex_indices(p, r.target),
-    lambda p, r: pass_builtin_inputs(p, r.target),
-    lambda p, r: name_fragment_colour_outputs(p, r.target),
-    lambda p, r: attribute_vertex_input_positions(p, r.target),
-    lambda p, r: canonicalize_builtin_values(p, r.target),
-    lambda p, r: deliver_unsigned_system_values(p, r.target),
-    lambda p, r: lower_compute_entry_values(p, r.target),
-    lambda p, r: adopt_module_stage_outputs(p, r.target),
-    lambda p, r: convert_signed_builtin_outputs(p, r.target),
-    lambda p, r: gather_stage_interface_variables(p, r.target),
-    lambda p, r: fit_tess_factors_to_domain(p, r.target),
-    lambda p, r: expand_struct_scalar_splats(p, r.source, r.target),
-    lambda p, r: convert_metal_vector_scalar_operands(p, r.source),
-    lambda p, r: convert_struct_constructor_arguments(p),
-    lambda p, r: lower_tessellation_patches(p, r.target),
-    lambda p, r: lower_geometry_streams(p, r.target),
-    lambda p, r: raise_glsl_geometry_streams(p, r.target),
-    lambda p, r: raise_glsl_mesh_stages(p, r.target),
-    lambda p, r: declare_task_payload_storage(p, r.target),
-    lambda p, r: lower_dxr_ray_interfaces(p, r.target),
-    lambda p, r: lower_metal_ray_dispatch(p, r.target),
-    lambda p, r: declare_interface_block_instances(p, r.target),
-    lambda p, r: normalize_spirv_storage_blocks(p, r.source, r.target),
-    lambda p, r: legalize_unsized_arrays(p, r.target),
-    lambda p, r: mark_default_buffer_layouts(p, r.target),
-    lambda p, r: legalize_structured_layouts(p, r.target),
-    lambda p, r: materialize_buffer_strides(p, r.target),
-    lambda p, r: refuse_unplaced_member_offsets(p, r.target),
-    lambda p, r: mark_push_constant_layouts(p, r.target),
-    lambda p, r: hoist_constant_buffer_layouts(p, r.target),
-    lambda p, r: hoist_constant_reference_layouts(p, r.target),
-    lambda p, r: refuse_unplaced_packed_members(p, r.target),
-    lambda p, r: hoist_array_constructors(p, r.target),
-    lambda p, r: copy_written_array_parameters(p, r.target),
-    lambda p, r: copy_written_stage_inputs(p, r.target),
-    lambda p, r: refuse_per_vertex_inputs(p, r.target),
-    lambda p, r: bind_fixed_samplers(p, r.target),
-    lambda p, r: refuse_colour_attachment_inputs(p, r.target),
-    lambda p, r: legalize_sampler_states(p, r.target),
-    lambda p, r: refuse_shader_record_buffers(p, r.target),
-    lambda p, r: refuse_debug_printf(p, r.target),
-    lambda p, r: refuse_texture_lod_clamp(p, r.target),
-    lambda p, r: refuse_texture_residency(p, r.target),
-    lambda p, r: refuse_feedback_textures(p, r.target),
-    lambda p, r: declare_hlsl_residency_status(p, r.target),
-    lambda p, r: fold_array_lengths(p, r.target),
-    lambda p, r: refuse_large_constant_buffers(p, r.target),
-    lambda p, r: legalize_hlsl_stage_interfaces(p, r.target),
-    lambda p, r: annotate_hlsl_ray_payloads(p, r.target),
-    lambda p, r: legalize_opaque_struct_members(p, r.target),
-    lambda p, r: flatten_descriptor_arrays(p, r.target),
-    lambda p, r: legalize_shadow_samples(p, r.target),
-    lambda p, r: legalize_implicit_lod(p, r.target),
-    lambda p, r: legalize_cuda_warp_intrinsics(p, r.target),
-    lambda p, r: legalize_half_floats(p, r.source, r.target),
-    lambda p, r: legalize_bit_functions(p, r.source, r.target),
-    lambda p, r: legalize_narrow_integers(p, r.source, r.target),
-    lambda p, r: wrap_narrow_arithmetic(p, r.source, r.target),
-    lambda p, r: refuse_spirv_instructions(p, r.target),
+    (hoist_local_structs, ("program", "target")),
+    (fill_generic_struct_defaults, ("program", "target")),
+    (bind_stage_functions, ("program",)),
+    (lower_struct_methods, ("program", "target")),
+    (hoist_stage_constant_blocks, ("program", "target")),
+    (distribute_block_matrix_orders, ("program", "target")),
+    (resolve_template_assertions, ("program", "target")),
+    (refuse_undeclared_types, ("program", "target")),
+    (record_undeclared_identifiers, ("program", "target")),
+    (refuse_undeclared_functions, ("program", "target")),
+    (lower_void_casts, ("program", "target")),
+    (refuse_void_values, ("program", "target")),
+    (resolve_builtin_names, ("program", "target")),
+    (refuse_misplaced_builtins, ("program", "target")),
+    (refuse_misplaced_builtin_identifiers, ("program", "target")),
+    (lower_relative_vertex_ids, ("program", "target")),
+    (refuse_ambiguous_matrix_spellings, ("program", "target")),
+    (refuse_hit_objects, ("program", "target")),
+    (refuse_shader_execution_reordering, ("program", "target")),
+    (refuse_metal_runtime_types, ("program", "target")),
+    (fold_constant_calls, ("program", "target")),
+    (fold_binding_constants, ("program", "target")),
+    (fold_constant_extents, ("program", "target")),
+    (fold_stage_layout_counts, ("program", "target")),
+    (resolve_intrinsic_named_functions, ("program",)),
+    (rename_colliding_functions, ("program",)),
+    (hoist_stage_private_variables, ("program", "target")),
+    (hoist_static_locals, ("program", "target")),
+    (lower_device_private_globals, ("program", "target")),
+    (orient_row_major_buffer_struct_members, ("program", "target")),
+    (store_row_major_members_transposed, ("program", "target")),
+    (store_row_major_constant_members_transposed, ("program", "target")),
+    (legalize_texel_offsets, ("program", "target")),
+    (fold_sizeof_values, ("program", "target")),
+    (resolve_type_aliases, ("program", "target")),
+    (orient_row_major_struct_members, ("program", "target")),
+    (resolve_static_assertions, ("program", "target")),
+    (zero_empty_scalar_initializers, ("program", "target")),
+    (lower_metal_math_spellings, ("program", "target")),
+    (lower_float_relations, ("program", "target")),
+    (lower_enum_values, ("program", "target")),
+    (lower_device_struct_references, ("program", "target")),
+    (separate_initializer_scopes, ("program", "source", "target")),
+    (canonicalize_texture_swizzles, ("program",)),
+    (expand_scalar_swizzles, ("program",)),
+    (lower_aggregate_equality, ("program", "target")),
+    (lower_vector_logic, ("program", "target")),
+    (lower_boolean_reductions, ("program", "target")),
+    (lower_subpass_inputs, ("program", "target")),
+    (strip_non_uniform_qualifiers, ("program", "target")),
+    (canonicalize_atomic_calls, ("program", "target")),
+    (hlsl_out_argument_atomics, ("program", "target")),
+    (lower_shading_rate_flags, ("program", "target")),
+    (refuse_mixed_metal_barycentrics, ("program", "target")),
+    (declare_builtin_outputs, ("program", "target")),
+    (spell_slang_vertex_indices, ("program", "target")),
+    (pass_builtin_inputs, ("program", "target")),
+    (name_fragment_colour_outputs, ("program", "target")),
+    (attribute_vertex_input_positions, ("program", "target")),
+    (canonicalize_builtin_values, ("program", "target")),
+    (deliver_unsigned_system_values, ("program", "target")),
+    (lower_compute_entry_values, ("program", "target")),
+    (adopt_module_stage_outputs, ("program", "target")),
+    (convert_signed_builtin_outputs, ("program", "target")),
+    (gather_stage_interface_variables, ("program", "target")),
+    (fit_tess_factors_to_domain, ("program", "target")),
+    (expand_struct_scalar_splats, ("program", "source", "target")),
+    (convert_metal_vector_scalar_operands, ("program", "source")),
+    (convert_struct_constructor_arguments, ("program",)),
+    (lower_tessellation_patches, ("program", "target")),
+    (lower_geometry_streams, ("program", "target")),
+    (raise_glsl_geometry_streams, ("program", "target")),
+    (raise_glsl_mesh_stages, ("program", "target")),
+    (declare_task_payload_storage, ("program", "target")),
+    (lower_dxr_ray_interfaces, ("program", "target")),
+    (lower_metal_ray_dispatch, ("program", "target")),
+    (declare_interface_block_instances, ("program", "target")),
+    (normalize_spirv_storage_blocks, ("program", "source", "target")),
+    (legalize_unsized_arrays, ("program", "target")),
+    (mark_default_buffer_layouts, ("program", "target")),
+    (legalize_structured_layouts, ("program", "target")),
+    (materialize_buffer_strides, ("program", "target")),
+    (refuse_unplaced_member_offsets, ("program", "target")),
+    (mark_push_constant_layouts, ("program", "target")),
+    (hoist_constant_buffer_layouts, ("program", "target")),
+    (hoist_constant_reference_layouts, ("program", "target")),
+    (refuse_unplaced_packed_members, ("program", "target")),
+    (hoist_array_constructors, ("program", "target")),
+    (copy_written_array_parameters, ("program", "target")),
+    (copy_written_stage_inputs, ("program", "target")),
+    (refuse_per_vertex_inputs, ("program", "target")),
+    (bind_fixed_samplers, ("program", "target")),
+    (refuse_colour_attachment_inputs, ("program", "target")),
+    (legalize_sampler_states, ("program", "target")),
+    (refuse_shader_record_buffers, ("program", "target")),
+    (refuse_debug_printf, ("program", "target")),
+    (refuse_texture_lod_clamp, ("program", "target")),
+    (refuse_texture_residency, ("program", "target")),
+    (refuse_feedback_textures, ("program", "target")),
+    (declare_hlsl_residency_status, ("program", "target")),
+    (fold_array_lengths, ("program", "target")),
+    (refuse_large_constant_buffers, ("program", "target")),
+    (legalize_hlsl_stage_interfaces, ("program", "target")),
+    (annotate_hlsl_ray_payloads, ("program", "target")),
+    (legalize_opaque_struct_members, ("program", "target")),
+    (flatten_descriptor_arrays, ("program", "target")),
+    (legalize_shadow_samples, ("program", "target")),
+    (legalize_implicit_lod, ("program", "target")),
+    (legalize_cuda_warp_intrinsics, ("program", "target")),
+    (legalize_half_floats, ("program", "source", "target")),
+    (legalize_bit_functions, ("program", "source", "target")),
+    (legalize_narrow_integers, ("program", "source", "target")),
+    (wrap_narrow_arithmetic, ("program", "source", "target")),
+    (refuse_spirv_instructions, ("program", "target")),
 ]
 
 __all__ = [
@@ -470,8 +488,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
+    _arg_map = {"program": program, "source": report.source, "target": report.target}
     for _pass in _PASSES:
-        _pass(program, report)
+        fn, arg_keys = _pass
+        fn(*(_arg_map[k] for k in arg_keys))
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
