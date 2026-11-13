@@ -179,7 +179,19 @@ def test_every_path_pattern_matches_a_tracked_file():
         (["tests/test_translator/test_codegen/test_CUDA_codegen.py"], ["backend:cuda"]),
         (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),
         ([".github/workflows/coverage.yml", "tools/coverage/run.py"], ["area:ci"]),
+        (["tools/pytest_shard.py", "tests/test_pytest_shard.py"], ["area:ci"]),
+        ([".github/dependabot.yml"], ["area:ci"]),
+        (["pyproject.toml"], ["area:ci"]),
+        (["conftest.py", "tests/test_ci_workflows.py"], ["area:ci"]),
         (["docs/source/index.rst", "README.md"], ["area:docs"]),
+        (["SECURITY.md", "CHANGELOG.md", "CITATION.cff"], ["area:docs"]),
+        (
+            [
+                ".github/PULL_REQUEST_TEMPLATE.md",
+                ".github/ISSUE_TEMPLATE/bug_report.yml",
+            ],
+            ["area:docs"],
+        ),
         (["demos/integrations/mlx/README.md"], []),
     ],
 )
