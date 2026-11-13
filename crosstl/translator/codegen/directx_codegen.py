@@ -49272,6 +49272,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_expression_is_repeatable(self, expr):
         if expr is None:
             return False
+        if isinstance(expr, ConstructorNode):
+            return all(
+                self.hlsl_expression_is_repeatable(arg)
+                for arg in getattr(expr, "arguments", None) or []
+            )
         if isinstance(expr, (int, float, str)):
             return True
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -49315,10 +49320,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_expr = getattr(expr, "function", getattr(expr, "name", None))
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
-            return self.is_scalar_value_type(func_name) and all(
-                self.hlsl_expression_is_repeatable(arg) for arg in args
-            )
+            return (
+                self.is_scalar_value_type(func_name)
+                or self.hlsl_type_constructor_name(func_name) is not None
+                or self.hlsl_crossgl_vector_constructor(func_name) is not None
+            ) and all(self.hlsl_expression_is_repeatable(arg) for arg in args)
         return False
+
+    def hlsl_crossgl_vector_constructor(self, name):
+        """The HLSL vector type spelled by a CrossGL constructor such as ``vec3``, or ``None``."""
+        if not isinstance(name, str):
+            return None
+        mapped = self.map_type(name)
+        if isinstance(mapped, str) and re.fullmatch(
+            r"(?:float|half|int|uint|bool|double)[234]", mapped
+        ):
+            return mapped
+        return None
 
     def hlsl_scalar_splat_cast(self, constructor_type, rendered_arg):
         return f"(({self.map_type(constructor_type)})({rendered_arg}))"
@@ -50299,6 +50317,66 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return float(value) == 0.0
         except (TypeError, ValueError):
             return False
+
+    def generate_explicit_shadow_sample_call(self, func_name, args):
+        """Lower a shadow texture sampled with an explicit comparison sampler."""
+        if len(args) < 3 or not self.is_shadow_sampler_type(
+            self.expression_result_type(args[0])
+        ):
+            return None
+        sampler_type = self.expression_result_type(args[1])
+        if (
+            self.map_type(self.resource_base_type(sampler_type))
+            != "SamplerComparisonState"
+        ):
+            return None
+        if not (
+            is_texture_sample_basic_operation(func_name)
+            or is_texture_sample_lod_operation(func_name)
+            or is_texture_sample_offset_operation(func_name)
+        ):
+            return None
+
+        coords = args[2]
+        if self.expression_component_count(coords) != 3:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "shadow texture sampling requires vec3 coordinates (uv plus comparison reference)",
+            )
+        if not self.hlsl_expression_is_repeatable(coords):
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "shadow coordinates with side effects must be assigned to a local variable first",
+            )
+        expected_count = 3 if is_texture_sample_basic_operation(func_name) else 4
+        if len(args) != expected_count:
+            return self.unsupported_texture_compare_call(
+                func_name, "unsupported number of shadow sampling arguments"
+            )
+
+        texture_name = self.generate_expression(args[0])
+        sampler_name = self.hlsl_comparison_sampler_alias_expression(
+            args[1], self.generate_expression(args[1])
+        )
+        rendered_coords = self.generate_expression(coords)
+        texture_coord = self.vector_component(rendered_coords, "xy")
+        compare = self.vector_component(rendered_coords, "z")
+        offset = None
+        if is_texture_sample_offset_operation(func_name):
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                args[-1],
+                self.texture_resource_type(args[0]),
+                "SampleCmp",
+            )
+        if is_texture_sample_lod_operation(func_name):
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, texture_coord, compare, args[3], offset
+            )
+        call_args = [sampler_name, texture_coord, compare]
+        if offset is not None:
+            call_args.append(offset)
+        return f"{texture_name}.SampleCmp({', '.join(call_args)})"
 
     def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
@@ -56839,6 +56917,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if is_texture_gather_operation(func_name):
             return self.generate_texture_gather_call(func_name, args)
+
+        explicit_shadow_call = self.generate_explicit_shadow_sample_call(
+            func_name, args
+        )
+        if explicit_shadow_call is not None:
+            return explicit_shadow_call
 
         if is_texture_sample_offset_operation(func_name):
             return self.generate_texture_sample_offset_call(
