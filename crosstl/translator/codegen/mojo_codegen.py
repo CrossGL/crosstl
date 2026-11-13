@@ -85,6 +85,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .image_access_contracts import (
     explicit_image_format,
     image_format_channel_count,
@@ -1661,6 +1662,8 @@ class MojoCodeGen:
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast)),
+            collect_constant_and_cbuffer_member_types(self, ast),
+            ast=ast,
         )
         for func in generic_function_specializations.values():
             self.register_function_return_type(func)

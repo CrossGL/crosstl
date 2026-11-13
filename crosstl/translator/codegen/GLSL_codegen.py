@@ -240,7 +240,10 @@ from .generic_function_utils import (
     reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
-from .generic_global_types import glsl_preliminary_global_variable_types
+from .generic_global_types import (
+    collect_constant_and_cbuffer_member_types,
+    glsl_preliminary_global_variable_types,
+)
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -9428,9 +9431,20 @@ class GLSLCodeGen(
         self.global_variable_types = glsl_preliminary_global_variable_types(
             self, ast, target_stage
         )
+        generic_collection_global_types = {
+            **collect_constant_and_cbuffer_member_types(
+                self,
+                ast,
+                cbuffers=self.glsl_cbuffer_nodes(ast, target_stage),
+            ),
+            **self.glsl_constant_types,
+            **self.global_variable_types,
+        }
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
+            global_types=generic_collection_global_types,
+            ast=ast,
         )
         if generic_function_specializations:
             additional_generic_enum_specializations = (

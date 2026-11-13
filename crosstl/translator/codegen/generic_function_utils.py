@@ -1,11 +1,13 @@
 """Helpers for monomorphizing generic functions in C-style shader outputs."""
 
+import re
 from copy import deepcopy
 
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    BufferNode,
     ConstructorNode,
     ExpressionNode,
     ExpressionStatementNode,
@@ -25,6 +27,8 @@ from ..explicit_specializations import (
     explicit_specialization_for,
     explicit_specialization_index,
 )
+from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
+from ..semantics.declared_types import declared_type_names
 from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
     generic_type_parts,
@@ -228,7 +232,14 @@ def _generic_member_expression_text(value):
     return str(value)
 
 
-def prepare_generic_function_specializations(generator, functions, global_types=None):
+def prepare_generic_function_specializations(
+    generator,
+    functions,
+    global_types=None,
+    *,
+    ast=None,
+    declared_types=None,
+):
     """Collect concrete generic function instantiations used by ``functions``.
 
     ``global_types`` maps global and stage-scope declarations to the type spelling the generator
@@ -236,6 +247,13 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     parameter here as it does during emission.
     """
     generator.generic_collection_global_types = dict(global_types or {})
+    generator.generic_program_block_names = collect_program_block_names(ast)
+    if declared_types is not None:
+        generator.declared_type_names = frozenset(declared_types)
+    elif ast is not None:
+        generator.declared_type_names = declared_type_names(ast)
+    elif getattr(generator, "declared_type_names", None) is None:
+        generator.declared_type_names = frozenset()
     definitions = {}
     definition_ordinals = {}
     for func in without_forward_generic_prototypes(
@@ -280,7 +298,7 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.collecting_generic_function_specializations = True
     try:
         for func in functions or []:
-            if getattr(func, "name", None) in definitions:
+            if generic_function_parameters(func):
                 continue
             pending.extend(_collect_from_function(generator, func, {}))
 
@@ -1576,14 +1594,81 @@ def _safe_generator_argument_type_name(generator, call_argument_type_name, expr)
     return generator.type_name_string(_safe_expression_result_type(generator, expr))
 
 
+_ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
+
+
+def _base_type_name(name):
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    while text.endswith(("*", "&")):
+        text = text[:-1].strip()
+    text = _ARRAY_SUFFIXES.sub("", text).strip()
+    if "<" in text:
+        text = generic_type_parts(text)[0].strip()
+    if "::" in text:
+        text = text.rsplit("::", 1)[-1].strip()
+    return text
+
+
+def collect_program_block_names(ast):
+    """Constant-buffer and buffer block names declared in ``ast``."""
+    if ast is None:
+        return frozenset()
+    names = set()
+
+    def add_name(name):
+        if isinstance(name, str) and name:
+            names.add(name)
+
+    for cbuffer in getattr(ast, "cbuffers", None) or []:
+        add_name(getattr(cbuffer, "name", None))
+    for buf in getattr(ast, "buffers", None) or []:
+        add_name(getattr(buf, "name", None))
+    for stage in (getattr(ast, "stages", None) or {}).values():
+        for cbuffer in getattr(stage, "local_cbuffers", None) or []:
+            add_name(getattr(cbuffer, "name", None))
+        for buf in getattr(stage, "buffers", None) or []:
+            add_name(getattr(buf, "name", None))
+    for node in list(getattr(ast, "global_variables", None) or []) + list(
+        getattr(ast, "structs", None) or []
+    ):
+        if isinstance(node, BufferNode):
+            add_name(getattr(node, "name", None))
+    return frozenset(names)
+
+
+def _is_known_type_name(generator, name):
+    base_name = _base_type_name(name)
+    if not base_name:
+        return False
+    if base_name in BUILTIN_TYPE_NAMES:
+        return True
+    if base_name in (
+        getattr(generator, "declared_type_names", None) or ()
+    ) and base_name not in (
+        getattr(generator, "generic_program_block_names", None) or ()
+    ):
+        return True
+    if base_name in (
+        getattr(generator, "current_generic_function_substitutions", None) or {}
+    ):
+        return True
+    if base_name in (getattr(generator, "current_generic_function_params", None) or ()):
+        return True
+    return False
+
+
 def _type_argument_name(generator, expr):
     if isinstance(expr, str):
-        return expr
+        if _fallback_expression_result_type(generator, IdentifierNode(expr)):
+            return None
+        return expr if _is_known_type_name(generator, expr) else None
     if isinstance(expr, IdentifierNode):
         # A variable in scope is a value, not a type argument: ``inc(w, w)`` must not read ``w`` as ``T``.
         if _fallback_expression_result_type(generator, expr):
             return None
-        return expr.name
+        return expr.name if _is_known_type_name(generator, expr.name) else None
     if isinstance(expr, ExpressionNode):
         # A call, member, element, literal or operator is a value too, as ``sel(w, w)`` in ``sel(sel(w, w), w)``.
         return None

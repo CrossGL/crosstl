@@ -115,6 +115,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_array_values import (
@@ -606,6 +607,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
+                collect_constant_and_cbuffer_member_types(
+                    self, ast, type_renderer=self.convert_type_node_to_string
+                ),
+                ast=ast,
             )
             if generic_function_specializations:
                 specialized_functions = list(generic_function_specializations.values())
