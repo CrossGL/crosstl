@@ -541,7 +541,7 @@ def test_linux_dxc_installer_pinning(
             output.write(json.dumps(record) + "\\n")
         if tool == "curl":
             if failure == "download" or (
-                failure == "first-download" and "/v1.9.2602.24/" in args[-1]
+                failure == "first-download" and "/v1.9.2609/" in args[-1]
             ):
                 sys.exit(1)
             Path(args[args.index("-fsSLo") + 1]).write_text("archive")
@@ -591,7 +591,7 @@ def test_linux_dxc_installer_pinning(
                 "tool": "sha256sum",
                 "args": ["--check", "--strict"],
                 "stdin": (
-                    "928b3e9986d11dc4279050e02340950c29bcbd1e5efb9d3ded9669dade37639d"
+                    "96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1"
                     f"  {output / 'dxc.tar.gz'}\n"
                 ),
             }
