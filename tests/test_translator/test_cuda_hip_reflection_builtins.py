@@ -11,6 +11,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.diagnostics import TranslationDiagnostic
 
 KERNEL = """shader Reflection {
     compute {
@@ -57,6 +58,49 @@ TYPED_KERNEL = """shader TypedReflection {
 }
 """
 
+NESTED_KERNEL = """shader NestedReflection {
+    compute {
+        layout(local_size_x = 1) in;
+        buffer vec4* outv;
+        void main() {
+            vec3 i = vec3(1.0, -1.0, 0.0);
+            vec3 n = vec3(0.0, 1.0, 0.0);
+            vec3 e = reflect(refract(i, n, 0.5), n);
+            vec3 f = faceforward(reflect(i, n), i, n);
+            outv[0] = vec4(e, f.x);
+        }
+    }
+}
+"""
+
+HALF2_KERNEL = """shader Half2Reflection {
+    compute {
+        layout(local_size_x = 1) in;
+        buffer float* outf;
+        void main() {
+            f16vec2 a = f16vec2(half(1.0), half(-1.0));
+            f16vec2 b = f16vec2(half(0.0), half(1.0));
+            f16vec2 r = reflect(a, b);
+            f16vec2 t = refract(a, b, 0.5);
+            f16vec2 g = faceforward(a, b, a);
+            outf[0] = float(r.x) + float(t.y) + float(g.x);
+        }
+    }
+}
+"""
+
+REFUSED_KERNEL = """shader RefusedReflection {{
+    compute {{
+        layout(local_size_x = 1) in;
+        buffer vec4* outv;
+        void main() {{
+            {statements}
+            outv[0] = vec4(0.0);
+        }}
+    }}
+}}
+"""
+
 REFLECT_FLOAT3 = """__device__ inline float3 cgl_float3_reflect(float3 i, float3 n)
 {
     float d = 2.0f * ((n.x * i.x) + (n.y * i.y) + (n.z * i.z));
@@ -88,6 +132,12 @@ REFLECT_HALF = """__device__ inline half cgl_reflect_half(half i, half n)
 {
     float d = 2.0f * ((__half2float(n) * __half2float(i)));
     return __float2half(__half2float(i) - d * __half2float(n));
+}"""
+
+REFLECT_HALF2 = """__device__ inline half2 cgl_half2_reflect(half2 i, half2 n)
+{
+    float d = 2.0f * ((__half2float(n.x) * __half2float(i.x)) + (__half2float(n.y) * __half2float(i.y)));
+    return __floats2half2_rn(__half2float(i.x) - d * __half2float(n.x), __half2float(i.y) - d * __half2float(n.y));
 }"""
 
 
@@ -127,7 +177,7 @@ def test_helpers_follow_the_glsl_definitions(tmp_path, backend):
 
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
 def test_no_bare_reflection_builtin_reaches_the_output(tmp_path, backend):
-    for source in (KERNEL, TYPED_KERNEL):
+    for source in (KERNEL, TYPED_KERNEL, NESTED_KERNEL, HALF2_KERNEL):
         code = translate(tmp_path, backend, source)
         for builtin in ("reflect(", "refract(", "faceforward("):
             assert f" {builtin}" not in code and f"({builtin}" not in code
@@ -158,6 +208,72 @@ def test_double_and_half_operands_get_typed_helpers(tmp_path, backend):
         assert statement in lines
 
 
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_nested_calls_are_lowered(tmp_path, backend):
+    lines = {
+        line.strip()
+        for line in kernel_body(
+            translate(tmp_path, backend, NESTED_KERNEL)
+        ).splitlines()
+    }
+
+    assert "float3 e = cgl_float3_reflect(cgl_float3_refract(i, n, 0.5f), n);" in lines
+    assert "float3 f = cgl_float3_faceforward(cgl_float3_reflect(i, n), i, n);" in lines
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_half2_operands_get_helpers(tmp_path, backend):
+    code = translate(tmp_path, backend, HALF2_KERNEL)
+    lines = {line.strip() for line in kernel_body(code).splitlines()}
+
+    assert REFLECT_HALF2 in code
+    for signature in (
+        "__device__ inline half2 cgl_half2_refract(half2 i, half2 n, float eta)",
+        "__device__ inline half2 cgl_half2_faceforward(half2 n, half2 i, half2 nref)",
+    ):
+        assert signature in code
+    for statement in (
+        "half2 r = cgl_half2_reflect(a, b);",
+        "half2 t = cgl_half2_refract(a, b, 0.5f);",
+        "half2 g = cgl_half2_faceforward(a, b, a);",
+    ):
+        assert statement in lines
+
+
+@pytest.mark.parametrize(("backend", "label"), [("cuda", "CUDA"), ("hip", "HIP")])
+@pytest.mark.parametrize(
+    ("statements", "call"),
+    [
+        (
+            "ivec2 a = ivec2(1, -1); ivec2 b = ivec2(0, 1); ivec2 r = reflect(a, b);",
+            "reflect(",
+        ),
+        (
+            "vec3 a = vec3(1.0); vec2 b = vec2(1.0); vec3 r = reflect(a, b);",
+            "reflect(",
+        ),
+        (
+            "vec3 a = vec3(1.0); vec3 b = vec3(1.0); vec3 r = refract(a, b, vec3(0.5));",
+            "refract(",
+        ),
+        (
+            "ivec3 a = ivec3(1); vec3 r = faceforward(a, a, a);",
+            "faceforward(",
+        ),
+        ("vec3 a = vec3(1.0); vec3 r = reflect(a);", "reflect takes 2 arguments"),
+    ],
+)
+def test_uncovered_operands_are_refused(tmp_path, backend, label, statements, call):
+    source = REFUSED_KERNEL.format(statements=statements)
+
+    with pytest.raises(TranslationDiagnostic) as refused:
+        translate(tmp_path, backend, source)
+
+    assert refused.value.code == f"project.translate.{backend}-lowering-unsupported"
+    assert refused.value.target == backend
+    assert f"{label} cannot lower 1 construct: {call}" in str(refused.value)
+
+
 def _compile(tmp_path, tool, args, code, suffix):
     if shutil.which(tool) is None:
         pytest.skip(f"{tool} is not installed")
@@ -171,13 +287,13 @@ def _compile(tmp_path, tool, args, code, suffix):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("source", [KERNEL, TYPED_KERNEL])
+@pytest.mark.parametrize("source", [KERNEL, TYPED_KERNEL, NESTED_KERNEL, HALF2_KERNEL])
 def test_nvcc_compiles(tmp_path, source):
     code = translate(tmp_path, "cuda", source)
     _compile(tmp_path, "nvcc", ["-std=c++17", "-c"], code, ".cu")
 
 
-@pytest.mark.parametrize("source", [KERNEL, TYPED_KERNEL])
+@pytest.mark.parametrize("source", [KERNEL, TYPED_KERNEL, NESTED_KERNEL, HALF2_KERNEL])
 def test_hipcc_compiles(tmp_path, source):
     code = translate(tmp_path, "hip", source)
     _compile(

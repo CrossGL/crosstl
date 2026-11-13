@@ -1877,23 +1877,52 @@ class VectorArithmeticMixin:
     def generate_reflection_call(self, func_name, raw_args, args):
         """Lower ``reflect``, ``refract`` and ``faceforward`` to generated helpers.
 
-        CUDA and HIP declare none of the three, for any scalar or vector type.
-        Every operand except ``refract``'s scalar ``eta`` has the result type.
-        Returns None when the operands do not resolve to one float type.
+        CUDA and HIP declare none of the three, for any scalar or vector type, so a
+        call the helpers do not cover is refused instead of being copied as written.
+        """
+        signature = self.reflection_call_signature(func_name, raw_args)
+        if signature is None:
+            raise self.LOWERING_REFUSAL_TYPE(
+                [self.reflection_refusal_reason(func_name, raw_args)]
+            )
+        helper_name = self.require_reflection_helper(func_name, *signature)
+        return f"{helper_name}({', '.join(args)})"
+
+    def reflection_result_type(self, func_name, raw_args):
+        """Return the result type of a ``reflect``/``refract``/``faceforward`` call, or None."""
+        if func_name not in REFLECTION_BUILTIN_ARITIES:
+            return None
+        signature = self.reflection_call_signature(func_name, raw_args)
+        return signature[0] if signature is not None else None
+
+    def reflection_operand_type(self, raw_arg):
+        return self.expression_result_type(raw_arg) or self.scalar_cast_result_type(
+            raw_arg
+        )
+
+    def reflection_call_signature(self, func_name, raw_args):
+        """Resolve the helper a ``reflect``/``refract``/``faceforward`` call needs.
+
+        Returns ``(value_type, component_type, accessors, constructor)``. Every
+        operand except ``refract``'s scalar ``eta`` has ``value_type``, which is
+        also the result type. Returns None when the operands do not resolve to one
+        float, double or half scalar or vector type.
         """
         if len(raw_args) != REFLECTION_BUILTIN_ARITIES[func_name]:
             return None
         value_operands = raw_args[:2] if func_name == "refract" else raw_args
         operand_types = [
-            self.expression_result_type(raw_arg)
-            or self.scalar_cast_result_type(raw_arg)
-            for raw_arg in value_operands
+            self.reflection_operand_type(raw_arg) for raw_arg in value_operands
         ]
         if any(operand_type is None for operand_type in operand_types):
             return None
+        if func_name == "refract":
+            eta_type = self.reflection_operand_type(raw_args[2])
+            if eta_type is not None and self.math_vector_type_info(eta_type):
+                return None
 
         vector_infos = [
-            self.vector_type_info(operand_type) for operand_type in operand_types
+            self.math_vector_type_info(operand_type) for operand_type in operand_types
         ]
         if vector_infos[0] is not None:
             vector_info = vector_infos[0]
@@ -1902,36 +1931,53 @@ class VectorArithmeticMixin:
                 for info in vector_infos
             ):
                 return None
-            helper_name = self.require_reflection_helper(
-                func_name,
+            component_type = vector_info["component_type"]
+            if self.geometric_component_float_type(component_type) is None:
+                return None
+            return (
                 vector_info["type"],
-                vector_info["component_type"],
+                component_type,
                 [f".{component}" for component in vector_info["components"]],
                 vector_info["constructor"],
             )
-        else:
-            if any(info is not None for info in vector_infos):
-                return None
-            scalar_types = [
-                self.map_vector_arithmetic_type(operand_type)
-                for operand_type in operand_types
-            ]
-            if any(scalar_type not in NUMERIC_SCALARS for scalar_type in scalar_types):
-                return None
-            if all(scalar_type in INTEGER_SCALARS for scalar_type in scalar_types):
-                return None
-            if "double" in scalar_types:
-                scalar_type = "double"
-            elif all(scalar_type == "half" for scalar_type in scalar_types):
-                scalar_type = "half"
-            else:
-                scalar_type = "float"
-            helper_name = self.require_reflection_helper(
-                func_name, scalar_type, scalar_type, [""], None
-            )
-        if helper_name is None:
+
+        if any(info is not None for info in vector_infos):
             return None
-        return f"{helper_name}({', '.join(args)})"
+        scalar_types = [
+            self.map_vector_arithmetic_type(operand_type)
+            for operand_type in operand_types
+        ]
+        if any(scalar_type not in NUMERIC_SCALARS for scalar_type in scalar_types):
+            return None
+        if all(scalar_type in INTEGER_SCALARS for scalar_type in scalar_types):
+            return None
+        if "double" in scalar_types:
+            scalar_type = "double"
+        elif all(scalar_type == "half" for scalar_type in scalar_types):
+            scalar_type = "half"
+        else:
+            scalar_type = "float"
+        return (scalar_type, scalar_type, [""], None)
+
+    def reflection_refusal_reason(self, func_name, raw_args):
+        arity = REFLECTION_BUILTIN_ARITIES[func_name]
+        if len(raw_args) != arity:
+            return f"{func_name} takes {arity} arguments, got {len(raw_args)}"
+        names = []
+        for raw_arg in raw_args:
+            operand_type = self.reflection_operand_type(raw_arg)
+            if operand_type is None:
+                names.append("unknown type")
+            elif isinstance(operand_type, str):
+                names.append(operand_type)
+            else:
+                names.append(self.convert_type_node_to_string(operand_type))
+        return (
+            f"{func_name}({', '.join(names)}): {self.LOWERING_REFUSAL_TYPE.label} "
+            f"declares no {func_name}, and its generated helpers need operands of "
+            "one float, double or half scalar or vector type"
+            + (" with a scalar eta" if func_name == "refract" else "")
+        )
 
     def require_reflection_helper(
         self, func_name, value_type, component_type, accessors, constructor
@@ -1942,9 +1988,6 @@ class VectorArithmeticMixin:
         or ``[""]`` for a scalar, which has no ``constructor``.
         """
         compute_type = self.geometric_component_float_type(component_type)
-        if compute_type is None:
-            return None
-
         if constructor is None:
             helper_name = f"cgl_{func_name}_{value_type}"
         else:

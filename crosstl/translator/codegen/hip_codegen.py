@@ -10573,6 +10573,9 @@ class HipCodeGen(
                 and not self.is_user_defined_function(func_name)
             ):
                 return self.expression_result_type(raw_args[0])
+            reflection_result_type = self.reflection_result_type(func_name, raw_args)
+            if reflection_result_type is not None:
+                return reflection_result_type
             bitcast_result_type = self.hip_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
