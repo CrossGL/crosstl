@@ -976,9 +976,7 @@ def _validate_spirv_assembly(spv_asm: str, tmp_path: Path) -> None:
     if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
         return
     import subprocess
-
     asm_path = tmp_path / "module.spvasm"
-    bin_path = tmp_path / "module.spv"
     asm_path.write_text(spv_asm, encoding="utf-8")
     subprocess.run(
         ["spirv-as", "--target-env", "vulkan1.1", str(asm_path), "-o", str(bin_path)],

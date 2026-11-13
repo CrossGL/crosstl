@@ -2128,6 +2128,7 @@ class _Lowering:
                     node.operator,
                     self.target_type(target_type),
                 )
+                return _call(
                     helper,
                     [
                         self.expression(owner, env),
