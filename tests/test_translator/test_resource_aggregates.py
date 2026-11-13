@@ -977,6 +977,7 @@ def _validate_spirv_assembly(spv_asm: str, tmp_path: Path) -> None:
     import subprocess
     asm_path = tmp_path / "module.spvasm"
     asm_path.write_text(spv_asm, encoding="utf-8")
+    bin_path = tmp_path / "module.spv"
     subprocess.run(
         ["spirv-as", "--target-env", "vulkan1.1", str(asm_path), "-o", str(bin_path)],
         check=True,
