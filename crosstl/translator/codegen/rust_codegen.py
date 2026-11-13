@@ -53,6 +53,7 @@ from ..ast import (
 )
 from ..explicit_specializations import explicit_specialization_refusals
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.shader_records import is_shader_record_buffer as _is_srb
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
@@ -62,7 +63,6 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
-from ..semantics.shader_records import is_shader_record_buffer as _is_srb
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
