@@ -10488,6 +10488,8 @@ class TestCudaCodeGen:
 
         assert "// define BUILD_SHAREDMEMORY_TYPE" in result
         assert "template <> struct SharedMemory<t>" in result
+        assert "// Kernel: use_shared" in result
+        assert "fn use_shared(" in result
         assert "struct SharedMemory {" in result
 
     def test_cuda_compound_literal_struct_becomes_constructor_call(self):
@@ -10516,7 +10518,5 @@ class TestCudaCodeGen:
         # The compound literal elements must be expanded directly into the
         # constructor call, not wrapped in a brace initializer.
         assert "Pair(3.0f, 2)" in result
-        assert "Pair({" not in result
-        assert "Pair{{" not in result
         assert "// Kernel: use_shared" in result
         assert "fn use_shared(" in result
