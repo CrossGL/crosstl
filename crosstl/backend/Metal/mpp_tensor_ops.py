@@ -37,7 +37,7 @@ See also :mod:`.opaque_matrix_contracts` for the ``simdgroup_matrix`` path.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 __all__ = [
     "MPP_MATMUL2D_RECEIVER_RE",
@@ -109,7 +109,7 @@ MPP_MATMUL2D_RECEIVER_RE = re.compile(
 # Descriptor parsing
 # ---------------------------------------------------------------------------
 
-def _parse_int_literal(text: str) -> Optional[int]:
+def _parse_int_literal(text: str) -> int | None:
     """Parse a simple positive integer literal, returning ``None`` on failure."""
     text = text.strip()
     try:
@@ -119,7 +119,7 @@ def _parse_int_literal(text: str) -> Optional[int]:
         return None
 
 
-def _parse_descriptor_args(arg_text: str) -> Optional[Tuple[int, int, int, bool, bool, str]]:
+def _parse_descriptor_args(arg_text: str) -> tuple[int, int, int, bool, bool, str] | None:
     """Parse ``matmul2d_descriptor(M, N, K, transL, transR, relax, mode)`` args.
 
     Returns ``(M, N, K, transpose_left, transpose_right, mode_name)`` or
@@ -166,7 +166,7 @@ def _cooperative_matrix_type(
 
 def _operand_dimensions(
     m: int, n: int, k: int, method: str, trans_left: bool, trans_right: bool
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Return (rows, cols) for the named operand factory method."""
     if method == "get_left_input_cooperative_tensor":
         # Left operand: M × K (or K × M if transposed)
@@ -178,7 +178,7 @@ def _operand_dimensions(
     return (m, n)
 
 
-def _result_element_type(method: str, type_args: List[str]) -> str:
+def _result_element_type(method: str, type_args: list[str]) -> str:
     """Pick the element type from the factory method's template arguments.
 
     The convention for all three factory methods in the MPP API is:
@@ -225,7 +225,7 @@ def rewrite_mpp_tensor_ops_auto_types(
     ignored_spans = preprocessor._find_comment_and_literal_spans(code)
 
     # ---- Step 1: collect constexpr descriptor declarations ----
-    descriptors: Dict[str, Tuple[int, int, int, bool, bool, str]] = {}
+    descriptors: dict[str, tuple[int, int, int, bool, bool, str]] = {}
     for match in _DESCRIPTOR_DECL_RE.finditer(code):
         if preprocessor._containing_span(match.start(), ignored_spans) is not None:
             continue
@@ -235,7 +235,7 @@ def rewrite_mpp_tensor_ops_auto_types(
             descriptors[name] = parsed
     # ---- Step 2: collect matmul2d variable declarations ----
     # Maps op_name → descriptor_name
-    matmul2d_ops: Dict[str, str] = {}
+    matmul2d_ops: dict[str, str] = {}
     for match in _MATMUL2D_DECL_RE.finditer(code):
         if preprocessor._containing_span(match.start(), ignored_spans) is not None:
             continue
@@ -247,8 +247,8 @@ def rewrite_mpp_tensor_ops_auto_types(
         return code
     # ---- Step 3: rewrite auto cooperative-tensor declarations ----
     # Maps variable_name → CrossGL type spelling (for step 4).
-    coop_tensor_types: Dict[str, str] = {}
-    replacements: List[Tuple[int, int, str]] = []
+    coop_tensor_types: dict[str, str] = {}
+    replacements: list[tuple[int, int, str]] = []
     for match in _AUTO_FACTORY_DECL_RE.finditer(code):
         if preprocessor._containing_span(match.start(), ignored_spans) is not None:
             continue
@@ -295,10 +295,10 @@ def rewrite_mpp_tensor_ops_auto_types(
 def infer_mpp_cooperative_tensor_call_type(
     op_name: str,
     method: str,
-    type_args: List[str],
-    matmul2d_ops: Dict[str, str],
-    descriptors: Dict[str, Tuple[int, int, int, bool, bool, str]],
-) -> Optional[str]:
+    type_args: list[str],
+    matmul2d_ops: dict[str, str],
+    descriptors: dict[str, tuple[int, int, int, bool, bool, str]],
+) -> str | None:
     """Return the CrossGL type for an MPP factory call, or ``None`` if unknown.
 
     This hook is used by the preprocessor's argument-type inference when it
@@ -323,7 +323,7 @@ def infer_mpp_cooperative_tensor_call_type(
 def scan_mpp_matmul2d_declarations(
     preprocessor: Any,
     code: str,
-) -> Tuple[Dict[str, Tuple[int, int, int, bool, bool, str]], Dict[str, str]]:
+) -> tuple[dict[str, tuple[int, int, int, bool, bool, str]], dict[str, str]]:
     """Return (descriptors, matmul2d_ops) collected from *code*.
 
     ``descriptors`` maps constexpr-descriptor-name → (M, N, K, transL, transR, mode).
@@ -332,14 +332,14 @@ def scan_mpp_matmul2d_declarations(
     if "mpp" not in code or "tensor_ops" not in code:
         return {}, {}
     ignored_spans = preprocessor._find_comment_and_literal_spans(code)
-    descriptors: Dict[str, Tuple[int, int, int, bool, bool, str]] = {}
+    descriptors: dict[str, tuple[int, int, int, bool, bool, str]] = {}
     for match in _DESCRIPTOR_DECL_RE.finditer(code):
         if preprocessor._containing_span(match.start(), ignored_spans) is not None:
             continue
         parsed = _parse_descriptor_args(match.group("args"))
         if parsed is not None:
             descriptors[match.group("name")] = parsed
-    matmul2d_ops: Dict[str, str] = {}
+    matmul2d_ops: dict[str, str] = {}
     for match in _MATMUL2D_DECL_RE.finditer(code):
         if preprocessor._containing_span(match.start(), ignored_spans) is not None:
             continue

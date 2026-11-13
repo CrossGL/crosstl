@@ -117,6 +117,7 @@ from .member_address_types import (
 from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
 from .method_arity import accepts_argument_count, named_parameter_arguments
+from .mpp_tensor_ops import rewrite_mpp_tensor_ops_auto_types
 from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
@@ -194,7 +195,6 @@ from .unreachable_constrained_callers import (
     materialize_with_unreachable_callers,
     unreachable_caller_scope,
 )
-from .mpp_tensor_ops import rewrite_mpp_tensor_ops_auto_types
 from .unreferenced_constrained_templates import (
     prune_unreferenced_constrained_templates,
 )
