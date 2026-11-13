@@ -3095,6 +3095,8 @@ class HLSLCodeGen(
             "isampler2DMSArray": "Texture2DMSArray<int4>",
             "usampler2DMS": "Texture2DMS<uint4>",
             "usampler2DMSArray": "Texture2DMSArray<uint4>",
+            "sampler1DShadow": "Texture1D",
+            "sampler1DArrayShadow": "Texture1DArray",
             "sampler2DShadow": "Texture2D",
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
@@ -46406,6 +46408,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_shadow_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",
