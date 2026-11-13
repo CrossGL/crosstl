@@ -676,14 +676,13 @@
   "scope": {
     "instantiatedEntryCount": 518,
     "coveredEntryCount": 36,
+    "qmvGateEntryCount": 54,
     "excludedEntries": {
       "kernels": [
         "fp_qmv_fast",
-        "fp_qmv",
         "fp_qvm",
         "fp_qmm_n",
         "fp_gather_qmv_fast",
-        "fp_gather_qmv",
         "fp_gather_qvm",
         "fp_gather_qmm_n",
         "fp_qmv_quad",
@@ -694,8 +693,8 @@
         "fp_qmm_t",
         "fp_gather_qmm_rhs"
       ],
-      "count": 482,
-      "reason": "the matrix-vector and matrix-matrix kernels are outside this gate"
+      "count": 428,
+      "reason": "the fast, quad, wide and split-K matrix-vector, the vector-matrix and the matrix-matrix kernels are not gated yet"
     },
     "runtimeCoveredEntryCount": 36,
     "artifactCountByTarget": 36,

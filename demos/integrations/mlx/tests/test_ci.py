@@ -1095,6 +1095,8 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "quantized-qmv-quad-0",
         "quantized-qmv-quad-1",
         "quantized-qmv-quad-2",
+        "fp-quantized-qmv-0",
+        "fp-quantized-qmv-1",
         "gemm-family-0",
         "gemm-family-1",
         "gemm-family-2",
