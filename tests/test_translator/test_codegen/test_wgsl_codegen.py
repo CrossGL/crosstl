@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -6120,14 +6121,55 @@ def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
     source.write_text(shader, encoding="utf-8")
     generated = crosstl.translate(str(source), backend="wgsl")
 
-    compute_main = generated.split("fn compute_main()")[1]
+    compute_main = generated.split("fn compute_main()")[1].split("fn crosstl_")[0]
+    lines = [
+        line.strip()
+        for line in compute_main.splitlines()
+        if line.strip() and line.strip() not in ("{", "}")
+    ]
 
-    # Verify each i++ advances exactly once per statement in source order
-    assert compute_main.count("i += 1;") == 9
-    for idx in range(9):
-        assert f"_crosstl_prior_{idx}" in compute_main
+    assert lines[0] == "var i: i32 = 0;"
 
-    # Verify next_index() call in array index is evaluated exactly once
+    expected_ops = [
+        ("u2_out[0]", "crosstl_pack2x16float_vec2", "v2_arr"),
+        ("u3_out[0]", "crosstl_pack2x16float_vec3", "v3_arr"),
+        ("u4_out[0]", "crosstl_pack2x16float_vec4", "v4_arr"),
+        ("f2_out[0]", "crosstl_unpack2x16float_vec2", "u2_arr"),
+        ("f3_out[0]", "crosstl_unpack2x16float_vec3", "u3_arr"),
+        ("f4_out[0]", "crosstl_unpack2x16float_vec4", "u4_arr"),
+        ("f2_out[1]", "unpack2x16float(pack2x16float", "v2_arr"),
+        ("f3_out[1]", "crosstl_unpack_pack2x16float_vec3", "v3_arr"),
+        ("f4_out[1]", "crosstl_unpack_pack2x16float_vec4", "v4_arr"),
+    ]
+
+    # Verify each i++ statement follows the exact sequence:
+    # 1. Capture the prior index into a temporary variable before increment.
+    # 2. Advance the loop variable (i += 1).
+    # 3. Use the exact captured temporary variable in the conversion assignment.
+    # 4. Statements execute strictly in source order.
+    curr_line = 1
+    for target, helper, arr in expected_ops:
+        capture_line = lines[curr_line]
+        m = re.match(r"^let (\w+): i32 = i;$", capture_line)
+        assert m is not None, f"Expected capture of i, got: {capture_line}"
+        saved_index_var = m.group(1)
+
+        incr_line = lines[curr_line + 1]
+        assert incr_line == "i += 1;", f"Expected increment of i, got: {incr_line}"
+
+        use_line = lines[curr_line + 2]
+        assert target in use_line, f"Expected target {target} in: {use_line}"
+        assert helper in use_line, f"Expected helper {helper} in: {use_line}"
+        assert (
+            f"{arr}[{saved_index_var}]" in use_line
+        ), f"Expected {arr}[{saved_index_var}] in: {use_line}"
+
+        curr_line += 3
+
+    # Verify the effectful call index expression is evaluated once and passed directly
+    final_line = lines[curr_line]
+    assert final_line == "u3_out[1] = crosstl_pack2x16float_vec3(v3_arr[next_index()]);"
     assert compute_main.count("next_index()") == 1
+    assert compute_main.count("i += 1;") == 9
 
     validate_wgsl_with_naga(tmp_path, generated)
