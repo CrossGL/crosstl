@@ -76,8 +76,19 @@ from .rust_memory_atomics import (
     rust_memory_atomic_location_roots,
     rust_memory_atomic_result_type,
 )
+from .rust_narrow_integers import (
+    RUST_EXACT_WIDTH_INTEGER_TYPES,
+    RUST_SCALAR_RANKS,
+    promoted_operand_type,
+)
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
+from .rust_resource_bindings import (
+    PROMOTABLE_RESOURCE_KINDS,
+    referenced_identifier_names,
+    refuse_unbound_rust_resource,
+    resource_parameters,
+)
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
@@ -116,6 +127,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "half": "f16",
             "f16": "f16",
             "bool": "bool",
+            **RUST_EXACT_WIDTH_INTEGER_TYPES,
             "string": "&'static str",
             "str": "&'static str",
             "char": "char",
@@ -621,6 +633,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
+        self.rust_referenced_names = frozenset()
+        self.rust_resource_capture_params = {}
+        self.rust_entry_resource_infos = {}
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -737,6 +752,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.lambda_capture_place_alias_stack = []
         self.force_move_lambda_depth = 0
         self.nested_lambda_capture_preclone_depth = 0
+        self.rust_referenced_names = referenced_identifier_names(ast)
         self.reserve_explicit_rust_resource_bindings(ast)
         self.rust_entry_resource_params_by_function_id = (
             self.collect_rust_entry_resource_params(ast)
@@ -745,6 +761,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             id(info["node"])
             for params in self.rust_entry_resource_params_by_function_id.values()
             for info in params
+        } | {
+            id(self.rust_entry_resource_infos[param.name]["node"])
+            for params in self.rust_resource_capture_params.values()
+            for param in params
+        }
+        self.rust_function_capture_params = {
+            name: list(params)
+            for name, params in self.rust_resource_capture_params.items()
         }
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
@@ -769,14 +793,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if isinstance(node, ArrayNode):
-                code += self.generate_global_array_declaration(node)
-                emitted_static_names.add(node.name)
-            elif self.is_promoted_rust_entry_resource(node):
+            if self.is_promoted_rust_entry_resource(node):
                 var_type = self.rust_variable_source_type(node)
                 self.register_glsl_buffer_block_metadata(node)
                 self.register_variable_type(node.name, var_type, scope="static")
                 code += self.rust_resource_metadata_comment(node, var_type)
+                emitted_static_names.add(node.name)
+            elif isinstance(node, ArrayNode):
+                code += self.generate_global_array_declaration(node)
                 emitted_static_names.add(node.name)
             else:
                 code += self.generate_variable_static_declaration(node)
@@ -836,7 +860,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     ),
                 )
             else:
-                code += self.generate_function(func)
+                code += self.generate_function(
+                    func,
+                    extra_params=self.rust_function_capture_params.get(
+                        getattr(func, "name", None)
+                    ),
+                )
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
@@ -854,9 +883,15 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         self.get_variable_type(variable),
                         scope="static",
                     )
-                    if variable.name not in emitted_static_names:
+                    if variable.name in emitted_static_names:
+                        continue
+                    if self.is_promoted_rust_entry_resource(variable):
+                        var_type = self.rust_variable_source_type(variable)
+                        self.register_glsl_buffer_block_metadata(variable)
+                        code += self.rust_resource_metadata_comment(variable, var_type)
+                    else:
                         code += self.generate_variable_static_declaration(variable)
-                        emitted_static_names.add(variable.name)
+                    emitted_static_names.add(variable.name)
 
                 local_captures = {}
                 if hasattr(stage, "entry_point"):
@@ -867,7 +902,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         stage_entry_name_counts,
                     )
                     local_captures = self.collect_stage_local_function_captures(stage)
-                    self.rust_function_capture_params.update(local_captures)
+                    for captured_name, captured in local_captures.items():
+                        self.rust_function_capture_params[captured_name] = list(
+                            captured
+                        ) + self.rust_resource_capture_params.get(captured_name, [])
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
                         stage.entry_point,
@@ -885,6 +923,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         )
                 for captured_name in local_captures:
                     self.rust_function_capture_params.pop(captured_name, None)
+                    if captured_name in self.rust_resource_capture_params:
+                        self.rust_function_capture_params[captured_name] = list(
+                            self.rust_resource_capture_params[captured_name]
+                        )
 
                 self.variable_types = saved_variable_types
 
@@ -2230,12 +2272,23 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return None
 
     def rust_global_entry_resource_infos(self, ast):
-        """Collect global resources that can be promoted to entry parameters."""
+        """Collect global and stage-local resources that can be promoted to entry parameters.
+
+        Stage-local variables share one module-level namespace with the globals (a name is declared once), so a
+        stage-local resource whose name a global or an earlier stage already declares is the same resource.
+        """
         resources = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        declared = set()
+        candidates = list(getattr(ast, "global_variables", []) or [])
+        stages = getattr(ast, "stages", None)
+        if isinstance(stages, dict):
+            for stage in stages.values():
+                candidates.extend(getattr(stage, "local_variables", []) or [])
+        for node in candidates:
             name = getattr(node, "name", None)
-            if not name:
+            if not name or name in declared:
                 continue
+            declared.add(name)
             type_name = self.rust_variable_source_type(node)
             if not self.can_promote_rust_entry_resource(node, type_name):
                 continue
@@ -2243,24 +2296,30 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return resources
 
     def can_promote_rust_entry_resource(self, node, type_name):
-        """Return whether a resource can replace a Rust placeholder static."""
-        if isinstance(node, ArrayNode):
-            return False
-        if self.explicit_rust_resource_binding_index(node) is None:
-            return False
+        """Return whether a resource can be an entry parameter, with its explicit or assigned binding.
+
+        A fixed-size resource array is one parameter of array type bound to ``count`` consecutive bindings.
+        """
         if getattr(node, "initial_value", getattr(node, "value", None)) is not None:
             return False
 
         resource_kind = self.rust_resource_kind(type_name, node=node)
-        if resource_kind not in {"texture", "sampler"}:
+        if resource_kind not in PROMOTABLE_RESOURCE_KINDS:
             return False
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
-        return count == 1
+        if self.is_array_type_name(self.type_name_string(type_name)):
+            _base, sizes = self.c_array_type_parts(self.type_name_string(type_name))
+        return isinstance(count, int) and count >= 1
 
     def collect_rust_entry_resource_params(self, ast):
-        """Map stage entry functions to promoted Rust resource parameters."""
+        """Map stage entry functions to their Rust resource parameters, and helpers to the resources they take.
+
+        The helper parameters go to :attr:`rust_resource_capture_params`, keyed by helper name.
+        """
+        self.rust_resource_capture_params = {}
         resources = self.rust_global_entry_resource_infos(ast)
+        self.rust_entry_resource_infos = resources
         if not resources:
             return {}
 
@@ -2273,12 +2332,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 stage_entry_ids.add(id(entry_point))
 
         entry_functions = {}
-        entry_refs = {}
-        non_entry_refs = set()
+        helpers = []
         seen_functions = set()
 
         def visit(current):
-            nonlocal non_entry_refs
             if current is None:
                 return
             if isinstance(current, list):
@@ -2290,17 +2347,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 if function_id in seen_functions:
                     return
                 seen_functions.add(function_id)
-                is_entry = (
+                if (
                     function_id in stage_entry_ids
                     or self.rust_function_stage_name(current) is not None
-                )
-                if is_entry:
+                ):
                     entry_functions[function_id] = current
-                    entry_refs[function_id] = self.collect_free_identifier_names(
-                        current
-                    )
-                else:
-                    non_entry_refs.update(self.collect_free_identifier_names(current))
+                elif not self.is_function_prototype(current):
+                    helpers.append(current)
                 return
 
             for function in getattr(current, "functions", []) or []:
@@ -2314,28 +2367,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     visit(stage)
 
         visit(ast)
-
-        params_by_function = {}
-        unsafe_names = set(resources) & non_entry_refs
-        for function_id, used_names in entry_refs.items():
-            function = entry_functions[function_id]
-            parameter_names = {
-                param.name
-                for param in getattr(
-                    function,
-                    "parameters",
-                    getattr(function, "params", []),
-                )
-            }
-            params = [
-                info
-                for name, info in resources.items()
-                if name in used_names
-                and name not in unsafe_names
-                and name not in parameter_names
-            ]
-            if params:
-                params_by_function[function_id] = params
+        params_by_function, self.rust_resource_capture_params = resource_parameters(
+            entry_functions, helpers, resources
+        )
         return params_by_function
 
     def is_promoted_rust_entry_resource(self, node):
@@ -3937,7 +3971,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         return (
             self.rust_resource_metadata_comment(node, var_type)
-            + self.rust_resource_placeholder_diagnostic_comment(node, var_type)
+            + refuse_unbound_rust_resource(self, node, var_type)
             + self.generate_static_declaration(
                 node.name,
                 rust_type,
@@ -3987,7 +4021,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.register_variable_type(node.name, source_type, scope="static")
         return (
             self.rust_resource_metadata_comment(node, source_type)
-            + self.rust_resource_placeholder_diagnostic_comment(node, source_type)
+            + refuse_unbound_rust_resource(self, node, source_type)
             + self.generate_static_declaration(
                 node.name, rust_type, initializer, lazy_lock=lazy_lock
             )
@@ -8551,6 +8585,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 "store", "a readonly block cannot be written"
             )
         root_name = self.glsl_buffer_block_root_name(target)
+        if root_name in self.rust_entry_resource_infos:
+            # The block reaches the entry point and its helpers as a value of the block's struct type, so a store
+            # would change a copy and never reach the bound buffer.
+            return self.unsupported_glsl_buffer_block_statement(
+                "store",
+                "the block is passed by value, so a store would not reach the buffer",
+            )
         if root_name in self.static_variable_names and root_name not in (
             self.local_variable_names
         ):
@@ -11744,7 +11785,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return components
 
     def scalar_constructor_type(self, func_name):
+        if func_name in RUST_EXACT_WIDTH_INTEGER_TYPES:
+            return RUST_EXACT_WIDTH_INTEGER_TYPES[func_name]
         scalar_types = {
+            "i8": "i8",
+            "u8": "u8",
             "bool": "bool",
             "char": "char",
             "short": "i16",
@@ -11774,12 +11819,23 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if operator in comparison_ops or operator in logical_ops:
             return "bool"
 
-        return self.promoted_scalar_type(left_type, right_type)
+        return self.promoted_binary_operand_type(left_type, right_type, operator)
 
     def binary_scalar_operand_type(self, left_type, right_type, operator=None):
         if operator in {"&&", "||"}:
             return None
-        return self.promoted_scalar_type(left_type, right_type)
+        return self.promoted_binary_operand_type(left_type, right_type, operator)
+
+    def promoted_binary_operand_type(self, left_type, right_type, operator):
+        """The type both operands compute in: integer promotion, then the higher-ranked of the two."""
+        left = self.normalize_scalar_type(left_type)
+        right = self.normalize_scalar_type(right_type)
+        if left is None or right is None:
+            return None
+        return self.promoted_scalar_type(
+            promoted_operand_type(left, operator),
+            promoted_operand_type(right, operator),
+        )
 
     def binary_composite_operand_type(self, left_type, right_type, operator=None):
         arithmetic_ops = {"+", "-", "*", "/", "%"}
@@ -12208,18 +12264,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if left is None or right is None:
             return None
 
-        ranks = {
-            "bool": 0,
-            "i16": 1,
-            "u16": 2,
-            "i32": 3,
-            "u32": 4,
-            "i64": 5,
-            "u64": 6,
-            "f16": 7,
-            "f32": 8,
-            "f64": 9,
-        }
+        ranks = RUST_SCALAR_RANKS
         return left if ranks[left] >= ranks[right] else right
 
     def promoted_vector_type(self, left_type, right_type):
@@ -12318,6 +12363,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "f16": "f16",
             "f32": "f32",
             "f64": "f64",
+            **RUST_EXACT_WIDTH_INTEGER_TYPES,
         }
         return aliases.get(type_name)
 
@@ -13797,7 +13843,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return ""
 
         spirv_args = []
-        if info["kind"] == "buffer":
+        if info["kind"] in {"buffer", "glsl_buffer_block"}:
             spirv_args.append("storage_buffer")
         spirv_args.extend(
             [
@@ -13816,18 +13862,6 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return (
             f"{attribute}{self.rust_identifier(node.name)}: "
             f"{self.map_function_parameter_type(type_name)}"
-        )
-
-    def rust_resource_placeholder_diagnostic_comment(self, node, type_name):
-        name = getattr(node, "name", None)
-        resource_kind = self.rust_resource_kind(type_name, node=node)
-        if not name or resource_kind is None:
-            return ""
-        return (
-            f"// CrossGL Rust limitation: resource {name} is emitted as a "
-            "compile-only placeholder static, not a rust-gpu resource binding; "
-            "pass real spirv_std resources as #[spirv(...)] entry parameters "
-            "when targeting rust-gpu.\n"
         )
 
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):

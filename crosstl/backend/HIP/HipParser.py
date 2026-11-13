@@ -4297,6 +4297,9 @@ class HipParser:
         depth = 1
 
         while depth > 0:
+            if self.current_token is None or self.current_token.type == "EOF":
+                # The input ended inside the argument list.
+                raise SyntaxError("Unterminated template argument list: expected '>'")
             token_type = self.current_token.type
             token_value = self.current_token.value
             if token_type == "LT" and self.is_nested_template_lt_at_pos(self.pos):

@@ -1,4 +1,4 @@
-"""Built-in functions the HLSL, Metal, CUDA and HIP generators may call by name, and the refusal of the rest.
+"""Built-in functions the HLSL, Metal, CUDA, HIP and Mojo generators may call by name, and the refusal of the rest.
 
 The importers carry the built-in functions of the languages they read into the IR as plain calls
 (:data:`~crosstl.translator.semantics.builtin_function_names.BUILTIN_FUNCTION_NAMES`), and each generator lowers the
@@ -47,6 +47,8 @@ __all__ = [
     "HLSL_CALLABLE_FUNCTION_NAMES",
     "HLSL_PAYLOAD_ACCESS_QUALIFIER",
     "METAL_CALLABLE_FUNCTION_NAMES",
+    "MOJO_CALLABLE_FUNCTION_NAMES",
+    "MOJO_NON_CALLS",
     "refuse_written_foreign_calls",
     "written_foreign_call_names",
 ]
@@ -61,6 +63,29 @@ METAL_CALLABLE_FUNCTION_NAMES = (
     | frozenset(SAMPLER_STATE_CALL_ARGUMENTS)
     | frozenset({"as_type", "sizeof", "alignof"})
 )
+
+# Mojo: the output imports ``math`` and ``gpu`` whole (``from math import *``, ``from gpu import *``) and, when it
+# reinterprets bits, ``memory.bitcast``, and the ``std.bit`` functions it calls. The callable built-in functions are
+# the free functions of the Mojo standard library's ``math`` module, the prelude's built-in functions (``abs``,
+# ``min``, ``max``, ``round``, ``pow``, ``divmod``, ``len``, ``range``, ``print``, ``any``, ``all``), ``gpu.barrier``,
+# ``memory.bitcast`` and the ``std.bit`` counts and reversal. Every other
+# helper the generator writes (``dot_product``, ``lerp``, ``_crossgl_saturate_f32``) is a function the output
+# declares with ``fn``.
+MOJO_CALLABLE_FUNCTION_NAMES = frozenset("""
+    acos acosh align_down align_up asin asinh atan atan2 atanh cbrt ceil ceildiv clamp copysign cos cosh erf erfc
+    exp exp2 expm1 factorial floor fma frexp gamma gcd hypot iota isclose isqrt j0 j1 lcm ldexp lgamma log log10
+    log1p log2 logb modf recip remainder rsqrt scalb sin sinh sqrt tan tanh trunc ulp y0 y1
+    abs all any divmod len max min pow print range round
+    barrier bitcast
+    pop_count bit_reverse count_leading_zeros count_trailing_zeros
+    """.split())
+# A Mojo comment runs from ``#`` to the end of the line (string literals are blanked first), and a keyword operator
+# or statement keyword followed by a parenthesis (``a and (b)``, ``not (c)``, ``return (d)``) is not a call.
+MOJO_COMMENT = re.compile(r"#[^\n]*")
+MOJO_KEYWORD = re.compile(
+    r"\b(?:and|or|not|in|is|if|elif|else|while|for|return|raise|assert|del|yield|await|with)\b"
+)
+MOJO_NON_CALLS = (MOJO_COMMENT, MOJO_KEYWORD)
 
 _PAYLOAD_STAGE = "|".join(PAYLOAD_STAGES)
 # A ray payload field's access qualifier, which follows a colon like a semantic and lists payload stages

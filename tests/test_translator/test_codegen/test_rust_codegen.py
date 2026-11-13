@@ -16904,15 +16904,12 @@ def test_sampler3d_maps_to_texture3d_in_rust(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert (
-        "static VOLUME_MAP: std::sync::LazyLock<Texture3D<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());"
-    ) in generated_code
+    assert ("volumeMap: Texture3D<f32>") in generated_code
     assert (
         "static VOLUME_MAP: Texture3D<f32> = Default::default();" not in generated_code
     )
     assert "static VOLUME_MAP: sampler3D" not in generated_code
-    assert "return sample(*VOLUME_MAP, uv);" in generated_code
+    assert "return sample(volumeMap, uv);" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -16940,30 +16937,21 @@ def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_pa
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static RAMP_MAP: std::sync::LazyLock<Texture1D<f32>>" in generated_code
-    assert (
-        "static RAMP_ARRAY_MAP: std::sync::LazyLock<Texture1DArray<f32>>"
-        in generated_code
-    )
-    assert (
-        "static ARRAY_MAP: std::sync::LazyLock<Texture2DArray<f32>>" in generated_code
-    )
-    assert "static ENV_MAP: std::sync::LazyLock<TextureCube<f32>>" in generated_code
-    assert (
-        "static PROBE_MAP: std::sync::LazyLock<TextureCubeArray<f32>>" in generated_code
-    )
+    assert "rampMap: Texture1D<f32>" in generated_code
+    assert "rampArrayMap: Texture1DArray<f32>" in generated_code
+    assert "arrayMap: Texture2DArray<f32>" in generated_code
+    assert "envMap: TextureCube<f32>" in generated_code
+    assert "probeMap: TextureCubeArray<f32>" in generated_code
     assert "sampler1D" not in generated_code
     assert "sampler1DArray" not in generated_code
     assert "sampler2DArray" not in generated_code
     assert "samplerCube" not in generated_code
     assert "samplerCubeArray" not in generated_code
-    assert "let ramp: Vec4<f32> = sample(*RAMP_MAP, x);" in generated_code
-    assert (
-        "let rampLayer: Vec4<f32> = sample(*RAMP_ARRAY_MAP, xLayer);" in generated_code
-    )
-    assert "let layer: Vec4<f32> = sample(*ARRAY_MAP, uvw);" in generated_code
-    assert "let env: Vec4<f32> = sample(*ENV_MAP, dir);" in generated_code
-    assert "let probe: Vec4<f32> = sample(*PROBE_MAP, probeCoord);" in generated_code
+    assert "let ramp: Vec4<f32> = sample(rampMap, x);" in generated_code
+    assert "let rampLayer: Vec4<f32> = sample(rampArrayMap, xLayer);" in generated_code
+    assert "let layer: Vec4<f32> = sample(arrayMap, uvw);" in generated_code
+    assert "let env: Vec4<f32> = sample(envMap, dir);" in generated_code
+    assert "let probe: Vec4<f32> = sample(probeMap, probeCoord);" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -17001,9 +16989,9 @@ def test_basic_sampled_texture_calls_map_to_rust_helpers_and_compile(tmp_path):
     )
     assert "static COLOR_MAP" not in generated_code
     assert "static LINEAR_SAMPLER" not in generated_code
-    assert "let combined: Vec4<f32> = sample(*DIFFUSE_MAP, uv);" in generated_code
+    assert "let combined: Vec4<f32> = sample(diffuseMap, uv);" in generated_code
     assert (
-        "let split: Vec4<f32> = sample_sampler(*DIFFUSE_MAP, *POINT_SAMPLER, uv);"
+        "let split: Vec4<f32> = sample_sampler(diffuseMap, pointSampler, uv);"
         in generated_code
     )
     assert (
@@ -17036,15 +17024,14 @@ def test_shadow_sampler_texture_calls_return_float_and_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let implicitShadow: f32 = sample_shadow(*SHADOW_MAP, uvDepth);"
+        "let implicitShadow: f32 = sample_shadow(shadowMap, uvDepth);" in generated_code
+    )
+    assert (
+        "let splitShadow: f32 = sample_shadow_sampler(shadowMap, compareSampler, uvDepth);"
         in generated_code
     )
     assert (
-        "let splitShadow: f32 = sample_shadow_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvDepth);"
-        in generated_code
-    )
-    assert (
-        "let cmpMember: f32 = texture_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        "let cmpMember: f32 = texture_compare_sampler(shadowMap, compareSampler, uv, depth);"
         in generated_code
     )
     assert "texture(shadowMap" not in generated_code
@@ -17141,7 +17128,7 @@ def test_hlsl_texture_member_helpers_map_to_rust_placeholders_and_compile(tmp_pa
         in generated_code
     )
     assert (
-        "let msLoaded: Vec4<f32> = texel_fetch(*MS_MAP, Vec2::<i32>::new(pixel.x, pixel.y), sampleIndex);"
+        "let msLoaded: Vec4<f32> = texel_fetch(msMap, Vec2::<i32>::new(pixel.x, pixel.y), sampleIndex);"
         in generated_code
     )
     assert (
@@ -17149,11 +17136,11 @@ def test_hlsl_texture_member_helpers_map_to_rust_placeholders_and_compile(tmp_pa
         in generated_code
     )
     assert (
-        "let cmpGradOffset: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, linearSampler, uv, depth, ddx, ddy, offset);"
+        "let cmpGradOffset: f32 = texture_compare_grad_offset_sampler(shadowMap, linearSampler, uv, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let gatherCmpOffset: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, linearSampler, uv, depth, offset);"
+        "let gatherCmpOffset: Vec4<f32> = texture_gather_compare_offset_sampler(shadowMap, linearSampler, uv, depth, offset);"
         in generated_code
     )
     assert (
@@ -17242,15 +17229,14 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let lodColor: Vec4<f32> = sample_lod(*MAIN_TEXTURE, uv, 2.0);"
+        "let lodColor: Vec4<f32> = sample_lod(mainTexture, uv, 2.0);" in generated_code
+    )
+    assert (
+        "let gradColor: Vec4<f32> = sample_grad(mainTexture, uv, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let gradColor: Vec4<f32> = sample_grad(*MAIN_TEXTURE, uv, ddx, ddy);"
-        in generated_code
-    )
-    assert (
-        "let offsetColor: Vec4<f32> = sample_offset(*MAIN_TEXTURE, uv, offset);"
+        "let offsetColor: Vec4<f32> = sample_offset(mainTexture, uv, offset);"
         in generated_code
     )
     assert "textureLod" not in generated_code
@@ -17306,33 +17292,21 @@ def test_integer_texture_lod_sampler_helpers_preserve_integer_samples_and_compil
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static SIGNED_TEX: std::sync::LazyLock<Texture2D<i32>>" in generated_code
+    assert "signedTex: Texture2D<i32>" in generated_code
+    assert "signedLayers: Texture2DArray<i32>" in generated_code
+    assert "unsignedCube: TextureCube<u32>" in generated_code
+    assert "unsignedCubeLayers: TextureCubeArray<u32>" in generated_code
     assert (
-        "static SIGNED_LAYERS: std::sync::LazyLock<Texture2DArray<i32>>"
-        in generated_code
-    )
-    assert (
-        "static UNSIGNED_CUBE: std::sync::LazyLock<TextureCube<u32>>" in generated_code
-    )
-    assert (
-        "static UNSIGNED_CUBE_LAYERS: std::sync::LazyLock<TextureCubeArray<u32>>"
-        in generated_code
-    )
-    assert (
-        "let signedSample: Vec4<i32> = "
-        "sample_lod_sampler(*SIGNED_TEX, *TEXTURE_SAMPLER, uv, lod);"
+        "let signedSample: Vec4<i32> = sample_lod_sampler(signedTex, textureSampler, uv, lod);"
     ) in generated_code
     assert (
-        "let signedLayerSample: Vec4<i32> = "
-        "sample_lod_sampler(*SIGNED_LAYERS, *TEXTURE_SAMPLER, uvLayer, lod);"
+        "let signedLayerSample: Vec4<i32> = sample_lod_sampler(signedLayers, textureSampler, uvLayer, lod);"
     ) in generated_code
     assert (
-        "let unsignedSample: Vec4<u32> = "
-        "sample_lod_sampler(*UNSIGNED_CUBE, *TEXTURE_SAMPLER, direction, lod);"
+        "let unsignedSample: Vec4<u32> = sample_lod_sampler(unsignedCube, textureSampler, direction, lod);"
     ) in generated_code
     assert (
-        "let unsignedLayerSample: Vec4<u32> = "
-        "sample_lod_sampler(*UNSIGNED_CUBE_LAYERS, *TEXTURE_SAMPLER, directionLayer, lod);"
+        "let unsignedLayerSample: Vec4<u32> = sample_lod_sampler(unsignedCubeLayers, textureSampler, directionLayer, lod);"
     ) in generated_code
     assert "textureLod" not in generated_code
     assert "isampler2D" not in generated_code
@@ -17381,43 +17355,36 @@ def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static RAMP_MAP: std::sync::LazyLock<Texture1D<f32>>" in generated_code
-    assert (
-        "static RAMP_ARRAY_MAP: std::sync::LazyLock<Texture1DArray<f32>>"
-        in generated_code
-    )
-    assert (
-        "static ARRAY_MAP: std::sync::LazyLock<Texture2DArray<f32>>" in generated_code
-    )
-    assert "static VOLUME_MAP: std::sync::LazyLock<Texture3D<f32>>" in generated_code
-    assert "static ENV_MAP: std::sync::LazyLock<TextureCube<f32>>" in generated_code
-    assert (
-        "static PROBE_MAP: std::sync::LazyLock<TextureCubeArray<f32>>" in generated_code
-    )
-    assert "let rampFetch: Vec4<f32> = texel_fetch(*RAMP_MAP, x, lod);" in (
+    assert "rampMap: Texture1D<f32>" in generated_code
+    assert "rampArrayMap: Texture1DArray<f32>" in generated_code
+    assert "arrayMap: Texture2DArray<f32>" in generated_code
+    assert "volumeMap: Texture3D<f32>" in generated_code
+    assert "envMap: TextureCube<f32>" in generated_code
+    assert "probeMap: TextureCubeArray<f32>" in generated_code
+    assert "let rampFetch: Vec4<f32> = texel_fetch(rampMap, x, lod);" in (
         generated_code
     )
     assert (
-        "let rampOffset: Vec4<f32> = texel_fetch_offset(*RAMP_MAP, x, lod, offset1);"
+        "let rampOffset: Vec4<f32> = texel_fetch_offset(rampMap, x, lod, offset1);"
         in generated_code
     )
     assert (
-        "let rampLayerFetch: Vec4<f32> = texel_fetch(*RAMP_ARRAY_MAP, xLayer, lod);"
+        "let rampLayerFetch: Vec4<f32> = texel_fetch(rampArrayMap, xLayer, lod);"
         in generated_code
     )
     assert (
-        "let layerOffset: Vec4<f32> = texel_fetch_offset(*ARRAY_MAP, pixelLayer, lod, offset2);"
+        "let layerOffset: Vec4<f32> = texel_fetch_offset(arrayMap, pixelLayer, lod, offset2);"
         in generated_code
     )
     assert (
-        "let volumeOffset: Vec4<f32> = texel_fetch_offset(*VOLUME_MAP, voxel, lod, offset3);"
+        "let volumeOffset: Vec4<f32> = texel_fetch_offset(volumeMap, voxel, lod, offset3);"
         in generated_code
     )
-    assert "let cubeFetch: Vec4<f32> = texel_fetch(*ENV_MAP, cubeCoord, lod);" in (
+    assert "let cubeFetch: Vec4<f32> = texel_fetch(envMap, cubeCoord, lod);" in (
         generated_code
     )
     assert (
-        "let cubeArrayFetch: Vec4<f32> = texel_fetch(*PROBE_MAP, cubeLayerCoord, lod);"
+        "let cubeArrayFetch: Vec4<f32> = texel_fetch(probeMap, cubeLayerCoord, lod);"
         in generated_code
     )
     assert "texelFetch" not in generated_code
@@ -17450,22 +17417,18 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert (
-        "let size2D: Vec2<i32> = texture_size_lod(*MAIN_TEXTURE, 0);" in generated_code
-    )
-    assert "let size3D: Vec3<i32> = texture_size_lod(*VOLUME_MAP, 0);" in generated_code
-    assert "let fetched: Vec4<f32> = texel_fetch(*MAIN_TEXTURE, pixel, 0);" in (
+    assert "let size2D: Vec2<i32> = texture_size_lod(mainTexture, 0);" in generated_code
+    assert "let size3D: Vec3<i32> = texture_size_lod(volumeMap, 0);" in generated_code
+    assert "let fetched: Vec4<f32> = texel_fetch(mainTexture, pixel, 0);" in (
         generated_code
     )
     assert (
-        "let shifted: Vec4<f32> = texel_fetch_offset(*MAIN_TEXTURE, pixel, 0, offset);"
+        "let shifted: Vec4<f32> = texel_fetch_offset(mainTexture, pixel, 0, offset);"
         in generated_code
     )
-    assert "let levels: i32 = texture_query_levels(*MAIN_TEXTURE);" in generated_code
-    assert (
-        "let lod: Vec2<f32> = texture_query_lod(*MAIN_TEXTURE, uv);" in generated_code
-    )
-    assert "let samples: i32 = texture_samples(*MAIN_TEXTURE);" in generated_code
+    assert "let levels: i32 = texture_query_levels(mainTexture);" in generated_code
+    assert "let lod: Vec2<f32> = texture_query_lod(mainTexture, uv);" in generated_code
+    assert "let samples: i32 = texture_samples(mainTexture);" in generated_code
     assert "textureSize" not in generated_code
     assert "texelFetch" not in generated_code
     assert "texelFetchOffset" not in generated_code
@@ -17497,8 +17460,8 @@ def test_wgsl_texture_dimensions_alias_maps_to_unsigned_rust_helpers_and_compile
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let size2D: Vec2<u32> = texture_size(*MAIN_TEXTURE);" in generated_code
-    assert "let size3D: Vec3<u32> = texture_size_lod(*VOLUME_MAP, 0);" in generated_code
+    assert "let size2D: Vec2<u32> = texture_size(mainTexture);" in generated_code
+    assert "let size3D: Vec3<u32> = texture_size_lod(volumeMap, 0);" in generated_code
     assert "textureDimensions" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
@@ -17524,22 +17487,17 @@ def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static MS_TEXTURE: std::sync::LazyLock<Texture2DMS<f32>>" in generated_code
+    assert "msTexture: Texture2DMS<f32>" in generated_code
+    assert "msArrayTexture: Texture2DMSArray<f32>" in generated_code
+    assert "let size2D: Vec2<i32> = texture_size(msTexture);" in generated_code
+    assert "let sizeArray: Vec3<i32> = texture_size(msArrayTexture);" in generated_code
+    assert "let samples: i32 = texture_samples(msTexture);" in generated_code
     assert (
-        "static MS_ARRAY_TEXTURE: std::sync::LazyLock<Texture2DMSArray<f32>>"
-        in generated_code
-    )
-    assert "let size2D: Vec2<i32> = texture_size(*MS_TEXTURE);" in generated_code
-    assert (
-        "let sizeArray: Vec3<i32> = texture_size(*MS_ARRAY_TEXTURE);" in generated_code
-    )
-    assert "let samples: i32 = texture_samples(*MS_TEXTURE);" in generated_code
-    assert (
-        "let fetched: Vec4<f32> = texel_fetch(*MS_TEXTURE, pixel, sampleIndex);"
+        "let fetched: Vec4<f32> = texel_fetch(msTexture, pixel, sampleIndex);"
         in generated_code
     )
     assert (
-        "let fetchedArray: Vec4<f32> = texel_fetch(*MS_ARRAY_TEXTURE, Vec3::<i32>::new(pixel.x, pixel.y, layer), sampleIndex);"
+        "let fetchedArray: Vec4<f32> = texel_fetch(msArrayTexture, Vec3::<i32>::new(pixel.x, pixel.y, layer), sampleIndex);"
         in generated_code
     )
     assert "sampler2DMS" not in generated_code
@@ -17584,54 +17542,54 @@ def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let projectedColor: Vec4<f32> = sample_projected(*MAIN_TEXTURE, projected);"
+        "let projectedColor: Vec4<f32> = sample_projected(mainTexture, projected);"
         in generated_code
     )
     assert (
-        "let projectedLod: Vec4<f32> = sample_projected_lod(*MAIN_TEXTURE, projected, 1.0);"
+        "let projectedLod: Vec4<f32> = sample_projected_lod(mainTexture, projected, 1.0);"
         in generated_code
     )
     assert (
-        "let projectedGrad: Vec4<f32> = sample_projected_grad(*MAIN_TEXTURE, projected, ddx, ddy);"
+        "let projectedGrad: Vec4<f32> = sample_projected_grad(mainTexture, projected, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let projectedOffset: Vec4<f32> = sample_projected_offset(*MAIN_TEXTURE, projected, offset);"
+        "let projectedOffset: Vec4<f32> = sample_projected_offset(mainTexture, projected, offset);"
         in generated_code
     )
     assert (
-        "let projectedLodOffset: Vec4<f32> = sample_projected_lod_offset(*MAIN_TEXTURE, projected, 1.0, offset);"
+        "let projectedLodOffset: Vec4<f32> = sample_projected_lod_offset(mainTexture, projected, 1.0, offset);"
         in generated_code
     )
     assert (
-        "let projectedGradOffset: Vec4<f32> = sample_projected_grad_offset(*MAIN_TEXTURE, projected, ddx, ddy, offset);"
+        "let projectedGradOffset: Vec4<f32> = sample_projected_grad_offset(mainTexture, projected, ddx, ddy, offset);"
         in generated_code
     )
     assert (
         "let offsets: [Vec2<i32>; 4] = std::array::from_fn(|_| Default::default());"
         in generated_code
     )
-    assert "let gather: Vec4<f32> = texture_gather(*MAIN_TEXTURE, uv);" in (
+    assert "let gather: Vec4<f32> = texture_gather(mainTexture, uv);" in (
         generated_code
     )
     assert (
-        "let gatherComponent: Vec4<f32> = texture_gather_component(*MAIN_TEXTURE, uv, 2);"
+        "let gatherComponent: Vec4<f32> = texture_gather_component(mainTexture, uv, 2);"
         in generated_code
     )
     assert (
-        "let gatherOffset: Vec4<f32> = texture_gather_offset(*MAIN_TEXTURE, uv, offset);"
+        "let gatherOffset: Vec4<f32> = texture_gather_offset(mainTexture, uv, offset);"
         in generated_code
     )
     assert (
-        "let gatherOffsetComponent: Vec4<f32> = texture_gather_offset_component(*MAIN_TEXTURE, uv, offset, 1);"
+        "let gatherOffsetComponent: Vec4<f32> = texture_gather_offset_component(mainTexture, uv, offset, 1);"
         in generated_code
     )
     assert (
-        "let gatherOffsets: Vec4<f32> = texture_gather_offsets(*MAIN_TEXTURE, uv, offsets);"
+        "let gatherOffsets: Vec4<f32> = texture_gather_offsets(mainTexture, uv, offsets);"
         in generated_code
     )
     assert (
-        "let gatherOffsetsComponent: Vec4<f32> = texture_gather_offsets_component(*MAIN_TEXTURE, uv, offsets, 3);"
+        "let gatherOffsetsComponent: Vec4<f32> = texture_gather_offsets_component(mainTexture, uv, offsets, 3);"
         in generated_code
     )
     assert "textureProj" not in generated_code
@@ -17693,112 +17651,112 @@ def test_explicit_sampler_texture_helpers_map_to_rust_helpers_and_compile(tmp_pa
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static TEXTURE_SAMPLER: std::sync::LazyLock<Sampler>" in generated_code
+    assert "textureSampler: Sampler" in generated_code
     assert (
-        "let base: Vec4<f32> = sample_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv);"
+        "let base: Vec4<f32> = sample_sampler(mainTexture, textureSampler, uv);"
         in generated_code
     )
-    assert "let biased: Vec4<f32> = sample_bias(*MAIN_TEXTURE, uv, 0.25);" in (
+    assert "let biased: Vec4<f32> = sample_bias(mainTexture, uv, 0.25);" in (
         generated_code
     )
     assert (
-        "let biasedSampler: Vec4<f32> = sample_bias_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, 0.5);"
+        "let biasedSampler: Vec4<f32> = sample_bias_sampler(mainTexture, textureSampler, uv, 0.5);"
         in generated_code
     )
     assert (
-        "let lod: Vec4<f32> = sample_lod_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, 1.0);"
+        "let lod: Vec4<f32> = sample_lod_sampler(mainTexture, textureSampler, uv, 1.0);"
         in generated_code
     )
     assert (
-        "let lodOffset: Vec4<f32> = sample_lod_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, 1.0, offset);"
+        "let lodOffset: Vec4<f32> = sample_lod_offset_sampler(mainTexture, textureSampler, uv, 1.0, offset);"
         in generated_code
     )
     assert (
-        "let grad: Vec4<f32> = sample_grad_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, ddx, ddy);"
+        "let grad: Vec4<f32> = sample_grad_sampler(mainTexture, textureSampler, uv, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let gradOffset: Vec4<f32> = sample_grad_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, ddx, ddy, offset);"
+        "let gradOffset: Vec4<f32> = sample_grad_offset_sampler(mainTexture, textureSampler, uv, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let shifted: Vec4<f32> = sample_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offset);"
+        "let shifted: Vec4<f32> = sample_offset_sampler(mainTexture, textureSampler, uv, offset);"
         in generated_code
     )
     assert (
-        "let shiftedBias: Vec4<f32> = sample_offset_bias(*MAIN_TEXTURE, uv, offset, 0.125);"
+        "let shiftedBias: Vec4<f32> = sample_offset_bias(mainTexture, uv, offset, 0.125);"
         in generated_code
     )
     assert (
-        "let shiftedBiasSampler: Vec4<f32> = sample_offset_bias_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offset, 0.125);"
+        "let shiftedBiasSampler: Vec4<f32> = sample_offset_bias_sampler(mainTexture, textureSampler, uv, offset, 0.125);"
         in generated_code
     )
     assert (
-        "let projectedColor: Vec4<f32> = sample_projected_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected);"
+        "let projectedColor: Vec4<f32> = sample_projected_sampler(mainTexture, textureSampler, projected);"
         in generated_code
     )
     assert (
-        "let projectedBias: Vec4<f32> = sample_projected_bias(*MAIN_TEXTURE, projected, 0.25);"
+        "let projectedBias: Vec4<f32> = sample_projected_bias(mainTexture, projected, 0.25);"
         in generated_code
     )
     assert (
-        "let projectedBiasSampler: Vec4<f32> = sample_projected_bias_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, 0.25);"
+        "let projectedBiasSampler: Vec4<f32> = sample_projected_bias_sampler(mainTexture, textureSampler, projected, 0.25);"
         in generated_code
     )
     assert (
-        "let projectedLod: Vec4<f32> = sample_projected_lod_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, 1.0);"
+        "let projectedLod: Vec4<f32> = sample_projected_lod_sampler(mainTexture, textureSampler, projected, 1.0);"
         in generated_code
     )
     assert (
-        "let projectedGrad: Vec4<f32> = sample_projected_grad_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, ddx, ddy);"
+        "let projectedGrad: Vec4<f32> = sample_projected_grad_sampler(mainTexture, textureSampler, projected, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let projectedOffset: Vec4<f32> = sample_projected_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, offset);"
+        "let projectedOffset: Vec4<f32> = sample_projected_offset_sampler(mainTexture, textureSampler, projected, offset);"
         in generated_code
     )
     assert (
-        "let projectedOffsetBias: Vec4<f32> = sample_projected_offset_bias(*MAIN_TEXTURE, projected, offset, 0.25);"
+        "let projectedOffsetBias: Vec4<f32> = sample_projected_offset_bias(mainTexture, projected, offset, 0.25);"
         in generated_code
     )
     assert (
-        "let projectedOffsetBiasSampler: Vec4<f32> = sample_projected_offset_bias_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, offset, 0.25);"
+        "let projectedOffsetBiasSampler: Vec4<f32> = sample_projected_offset_bias_sampler(mainTexture, textureSampler, projected, offset, 0.25);"
         in generated_code
     )
     assert (
-        "let projectedLodOffset: Vec4<f32> = sample_projected_lod_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, 1.0, offset);"
+        "let projectedLodOffset: Vec4<f32> = sample_projected_lod_offset_sampler(mainTexture, textureSampler, projected, 1.0, offset);"
         in generated_code
     )
     assert (
-        "let projectedGradOffset: Vec4<f32> = sample_projected_grad_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, projected, ddx, ddy, offset);"
+        "let projectedGradOffset: Vec4<f32> = sample_projected_grad_offset_sampler(mainTexture, textureSampler, projected, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let query: Vec2<f32> = texture_query_lod_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv);"
+        "let query: Vec2<f32> = texture_query_lod_sampler(mainTexture, textureSampler, uv);"
         in generated_code
     )
     assert (
-        "let gather: Vec4<f32> = texture_gather_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv);"
+        "let gather: Vec4<f32> = texture_gather_sampler(mainTexture, textureSampler, uv);"
         in generated_code
     )
     assert (
-        "let gatherComponent: Vec4<f32> = texture_gather_component_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, 1);"
+        "let gatherComponent: Vec4<f32> = texture_gather_component_sampler(mainTexture, textureSampler, uv, 1);"
         in generated_code
     )
     assert (
-        "let gatherOffset: Vec4<f32> = texture_gather_offset_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offset);"
+        "let gatherOffset: Vec4<f32> = texture_gather_offset_sampler(mainTexture, textureSampler, uv, offset);"
         in generated_code
     )
     assert (
-        "let gatherOffsetComponent: Vec4<f32> = texture_gather_offset_component_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offset, 2);"
+        "let gatherOffsetComponent: Vec4<f32> = texture_gather_offset_component_sampler(mainTexture, textureSampler, uv, offset, 2);"
         in generated_code
     )
     assert (
-        "let gatherOffsets: Vec4<f32> = texture_gather_offsets_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offsets);"
+        "let gatherOffsets: Vec4<f32> = texture_gather_offsets_sampler(mainTexture, textureSampler, uv, offsets);"
         in generated_code
     )
     assert (
-        "let gatherOffsetsComponent: Vec4<f32> = texture_gather_offsets_component_sampler(*MAIN_TEXTURE, *TEXTURE_SAMPLER, uv, offsets, 3);"
+        "let gatherOffsetsComponent: Vec4<f32> = texture_gather_offsets_component_sampler(mainTexture, textureSampler, uv, offsets, 3);"
         in generated_code
     )
     assert "textureLodOffset" not in generated_code
@@ -17881,143 +17839,134 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static SHADOW_MAP: std::sync::LazyLock<DepthTexture2D<f32>>" in (
-        generated_code
-    )
-    assert "static SHADOW_ARRAY: std::sync::LazyLock<DepthTexture2DArray<f32>>" in (
-        generated_code
-    )
-    assert "static CUBE_SHADOW: std::sync::LazyLock<DepthTextureCube<f32>>" in (
-        generated_code
-    )
+    assert "shadowMap: DepthTexture2D<f32>" in (generated_code)
+    assert "shadowArray: DepthTexture2DArray<f32>" in (generated_code)
+    assert "cubeShadow: DepthTextureCube<f32>" in (generated_code)
+    assert "cubeArrayShadow: DepthTextureCubeArray<f32>" in generated_code
+    assert "compareSampler: Sampler" in generated_code
+    assert "let base: f32 = texture_compare(shadowMap, uv, depth);" in generated_code
     assert (
-        "static CUBE_ARRAY_SHADOW: std::sync::LazyLock<DepthTextureCubeArray<f32>>"
-        in generated_code
-    )
-    assert "static COMPARE_SAMPLER: std::sync::LazyLock<Sampler>" in generated_code
-    assert "let base: f32 = texture_compare(*SHADOW_MAP, uv, depth);" in generated_code
-    assert (
-        "let baseSampler: f32 = texture_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        "let baseSampler: f32 = texture_compare_sampler(shadowMap, compareSampler, uv, depth);"
         in generated_code
     )
     assert (
-        "let arrayCompare: f32 = texture_compare(*SHADOW_ARRAY, uvLayer, depth);"
+        "let arrayCompare: f32 = texture_compare(shadowArray, uvLayer, depth);"
         in generated_code
     )
     assert (
-        "let cubeCompare: f32 = texture_compare(*CUBE_SHADOW, direction, depth);"
+        "let cubeCompare: f32 = texture_compare(cubeShadow, direction, depth);"
         in generated_code
     )
     assert (
-        "let cubeArrayCompare: f32 = texture_compare(*CUBE_ARRAY_SHADOW, cubeLayer, depth);"
+        "let cubeArrayCompare: f32 = texture_compare(cubeArrayShadow, cubeLayer, depth);"
         in generated_code
     )
     assert (
-        "let offsetCompare: f32 = texture_compare_offset(*SHADOW_MAP, uv, depth, offset);"
+        "let offsetCompare: f32 = texture_compare_offset(shadowMap, uv, depth, offset);"
         in generated_code
     )
     assert (
-        "let offsetSampler: f32 = texture_compare_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, offset);"
+        "let offsetSampler: f32 = texture_compare_offset_sampler(shadowMap, compareSampler, uv, depth, offset);"
         in generated_code
     )
     assert (
-        "let lodCompare: f32 = texture_compare_lod(*SHADOW_MAP, uv, depth, lod);"
+        "let lodCompare: f32 = texture_compare_lod(shadowMap, uv, depth, lod);"
         in generated_code
     )
     assert (
-        "let lodSampler: f32 = texture_compare_lod_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, lod);"
+        "let lodSampler: f32 = texture_compare_lod_sampler(shadowMap, compareSampler, uv, depth, lod);"
         in generated_code
     )
     assert (
-        "let lodOffset: f32 = texture_compare_lod_offset(*SHADOW_MAP, uv, depth, lod, offset);"
+        "let lodOffset: f32 = texture_compare_lod_offset(shadowMap, uv, depth, lod, offset);"
         in generated_code
     )
     assert (
-        "let lodOffsetSampler: f32 = texture_compare_lod_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, lod, offset);"
+        "let lodOffsetSampler: f32 = texture_compare_lod_offset_sampler(shadowMap, compareSampler, uv, depth, lod, offset);"
         in generated_code
     )
     assert (
-        "let gradCompare: f32 = texture_compare_grad(*SHADOW_MAP, uv, depth, ddx, ddy);"
+        "let gradCompare: f32 = texture_compare_grad(shadowMap, uv, depth, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let gradSampler: f32 = texture_compare_grad_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, ddx, ddy);"
+        "let gradSampler: f32 = texture_compare_grad_sampler(shadowMap, compareSampler, uv, depth, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let gradOffset: f32 = texture_compare_grad_offset(*SHADOW_MAP, uv, depth, ddx, ddy, offset);"
+        "let gradOffset: f32 = texture_compare_grad_offset(shadowMap, uv, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let gradOffsetSampler: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, ddx, ddy, offset);"
+        "let gradOffsetSampler: f32 = texture_compare_grad_offset_sampler(shadowMap, compareSampler, uv, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let projected: f32 = texture_compare_projected(*SHADOW_MAP, uvq, depth);"
+        "let projected: f32 = texture_compare_projected(shadowMap, uvq, depth);"
         in generated_code
     )
     assert (
-        "let projectedSampler: f32 = texture_compare_projected_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth);"
+        "let projectedSampler: f32 = texture_compare_projected_sampler(shadowMap, compareSampler, uvq, depth);"
         in generated_code
     )
     assert (
-        "let projectedOffset: f32 = texture_compare_projected_offset(*SHADOW_MAP, uvq, depth, offset);"
+        "let projectedOffset: f32 = texture_compare_projected_offset(shadowMap, uvq, depth, offset);"
         in generated_code
     )
     assert (
-        "let projectedOffsetSampler: f32 = texture_compare_projected_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, offset);"
+        "let projectedOffsetSampler: f32 = texture_compare_projected_offset_sampler(shadowMap, compareSampler, uvq, depth, offset);"
         in generated_code
     )
     assert (
-        "let projectedLod: f32 = texture_compare_projected_lod(*SHADOW_MAP, uvq, depth, lod);"
+        "let projectedLod: f32 = texture_compare_projected_lod(shadowMap, uvq, depth, lod);"
         in generated_code
     )
     assert (
-        "let projectedLodSampler: f32 = texture_compare_projected_lod_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, lod);"
+        "let projectedLodSampler: f32 = texture_compare_projected_lod_sampler(shadowMap, compareSampler, uvq, depth, lod);"
         in generated_code
     )
     assert (
-        "let projectedLodOffset: f32 = texture_compare_projected_lod_offset(*SHADOW_MAP, uvq, depth, lod, offset);"
+        "let projectedLodOffset: f32 = texture_compare_projected_lod_offset(shadowMap, uvq, depth, lod, offset);"
         in generated_code
     )
     assert (
-        "let projectedLodOffsetSampler: f32 = texture_compare_projected_lod_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, lod, offset);"
+        "let projectedLodOffsetSampler: f32 = texture_compare_projected_lod_offset_sampler(shadowMap, compareSampler, uvq, depth, lod, offset);"
         in generated_code
     )
     assert (
-        "let projectedGrad: f32 = texture_compare_projected_grad(*SHADOW_MAP, uvq, depth, ddx, ddy);"
+        "let projectedGrad: f32 = texture_compare_projected_grad(shadowMap, uvq, depth, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let projectedGradSampler: f32 = texture_compare_projected_grad_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, ddx, ddy);"
+        "let projectedGradSampler: f32 = texture_compare_projected_grad_sampler(shadowMap, compareSampler, uvq, depth, ddx, ddy);"
         in generated_code
     )
     assert (
-        "let projectedGradOffset: f32 = texture_compare_projected_grad_offset(*SHADOW_MAP, uvq, depth, ddx, ddy, offset);"
+        "let projectedGradOffset: f32 = texture_compare_projected_grad_offset(shadowMap, uvq, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let projectedGradOffsetSampler: f32 = texture_compare_projected_grad_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, ddx, ddy, offset);"
+        "let projectedGradOffsetSampler: f32 = texture_compare_projected_grad_offset_sampler(shadowMap, compareSampler, uvq, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let gathered: Vec4<f32> = texture_gather_compare(*SHADOW_MAP, uv, depth);"
+        "let gathered: Vec4<f32> = texture_gather_compare(shadowMap, uv, depth);"
         in generated_code
     )
     assert (
-        "let gatheredSampler: Vec4<f32> = texture_gather_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        "let gatheredSampler: Vec4<f32> = texture_gather_compare_sampler(shadowMap, compareSampler, uv, depth);"
         in generated_code
     )
     assert (
-        "let gatheredOffset: Vec4<f32> = texture_gather_compare_offset(*SHADOW_MAP, uv, depth, offset);"
+        "let gatheredOffset: Vec4<f32> = texture_gather_compare_offset(shadowMap, uv, depth, offset);"
         in generated_code
     )
     assert (
-        "let gatheredOffsetSampler: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, offset);"
+        "let gatheredOffsetSampler: Vec4<f32> = texture_gather_compare_offset_sampler(shadowMap, compareSampler, uv, depth, offset);"
         in generated_code
     )
     assert (
-        "let shadowSize: Vec3<i32> = texture_size_lod(*SHADOW_ARRAY, 0);"
+        "let shadowSize: Vec3<i32> = texture_size_lod(shadowArray, 0);"
         in generated_code
     )
     assert "textureCompare" not in generated_code
@@ -18089,67 +18038,37 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static FIXED_TEXTURES: std::sync::LazyLock<[Texture2D<f32>; 2]>" in (
-        generated_code
-    )
-    assert "static FIXED_SAMPLERS: std::sync::LazyLock<[Sampler; 2]>" in (
-        generated_code
-    )
-    assert "static FIXED_IMAGES: std::sync::LazyLock<[Image2D<Vec4<f32>>; 2]>" in (
-        generated_code
-    )
-    assert "static FIXED_WEIGHTS: std::sync::LazyLock<[StructuredBuffer<f32>; 2]>" in (
-        generated_code
-    )
+    assert "fixedTextures: [Texture2D<f32>; 2]" in (generated_code)
+    assert "fixedSamplers: [Sampler; 2]" in (generated_code)
+    assert "fixedImages: [Image2D<Vec4<f32>>; 2]" in (generated_code)
+    assert "fixedWeights: [StructuredBuffer<f32>; 2]" in (generated_code)
+    assert "fixedValues: [RWStructuredBuffer<i32>; 2]" in generated_code
+    assert "fixedRaw: [ByteAddressBuffer; 2]" in (generated_code)
+    assert "fixedRawOut: [RwByteAddressBuffer; 2]" in (generated_code)
+    assert "bindlessTextures: Vec<Texture2D<f32>>" in (generated_code)
+    assert "bindlessSamplers: Vec<Sampler>" in generated_code
+    assert "bindlessImages: Vec<Image2D<Vec4<f32>>>" in (generated_code)
+    assert "bindlessWeights: Vec<StructuredBuffer<f32>>" in (generated_code)
+    assert "bindlessValues: Vec<RWStructuredBuffer<i32>>" in (generated_code)
+    assert "bindlessRaw: Vec<ByteAddressBuffer>" in generated_code
+    assert "bindlessRawOut: Vec<RwByteAddressBuffer>" in (generated_code)
     assert (
-        "static FIXED_VALUES: std::sync::LazyLock<[RWStructuredBuffer<i32>; 2]>"
-        in generated_code
-    )
-    assert "static FIXED_RAW: std::sync::LazyLock<[ByteAddressBuffer; 2]>" in (
-        generated_code
-    )
-    assert "static FIXED_RAW_OUT: std::sync::LazyLock<[RwByteAddressBuffer; 2]>" in (
-        generated_code
-    )
-    assert "static BINDLESS_TEXTURES: Vec<Texture2D<f32>> = Vec::new();" in (
-        generated_code
-    )
-    assert "static BINDLESS_SAMPLERS: Vec<Sampler> = Vec::new();" in generated_code
-    assert "static BINDLESS_IMAGES: Vec<Image2D<Vec4<f32>>> = Vec::new();" in (
-        generated_code
-    )
-    assert "static BINDLESS_WEIGHTS: Vec<StructuredBuffer<f32>> = Vec::new();" in (
-        generated_code
-    )
-    assert "static BINDLESS_VALUES: Vec<RWStructuredBuffer<i32>> = Vec::new();" in (
-        generated_code
-    )
-    assert "static BINDLESS_RAW: Vec<ByteAddressBuffer> = Vec::new();" in generated_code
-    assert "static BINDLESS_RAW_OUT: Vec<RwByteAddressBuffer> = Vec::new();" in (
-        generated_code
-    )
-    assert (
-        "sample_sampler((*FIXED_TEXTURES)[fixedIndex as usize], "
-        "(*FIXED_SAMPLERS)[fixedIndex as usize], uv)"
+        "sample_sampler(fixedTextures[fixedIndex as usize], fixedSamplers[fixedIndex as usize], uv)"
     ) in generated_code
     assert (
-        "sample_sampler(BINDLESS_TEXTURES[index as usize], "
-        "BINDLESS_SAMPLERS[index as usize], uv)"
+        "sample_sampler(bindlessTextures[index as usize], bindlessSamplers[index as usize], uv)"
     ) in generated_code
-    assert "image_load((*FIXED_IMAGES)[fixedIndex as usize], pixel)" in generated_code
-    assert "image_load(BINDLESS_IMAGES[index as usize], pixel)" in generated_code
-    assert "buffer_load((*FIXED_VALUES)[fixedIndex as usize], offset)" in generated_code
-    assert "buffer_load(BINDLESS_VALUES[index as usize], offset)" in generated_code
-    assert "buffer_load((*FIXED_RAW)[fixedIndex as usize], offset)" in generated_code
-    assert "buffer_load(BINDLESS_RAW[index as usize], offset)" in generated_code
-    assert (
-        "buffer_store((*FIXED_RAW_OUT)[fixedIndex as usize], offset, fixedRawValue)"
-        in (generated_code)
+    assert "image_load(fixedImages[fixedIndex as usize], pixel)" in generated_code
+    assert "image_load(bindlessImages[index as usize], pixel)" in generated_code
+    assert "buffer_load(fixedValues[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(bindlessValues[index as usize], offset)" in generated_code
+    assert "buffer_load(fixedRaw[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(bindlessRaw[index as usize], offset)" in generated_code
+    assert "buffer_store(fixedRawOut[fixedIndex as usize], offset, fixedRawValue)" in (
+        generated_code
     )
-    assert (
-        "buffer_store(BINDLESS_RAW_OUT[index as usize], offset, bindlessRawValue)" in (
-            generated_code
-        )
+    assert "buffer_store(bindlessRawOut[index as usize], offset, bindlessRawValue)" in (
+        generated_code
     )
     assert "texture(fixedTextures" not in generated_code
     assert "imageLoad(fixedImages" not in generated_code
@@ -18182,16 +18101,12 @@ def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static COMPARISON_SAMPLERS: std::sync::LazyLock<[Sampler; 2]>" in (
-        generated_code
-    )
+    assert "comparisonSamplers: [Sampler; 2]" in (generated_code)
     assert (
-        "let shadow: Vec4<f32> = sample_sampler(SHADOW_MAPS[1], "
-        "(*COMPARISON_SAMPLERS)[0], Vec2::<f32>::new(0.5, 0.5));"
+        "let shadow: Vec4<f32> = sample_sampler(shadowMaps[1], comparisonSamplers[0], Vec2::<f32>::new(0.5, 0.5));"
     ) in generated_code
     assert (
-        "let mipShadow: Vec4<f32> = sample_lod_sampler(SHADOW_MAPS[1], "
-        "(*COMPARISON_SAMPLERS)[0], Vec2::<f32>::new(0.5, 0.5), 1.0);"
+        "let mipShadow: Vec4<f32> = sample_lod_sampler(shadowMaps[1], comparisonSamplers[0], Vec2::<f32>::new(0.5, 0.5), 1.0);"
     ) in generated_code
     assert ".sample(" not in generated_code
     assert "level(" not in generated_code
@@ -18333,117 +18248,85 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static COLOR_IMAGE: std::sync::LazyLock<Image2D<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static COUNTER_IMAGE: std::sync::LazyLock<Image2D<Vec4<u32>>>" in (
-        generated_code
-    )
-    assert "static RAMP_IMAGE: std::sync::LazyLock<Image1D<Vec4<f32>>>" in (
-        generated_code
-    )
+    assert "colorImage: Image2D<Vec4<f32>>" in (generated_code)
+    assert "counterImage: Image2D<Vec4<u32>>" in (generated_code)
+    assert "rampImage: Image1D<Vec4<f32>>" in (generated_code)
     assert "static RAMP_ARRAY_IMAGE: std::sync::LazyLock<Image1DArray<Vec4<f32>>>" in (
         generated_code
     )
-    assert "static VOLUME_IMAGE: std::sync::LazyLock<Image3D<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static CUBE_IMAGE: std::sync::LazyLock<ImageCube<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static LAYER_IMAGE: std::sync::LazyLock<Image2DArray<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static MS_IMAGE: std::sync::LazyLock<Image2DMS<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static MS_ARRAY_IMAGE: std::sync::LazyLock<Image2DMSArray<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static SIGNED_VOLUME: std::sync::LazyLock<Image3D<Vec4<i32>>>" in (
-        generated_code
-    )
-    assert "static COUNTER_LAYERS: std::sync::LazyLock<Image2DArray<Vec4<u32>>>" in (
-        generated_code
-    )
-    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in (
-        generated_code
-    )
-    assert "static WEIGHTS: std::sync::LazyLock<StructuredBuffer<f32>>" in (
-        generated_code
-    )
-    assert (
-        "static APPEND_VALUES: std::sync::LazyLock<AppendStructuredBuffer<u32>>"
-        in generated_code
-    )
-    assert (
-        "static CONSUME_VALUES: std::sync::LazyLock<ConsumeStructuredBuffer<u32>>"
-        in generated_code
-    )
+    assert "volumeImage: Image3D<Vec4<f32>>" in (generated_code)
+    assert "cubeImage: ImageCube<Vec4<f32>>" in (generated_code)
+    assert "layerImage: Image2DArray<Vec4<f32>>" in (generated_code)
+    assert "msImage: Image2DMS<Vec4<f32>>" in (generated_code)
+    assert "msArrayImage: Image2DMSArray<Vec4<f32>>" in (generated_code)
+    assert "signedVolume: Image3D<Vec4<i32>>" in (generated_code)
+    assert "counterLayers: Image2DArray<Vec4<u32>>" in (generated_code)
+    assert "values: RWStructuredBuffer<i32>" in (generated_code)
+    assert "weights: StructuredBuffer<f32>" in (generated_code)
+    assert "appendValues: AppendStructuredBuffer<u32>" in generated_code
+    assert "consumeValues: ConsumeStructuredBuffer<u32>" in generated_code
     assert "static RAW_BYTES: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
     assert "static RAW_OUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
-    assert "let color: Vec4<f32> = image_load(*COLOR_IMAGE, pixel);" in generated_code
-    assert "let ramp: Vec4<f32> = image_load(*RAMP_IMAGE, 0);" in generated_code
+    assert "let color: Vec4<f32> = image_load(colorImage, pixel);" in generated_code
+    assert "let ramp: Vec4<f32> = image_load(rampImage, 0);" in generated_code
     assert (
-        "let signedValue: Vec4<i32> = image_load(*SIGNED_VOLUME, Vec3::<i32>::new(0, 0, 0));"
+        "let signedValue: Vec4<i32> = image_load(signedVolume, Vec3::<i32>::new(0, 0, 0));"
         in generated_code
     )
     assert (
-        "let unsignedValue: Vec4<u32> = image_load(*COUNTER_LAYERS, Vec3::<i32>::new(0, 0, 0));"
+        "let unsignedValue: Vec4<u32> = image_load(counterLayers, Vec3::<i32>::new(0, 0, 0));"
         in generated_code
     )
-    assert "let size1D: i32 = image_size(*RAMP_IMAGE);" in generated_code
-    assert "let size2D: Vec2<i32> = image_size(*COLOR_IMAGE);" in generated_code
-    assert "let size3D: Vec3<i32> = image_size(*VOLUME_IMAGE);" in generated_code
-    assert "let sizeCube: Vec2<i32> = image_size(*CUBE_IMAGE);" in generated_code
-    assert "let sizeArray: Vec3<i32> = image_size(*LAYER_IMAGE);" in generated_code
-    assert "let sizeMs: Vec2<i32> = image_size(*MS_IMAGE);" in generated_code
-    assert "let sizeMsArray: Vec3<i32> = image_size(*MS_ARRAY_IMAGE);" in generated_code
-    assert "let sampleCount: i32 = image_samples(*MS_IMAGE);" in generated_code
-    assert "image_store(*COLOR_IMAGE, pixel, (color + Vec4::<f32>::new" in (
+    assert "let size1D: i32 = image_size(rampImage);" in generated_code
+    assert "let size2D: Vec2<i32> = image_size(colorImage);" in generated_code
+    assert "let size3D: Vec3<i32> = image_size(volumeImage);" in generated_code
+    assert "let sizeCube: Vec2<i32> = image_size(cubeImage);" in generated_code
+    assert "let sizeArray: Vec3<i32> = image_size(layerImage);" in generated_code
+    assert "let sizeMs: Vec2<i32> = image_size(msImage);" in generated_code
+    assert "let sizeMsArray: Vec3<i32> = image_size(msArrayImage);" in generated_code
+    assert "let sampleCount: i32 = image_samples(msImage);" in generated_code
+    assert "image_store(colorImage, pixel, (color + Vec4::<f32>::new" in (
         generated_code
     )
     assert (
-        "let previous: u32 = image_atomic_add(*COUNTER_IMAGE, pixel, amount);"
+        "let previous: u32 = image_atomic_add(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let minValue: u32 = image_atomic_min(*COUNTER_IMAGE, pixel, amount);"
+        "let minValue: u32 = image_atomic_min(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let maxValue: u32 = image_atomic_max(*COUNTER_IMAGE, pixel, amount);"
+        "let maxValue: u32 = image_atomic_max(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let andValue: u32 = image_atomic_and(*COUNTER_IMAGE, pixel, amount);"
+        "let andValue: u32 = image_atomic_and(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let orValue: u32 = image_atomic_or(*COUNTER_IMAGE, pixel, amount);"
+        "let orValue: u32 = image_atomic_or(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let xorValue: u32 = image_atomic_xor(*COUNTER_IMAGE, pixel, amount);"
+        "let xorValue: u32 = image_atomic_xor(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let exchanged: u32 = image_atomic_exchange(*COUNTER_IMAGE, pixel, amount);"
+        "let exchanged: u32 = image_atomic_exchange(counterImage, pixel, amount);"
         in generated_code
     )
     assert (
-        "let swapped: u32 = image_atomic_comp_swap(*COUNTER_IMAGE, pixel, previous, amount);"
+        "let swapped: u32 = image_atomic_comp_swap(counterImage, pixel, previous, amount);"
         in generated_code
     )
-    assert "let value: i32 = buffer_load(*VALUES, index);" in generated_code
-    assert "let weight: f32 = buffer_load(*WEIGHTS, index);" in generated_code
+    assert "let value: i32 = buffer_load(values, index);" in generated_code
+    assert "let weight: f32 = buffer_load(weights, index);" in generated_code
     assert "let length: u32 = 0;" in generated_code
-    assert "buffer_dimensions(*VALUES, length);" in generated_code
-    assert "buffer_append(*APPEND_VALUES, amount);" in generated_code
-    assert "let consumed: u32 = buffer_consume(*CONSUME_VALUES);" in generated_code
-    assert (
-        "buffer_store(*VALUES, index, (value + (previous as i32)));" in generated_code
-    )
+    assert "buffer_dimensions(values, length);" in generated_code
+    assert "buffer_append(appendValues, amount);" in generated_code
+    assert "let consumed: u32 = buffer_consume(consumeValues);" in generated_code
+    assert "buffer_store(values, index, (value + (previous as i32)));" in generated_code
     assert "image2D" not in generated_code
     assert "uimage2D" not in generated_code
     assert "RwBuffer" not in generated_code
@@ -18494,47 +18377,28 @@ def test_resource_memory_qualifiers_map_rust_buffer_access_and_compile(tmp_path)
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert (
-        "static READ_ONLY_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
-        in generated_code
-    )
-    assert (
-        "static WRITE_ONLY_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
-        in generated_code
-    )
-    assert (
-        "static READ_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>"
-        in generated_code
-    )
-    assert (
-        "static ATTR_READ_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
-        in generated_code
-    )
-    assert (
-        "static ATTR_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
-        in generated_code
-    )
-    assert "static RAW_INPUT: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
-    assert (
-        "static RAW_OUTPUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
-    )
-    assert "static SOURCE: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
-    assert "static TARGET: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
-    assert "let value: i32 = buffer_load(*READ_ONLY_VALUES, index);" in generated_code
-    assert (
-        "let attrValue: i32 = buffer_load(*ATTR_READ_VALUES, index);" in generated_code
-    )
-    assert "let rawValue: u32 = buffer_load(*RAW_INPUT, byteOffset);" in generated_code
-    assert "buffer_store(*WRITE_ONLY_VALUES, index, (value + attrValue));" in (
+    assert "readOnlyValues: StructuredBuffer<i32>" in generated_code
+    assert "writeOnlyValues: RWStructuredBuffer<i32>" in generated_code
+    assert "readWriteValues: RWStructuredBuffer<f32>" in generated_code
+    assert "attrReadValues: StructuredBuffer<i32>" in generated_code
+    assert "attrWriteValues: RWStructuredBuffer<i32>" in generated_code
+    assert "rawInput: ByteAddressBuffer" in generated_code
+    assert "rawOutput: RwByteAddressBuffer" in generated_code
+    assert "source: Image2D<Vec4<f32>>" in generated_code
+    assert "target: Image2D<Vec4<f32>>" in generated_code
+    assert "let value: i32 = buffer_load(readOnlyValues, index);" in generated_code
+    assert "let attrValue: i32 = buffer_load(attrReadValues, index);" in generated_code
+    assert "let rawValue: u32 = buffer_load(rawInput, byteOffset);" in generated_code
+    assert "buffer_store(writeOnlyValues, index, (value + attrValue));" in (
         generated_code
     )
-    assert "buffer_store(*READ_WRITE_VALUES, index, (value as f32));" in generated_code
-    assert "buffer_store(*ATTR_WRITE_VALUES, index, attrValue);" in generated_code
-    assert "buffer_store(*RAW_OUTPUT, byteOffset, rawValue);" in generated_code
-    assert "let color: Vec4<f32> = image_load(*SOURCE, Vec2::<i32>::new(0, 0));" in (
+    assert "buffer_store(readWriteValues, index, (value as f32));" in generated_code
+    assert "buffer_store(attrWriteValues, index, attrValue);" in generated_code
+    assert "buffer_store(rawOutput, byteOffset, rawValue);" in generated_code
+    assert "let color: Vec4<f32> = image_load(source, Vec2::<i32>::new(0, 0));" in (
         generated_code
     )
-    assert "image_store(*TARGET, Vec2::<i32>::new(0, 0), color);" in generated_code
+    assert "image_store(target, Vec2::<i32>::new(0, 0), color);" in generated_code
     assert "readonly" not in generated_code
     assert "writeonly" not in generated_code
     assert "readwrite" not in generated_code
@@ -18559,14 +18423,10 @@ def test_glsl_buffer_array_declarations_map_to_rust_resources_and_compile(tmp_pa
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static VALUES: std::sync::LazyLock<StructuredBuffer<f32>>" in (
-        generated_code
-    )
-    assert "static OUT_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>" in (
-        generated_code
-    )
-    assert "let value: f32 = buffer_load(*VALUES, 0);" in generated_code
-    assert "buffer_store(*OUT_VALUES, 1, value);" in generated_code
+    assert "values: StructuredBuffer<f32>" in (generated_code)
+    assert "outValues: RWStructuredBuffer<f32>" in (generated_code)
+    assert "let value: f32 = buffer_load(values, 0);" in generated_code
+    assert "buffer_store(outValues, 1, value);" in generated_code
     assert "Vec<f32>" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
@@ -18613,16 +18473,18 @@ def test_glsl_buffer_block_reads_compile_and_invalid_accesses_are_refused(tmp_pa
         "// CrossGL resource metadata: name=writeOnlyData "
         "kind=glsl_buffer_block layout=std430 access=writeonly" in generated_code
     )
-    assert "static PARTICLE_BLOCK: std::sync::LazyLock<ParticleBlock>" in (
-        generated_code
-    )
-    assert "let mass: f32 = (*PARTICLE_BLOCK).particles[0].mass;" in generated_code
+    assert "static PARTICLE_BLOCK" not in generated_code
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
+    ) in generated_code
+    assert "particleBlock: ParticleBlock" in generated_code
+    assert "let mass: f32 = particleBlock.particles[0].mass;" in generated_code
     assert "/* unsupported" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
     refused_accesses = {
         "particleBlock.particles[1u].mass = 1.0;": (
-            "GLSL buffer block store: the block is an immutable Rust static"
+            "GLSL buffer block store: the block is passed by value, so a store would not reach the buffer"
         ),
         "uint blockedRead = writeOnlyData.value;": (
             "GLSL buffer block load: a writeonly block cannot be read"
@@ -18788,14 +18650,8 @@ def test_sampler_descriptor_array_source_bindings_do_not_expand_rust_ranges(tmp_
         "// CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
         "binding=6 binding_source=explicit count=2" in generated_code
     )
-    assert (
-        "resource linearSamplers is emitted as a compile-only placeholder static"
-        in generated_code
-    )
-    assert (
-        "resource shadowSamplers is emitted as a compile-only placeholder static"
-        in generated_code
-    )
+    # Neither array is used, so neither is a parameter; nothing reads the declarations.
+    assert "compile-only placeholder" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -18876,7 +18732,7 @@ def test_rust_resource_parameters_lower_explicit_sampler_sampling(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_resource_placeholders_diagnose_storage_image_atomic(tmp_path):
+def test_rust_storage_image_atomic_binds_the_image_as_an_entry_parameter(tmp_path):
     code = """
     shader RustStorageImageAtomicResourceDiagnostic {
         uimage2D counterImage @r32ui @binding(2);
@@ -18891,16 +18747,13 @@ def test_rust_resource_placeholders_diagnose_storage_image_atomic(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let previous: u32 = image_atomic_add(*COUNTER_IMAGE, pixel, amount);" in (
+    assert "let previous: u32 = image_atomic_add(counterImage, pixel, amount);" in (
         generated_code
     )
     assert "imageAtomicAdd" not in generated_code
     assert "imageLoad" not in generated_code
-    assert (
-        "// CrossGL Rust limitation: resource counterImage is emitted as a "
-        "compile-only placeholder static, not a rust-gpu resource binding"
-    ) in generated_code
-    assert "static COUNTER_IMAGE: std::sync::LazyLock<Image2D<u32>>" in generated_code
+    assert "CrossGL Rust limitation" not in generated_code
+    assert "counterImage: Image2D<u32>" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -18997,28 +18850,26 @@ def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static SCALAR_FLOAT: std::sync::LazyLock<Image2D<f32>>" in generated_code
-    assert "static SCALAR_COUNTER: std::sync::LazyLock<Image2D<u32>>" in generated_code
-    assert "static RG_FLOAT: std::sync::LazyLock<Image2D<Vec2<f32>>>" in generated_code
-    assert "static RG_UINT: std::sync::LazyLock<Image2D<Vec2<u32>>>" in generated_code
-    assert "static SIGNED_VOLUME: std::sync::LazyLock<Image3D<i32>>" in generated_code
-    assert "let scalar: f32 = image_load(*SCALAR_FLOAT, pixel);" in generated_code
-    assert "image_store(*SCALAR_FLOAT, pixel, (scalar + 1.0));" in generated_code
-    assert "let count: u32 = image_load(*SCALAR_COUNTER, pixel);" in generated_code
-    assert "image_store(*SCALAR_COUNTER, pixel, (count + 1));" in generated_code
-    assert "let pair: Vec2<f32> = image_load(*RG_FLOAT, pixel);" in generated_code
-    assert "image_store(*RG_FLOAT, pixel, pair);" in generated_code
+    assert "scalarFloat: Image2D<f32>" in generated_code
+    assert "scalarCounter: Image2D<u32>" in generated_code
+    assert "rgFloat: Image2D<Vec2<f32>>" in generated_code
+    assert "rgUint: Image2D<Vec2<u32>>" in generated_code
+    assert "signedVolume: Image3D<i32>" in generated_code
+    assert "let scalar: f32 = image_load(scalarFloat, pixel);" in generated_code
+    assert "image_store(scalarFloat, pixel, (scalar + 1.0));" in generated_code
+    assert "let count: u32 = image_load(scalarCounter, pixel);" in generated_code
+    assert "image_store(scalarCounter, pixel, (count + 1));" in generated_code
+    assert "let pair: Vec2<f32> = image_load(rgFloat, pixel);" in generated_code
+    assert "image_store(rgFloat, pixel, pair);" in generated_code
+    assert "let unsignedPair: Vec2<u32> = image_load(rgUint, pixel);" in generated_code
+    assert "image_store(rgUint, pixel, unsignedPair);" in generated_code
     assert (
-        "let unsignedPair: Vec2<u32> = image_load(*RG_UINT, pixel);" in generated_code
-    )
-    assert "image_store(*RG_UINT, pixel, unsignedPair);" in generated_code
-    assert (
-        "let signedValue: i32 = image_load(*SIGNED_VOLUME, "
-        "Vec3::<i32>::new(0, 0, 0));" in generated_code
+        "let signedValue: i32 = image_load(signedVolume, Vec3::<i32>::new(0, 0, 0));"
+        in generated_code
     )
     assert (
-        "image_store(*SIGNED_VOLUME, Vec3::<i32>::new(0, 0, 0), "
-        "(signedValue - 1));" in generated_code
+        "image_store(signedVolume, Vec3::<i32>::new(0, 0, 0), (signedValue - 1));"
+        in generated_code
     )
     assert "image2D" not in generated_code
     assert "uimage2D" not in generated_code
@@ -19068,56 +18919,41 @@ def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "static MS_IMAGE: std::sync::LazyLock<Image2DMS<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static MS_LAYER_IMAGE: std::sync::LazyLock<Image2DMSArray<Vec4<f32>>>" in (
-        generated_code
-    )
-    assert "static MS_COUNTER: std::sync::LazyLock<Image2DMS<Vec4<u32>>>" in (
-        generated_code
-    )
-    assert (
-        "static MS_SIGNED_LAYERS: std::sync::LazyLock<Image2DMSArray<Vec4<i32>>>" in (
-            generated_code
-        )
-    )
-    assert (
-        "let color: Vec4<f32> = image_load_sample(*MS_IMAGE, pixel, sampleIndex);" in (
-            generated_code
-        )
-    )
-    assert (
-        "image_store_sample(*MS_IMAGE, pixel, sampleIndex, "
-        "(color + Vec4::<f32>::new" in generated_code
-    )
-    assert (
-        "let layer: Vec4<f32> = "
-        "image_load_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex);" in generated_code
-    )
-    assert "image_store_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex, layer);" in (
+    assert "msImage: Image2DMS<Vec4<f32>>" in (generated_code)
+    assert "msLayerImage: Image2DMSArray<Vec4<f32>>" in (generated_code)
+    assert "msCounter: Image2DMS<Vec4<u32>>" in (generated_code)
+    assert "msSignedLayers: Image2DMSArray<Vec4<i32>>" in (generated_code)
+    assert "let color: Vec4<f32> = image_load_sample(msImage, pixel, sampleIndex);" in (
         generated_code
     )
     assert (
-        "let counts: Vec4<u32> = image_load_sample(*MS_COUNTER, pixel, sampleIndex);"
-        in generated_code
-    )
-    assert "image_store_sample(*MS_COUNTER, pixel, sampleIndex, counts);" in (
-        generated_code
-    )
-    assert (
-        "let previous: u32 = "
-        "image_atomic_add_sample(*MS_COUNTER, pixel, sampleIndex, amount);"
+        "image_store_sample(msImage, pixel, sampleIndex, (color + Vec4::<f32>::new"
         in generated_code
     )
     assert (
-        "let exchanged: u32 = "
-        "image_atomic_exchange_sample(*MS_COUNTER, pixel, sampleIndex, previous);"
+        "let layer: Vec4<f32> = image_load_sample(msLayerImage, pixelLayer, sampleIndex);"
+        in generated_code
+    )
+    assert "image_store_sample(msLayerImage, pixelLayer, sampleIndex, layer);" in (
+        generated_code
+    )
+    assert (
+        "let counts: Vec4<u32> = image_load_sample(msCounter, pixel, sampleIndex);"
+        in generated_code
+    )
+    assert "image_store_sample(msCounter, pixel, sampleIndex, counts);" in (
+        generated_code
+    )
+    assert (
+        "let previous: u32 = image_atomic_add_sample(msCounter, pixel, sampleIndex, amount);"
         in generated_code
     )
     assert (
-        "let swapped: i32 = image_atomic_comp_swap_sample("
-        "*MS_SIGNED_LAYERS, pixelLayer, sampleIndex, 0, (exchanged as i32));"
+        "let exchanged: u32 = image_atomic_exchange_sample(msCounter, pixel, sampleIndex, previous);"
+        in generated_code
+    )
+    assert (
+        "let swapped: i32 = image_atomic_comp_swap_sample(msSignedLayers, pixelLayer, sampleIndex, 0, (exchanged as i32));"
         in generated_code
     )
     assert "imageLoad" not in generated_code
@@ -19728,14 +19564,13 @@ def test_texture_builtin_alias_targets_qualify_shadowed_runtime_helpers_and_comp
 
     assert "let sample: f32 = 1.0;" in generated_code
     assert "let sample_sampler: f32 = 2.0;" in generated_code
-    assert "let implicitColor: Vec4<f32> = gpu::sample(*COLOR_MAP, uv);" in (
+    assert "let implicitColor: Vec4<f32> = gpu::sample(colorMap, uv);" in (
         generated_code
     )
     assert (
-        "let explicitColor: Vec4<f32> = "
-        "gpu::sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+        "let explicitColor: Vec4<f32> = gpu::sample_sampler(colorMap, linearSampler, uv);"
     ) in generated_code
-    assert "let implicitColor: Vec4<f32> = sample(*COLOR_MAP, uv);" not in (
+    assert "let implicitColor: Vec4<f32> = sample(colorMap, uv);" not in (
         generated_code
     )
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -19769,7 +19604,7 @@ def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert "let reflected: Vec3<f32> = reflect((-unit), light);" in generated_code
     assert "let ndotl: f32 = max(0.0, dot(reflected, light));" in generated_code
     assert "let mixed: Vec3<f32> = lerp(" in generated_code
-    assert "let tex: Vec4<f32> = sample(*MAIN_TEXTURE, uv);" in generated_code
+    assert "let tex: Vec4<f32> = sample(main_texture, uv);" in generated_code
     assert "let unit: f32 = normalize" not in generated_code
     assert "let reflected: f32 = reflect" not in generated_code
     assert "let mixed: f32 = lerp" not in generated_code
@@ -21084,7 +20919,7 @@ def test_rust_texture_size_vector_temp_and_float_increment_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let __cgl_vec_arg_0: Vec2<i32> = texture_size_lod(*SHADOW_MAP, 0);" in (
+    assert "let __cgl_vec_arg_0: Vec2<i32> = texture_size_lod(shadowMap, 0);" in (
         generated_code
     )
     assert "samples += 1.0;" in generated_code
@@ -23693,10 +23528,7 @@ def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
         "static SHARED_TRANSFORM: std::sync::LazyLock<Mat4<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());"
     ) in generated_code
-    assert (
-        "static MAIN_TEXTURE: std::sync::LazyLock<Texture2D<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());"
-    ) in generated_code
+    assert ("main_texture: Texture2D<f32>") in generated_code
     assert (
         "static SHARED_TRANSFORM: Mat4<f32> = Default::default();" not in generated_code
     )
@@ -23706,7 +23538,7 @@ def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
     )
     assert "static MAIN_TEXTURE: sampler2D" not in generated_code
     assert "(*SHARED_TRANSFORM * Vec4::<f32>::new" in generated_code
-    assert "sample(*MAIN_TEXTURE, uv)" in generated_code
+    assert "sample(main_texture, uv)" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -25960,9 +25792,7 @@ def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
         "// CrossGL resource metadata: name=scene kind=acceleration_structure "
         "set=2 binding=3 binding_source=explicit" in generated_code
     )
-    assert "static SCENE: std::sync::LazyLock<RayTracingAccelerationStructure>" in (
-        generated_code
-    )
+    assert "scene: RayTracingAccelerationStructure" in (generated_code)
     assert "// CrossGL ray stage: ray_generation" in generated_code
     assert "// CrossGL ray stage: closest_hit" in generated_code
     assert "// CrossGL ray stage: any_hit" in generated_code
@@ -25974,7 +25804,7 @@ def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
     assert "// CrossGL parameter semantic: data: callable_data" in generated_code
     assert "let launch: Vec3<u32> = ray_launch_id();" in generated_code
     assert "let launchWidth: u32 = ray_launch_size().x;" in generated_code
-    assert "trace_ray(*SCENE, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert "trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in generated_code
     assert "call_shader(0, data);" in generated_code
     assert "ignore_hit();" in generated_code
     assert "accept_hit_and_end_search();" in generated_code

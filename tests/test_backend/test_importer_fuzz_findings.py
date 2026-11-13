@@ -113,6 +113,20 @@ def test_opencl_unterminated_comment_after_parameter_qualifier_is_rejected(tmp_p
     assert isinstance(error, SyntaxError), repr(error)
 
 
+def test_opencl_template_argument_list_cut_off_by_the_end_of_input_is_rejected(
+    tmp_path,
+):
+    # The OpenCL importer parses types with the HIP parser, which read the token after the end of the input.
+    source = tmp_path / "k.cl"
+    source.write_text(
+        "__kernel void hazard(__global const int *inp, __global int <||outp) {\n"
+        "    size_t i = get_global_id("
+    )
+    error = finishes(lambda: crosstl.translate(str(source), backend="cgl"))
+    assert isinstance(error, SyntaxError), repr(error)
+    assert "Unterminated template argument list" in str(error)
+
+
 def test_directx_stray_hash_after_tokens_is_rejected(tmp_path):
     source = tmp_path / "stray.hlsl"
     source.write_text(

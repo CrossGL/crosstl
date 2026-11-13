@@ -11267,7 +11267,7 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     ]
 
 
-def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic(
+def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -11312,28 +11312,15 @@ def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic
 
     assert output.exists()
     rust_code = output.read_text(encoding="utf-8")
-    assert "CrossGL Rust limitation: resource values" in rust_code
-    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in rust_code
-    assert len(placeholder_diagnostics) == 1
-    assert placeholder_diagnostics[0]["location"]["file"] == (
-        "translated/rust/shaders/storage.rs"
-    )
-    assert "rust-gpu resource binding" in placeholder_diagnostics[0]["message"]
-    assert validate_project_report(report_path)["success"] is True
-
-    missing_payload = copy.deepcopy(payload)
-    _clear_report_diagnostics(missing_payload)
-    missing_report_path = repo / "translated" / "missing-storage-diagnostic.json"
-    missing_report_path.write_text(json.dumps(missing_payload), encoding="utf-8")
-    missing_validation = validate_project_report(missing_report_path)
-
-    assert missing_validation["success"] is False
+    # The buffer is an entry parameter with its binding, not a default-valued static under a placeholder comment.
+    assert "CrossGL Rust limitation" not in rust_code
+    assert "static VALUES" not in rust_code
     assert (
-        missing_validation["diagnosticsByCode"][
-            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
-        ]
-        == 1
-    )
+        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
+        "binding = 0))] values: RWStructuredBuffer<i32>"
+    ) in rust_code
+    assert placeholder_diagnostics == []
+    assert validate_project_report(report_path)["success"] is True
 
 
 def test_translate_project_filters_invalid_include_dirs_before_frontend(

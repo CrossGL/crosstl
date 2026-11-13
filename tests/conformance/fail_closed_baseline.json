@@ -1,8 +1,6 @@
 {
  "schemaVersion": 1,
  "sites": {
-  "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.rust_resource_placeholder_diagnostic_comment::fallback-text": 1,
   "crosstl/translator/parser.py::Parser.parse_function::empty-block-recovery": 1
  }
 }

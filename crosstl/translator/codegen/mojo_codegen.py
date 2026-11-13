@@ -92,6 +92,7 @@ from .image_access_contracts import (
     image_format_component_kind,
 )
 from .lowering_refusals import refuse_unsupported
+from .mojo_bit_functions import generate_mojo_bit_function_call
 from .mojo_exact_lookups import (
     MOJO_RAY_TRACING_INTRINSICS,
     mojo_generic_template_reason,
@@ -104,6 +105,11 @@ from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
+from .written_function_names import (
+    MOJO_CALLABLE_FUNCTION_NAMES,
+    MOJO_NON_CALLS,
+    refuse_written_foreign_calls,
+)
 
 
 class MojoScalarConversionError(ValueError):
@@ -1353,6 +1359,7 @@ class MojoCodeGen:
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_bit_imports = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
         self.required_ray_helpers = set()
@@ -1553,7 +1560,20 @@ class MojoCodeGen:
         }
 
     def generate(self, ast):
-        """Generate complete Mojo-like shader source for a CrossGL AST."""
+        """Generate complete Mojo-like shader source for a CrossGL AST, or raise :class:`MojoLoweringRefused`.
+
+        A call the generator has no lowering for is written as it stands, so the rendered program is refused when
+        it still calls a built-in function of another shading language that Mojo does not define and the program
+        does not declare.
+        """
+        output = self.render_program(ast)
+        refuse_written_foreign_calls(
+            output, MOJO_CALLABLE_FUNCTION_NAMES, "Mojo", non_calls=MOJO_NON_CALLS
+        )
+        return output
+
+    def render_program(self, ast):
+        """Render complete Mojo-like shader source for a CrossGL AST."""
         refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
@@ -1619,6 +1639,7 @@ class MojoCodeGen:
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_bit_imports = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
         self.required_ray_helpers = set()
@@ -1828,6 +1849,10 @@ class MojoCodeGen:
                     self.stage_local_function_extra_params = previous_extra_params
         if self.required_reinterpret_helpers:
             header += "from memory import bitcast\n"
+        if self.required_bit_imports:
+            header += (
+                f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
+            )
         header += "\n"
 
         return header + self.generate_required_helpers() + code
@@ -9048,6 +9073,14 @@ class MojoCodeGen:
                 lambda_expr = self.generate_lambda_expression(expr.args)
                 if lambda_expr is not None:
                     return lambda_expr
+                # A lambda whose parameters or body the helper materialization cannot type has no Mojo spelling:
+                # the CrossGL text of it is not a Mojo expression.
+                refuse_unsupported(
+                    "Mojo",
+                    "lambda",
+                    "lambda whose parameter list or body cannot be materialized as a typed Mojo helper function",
+                    "lambda",
+                )
 
             enum_constructor = self.generate_enum_variant_constructor_call(
                 func_name, expr.args, target_type
@@ -9189,8 +9222,14 @@ class MojoCodeGen:
                 return f"{helper_name}()"
             if func_name == "__shfl_down_sync":
                 return self.generate_cuda_shuffle_down_call(expr.args)
+            bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
+            if bit_function is not None:
+                return bit_function
 
-            func_name = self.function_map.get(func_name, func_name)
+            if func_name in self.function_map:
+                func_name = self.function_map[func_name]
+            # Otherwise a program function or a Mojo library function, spelled as it is; a built-in function of
+            # another language left in the output is refused by generate.
             if func_name in MOJO_MATH_HELPERS:
                 self.required_math_helpers.add(func_name)
             if func_name in self.scalar_constructor_map:
@@ -9229,11 +9268,7 @@ class MojoCodeGen:
 
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             call_name = (
-                "lambda"
-                if func_name == "lambda"
-                else (
-                    self.mojo_identifier(func_name) if func_name is not None else callee
-                )
+                self.mojo_identifier(func_name) if func_name is not None else callee
             )
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -10520,6 +10555,10 @@ class MojoCodeGen:
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
+            if dtype in MOJO_INTEGER_DTYPES:
+                # saturate keeps its argument's type (semantics.hub_types), so an integer vector clamps to 0 and
+                # 1 per component, through SIMD's clamp method, which no generated free helper shadows.
+                return f"({self.generate_expression(args[0])}).clamp(0, 1)"
             if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
@@ -10534,6 +10573,13 @@ class MojoCodeGen:
         matrix_info = self.matrix_type_info(arg_type)
         if matrix_info is not None:
             dtype, columns, rows = matrix_info
+            if dtype in MOJO_INTEGER_DTYPES:
+                return refuse_unsupported(
+                    "Mojo",
+                    "function",
+                    "saturate of an integer matrix: the Mojo matrix runtime has no integer clamp",
+                    "saturate",
+                )
             if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
@@ -10543,6 +10589,9 @@ class MojoCodeGen:
             return f"{helper_name}({arg_expr})"
 
         arg_dtype = self.expression_mojo_dtype(args[0])
+        if arg_dtype in MOJO_INTEGER_DTYPES:
+            # An integer scalar is a one-lane SIMD value in Mojo, with the same clamp method.
+            return f"({self.generate_expression(args[0])}).clamp(0, 1)"
         if arg_dtype not in supported_float_dtypes:
             return None
 
