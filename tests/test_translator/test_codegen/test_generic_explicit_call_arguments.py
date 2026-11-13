@@ -242,6 +242,8 @@ ALL_BACKENDS = [
 
 
 def _assert_vulkan_sel_call(code, param_type, expected_operands):
+    # translate() formats SPIR-V through spirv-dis when SPIRV-Tools are installed, which indents every line.
+    code = "\n".join(line.strip() for line in code.splitlines())
     names = {
         sym_id: name
         for sym_id, name in re.findall(r'^OpName\s+(%\w+)\s+"([^"]+)"', code, re.M)
