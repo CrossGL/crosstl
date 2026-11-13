@@ -1446,6 +1446,15 @@ kernel void slice_copy(
     hlsl = translate(str(shader), backend="directx", format_output=False)
     assert "crosstl_resource_load_float" in hlsl
     assert "crosstl_resource_store_float" in hlsl
+    # b.input was initialised as `input + 2` (offset 2) then shifted by +1,
+    # so the final combined offset must be 3, not 2 or 1 individually.
+    assert ", 3)" in hlsl or ", 3LL)" in hlsl, (
+        "b.input combined offset (2+1) must appear as literal 3 in HLSL shift call"
+    )
+    # b.output was assigned `output + 1` so its shift offset must be 1.
+    assert ", 1)" in hlsl or ", 1LL)" in hlsl, (
+        "b.output offset must appear as literal 1 in HLSL shift call"
+    )
     assert "crosstl_resource_shift_float" in hlsl
     assert "Unknown type" not in hlsl
 
@@ -1455,5 +1464,50 @@ kernel void slice_copy(
     assert "Unknown type" not in glsl
 
     spv = translate(str(shader), backend="vulkan", format_output=False)
+
+
+def test_opengl_null_cursor_field_lowers_without_index_type_error(tmp_path):
+    """Overwriting a null-initialised aggregate field translates to OpenGL.
+
+    The exact fixture from issue #1544 (comment 2026-10-06) assigns nullptr to
+    a struct field and then overwrites it with a real buffer pointer before
+    dereferencing it.  On OpenGL the index bound-check pass must not raise
+    ``OpenGLIndexTypeError`` for the ``index`` parameter because the proof
+    that ``index`` never exceeds 32 bits is derivable from the kernel's
+    thread-position builtin.  The generated GLSL must pass glslangValidator.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct Cursor { const device float* input; };
+
+kernel void copy_values(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint index [[thread_position_in_grid]])
+{
+    Cursor cursor;
+    cursor.input = nullptr;
+    cursor.input = input;
+    output[index] = cursor.input[index];
+}
+"""
+    shader = tmp_path / "null_cursor_opengl.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    # Must not raise OpenGLIndexTypeError — this is the regression being fixed.
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "Unknown type" not in glsl
+
+    if shutil.which("glslangValidator"):
+        import subprocess
+
+        glsl_path = tmp_path / "null_cursor.glsl"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            ["glslangValidator", "-S", "comp", str(glsl_path)],
+            check=True,
+        )
     _validate_spirv_assembly(spv, tmp_path)
     assert "Unknown type" not in spv
