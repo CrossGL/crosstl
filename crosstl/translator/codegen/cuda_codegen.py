@@ -4370,6 +4370,15 @@ class CudaCodeGen(
         "clockRealtime2x32EXT",
     }
 
+    # The CrossGL result types, so arithmetic on a 2x32 pair goes through the
+    # uint2 helpers as it does for any other uvec2 value.
+    CUDA_SHADER_CLOCK_RESULT_TYPES = {
+        "clockARB": "uint64_t",
+        "clock2x32ARB": "uvec2",
+        "clockRealtimeEXT": "uint64_t",
+        "clockRealtime2x32EXT": "uvec2",
+    }
+
     def generate_cuda_shader_clock_call(self, func_name, raw_args):
         """GL_ARB_shader_clock and GL_EXT_shader_realtime_clock built-ins.
 
@@ -7952,6 +7961,8 @@ class CudaCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            if func_name in self.CUDA_SHADER_CLOCK_RESULT_TYPES:
+                return self.CUDA_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args

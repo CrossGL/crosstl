@@ -398,6 +398,31 @@ class TestHipCodeGen:
         ):
             assert name not in hip_code
 
+    def test_shader_clock_pair_arithmetic_uses_uint2_helpers_for_hip(self):
+        # HIP's uint2 has no operators either: a 2x32 clock read used directly
+        # as an operand goes through the uint2 helpers.
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uvec2* pair_buf;
+                void main() {
+                    pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+                    pair_buf[1] = clock2x32ARB() * 2u;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        compact = "".join(hip_code.split())
+
+        assert (
+            "pair_buf[0]=cgl_uint2_add(cgl_hip_clock2x32(),cgl_hip_realtime_clock2x32());"
+            in compact
+        )
+        assert "pair_buf[1]=cgl_uint2_mul_scalar(cgl_hip_clock2x32(),2u);" in compact
+
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
         ast = ShaderNode(
             name="NonVoidHipKernel",

@@ -20770,6 +20770,32 @@ class TestCudaCodeGen:
         with pytest.raises(ValueError, match=r"clockARB requires 0 arguments"):
             CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_shader_clock_pair_arithmetic_uses_uint2_helpers_for_cuda(self, tmp_path):
+        # CUDA's uint2 has no operators: a 2x32 clock read used directly as an
+        # operand must go through the same helpers as any other uvec2 value.
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uvec2* pair_buf;
+                void main() {
+                    pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+                    pair_buf[1] = clock2x32ARB() * 2u;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        compact = "".join(cuda_code.split())
+
+        assert (
+            "pair_buf[0]=cgl_uint2_add(cgl_cuda_clock2x32(),cgl_cuda_realtime_clock2x32());"
+            in compact
+        )
+        assert "pair_buf[1]=cgl_uint2_mul_scalar(cgl_cuda_clock2x32(),2u);" in compact
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
 
 def test_scalar_f64_constructor_emits_double_cast():
     source_code = """

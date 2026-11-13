@@ -4770,6 +4770,15 @@ class HipCodeGen(
         "clockRealtime2x32EXT": "wall_clock64()",
     }
 
+    # The CrossGL result types, so arithmetic on a 2x32 pair goes through the
+    # uint2 helpers as it does for any other uvec2 value.
+    HIP_SHADER_CLOCK_RESULT_TYPES = {
+        "clockARB": "uint64_t",
+        "clock2x32ARB": "uvec2",
+        "clockRealtimeEXT": "uint64_t",
+        "clockRealtime2x32EXT": "uvec2",
+    }
+
     def generate_hip_shader_clock_call(self, func_name, raw_args):
         """The shader clock built-ins; the 2x32 forms return the 64-bit counter as a uint2 (low, high)."""
         source = self.HIP_SHADER_CLOCK_SOURCES.get(func_name)
@@ -10547,6 +10556,8 @@ class HipCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            if func_name in self.HIP_SHADER_CLOCK_RESULT_TYPES:
+                return self.HIP_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args
