@@ -1960,6 +1960,31 @@ matrix-vector, vector-matrix and matrix-matrix kernels are outside this gate.
 This covers 54/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+`contracts/fp_quantized_qmv_fast.current-tree.translation.json` pins a further
+66 entries of `fp_quantized.metal` and their 198 artifacts: `fp_qmv_fast` with
+and without batching and `fp_gather_qmv_fast`, each with and without a global
+scale, for the three element types in `nvfp4`, `mxfp8` and `mxfp4`, and the
+twelve `nvfp4` `fp_qmv_fast` entries with two-row (`_r_2`) tiles. They share
+the `fp_qmv` gate's target options, index-range preconditions, inputs and
+exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 156 dispatches and 6,432 checked elements per
+target on Metal, Mesa EGL and Direct3D 12 WARP. Each case is a product
+`quantized.cpp` sends to the fast kernel: `N` a multiple of 8 and `K` of
+`qmv_fast_k_alignment`, one vector without a global scale outside gather,
+`(32, 2, 1)` threadgroups over a `(M, N / 8, B)` grid, or `(M, N / 4, B)` for
+`_r_2`. The host picks `_r_2` for `nvfp4` only when `N >= 4096` on
+generation-17 `s` devices; `fp_qmv_fast_impl` has no branch on `N`, so the gate
+runs those entries at the cases' `N`. Cases take one and three blocks, one and
+several row tiles, one and two vectors, and both branches of each
+`adjust_matrix_offsets` overload. A lane-level model of `fp_qmv_fast_impl`
+must reach direct dequantized dot products and store every output once, and
+mutated models that give lanes the wrong scale or pack stride, reverse codes,
+ignore the row, batch or expert offsets, stop a block early, or drop the code
+sign or the global scale are rejected. Every target must match the model word
+for word and leave the guards untouched; on Metal the translation must also
+match the unchanged upstream kernel. This covers 66/17,832 entries; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
 and without batching and `affine_gather_qmv_fast`, for the same three element

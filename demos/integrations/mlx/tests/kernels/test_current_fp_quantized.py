@@ -21,8 +21,9 @@ per byte and the guarded byte writes. Dequantize unpacks random codes,
 including signed zeros and E4M3 subnormals, with E4M3 scales of either sign
 or E8M0 scales. Every word is compared exactly, guards and inputs must be
 unchanged, and Metal also runs the unchanged upstream kernels. fp_qmv and
-fp_gather_qmv have their own gate, test_current_fp_quantized_qmv.py; the other
-matrix-vector and the matrix-matrix kernels are outside both.
+fp_gather_qmv have their own gate, test_current_fp_quantized_qmv.py, and
+fp_qmv_fast and fp_gather_qmv_fast theirs, test_current_fp_quantized_qmv_fast.py;
+the other matrix-vector and the matrix-matrix kernels are outside all three.
 """
 
 import functools
@@ -121,12 +122,13 @@ MODES = (
 # The 54 fp_qmv and fp_gather_qmv entries have their own gate,
 # test_current_fp_quantized_qmv.py.
 QMV_ENTRY_COUNT = 54
+# The 66 fp_qmv_fast and fp_gather_qmv_fast entries have theirs,
+# test_current_fp_quantized_qmv_fast.py.
+QMV_FAST_ENTRY_COUNT = 66
 # Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "fp_qmv_fast",
     "fp_qvm",
     "fp_qmm_n",
-    "fp_gather_qmv_fast",
     "fp_gather_qvm",
     "fp_gather_qmm_n",
     "fp_qmv_quad",
@@ -839,12 +841,15 @@ def _expected_scope():
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
         "qmvGateEntryCount": QMV_ENTRY_COUNT,
+        "qmvFastGateEntryCount": QMV_FAST_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - len(ENTRIES) - QMV_ENTRY_COUNT,
+            "count": (
+                UNIT_ENTRY_COUNT - len(ENTRIES) - QMV_ENTRY_COUNT - QMV_FAST_ENTRY_COUNT
+            ),
             "reason": (
-                "the fast, quad, wide and split-K matrix-vector, the "
-                "vector-matrix and the matrix-matrix kernels are not gated yet"
+                "the quad, wide and split-K matrix-vector, the vector-matrix "
+                "and the matrix-matrix kernels are not gated yet"
             ),
         },
         "runtimeCoveredEntryCount": len(ENTRIES),
