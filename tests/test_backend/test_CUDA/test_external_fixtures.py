@@ -2535,16 +2535,16 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
     assert body[2].vtype == "const __nv_bfloat16 *"
     assert body[2].name == "tile_ptr"
     assert body[3].vtype == "__nv_bfloat16"
-    assert "array<f16>" in crossgl
+    assert "array<bfloat16>" in crossgl
     assert (
-        "var<workgroup> shmem: " "array<array<f16, CHUNK_K_mul_K_plus_SKEW_BF16>>;"
+        "var<workgroup> shmem: " "array<array<bfloat16, CHUNK_K_mul_K_plus_SKEW_BF16>>;"
     ) in crossgl
-    assert "var local: ptr<f16> = D;" in crossgl
+    assert "var local: ptr<bfloat16> = D;" in crossgl
     assert (
-        "var tile_ptr: ptr<f16> = "
+        "var tile_ptr: ptr<bfloat16> = "
         "(&shmem[gl_LocalInvocationID.y][gl_LocalInvocationID.x]);"
     ) in crossgl
-    assert "var value: f16 = A[gl_LocalInvocationID.x];" in crossgl
+    assert "var value: bfloat16 = A[gl_LocalInvocationID.x];" in crossgl
     assert "__nv_bfloat16" not in crossgl
     assert_crossgl_reparse(crossgl)
 
@@ -3282,7 +3282,7 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "partition of the current workgroup"
     ) in crossgl
     assert crossgl.count("workgroupBarrier();") == 3
-    assert "var globaltid: u32 = gl_GlobalInvocationID.x;" in crossgl
+    assert "var globaltid: u64 = gl_GlobalInvocationID.x;" in crossgl
     assert "for (var i: i32 = (32 / 2); (i > 0); i >>= 1)" in crossgl
     assert "tmp[gl_LocalInvocationIndex] = beta;" in crossgl
     assert (
