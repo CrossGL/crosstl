@@ -431,19 +431,32 @@
       "class": "silent",
       "component": "CUDA importer",
       "summary": "__nv_bfloat16 imported as binary16 and size_t as a 32-bit integer",
-      "status": "open",
+      "status": "fixed",
       "probes": [
         {
           "source": "S21.cu",
           "target": "cgl",
           "expect": "translated",
           "present": [
-            "bfloat16",
-            "\\b(uint64|ulong)\\b"
+            "array<bfloat16>",
+            "\\bu64 n\\b|\\bn: u64\\b",
+            "var i: u64 = "
+          ],
+          "absent": [
+            "\\bf16\\b",
+            "__bfloat162float",
+            "\\bsize_t\\b"
           ]
         }
       ],
-      "note": "size_t still imports as a 32-bit integer, so index arithmetic wraps at 2^32."
+      "tests": [
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_and_ptrdiff_t_import_as_64_bit",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_index_arithmetic_is_64_bit_on_metal_and_spirv",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_imports_as_bfloat16_with_its_conversions",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_buffers_keep_two_byte_elements",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_sizeof_operands_import_as_crossgl_types"
+      ],
+      "note": "size_t and ptrdiff_t import as u64 and i64 on CUDA and HIP; OpenGL refuses a 64-bit subscript rather than truncating it."
     },
     {
       "id": "S22",

@@ -739,8 +739,9 @@ def test_hip_bit_extract_kernel_body_survives_metal_and_spirv_targets(tmp_path):
     _assert_generated_output_is_usable(metal)
     assert "device uint* d_output [[buffer(0)]]" in metal
     assert "const device uint* d_input [[buffer(1)]]" in metal
-    assert "constant uint& size [[buffer(2)]]" in metal
-    assert "for (uint i = offset; i < size; i += stride)" in metal
+    # HIP's size_t is 64 bits wide, so the size, offset and loop index stay 64-bit.
+    assert "constant uint64_t& size [[buffer(2)]]" in metal
+    assert "for (uint64_t i = offset; i < size; i += stride)" in metal
     assert "d_output[i] = d_input[i] >> 8 & 15u;" in metal
 
     _assert_generated_output_is_usable(spirv)
