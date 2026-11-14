@@ -30,7 +30,7 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from . import constructs, execution, lowering, probes, semantic, validators
+from . import constructs, lowering, probes, semantic, validators
 from .dialect import ProbeError
 from .features.spirv import NAN_AWARE, is_core
 from .model import Feature, Param, Signature, Type
@@ -149,7 +149,7 @@ def _lowered(feature: Feature, language: str) -> tuple[str, probes.Probe]:
             f"{compiler} rejects the {language.upper()} probe: {validators.first_error(log)}"
         )
     if language == FALLBACK:
-        assembly = execution.without_unused_counters(assembly)
+        assembly = lowering.without_unused_counters(assembly)
     return assembly, probe
 
 
