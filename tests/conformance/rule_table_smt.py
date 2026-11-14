@@ -31,7 +31,12 @@ Target model:
   - a binary32 value is its bit pattern: ``asfloat``, and ``asuint`` or ``asint`` of a float, reinterpret it exactly,
     and ``int(f)`` and ``uint(f)`` truncate toward zero and are defined only where the truncated value is
     representable (C++17 [conv.fpint]/1 for MSL, CUDA and HIP; DXC's fptosi and fptoui give poison otherwise; GLSL,
-    SPIR-V and WGSL are taken to leave it undefined too). Floating-point comparison and arithmetic are not modelled.
+    SPIR-V and WGSL are taken to leave it undefined too);
+  - binary32 ``+``, ``-``, ``*``, unary ``-`` and the orderings ``<``, ``<=``, ``>``, ``>=`` are the IEEE 754
+    operations rounding to nearest even, which the fp_ieee rule asks every target for, and ``trunc`` and ``abs`` are
+    exact, as is ``floor``. ``sign`` is +1.0 or -1.0 for a nonzero value and unspecified for a zero or a NaN. A target's own
+    ``round`` sends halfway cases away from zero on CUDA and HIP and to even on DirectX and WGSL; elsewhere it is not
+    modelled. Floating-point ``==`` and ``!=`` are not modelled.
 
 For ``convert_sat`` the carried rule is OpenCL C 6.4.3.3, stated over IEEE binary32 values: NaN gives 0, and other
 values truncate toward zero and clamp to the result range.
@@ -40,6 +45,10 @@ For ``ftoi_nan`` the carried rule is MSL 4.1 section 8.6: NaN gives 0, and a val
 truncates toward zero. It is partial: other values carry no obligation, so the query only asks about operands inside
 the rule's domain (``find x : domain_S(x) and not (...)``). Metal's own ``int(f)`` and ``uint(f)`` give 0 for NaN by
 the same section, so its native entry is modelled with that result.
+
+For ``round_away`` the carried rule is C11 7.12.9.6 ``round`` over binary32 values (IEEE 754
+roundToIntegralTiesToAway): halfway cases go away from zero, a zero keeps its sign, and NaN and infinities are
+unchanged. Results are compared as binary32 values, so -0.0 differs from +0.0 and every NaN is the same value.
 
 The check also fails when an entry is missing for a registered backend, when a template uses a parameter other than
 exactly once (helper functions may repeat parameters, since a call evaluates each operand once), when an intrinsic
@@ -99,6 +108,22 @@ class Semantics:
             and SIGNED_WRAPS_UNDER.get(target) == configuration
         )
 
+    @staticmethod
+    def model_key(target, configuration):
+        """Everything about ``target`` that this model reads; equal keys give equal verdicts for one construct.
+
+        A target-dependent behaviour added to the model must be added here too, or check_table would reuse a proof
+        made under another target's semantics.
+        """
+        return (
+            target in SIGNED_WRAPS,
+            configuration is not None
+            and SIGNED_WRAPS_UNDER.get(target) == configuration,
+            target in NAN_CONVERTS_TO_ZERO,
+            UNSIGNED_DIVISION_BY_ZERO.get(target, "undefined"),
+            ROUND_HALFWAY.get(target),
+        )
+
     def eval(self, node) -> Value:
         if isinstance(node, A.IdentifierNode):
             if node.name not in self.bindings:
@@ -106,6 +131,8 @@ class Semantics:
             return self.bindings[node.name]
         if isinstance(node, A.LiteralNode):
             value = node.value
+            if isinstance(value, float):
+                return Value(_fp(value), "F")
             if isinstance(value, bool) or not isinstance(value, int):
                 raise Unmodelled(f"literal {value!r}")
             declared = type_from_node(node.literal_type)
@@ -113,6 +140,12 @@ class Semantics:
             if kind not in ("i", "u") or (declared and declared.bits != BITS):
                 raise Unmodelled(f"literal type {node.literal_type!r}")
             return Value(z3.BitVecVal(value % (1 << BITS), BITS), kind)
+        if isinstance(node, A.FunctionCallNode) and call_name(node) in _FLOAT_CALLS:
+            if len(node.arguments) != 1:
+                raise Unmodelled(
+                    f"call {call_name(node)!r} with {len(node.arguments)} operands"
+                )
+            return self.float_call(call_name(node), self.eval(node.arguments[0]))
         if isinstance(node, A.FunctionCallNode):
             name = call_name(node)
             if (
@@ -131,7 +164,10 @@ class Semantics:
                 return self.float_to_integer(name, operand)
             return Value(operand.term, "i" if name in ("asint", "int") else "u")
         if isinstance(node, A.BinaryOpNode) and node.op in ("+", "-", "*"):
-            return self.arithmetic(node.op, self.eval(node.left), self.eval(node.right))
+            left, right = self.eval(node.left), self.eval(node.right)
+            if left.kind in _FLOAT_KINDS or right.kind in _FLOAT_KINDS:
+                return self.float_arithmetic(node.op, left, right)
+            return self.arithmetic(node.op, left, right)
         if isinstance(node, A.BinaryOpNode) and node.op in ("/", "%"):
             return self.division(node.op, self.eval(node.left), self.eval(node.right))
         if isinstance(node, A.BinaryOpNode) and node.op == "&":
@@ -139,6 +175,10 @@ class Semantics:
             kind = "u" if "u" in (left.kind, right.kind) else "i"
             return Value(left.term & right.term, kind)
         if isinstance(node, A.BinaryOpNode) and node.op in _ORDERINGS:
+            left, right = self.eval(node.left), self.eval(node.right)
+            if left.kind in _FLOAT_KINDS or right.kind in _FLOAT_KINDS:
+                a, b = _as_fp(left), _as_fp(right)
+                return Value(_FLOAT_ORDERINGS[node.op](a, b), "b")
             left, right = self.integers(node.op, node.left, node.right)
             signed = left.kind == right.kind == "i"
             return Value(_ORDERINGS[node.op](left.term, right.term, signed), "b")
@@ -156,12 +196,53 @@ class Semantics:
             return Value(z3.If(condition.term, chosen.term, other.term), chosen.kind)
         if isinstance(node, A.UnaryOpNode) and node.op == "-":
             operand = self.eval(node.operand)
+            if operand.kind in _FLOAT_KINDS:
+                return Value(z3.fpNeg(_as_fp(operand)), "F")
             if operand.kind not in ("i", "u"):
                 raise Unmodelled(f"negation of a {operand.kind!r} value")
             if operand.kind == "i" and not self.signed_wraps:
                 self.defined.append(z3.BVSNegNoOverflow(operand.term))
             return Value(-operand.term, operand.kind)
         raise Unmodelled(f"{type(node).__name__} {getattr(node, 'op', '')}".strip())
+
+    def float_call(self, name, operand) -> Value:
+        """``trunc``, ``floor``, ``abs``, ``sign`` and ``round`` of a binary32 value.
+
+        ``trunc``, ``floor`` and ``abs`` are exact on every target (IEEE 754 roundToIntegralTowardZero and abs). ``sign`` gives
+        +1.0 or -1.0 for nonzero finite and infinite values; its result for a zero or a NaN differs between targets
+        (HLSL returns an int 0, GLSL may return -0.0), so it is an unspecified value there. ``round`` is the target's
+        own built-in: halfway cases go away from zero on CUDA and HIP (C11 7.12.9.6) and to even on DirectX (DXIL
+        Round_ne) and WGSL; other targets leave the direction open or are not modelled.
+        """
+        if operand.kind not in _FLOAT_KINDS:
+            raise Unmodelled(f"{name} of a {operand.kind!r} value")
+        value = _as_fp(operand)
+        if name == "trunc":
+            return Value(z3.fpRoundToIntegral(z3.RTZ(), value), "F")
+        if name == "floor":
+            return Value(z3.fpRoundToIntegral(z3.RTN(), value), "F")
+        if name == "abs":
+            return Value(z3.fpAbs(value), "F")
+        if name == "sign":
+            unspecified = z3.FreshConst(z3.Float32(), "sign")
+            signed = z3.If(z3.fpIsNegative(value), _fp(-1.0), _fp(1.0))
+            undecided = z3.Or(z3.fpIsZero(value), z3.fpIsNaN(value))
+            return Value(z3.If(undecided, unspecified, signed), "F")
+        mode = ROUND_HALFWAY.get(self.target)
+        if mode is None:
+            raise Unmodelled(f"round on {self.target}")
+        return Value(z3.fpRoundToIntegral(mode(), value), "F")
+
+    def float_arithmetic(self, op, left, right) -> Value:
+        """IEEE 754 binary32 ``+``, ``-`` and ``*`` rounding to nearest even, as fp_ieee programs compile them."""
+        a, b = _as_fp(left), _as_fp(right)
+        rounding = z3.RNE()
+        result = {
+            "+": z3.fpAdd(rounding, a, b),
+            "-": z3.fpSub(rounding, a, b),
+            "*": z3.fpMul(rounding, a, b),
+        }[op]
+        return Value(result, "F")
 
     def integers(self, op, left_node, right_node):
         """Both operands of an integer-only operator; ``==`` on floats is not bit equality, so it is unmodelled."""
@@ -305,8 +386,39 @@ def ftoi_nan_domain(op, operands):
     return z3.Or(z3.fpIsNaN(value), in_range)
 
 
+def carried_round_away(op, operands):
+    """C11 7.12.9.6 round: the nearest integral value, halfway cases away from zero, the sign of a zero kept.
+
+    IEEE 754 roundToIntegralTiesToAway; NaN gives NaN and an infinity itself.
+    """
+    (x,) = operands
+    return z3.fpRoundToIntegral(z3.RNA(), z3.fpBVToFP(x, z3.Float32()))
+
+
 def _fp(value):
     return z3.FPVal(value, z3.Float32())
+
+
+def _as_fp(value):
+    """The binary32 value of a float operand: an ``F`` term itself, or the bit pattern of an ``f`` operand."""
+    if value.kind == "F":
+        return value.term
+    if value.kind == "f":
+        return z3.fpBVToFP(value.term, z3.Float32())
+    raise Unmodelled(f"floating-point use of a {value.kind!r} value")
+
+
+# ``f`` is a binary32 bit pattern (an operand or ``asfloat``), ``F`` a binary32 value computed by float operations.
+_FLOAT_KINDS = frozenset({"f", "F"})
+_FLOAT_CALLS = frozenset({"trunc", "floor", "abs", "sign", "round"})
+_FLOAT_ORDERINGS = {
+    "<": z3.fpLT,
+    "<=": z3.fpLEQ,
+    ">": z3.fpGT,
+    ">=": z3.fpGEQ,
+}
+# The halfway direction of each target's own ``round``; a target not listed is not modelled.
+ROUND_HALFWAY = {"cuda": z3.RNA, "hip": z3.RNA, "directx": z3.RNE, "wgsl": z3.RNE}
 
 
 _ORDERINGS = {
@@ -321,11 +433,14 @@ CARRIED = {
     rule_table.UDIV_ZERO: carried_udiv_zero,
     rule_table.CONVERT_SAT: carried_convert_sat,
     rule_table.FTOI_NAN: carried_ftoi_nan,
+    rule_table.ROUND_AWAY: carried_round_away,
 }
 # The operands a partial rule defines; a family not listed defines every operand.
 DOMAIN = {rule_table.FTOI_NAN: ftoi_nan_domain}
 # The operand and result kind of each family's operations; conversions have their own signatures.
 FAMILY_KIND = {rule_table.WRAP: "i", rule_table.UDIV_ZERO: "u"}
+# Families whose operands and result differ in kind: a binary32 bit pattern in, a binary32 value out.
+FAMILY_SIGNATURE = {rule_table.ROUND_AWAY: (("f",), "F")}
 _SCALAR_KIND = {"float": "f", "int": "i", "uint": "u"}
 
 
@@ -336,7 +451,10 @@ def signature(intrinsic):
     if conversion is not None:
         operand, result = (_SCALAR_KIND[name] for name in conversion)
         return (operand,) * arity, result
-    kind = FAMILY_KIND[rule_table.INTRINSIC_FAMILY[intrinsic]]
+    family = rule_table.INTRINSIC_FAMILY[intrinsic]
+    if family in FAMILY_SIGNATURE:
+        return FAMILY_SIGNATURE[family]
+    kind = FAMILY_KIND[family]
     return (kind,) * arity, kind
 
 
@@ -346,6 +464,8 @@ def native_expression(intrinsic):
     conversion = rule_table.CONVERSION_SIGNATURES.get(intrinsic)
     if conversion is not None:
         return A.FunctionCallNode(A.IdentifierNode(conversion[1]), operands)
+    if operator.isidentifier():
+        return A.FunctionCallNode(A.IdentifierNode(operator), operands)
     if arity == 1:
         return A.UnaryOpNode(operator, operands[0])
     return A.BinaryOpNode(operands[0], operator, operands[1])
@@ -408,7 +528,11 @@ def check_entry(intrinsic, target, entry):
     # Contextual simplification first: a guarded division such as ``b == 0 ? c : a / (b == 0 ? 1 : b)`` reduces to
     # the carried rule's own ``a / b`` term, which plain bit-blasting of two 32-bit dividers cannot prove in time.
     # Every tactic in the pipeline preserves equivalence, so unsat stays a proof and a model stays a counterexample.
-    solver = z3.Then("simplify", "ctx-simplify", "simplify", "smt").solver()
+    # A float-valued family is a QF_FPBV query, which the dedicated tactic bit-blasts an order of magnitude faster.
+    if family in FAMILY_SIGNATURE:
+        solver = z3.Tactic("qffpbv").solver()
+    else:
+        solver = z3.Then("simplify", "ctx-simplify", "simplify", "smt").solver()
     solver.set("timeout", 60000)
     refines = z3.And(
         *semantics.defined, result.term == CARRIED[family](operator, operands)
@@ -433,6 +557,36 @@ def check_entry(intrinsic, target, entry):
     return record
 
 
+def _construct_text(intrinsic, kind):
+    """The source text of the construct an entry of ``kind`` checks, so a changed template is proved again."""
+    if kind == "polyfill" and intrinsic in rule_table.HELPERS:
+        return rule_table.HELPERS[intrinsic].body
+    if kind == "polyfill":
+        return rule_table.POLYFILLS.get(intrinsic)
+    return rule_table.INTRINSICS[intrinsic][0]
+
+
+# Verdicts by construct and target model: the targets that share a polyfill and a model share one proof, and
+# repeated checks of the table in one process reuse it.
+_PROOFS = {}
+
+
+def check_shared(intrinsic, target, entry):
+    """:func:`check_entry`, reusing the verdict of an earlier target whose model and construct are the same."""
+    if entry.kind == "refuse":
+        return check_entry(intrinsic, target, entry)
+    key = (
+        intrinsic,
+        entry.kind,
+        entry.configuration,
+        _construct_text(intrinsic, entry.kind),
+        Semantics.model_key(target, entry.configuration),
+    )
+    if key not in _PROOFS:
+        _PROOFS[key] = check_entry(intrinsic, target, entry)
+    return {**_PROOFS[key], "target": target}
+
+
 def check_table(entries=None, backends=None):
     """Every entry for every family, intrinsic and registered backend; returns (records, failures)."""
     if entries is None:
@@ -453,7 +607,7 @@ def check_table(entries=None, backends=None):
             for intrinsic in sorted(rule_table.INTRINSICS):
                 if rule_table.INTRINSIC_FAMILY[intrinsic] != family:
                     continue
-                record = check_entry(intrinsic, target, entry)
+                record = check_shared(intrinsic, target, entry)
                 records.append(record)
                 if record["result"] not in ("sound", "refused"):
                     failures.append(record)
