@@ -4104,7 +4104,14 @@ class WGSLCodeGen(
             and not self.is_user_function_name(function_name)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            args = self.replicate_scalar_call_arguments(node.arguments, args)
             return f"{normalized_name}({args[0]}, {args[1]})"
+        if normalized_name in {"step", "smoothstep"} and not (
+            self.is_user_function_name(function_name)
+        ):
+            args = [self.generate_expression(arg) for arg in node.arguments]
+            args = self.replicate_scalar_call_arguments(node.arguments, args)
+            return f"{normalized_name}({', '.join(args)})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
@@ -4928,6 +4935,39 @@ class WGSLCodeGen(
         ):
             return self.vector_component_count(self.expression_type(expr.arguments[0]))
         return None
+
+    def replicate_scalar_call_arguments(self, arguments, rendered):
+        """Replicate the scalar arguments of a min, max, step or smoothstep call beside a vector.
+
+        GLSL has min(genType, float), max(genType, float), step(float, genType)
+        and smoothstep(float, float, genType) (GLSL 4.60 section 8.3), but WGSL
+        declares them with one type T for every argument, so a scalar is written
+        as the vector type of the other arguments, as clamp's bounds are. Only a
+        scalar of the vector's component type or a literal is replicated; a
+        scalar of another type is left as written.
+        """
+        argument_types = [self.expression_type(arg) for arg in arguments]
+        vector_shape = next(
+            (
+                shape
+                for shape in map(self.vector_shape, argument_types)
+                if shape is not None
+            ),
+            None,
+        )
+        if vector_shape is None:
+            return list(rendered)
+        component, size = vector_shape
+        replicated = []
+        for arg, arg_type, text in zip(arguments, argument_types, rendered):
+            literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
+            if self.vector_shape(arg_type) is None and (
+                isinstance(literal, LiteralNode)
+                or self.scalar_type_name(arg_type) == component
+            ):
+                text = f"vec{size}<{component}>({text})"
+            replicated.append(text)
+        return replicated
 
     def generate_clamp_bound(self, bound, vector_type_name):
         rendered = self.generate_expression(bound)

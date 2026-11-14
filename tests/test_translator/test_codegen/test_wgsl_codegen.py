@@ -238,6 +238,61 @@ def test_wgsl_codegen_lowers_vector_clamp_scalar_bounds():
     assert "clamp(color, 0.0, 1.0)" not in generated
 
 
+def test_wgsl_codegen_replicates_scalar_arguments_of_vector_builtins(tmp_path):
+    # GLSL has min/max(genType, scalar), step(scalar, genType) and
+    # smoothstep(scalar, scalar, genType); WGSL takes one type for every argument (#4498).
+    shader = """
+    shader Probe {
+        buffer vec2* fo;
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec2 v = fo[0];
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                float f = v.x;
+                uint s = u.x;
+                int t = k.x;
+                vec2 a = max(v, f);
+                vec2 b = min(v, 0.5);
+                uvec2 c = max(u, s);
+                uvec2 d = min(u, 1u);
+                ivec2 e = max(k, t);
+                ivec2 g = min(k, -3);
+                vec2 h = step(f, v);
+                vec2 m = smoothstep(0.0, f, v);
+                uvec2 n = max(u, 1);
+                float o = max(f, 1.0) + step(0.5, f) + smoothstep(0.0, 1.0, f);
+                fo[1] = a + b + h + m + step(0.5, v) * o;
+                uo[1] = c + d + n;
+                io[1] = e + g;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<f32> = max(v, vec2<f32>(f));" in generated
+    assert "var b: vec2<f32> = min(v, vec2<f32>(0.5));" in generated
+    assert "var c: vec2<u32> = max(u, vec2<u32>(s));" in generated
+    assert "var d: vec2<u32> = min(u, vec2<u32>(1u));" in generated
+    assert "var e: vec2<i32> = max(k, vec2<i32>(t));" in generated
+    assert "var g: vec2<i32> = min(k, vec2<i32>(-3));" in generated
+    assert "var h: vec2<f32> = step(vec2<f32>(f), v);" in generated
+    assert (
+        "var m: vec2<f32> = smoothstep(vec2<f32>(0.0), vec2<f32>(f), v);" in generated
+    )
+    assert "var n: vec2<u32> = max(u, vec2<u32>(1));" in generated
+    assert "max(f, 1.0)" in generated
+    assert "step(0.5, f)" in generated
+    assert "smoothstep(0.0, 1.0, f)" in generated
+    assert "step(vec2<f32>(0.5), v)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
