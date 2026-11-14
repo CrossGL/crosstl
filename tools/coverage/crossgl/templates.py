@@ -55,6 +55,7 @@ from ..templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from ..templates.lexical import CROSSGL_NAMES
 from ..templates.lexical import FAMILY as LEXICAL
 from ..templates.lexical import FILL, SPREAD4, reserved
+from ..templates.memory import CROSSGL as MEMORY
 from ..templates.meshes import CROSSGL as MESHES
 from ..templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from ..templates.packing import CROSSGL as PACKING_CROSSGL
@@ -290,6 +291,7 @@ CONSTRUCTS: dict[str, Template] = {
     **INTERLOCKS,
     **COMPONENTS,
     **POINTERS,
+    **MEMORY,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

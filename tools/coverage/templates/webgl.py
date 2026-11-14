@@ -43,6 +43,7 @@ from .interlocks import WEBGL as _INTERLOCKS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .memory import ELSEWHERE as _MEMORY
 from .meshes import WEBGL as _MESHES
 from .orientation import WEBGL as _ORIENTATION
 from .packing import WEBGL as _PACKING
@@ -152,6 +153,7 @@ WEBGL = {
     **_INTERLOCKS,
     **_COMPONENTS,
     **_POINTERS,
+    **_MEMORY,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,
