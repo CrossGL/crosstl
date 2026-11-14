@@ -1889,6 +1889,44 @@ the same words. Its matrix-vector and matrix-matrix kernels are outside
 this gate. This covers 108/17,832 entries; it does
 not run the upstream MLX test suite or redirect the MLX host runtime.
 
+`contracts/fp_quantized.current-tree.translation.json` pins 36 of the 518
+entries of `fp_quantized.metal` and their 108 artifacts: `fp_quantize`,
+`fp_dequantize` and `fp_quantize_dequantize` for float, bfloat16 and float16
+in `nvfp4` (16-value groups, E2M1 codes and E4M3 scales) with and without a
+global scale, `mxfp8` (32-value groups, E4M3 codes and E8M0 scales) and
+`mxfp4` (E2M1 codes and E8M0 scales). `simd_max`, per 16-lane half for
+`nvfp4`, and the `simd_shuffle_down` that packs two E2M1 codes per byte lower
+to 32-lane software subgroups on OpenGL and DirectX. Both select
+`binary32_division_profile = "rne-flush"`, and every target uses the portable
+host's multiplication and `log2` profiles plus
+`binary32_comparison_profile = "flush-subnormals"`. For an all-zero `mx` group
+`fp8_e8m0`'s float conversion returns the subnormal 2^-127; the Metal source
+flushes it, so the scale byte is 0 and `scale == 0` holds. Without the
+comparison profile, Mesa OpenGL keeps the subnormal, the flushing division
+returns infinity, and every code of the group becomes the NaN code. OpenGL is
+given 1, 3 and 4 index-range preconditions per kernel; the model shows each
+names an element inside its buffer. Required CI executes 72 dispatches and
+17,820 checked elements per target on Metal, Mesa EGL and Direct3D 12 WARP in
+the `quantized` leg, with 64-thread workgroups in a row of three (quantize) or
+two (dequantize) workgroups and in a two-by-two grid.
+Quantize groups put values on the element grid times an E4M3 or power-of-two
+scale, exactly on every E2M1 rounding threshold or midway between adjacent
+E4M3 values, at free multiples of 1/32, all negative and all signed zero;
+`nvfp4` groups also saturate the E4M3 scale and take its subnormal path, and
+`mx` groups need the E8M0 scale rounded up. A lane-level model replays the
+maxima, every correctly rounded binary32 operation, the E4M3, E8M0 and E2M1
+encoders bit for bit, the shuffled packing and the guarded byte writes.
+Mutated models that drop the shuffled code, take one maximum for both halves,
+round E8M0 scales to nearest, round E2M1 ties away from zero or drop sign bits
+are rejected. Dequantize unpacks every E2M1 code and E4M3 codes other than NaN,
+including signed zeros and subnormals, with E4M3 scales of either sign or E8M0
+scales from 2^-5 to 2^7. Every word is compared exactly, eight trailing guards
+per output must keep their values and inputs must be unchanged; Metal also runs
+the unchanged upstream kernels, which must produce the same words. The
+matrix-vector and matrix-matrix kernels are outside this gate. This covers
+36/17,832 entries; it does not run the upstream MLX test suite or redirect the
+MLX host runtime.
+
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
 and without batching and `affine_gather_qmv_fast`, for the same three element

@@ -45489,7 +45489,11 @@ complex64_t crossgl_complex64_mod_assign(
         object_type = self.type_name_string(self.expression_result_type(object_expr))
         if not object_type:
             return member_name
-        struct_name, _array_suffix = split_array_type_suffix(object_type)
+        struct_name, array_suffix = split_array_type_suffix(object_type)
+        if array_suffix and member_name == "length":
+            # array.length() is the array's method (GLSL 4.60 section 5.9),
+            # not a member of its element structure.
+            return member_name
         struct_name = self.glsl_source_type_identifier_name(struct_name)
         member_map = self.glsl_struct_member_name_map(struct_name)
         if not member_map:
