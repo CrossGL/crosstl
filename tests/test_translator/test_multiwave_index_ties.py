@@ -275,6 +275,16 @@ def _translate(tmp_path, target, value_type):
     rules = {}
     if target != "metal":
         rules["subgroup_width_rules"] = {SOURCE_NAME: WIDTH}
+    if target == "directx":
+        # The reference keeps an upper lane's own pair, as simd_shuffle_down
+        # defines; HLSL leaves an out-of-range WaveReadLaneAt undefined.
+        rules["source_options"] = {
+            "metal": {
+                "target_options": {
+                    "directx": {"relative_wave_shuffle_out_of_range": "self"}
+                }
+            }
+        }
     report = translate_project(
         ProjectConfig(
             root=repo,
@@ -324,6 +334,8 @@ def test_index_ties_translate_to_exact_width_hlsl(tmp_path, value_type):
     assert "[WaveSize(32)]" in generated
     assert "simd_id = crossglPhysicalSubgroupID;" in generated
     assert "groupshared IndexedValue_" in generated
+    assert "__crossgl_wave_shuffle_down_self_" in generated
+    assert "(WaveGetLaneIndex() + uint(" not in generated
     _compile(generated, tmp_path, profile="cs_6_6")
 
 
