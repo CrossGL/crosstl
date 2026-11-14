@@ -174,6 +174,7 @@ from .shader_records import (
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instance_ids import InstanceIdUnsupportedError, lower_spirv_instance_ids
 from .spirv_instructions import (
     SpirvOperationUnsupportedError,
     refuse_spirv_instructions,
@@ -284,6 +285,7 @@ __all__ = [
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
     "RelativeVertexIdUnsupportedError",
+    "InstanceIdUnsupportedError",
     "RuleInexpressibleError",
     "RowMajorMemberError",
     "RuleReport",
@@ -500,6 +502,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
     lower_relative_vertex_ids(program, report.target)
+    lower_spirv_instance_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
