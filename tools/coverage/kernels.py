@@ -432,6 +432,9 @@ class Rust(Dialect):
             return f"let mut {name}: {self.type(kind)} = Default::default();"
         return f"let {name}: {self.type(kind)} = {value};"
 
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        return f"let mut {name}: {self.type(kind)} = {value};"
+
     def retain(self, kind: Type, name: str, statement: str) -> list[str]:
         # rust-gpu removes values nothing uses. A baseline that only declared a boolean argument would lose the
         # comparison that makes it, and the comparison would then join the id of every call that takes one, as

@@ -85,6 +85,9 @@ CAPABILITIES = (
     "RayQueryKHR",
     "RayQueryPositionFetchKHR",
     "RuntimeDescriptorArray",
+    # rust-gpu selects between pointers with OpPhi to index a vector or a local array dynamically, as glam's
+    # to_euler and an index into a vector do; spirv-val accepts that only with this capability.
+    "VariablePointers",
 )
 EXTENSIONS = (
     "SPV_EXT_demote_to_helper_invocation",
