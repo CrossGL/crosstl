@@ -4650,6 +4650,51 @@ class WGSLCodeGen(
     # and no matrixCompMult or outerProduct built-in (WGSL sections 8.7, 17.5), so
     # these build the result one column at a time.
     COLUMNWISE_MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
+    # Built-ins that reduce a vector to its component type (GLSL 4.60 section 8.5).
+    COMPONENT_RESULT_BUILTINS = frozenset({"length", "distance", "dot"})
+    # Component-wise built-ins whose result has the type of their vector argument,
+    # or of their first argument when all are scalars (GLSL 4.60 sections 8.1-8.3, 8.5).
+    COMPONENTWISE_MATH_BUILTINS = frozenset(
+        {
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "trunc",
+            "round",
+            "roundEven",
+            "fract",
+            "mod",
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "normalize",
+            "min",
+            "max",
+            "clamp",
+            "mix",
+            "step",
+            "smoothstep",
+        }
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -4961,13 +5006,38 @@ class WGSLCodeGen(
         replicated = []
         for arg, arg_type, text in zip(arguments, argument_types, rendered):
             literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
-            if self.vector_shape(arg_type) is None and (
-                isinstance(literal, LiteralNode)
-                or self.scalar_type_name(arg_type) == component
+            already_vector = text.startswith(f"vec{size}<{component}>(")
+            if (
+                self.vector_shape(arg_type) is None
+                and not already_vector
+                and (
+                    isinstance(literal, LiteralNode)
+                    or self.scalar_type_name(arg_type) == component
+                )
             ):
                 text = f"vec{size}<{component}>({text})"
             replicated.append(text)
         return replicated
+
+    def builtin_math_call_type(self, function_name, arguments):
+        """Return the result type of a GLSL math built-in call, or None if unknown."""
+        if not arguments or self.is_user_function_name(function_name):
+            return None
+        if function_name in self.COMPONENT_RESULT_BUILTINS:
+            argument_type = self.expression_type(arguments[0])
+            return self.vector_component_type(argument_type) or self.scalar_type_name(
+                argument_type
+            )
+        if function_name in self.COMPONENTWISE_MATH_BUILTINS:
+            argument_types = [self.expression_type(arg) for arg in arguments]
+            vector_type = next(
+                (t for t in argument_types if self.vector_shape(t) is not None), None
+            )
+            if vector_type is not None:
+                return vector_type
+            if self.scalar_type_name(argument_types[0]) is not None:
+                return argument_types[0]
+        return None
 
     def generate_clamp_bound(self, bound, vector_type_name):
         rendered = self.generate_expression(bound)
@@ -8074,6 +8144,9 @@ class WGSLCodeGen(
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
                 return mixed_integer_call_type(self, expr.arguments)
+            math_call_type = self.builtin_math_call_type(function_name, expr.arguments)
+            if math_call_type is not None:
+                return math_call_type
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )

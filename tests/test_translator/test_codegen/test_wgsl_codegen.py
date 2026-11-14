@@ -293,6 +293,47 @@ def test_wgsl_codegen_replicates_scalar_arguments_of_vector_builtins(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
+    # A scalar from length, dot, distance or a component-wise built-in such as
+    # abs or sqrt is replicated too (#4498 review); a signed literal beside a
+    # uvec is converted once, not wrapped twice.
+    shader = """
+    shader Probe {
+        buffer vec3* go;
+        buffer uvec3* gu;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec3 w = go[0];
+                float f = w.x;
+                uvec3 u = gu[0];
+                vec3 a = max(w, length(w));
+                vec3 b = min(w, dot(w, w));
+                vec3 d = step(abs(f), w);
+                vec3 g = max(w, sqrt(f));
+                vec3 h = smoothstep(distance(w, w), 1.0, w);
+                go[1] = a + b + d + g + h + abs(w);
+                gu[1] = min(u, -1);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec3<f32> = max(w, vec3<f32>(length(w)));" in generated
+    assert "var b: vec3<f32> = min(w, vec3<f32>(dot(w, w)));" in generated
+    assert "var d: vec3<f32> = step(vec3<f32>(abs(f)), w);" in generated
+    assert "var g: vec3<f32> = max(w, vec3<f32>(sqrt(f)));" in generated
+    assert (
+        "var h: vec3<f32> = smoothstep(vec3<f32>(distance(w, w)), vec3<f32>(1.0), w);"
+        in generated
+    )
+    assert "abs(w)" in generated
+    assert "gu[1] = min(u, vec3<u32>(u32(-1i)));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
