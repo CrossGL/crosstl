@@ -1,4 +1,8 @@
 {
  "schemaVersion": 1,
- "sites": {}
+ "sites": {
+  "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_ray_helpers::fallback-text": 1,
+  "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_required_helpers::fallback-text": 7,
+  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_required_rust_mesh_helpers::fallback-text": 1
+ }
 }
