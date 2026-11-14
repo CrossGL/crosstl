@@ -32080,7 +32080,7 @@ class GLSLCodeGen(
             return "shared "
         if is_compile_time:
             return "const "
-        if "static" in qualifiers or "thread" in qualifiers:
+        if qualifiers & {"private", "static", "thread"}:
             # Static and thread-address-space globals are private to each
             # invocation, which is what a GLSL global without a storage
             # qualifier is.

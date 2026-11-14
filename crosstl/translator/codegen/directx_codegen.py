@@ -5278,9 +5278,14 @@ class HLSLCodeGen(
                 qualifier = self.local_variable_qualifier(node)
                 # A module variable without ``static`` is an implicitly constant member of the $Globals
                 # constant buffer in HLSL; private per-invocation state needs ``static``.
-                if {"thread", "static"} & {
+                storage_qualifiers = {
                     str(value) for value in getattr(node, "qualifiers", []) or []
-                } and not qualifier.startswith("static"):
+                }
+                if {
+                    "private",
+                    "thread",
+                    "static",
+                } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:
