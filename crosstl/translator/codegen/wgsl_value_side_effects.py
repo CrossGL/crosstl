@@ -58,6 +58,7 @@ from ..ast import (
     WhileNode,
     iter_ast_child_nodes,
 )
+from ..refusals import WGSLRefusal
 
 INCREMENT_OPERATORS = ("++", "--")
 SHORT_CIRCUIT_OPERATORS = ("&&", "||")
@@ -290,7 +291,7 @@ class WGSLValueSideEffectsMixin:
         if expr is None or not contains_value_side_effect(expr):
             return expr
         if is_value_side_effect(expr) and conditional:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower an increment, decrement or assignment used "
                 "as a value in the right operand of && or ||, or in a ternary branch; "
                 "WGSL has no such expressions and hoisting it would run it "
@@ -357,7 +358,7 @@ class WGSLValueSideEffectsMixin:
             if not effectful:
                 continue
             if conditional:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target cannot lower a comma expression whose discarded operand has a side "
                     "effect or a call, in the right operand of && or ||, or in a ternary branch; WGSL "
                     "has no comma operator and hoisting the operand would run it unconditionally"
@@ -368,7 +369,7 @@ class WGSLValueSideEffectsMixin:
         return self.hoist_value_side_effects(result, prelude, conditional)
 
     def reject_unordered_side_effect(self, expr):
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot order an increment, decrement or assignment used as "
             f"a value inside {describe(expr)}"
         )
@@ -380,7 +381,7 @@ class WGSLValueSideEffectsMixin:
                 node
             ):
                 continue
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target cannot lower {context} used as a value: its l-value "
                 f"contains {describe(node)}, which the lowering would evaluate twice"
             )

@@ -3,6 +3,8 @@
 import re
 import sys
 
+from crosstl.translator.refusals import MetalSyntaxError
+
 from ..switch_clauses import record_default_position
 from .declared_template_primaries import retain_declared_template_primaries
 from .explicit_entry_instantiations import (
@@ -979,7 +981,7 @@ class MetalParser:
                 break
             if self.current_token[0] == "EOF":
                 break
-            raise SyntaxError(
+            raise MetalSyntaxError(
                 f"Expected comma or end of parameter fragment, got {self.current_token[0]}"
             )
 
@@ -998,7 +1000,7 @@ class MetalParser:
                     break
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated macro invocation")
+            raise MetalSyntaxError("Unterminated macro invocation")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
@@ -1103,7 +1105,7 @@ class MetalParser:
         elif self.is_union_declaration_start():
             aggregate = self.parse_union()
         else:
-            raise SyntaxError(
+            raise MetalSyntaxError(
                 f"Expected aggregate declaration, got {self.current_token[0]}"
             )
 
@@ -1948,7 +1950,7 @@ class MetalParser:
     def parse_using_union_alias(self, alias_name):
         self.eat("IDENTIFIER")
         if self.current_token[0] != "LBRACE":
-            raise SyntaxError("Expected anonymous union body in using alias")
+            raise MetalSyntaxError("Expected anonymous union body in using alias")
         self.eat("LBRACE")
         members = self.parse_struct_members()
         self.eat("RBRACE")
@@ -2009,7 +2011,7 @@ class MetalParser:
             elif self.current_token[0] == "RBRACE":
                 break
             else:
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected comma or closing brace in enum, got {self.current_token[0]}"
                 )
         return members
@@ -2123,7 +2125,7 @@ class MetalParser:
             self.eat("SEMICOLON")
             enum_name = alias_name or tag_name
             if not enum_name:
-                raise SyntaxError("Expected typedef enum name")
+                raise MetalSyntaxError("Expected typedef enum name")
             self.register_known_type(enum_name)
             enum = EnumNode(enum_name, members)
             enum.typedef_tag = tag_name
@@ -2132,7 +2134,7 @@ class MetalParser:
             return enum
 
         if not tag_name:
-            raise SyntaxError("Expected typedef enum body or tag name")
+            raise MetalSyntaxError("Expected typedef enum body or tag name")
         alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
             self.parse_declarator()
         )
@@ -2160,7 +2162,7 @@ class MetalParser:
             self.eat("SEMICOLON")
             union_name = alias_name or tag_name
             if not union_name:
-                raise SyntaxError("Expected typedef union name")
+                raise MetalSyntaxError("Expected typedef union name")
             self.register_known_type(union_name)
             union_node = StructNode(union_name, members)
             union_node.typedef_tag = tag_name
@@ -2172,7 +2174,7 @@ class MetalParser:
             return union_node
 
         if not tag_name:
-            raise SyntaxError("Expected typedef union body or tag name")
+            raise MetalSyntaxError("Expected typedef union body or tag name")
         alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
             self.parse_declarator()
         )
@@ -2228,7 +2230,7 @@ class MetalParser:
                     break
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated function typedef parameter list")
+            raise MetalSyntaxError("Unterminated function typedef parameter list")
 
     def parse_decltype_type(self):
         self.eat("IDENTIFIER")
@@ -2247,7 +2249,7 @@ class MetalParser:
             parts.append(token_value)
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated decltype typedef")
+            raise MetalSyntaxError("Unterminated decltype typedef")
         return f"decltype({self.format_generic_type_tokens(parts)})"
 
     def parse_decltype_member_type(self):
@@ -2281,7 +2283,7 @@ class MetalParser:
             self.eat("SEMICOLON")
             struct_name = alias_name or tag_name
             if not struct_name:
-                raise SyntaxError("Expected typedef struct name")
+                raise MetalSyntaxError("Expected typedef struct name")
             self.register_known_type(struct_name)
             struct_node = StructNode(struct_name, members)
             struct_node.typedef_tag = tag_name
@@ -2294,7 +2296,7 @@ class MetalParser:
             return struct_node
 
         if not tag_name:
-            raise SyntaxError("Expected typedef struct body or tag name")
+            raise MetalSyntaxError("Expected typedef struct body or tag name")
         alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
             self.parse_declarator()
         )
@@ -2313,7 +2315,9 @@ class MetalParser:
         try:
             return concatenate_string_literals(spellings)
         except ValueError as exc:
-            raise SyntaxError(f"Invalid string literal concatenation: {exc}") from exc
+            raise MetalSyntaxError(
+                f"Invalid string literal concatenation: {exc}"
+            ) from exc
 
     def parse_static_assert(self):
         self.eat("STATIC_ASSERT")
@@ -2345,7 +2349,7 @@ class MetalParser:
                     break
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated _Pragma statement")
+            raise MetalSyntaxError("Unterminated _Pragma statement")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
@@ -2534,7 +2538,7 @@ class MetalParser:
             base_type = self.current_token[1]
             self.eat("MESH")
         elif self.current_token[0] not in TYPE_TOKENS:
-            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
+            raise MetalSyntaxError(f"Expected type, got {self.current_token[0]}")
         elif (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in SIGNED_TYPE_PREFIXES
@@ -2559,7 +2563,7 @@ class MetalParser:
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
             if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected identifier after '::', got {self.current_token[0]}"
                 )
             base_type += f"::{self.current_token[1]}"
@@ -2684,7 +2688,7 @@ class MetalParser:
                 tokens.append(token_value)
                 self.eat(token_type)
         if depth != 0:
-            raise SyntaxError(error_message)
+            raise MetalSyntaxError(error_message)
         return self.format_generic_type_tokens(tokens)
 
     def prefix_type_qualifier_followed_by_type_at(self, idx):
@@ -2782,7 +2786,7 @@ class MetalParser:
             while self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
                 if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
-                    raise SyntaxError(
+                    raise MetalSyntaxError(
                         f"Expected identifier after '::', got {self.current_token[0]}"
                     )
                 name += f"::{self.current_token[1]}"
@@ -2860,7 +2864,9 @@ class MetalParser:
             type_suffix += self.declarator_pointer_token_suffix(self.current_token[0])
             self.eat(self.current_token[0])
         if not self.is_current_name_token():
-            raise SyntaxError(f"Expected declarator name, got {self.current_token[0]}")
+            raise MetalSyntaxError(
+                f"Expected declarator name, got {self.current_token[0]}"
+            )
         name = self.current_token[1]
         self.eat(self.current_token[0])
         self.eat("RPAREN")
@@ -2907,7 +2913,7 @@ class MetalParser:
 
     def parse_member_name(self, context):
         if not self.is_current_member_name_token():
-            raise SyntaxError(
+            raise MetalSyntaxError(
                 f"Expected identifier after {context}, got {self.current_token[0]}"
             )
         member = self.current_token[1]
@@ -2941,7 +2947,7 @@ class MetalParser:
         if unnamed:
             name = self.reserve_unnamed_aggregate_name("struct")
         elif not self.is_current_name_token():
-            raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+            raise MetalSyntaxError(f"Expected identifier, got {self.current_token[0]}")
         else:
             name = self.current_token[1]
             self.eat(self.current_token[0])
@@ -3008,7 +3014,7 @@ class MetalParser:
         alignas_specs.extend(self.parse_alignas_specifiers())
         self.skip_aggregate_alignment_macros()
         if not self.is_current_name_token():
-            raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+            raise MetalSyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
         self.eat(self.current_token[0])
         self.register_known_type(name)
@@ -3112,7 +3118,7 @@ class MetalParser:
         if unnamed:
             name = self.reserve_unnamed_aggregate_name("union")
         if not name:
-            raise SyntaxError("Expected union name")
+            raise MetalSyntaxError("Expected union name")
         self.push_declaration_context(f"union {name}")
         self.eat("LBRACE")
 
@@ -3162,7 +3168,7 @@ class MetalParser:
         if not aggregate.trailing_declarations:
             # [class.union.anon]: the members of an anonymous union join the
             # enclosing scope, which hoisting cannot represent.
-            raise SyntaxError(
+            raise MetalSyntaxError(
                 f"An unnamed block-scope {kind} must declare an object; "
                 f"anonymous {kind} members of a block are not supported"
             )
@@ -3749,7 +3755,7 @@ class MetalParser:
             if nested is not None and pre_alignas:
                 nested.alignas = list(pre_alignas)
             return nested
-        raise SyntaxError(
+        raise MetalSyntaxError(
             f"Expected nested aggregate declaration, got {self.current_token[0]}"
         )
 
@@ -3792,7 +3798,7 @@ class MetalParser:
 
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated nested aggregate declaration")
+        raise MetalSyntaxError("Unterminated nested aggregate declaration")
 
     def is_struct_conversion_operator_start(self):
         idx = self.pos
@@ -3892,12 +3898,14 @@ class MetalParser:
 
         name = self.current_token[1]
         if not self.is_current_name_token():
-            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
+            raise MetalSyntaxError(
+                f"Expected function name, got {self.current_token[0]}"
+            )
         self.eat(self.current_token[0])
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
             if not self.is_current_name_token():
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected function name after '::', got {self.current_token[0]}"
                 )
             name += f"::{self.current_token[1]}"
@@ -4064,7 +4072,7 @@ class MetalParser:
                     continue
                 if self.current_token[0] == "RPAREN":
                     break
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
             attributes = self.parse_attributes()
@@ -4097,7 +4105,7 @@ class MetalParser:
             elif self.current_token[0] == "RPAREN":
                 break
             else:
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
         return params
@@ -5533,7 +5541,7 @@ class MetalParser:
                 node = FunctionCallNode(type_name, [initializer])
                 node.is_braced_constructor = True
                 return node
-            raise SyntaxError(f"Unexpected type in expression: {type_name}")
+            raise MetalSyntaxError(f"Unexpected type in expression: {type_name}")
         if self.current_token[0] in {"METAL", "SCOPE"} or self.is_current_name_token():
             start_token = self.current_token
             name = self.parse_scoped_identifier()
@@ -5545,7 +5553,9 @@ class MetalParser:
                     self.tokens[self.pos - 1],
                 )
             return node
-        raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
+        raise MetalSyntaxError(
+            f"Unexpected token in expression: {self.current_token[0]}"
+        )
 
     def parse_lambda_expression(self):
         start_token = self.current_token
@@ -5568,7 +5578,7 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         if self.current_token[0] != "LBRACE":
-            raise SyntaxError("Expected lambda body")
+            raise MetalSyntaxError("Expected lambda body")
 
         self.pending_block_scope_names.append(
             {param.name for param in params if getattr(param, "name", None)}
@@ -5608,7 +5618,7 @@ class MetalParser:
             parts.append(token_value)
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated lambda capture list")
+            raise MetalSyntaxError("Unterminated lambda capture list")
         return self.format_generic_type_tokens(parts)
 
     def parse_initializer_list(self):
@@ -5679,7 +5689,7 @@ class MetalParser:
             parts.append(token_value)
             self.eat(token_type)
         if not parts:
-            raise SyntaxError("Expected designator expression")
+            raise MetalSyntaxError("Expected designator expression")
         return self.format_generic_type_tokens(parts)
 
     def parse_scoped_identifier(self):
@@ -5692,7 +5702,9 @@ class MetalParser:
         else:
             parts.append(self.current_token[1])
             if not self.is_current_name_token():
-                raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+                raise MetalSyntaxError(
+                    f"Expected identifier, got {self.current_token[0]}"
+                )
             self.eat(self.current_token[0])
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
@@ -5702,7 +5714,7 @@ class MetalParser:
             ):
                 self.eat("IDENTIFIER")
             if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Expected identifier after '::', got {self.current_token[0]}"
                 )
             if self.current_token[0] == "METAL":
@@ -5878,7 +5890,7 @@ class MetalParser:
 
                     default = default_statements
                 else:
-                    raise SyntaxError(
+                    raise MetalSyntaxError(
                         "Unexpected token in switch statement: "
                         f"{self.current_token[0]}"
                     )

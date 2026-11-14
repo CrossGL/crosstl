@@ -62,6 +62,7 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from ..refusals import WGSLRefusal
 from .wgsl_loop_continuing import WGSLContinuingLoopNode
 from .wgsl_must_use import WGSL_MUST_USE_BUILTINS
 from .wgsl_parameter_lowering import lvalue_root, reference_parameter_qualifier
@@ -312,7 +313,7 @@ class WGSLReferenceArgumentCopiesMixin:
                     "the right operand of && or ||, or a ternary branch"
                 )
             if walk.call_left_in_place is not None:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target cannot copy the by-reference arguments of "
                     f"{expr.function.name} in place: the copies move the call ahead "
                     "of an earlier call in the same statement; call it in a "
@@ -357,7 +358,7 @@ class WGSLReferenceArgumentCopiesMixin:
             if not self.is_effect_free_call(expr):
                 walk.call_left_in_place = expr
             return lowered
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot order the by-reference argument copies of a call "
             f"inside {type(expr).__name__}"
         )
@@ -408,7 +409,7 @@ class WGSLReferenceArgumentCopiesMixin:
             return None
         return_type = getattr(function, "return_type", None)
         if return_type is None or self.is_void_local_declaration_type(return_type):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target cannot use the void call of {call.function.name} as a value"
             )
         result = self.next_reference_copy_name(CALL_RESULT_PREFIX)
@@ -436,7 +437,7 @@ class WGSLReferenceArgumentCopiesMixin:
         if parameter is None or not self.is_plain_value_parameter(parameter):
             if isinstance(argument, IdentifierNode):
                 return argument
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot evaluate a resource argument ahead of the "
                 "by-reference argument copies of the same call"
             )
@@ -472,7 +473,7 @@ class WGSLReferenceArgumentCopiesMixin:
         if isinstance(lvalue, SwizzleNode):
             components = str(lvalue.components)
             if len(set(components)) != len(components):
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target cannot copy out to swizzle .{components}: it repeats "
                     "a component, so it is not an l-value"
                 )
@@ -493,7 +494,7 @@ class WGSLReferenceArgumentCopiesMixin:
                 walk.prelude.append(VariableNode(name, None, index, is_mutable=False))
                 index = IdentifierNode(name)
             return replaced(lvalue, array_expr=inner, index_expr=index)
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target cannot copy out a by-reference argument through {type(lvalue).__name__}"
         )
 
@@ -514,7 +515,7 @@ class WGSLReferenceArgumentCopiesMixin:
         reason = reason or (
             "the copy-in and copy-out would run even when the source skips the call"
         )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot copy a by-reference argument that is not a whole "
             f"local variable in {where}: {reason}"
         )

@@ -8,6 +8,7 @@ from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
 from crosstl.translator.integer_literals import crossgl_legacy_octal
+from crosstl.translator.refusals import OpenGLSourceRefusal
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
@@ -746,7 +747,7 @@ class GLSLToCrossGLConverter:
             existing_value = self.layout_conflict_value(target_layout[existing_key])
             new_value = self.layout_conflict_value(value)
             if existing_value != new_value:
-                raise ValueError(
+                raise OpenGLSourceRefusal(
                     "Conflicting GLSL builtin redeclaration for "
                     f"'{target.name}': layout {existing_key}={existing_value} "
                     f"differs from {key}={new_value}"
@@ -763,7 +764,7 @@ class GLSLToCrossGLConverter:
     def validate_builtin_stage_io_array_metadata(self, target, source):
         for attr_name in ("is_array", "array_size", "array_sizes"):
             if getattr(target, attr_name, None) != getattr(source, attr_name, None):
-                raise ValueError(
+                raise OpenGLSourceRefusal(
                     "Conflicting GLSL builtin redeclaration for "
                     f"'{target.name}': {attr_name} "
                     f"{getattr(target, attr_name, None)} differs from "
@@ -772,18 +773,18 @@ class GLSLToCrossGLConverter:
 
     def merge_builtin_stage_io_redeclaration(self, target, source):
         if getattr(target, "vtype", None) != getattr(source, "vtype", None):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': type {target.vtype} differs from {source.vtype}"
             )
         if self.stage_io_direction(target) != self.stage_io_direction(source):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': direction {self.stage_io_direction(target)} "
                 f"differs from {self.stage_io_direction(source)}"
             )
         if getattr(target, "semantic", None) != getattr(source, "semantic", None):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': semantic {getattr(target, 'semantic', None)} "
                 f"differs from {getattr(source, 'semantic', None)}"
@@ -1252,7 +1253,7 @@ class GLSLToCrossGLConverter:
 
     def validate_shader_record_layout(self, var):
         if self.ssbo_binding(var) is not None:
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "GLSL shaderRecordEXT buffer blocks cannot declare binding layout "
                 "qualifiers"
             )

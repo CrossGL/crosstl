@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from ..ast import ArrayAccessNode, IdentifierNode, MemberAccessNode, VariableNode
+from ..refusals import TranslationRefusal
 from .hlsl_buffer_layout import HLSL_STRUCTURED_LAYOUT, buffer_layout_from_attributes
 
 SCALARS = {"int": "int", "uint": "uint", "float": "float", "bool": "bool"}
@@ -24,8 +25,10 @@ VECTOR_SCALARS = {"": "float", "i": "int", "u": "uint", "b": "bool"}
 SWIZZLE_LANES = {"x": 0, "y": 1, "z": 2, "w": 3, "r": 0, "g": 1, "b": 2, "a": 3}
 
 
-class OpenGLStructuredLayoutError(ValueError):
+class OpenGLStructuredLayoutError(TranslationRefusal):
     """An HLSL structured-buffer access OpenGL storage cannot reproduce."""
+
+    code = "project.translate.opengl-structured-buffer-layout-unsupported"
 
     def __init__(self, message, *, buffer=None, reason=None):
         super().__init__(message)

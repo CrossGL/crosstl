@@ -8,6 +8,8 @@ revolutions, or with the table-driven single-precision evaluation of WARP.
 
 import struct
 
+from crosstl.translator.refusals import DirectXSourceRefusal
+
 
 class HLSLTrigonometricReductionMixin:
     """Trigonometric range-reduction members of ``HLSLToCrossGLConverter``."""
@@ -71,7 +73,7 @@ class HLSLTrigonometricReductionMixin:
         """Return the CrossGL float type of a trigonometric operand and the operand."""
         width = self.hlsl_component_width(operand_expr)
         if width is None:
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 f"Cannot apply {self.trigonometric_reduction} trigonometric "
                 f"evaluation to '{rendered}': the operand is not a known "
                 "floating-point scalar or vector"

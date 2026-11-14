@@ -6,6 +6,8 @@ import operator
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
+from ..refusals import TargetRefusal
+
 INDEX_RANGE_CONSTANT = "constant"
 INDEX_RANGE_STATIC = "statically-bounded"
 INDEX_RANGE_ASSERTED = "asserted"
@@ -52,9 +54,9 @@ class IntegerRange:
 
     def __post_init__(self) -> None:
         if isinstance(self.minimum, bool) or isinstance(self.maximum, bool):
-            raise ValueError("integer range bounds must be integers")
+            raise TargetRefusal("integer range bounds must be integers")
         if self.minimum > self.maximum:
-            raise ValueError("integer range minimum must not exceed maximum")
+            raise TargetRefusal("integer range minimum must not exceed maximum")
 
     @classmethod
     def exact(cls, value: int, *, provenance: str | None = None) -> IntegerRange:
@@ -146,15 +148,15 @@ class IndexRangeAssertion:
 
     def __post_init__(self) -> None:
         if not isinstance(self.expression, str) or not self.expression.strip():
-            raise ValueError("index range assertion expression must be non-empty")
+            raise TargetRefusal("index range assertion expression must be non-empty")
         if not isinstance(self.source, str) or not self.source.strip():
-            raise ValueError("index range assertion source must be non-empty")
+            raise TargetRefusal("index range assertion source must be non-empty")
         for field_name in ("function", "indexed"):
             value = getattr(self, field_name)
             if value is None:
                 continue
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(
+                raise TargetRefusal(
                     f"index range assertion {field_name} must be non-empty"
                 )
             object.__setattr__(self, field_name, value.strip())
@@ -402,7 +404,7 @@ def parse_index_range_assertions(
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         records = value
     else:
-        raise ValueError(f"{field_name} must be an array of assertion tables")
+        raise TargetRefusal(f"{field_name} must be an array of assertion tables")
 
     assertions = []
     for index, record in enumerate(records):
@@ -411,7 +413,7 @@ def parse_index_range_assertions(
             assertions.append(record)
             continue
         if not isinstance(record, Mapping):
-            raise ValueError(f"{record_path} must be a table")
+            raise TargetRefusal(f"{record_path} must be a table")
         expression = record.get("expression")
         source = record.get("source", "*")
         function = record.get("function")
@@ -439,16 +441,16 @@ def _range_bound(
     record: Mapping[str, Any], primary: str, alias: str, field_name: str
 ) -> int:
     if primary in record and alias in record:
-        raise ValueError(f"{field_name} must not define both {primary} and {alias}")
+        raise TargetRefusal(f"{field_name} must not define both {primary} and {alias}")
     if primary not in record and alias not in record:
-        raise ValueError(f"{field_name}.{primary} is required")
+        raise TargetRefusal(f"{field_name}.{primary} is required")
     value = record.get(primary, record.get(alias))
     if isinstance(value, bool):
-        raise ValueError(f"{field_name}.{primary} must be an integer")
+        raise TargetRefusal(f"{field_name}.{primary} must be an integer")
     try:
         return operator.index(value)
     except TypeError as exc:
-        raise ValueError(f"{field_name}.{primary} must be an integer") from exc
+        raise TargetRefusal(f"{field_name}.{primary} must be an integer") from exc
 
 
 def _normalize_expression(expression: str) -> str:

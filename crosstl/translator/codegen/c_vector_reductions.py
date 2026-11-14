@@ -12,6 +12,8 @@ call that means a warp vote or does not compile.
 
 from __future__ import annotations
 
+from ..refusals import TargetRefusal
+
 __all__ = ["REDUCTION_FUNCTIONS", "generate_vector_reduction_call"]
 
 REDUCTION_FUNCTIONS = frozenset({"all", "any"})
@@ -88,7 +90,7 @@ def generate_vector_reduction_call(codegen, target, func_name, raw_args, args):
     if func_name not in REDUCTION_FUNCTIONS:
         return None
     if len(raw_args) != 1 or len(args) != 1:
-        raise ValueError(
+        raise TargetRefusal(
             f"{target} target: {func_name} takes one argument; got {len(raw_args)}"
         )
     operand_type = codegen.expression_result_type(raw_args[0])
@@ -107,7 +109,7 @@ def generate_vector_reduction_call(codegen, target, func_name, raw_args, args):
     for scalar in (type_name, mapped):
         if scalar in _SCALAR_TYPES or scalar in _HALF_TYPES:
             return _non_zero(scalar, f"({args[0]})")
-    raise ValueError(
+    raise TargetRefusal(
         f"{target} target cannot lower {func_name}() on an operand of type "
         f"{type_name or 'unknown'}: it has no device {func_name} reduction, and "
         f"the {func_name} it does have is a warp vote"

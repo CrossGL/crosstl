@@ -238,6 +238,108 @@ def test_wgsl_codegen_lowers_vector_clamp_scalar_bounds():
     assert "clamp(color, 0.0, 1.0)" not in generated
 
 
+def test_wgsl_codegen_replicates_scalar_arguments_of_vector_builtins(tmp_path):
+    # GLSL has min/max(genType, scalar), step(scalar, genType) and
+    # smoothstep(scalar, scalar, genType); WGSL takes one type for every argument (#4498).
+    shader = """
+    shader Probe {
+        buffer vec2* fo;
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec2 v = fo[0];
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                float f = v.x;
+                uint s = u.x;
+                int t = k.x;
+                vec2 a = max(v, f);
+                vec2 b = min(v, 0.5);
+                uvec2 c = max(u, s);
+                uvec2 d = min(u, 1u);
+                ivec2 e = max(k, t);
+                ivec2 g = min(k, -3);
+                vec2 h = step(f, v);
+                vec2 m = smoothstep(0.0, f, v);
+                uvec2 n = max(u, 1);
+                float o = max(f, 1.0) + step(0.5, f) + smoothstep(0.0, 1.0, f);
+                fo[1] = a + b + h + m + step(0.5, v) * o;
+                uo[1] = c + d + n;
+                io[1] = e + g;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<f32> = max(v, vec2<f32>(f));" in generated
+    assert "var b: vec2<f32> = min(v, vec2<f32>(0.5));" in generated
+    assert "var c: vec2<u32> = max(u, vec2<u32>(s));" in generated
+    assert "var d: vec2<u32> = min(u, vec2<u32>(1u));" in generated
+    assert "var e: vec2<i32> = max(k, vec2<i32>(t));" in generated
+    assert "var g: vec2<i32> = min(k, vec2<i32>(-3));" in generated
+    assert "var h: vec2<f32> = step(vec2<f32>(f), v);" in generated
+    assert (
+        "var m: vec2<f32> = smoothstep(vec2<f32>(0.0), vec2<f32>(f), v);" in generated
+    )
+    assert "var n: vec2<u32> = max(u, vec2<u32>(1));" in generated
+    assert "max(f, 1.0)" in generated
+    assert "step(0.5, f)" in generated
+    assert "smoothstep(0.0, 1.0, f)" in generated
+    assert "step(vec2<f32>(0.5), v)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
+    # A scalar from length, dot, distance or a component-wise built-in such as
+    # abs or sqrt is replicated too (#4498 review), and so is a swizzle of a
+    # vector constructor; a signed literal beside a uvec is converted once, not
+    # wrapped twice.
+    shader = """
+    shader Probe {
+        buffer vec3* go;
+        buffer uvec3* gu;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec3 w = go[0];
+                float f = w.x;
+                uvec3 u = gu[0];
+                vec3 a = max(w, length(w));
+                vec3 b = min(w, dot(w, w));
+                vec3 d = step(abs(f), w);
+                vec3 g = max(w, sqrt(f));
+                vec3 h = smoothstep(distance(w, w), 1.0, w);
+                vec4 c = vec4(w, f);
+                vec3 x = max(w, vec3(f).x);
+                vec4 y = step(vec4(c.x).w, c);
+                go[1] = a + b + d + g + h + x + y.xyz + abs(w);
+                gu[1] = min(u, -1);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec3<f32> = max(w, vec3<f32>(length(w)));" in generated
+    assert "var b: vec3<f32> = min(w, vec3<f32>(dot(w, w)));" in generated
+    assert "var d: vec3<f32> = step(vec3<f32>(abs(f)), w);" in generated
+    assert "var g: vec3<f32> = max(w, vec3<f32>(sqrt(f)));" in generated
+    assert (
+        "var h: vec3<f32> = smoothstep(vec3<f32>(distance(w, w)), vec3<f32>(1.0), w);"
+        in generated
+    )
+    assert "var x: vec3<f32> = max(w, vec3<f32>(vec3<f32>(f).x));" in generated
+    assert "var y: vec4<f32> = step(vec4<f32>(vec4<f32>(c.x).w), c);" in generated
+    assert "abs(w)" in generated
+    assert "gu[1] = min(u, vec3<u32>(u32(-1i)));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
@@ -2211,6 +2313,120 @@ def test_wgsl_codegen_converts_mixed_integer_vector_compound_operands(tmp_path):
     assert "a *= vec2<u32>(u32(t));" in generated
     if shutil.which("naga") is not None:
         validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_bitwise_operands(tmp_path):
+    # GLSL converts the int operand of &, | and ^ beside a uint one; WGSL needs the
+    # conversion, and a scalar beside a vector is replicated as well (#4492).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        buffer uint* so;
+        buffer int* si;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                uint s = so[0];
+                int t = si[0];
+                uvec2 a = u & k;
+                uvec2 b = u | k.y;
+                uvec2 c = k ^ s;
+                uvec2 d = (u ^ k) & (k | 1u);
+                uvec2 e = u & -1;
+                uint f = s & t;
+                uint g = t | s;
+                ivec2 h = k & t;
+                uo[1] = a + b + c + d + e;
+                so[1] = f + g;
+                io[1] = h;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<u32> = (u & vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = (u | vec2<u32>(u32(k.y)));" in generated
+    assert "var c: vec2<u32> = (vec2<u32>(k) ^ vec2<u32>(s));" in generated
+    assert (
+        "var d: vec2<u32> = ((u ^ vec2<u32>(k)) & (vec2<u32>(k) | vec2<u32>(1u)));"
+        in generated
+    )
+    assert "var e: vec2<u32> = (u & vec2<u32>(u32(-1i)));" in generated
+    assert "var f: u32 = (s & u32(t));" in generated
+    assert "var g: u32 = (u32(t) | s);" in generated
+    assert "var h: vec2<i32> = (k & vec2<i32>(t));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_compound_bitwise(tmp_path):
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                u |= k;
+                u &= k;
+                u ^= k.x;
+                uo[1] = u;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "u |= vec2<u32>(k);" in generated
+    assert "u &= vec2<u32>(k);" in generated
+    assert "u ^= vec2<u32>(u32(k.x));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_min_max_clamp(tmp_path):
+    # Vector min, max and clamp convert signed vectors to vecN<u32> beside a uint
+    # argument, and replicate scalar arguments to the vector type (#4492).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        buffer uint* so;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                uint s = so[0];
+                uvec2 a = max(u, k);
+                uvec2 b = min(k, u);
+                uvec2 c = max(k, s);
+                uvec2 d = clamp(u, k, uvec2(9u));
+                uvec2 e = clamp(u, k.x, 9u);
+                uvec2 f = clamp(k, 1u, u);
+                uo[1] = a + b + c + d + e + f;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<u32> = max(u, vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = min(vec2<u32>(k), u);" in generated
+    assert "var c: vec2<u32> = max(vec2<u32>(k), vec2<u32>(s));" in generated
+    assert "var d: vec2<u32> = clamp(u, vec2<u32>(k), vec2<u32>(9u));" in generated
+    assert (
+        "var e: vec2<u32> = clamp(u, vec2<u32>(u32(k.x)), vec2<u32>(9u));" in generated
+    )
+    assert "var f: vec2<u32> = clamp(vec2<u32>(k), vec2<u32>(1u), u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):

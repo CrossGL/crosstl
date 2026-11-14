@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.refusals import MojoSyntaxError
+
 from .MojoAst import *
 from .MojoLexer import *
 
@@ -133,7 +135,7 @@ class MojoParser:
             self.consume_pending_expression_layout_dedents()
             return
 
-        raise SyntaxError(f"Expected end of statement, got {self.current_token[0]}")
+        raise MojoSyntaxError(f"Expected end of statement, got {self.current_token[0]}")
 
     def consume_pending_expression_layout_dedents(self):
         while self.pending_expression_layout_dedents:
@@ -156,12 +158,12 @@ class MojoParser:
 
     def expect_end_of_input(self):
         if self.current_token[0] != "EOF":
-            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected EOF, got {self.current_token[0]}")
 
     def eat(self, token_type):
         # The end of input is never consumed: a construct that reads past it is unterminated.
         if token_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise MojoSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -169,7 +171,7 @@ class MojoParser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def peek_token(self, offset=1):
         index = self.pos + offset
@@ -209,7 +211,7 @@ class MojoParser:
 
             attributes = self.parse_attributes()
             if attributes and self.current_token[0] == "EOF":
-                raise SyntaxError("Expected declaration after attribute")
+                raise MojoSyntaxError("Expected declaration after attribute")
 
             if self.current_token[0] in ["IMPORT", "FROM"]:
                 node = self.parse_import_statement()
@@ -256,9 +258,9 @@ class MojoParser:
                 all_items.append(node)
             else:
                 if attributes:
-                    raise SyntaxError("Expected declaration after attribute")
+                    raise MojoSyntaxError("Expected declaration after attribute")
                 token_type, token_value = self.current_token
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Unexpected top-level token: {token_type} {token_value!r}"
                 )
 
@@ -307,12 +309,12 @@ class MojoParser:
             name += self.current_token[1]
             self.eat(self.current_token[0])
         elif not name:
-            raise SyntaxError(f"Expected import path, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected import path, got {self.current_token[0]}")
 
         while self.current_token[0] == "DOT":
             self.eat("DOT")
             if not self.is_dotted_name_token():
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
                 )
             name += f".{self.current_token[1]}"
@@ -330,7 +332,7 @@ class MojoParser:
 
     def parse_identifier_name(self, context="IDENTIFIER"):
         if not self.is_identifier_name_token():
-            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected {context}, got {self.current_token[0]}")
 
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -348,7 +350,7 @@ class MojoParser:
 
     def parse_binding_name(self, context="IDENTIFIER"):
         if not self.is_binding_name_token():
-            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected {context}, got {self.current_token[0]}")
 
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -361,7 +363,7 @@ class MojoParser:
 
     def parse_dotted_name(self, context):
         if not self.is_dotted_name_token():
-            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected {context}, got {self.current_token[0]}")
 
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -408,7 +410,7 @@ class MojoParser:
             self.eat("RPAREN")
 
         if not items:
-            raise SyntaxError("Expected imported item")
+            raise MojoSyntaxError("Expected imported item")
         return items
 
     def parse_struct(self, initial_attributes=None):
@@ -455,7 +457,7 @@ class MojoParser:
             if self.current_token[0] == "DEDENT":
                 self.eat("DEDENT")
         else:
-            raise SyntaxError(f"Expected struct body, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected struct body, got {self.current_token[0]}")
 
         node = StructNode(name, members, attributes=initial_attributes)
         node.methods = methods
@@ -470,7 +472,7 @@ class MojoParser:
 
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated base class list")
+                raise MojoSyntaxError("Unterminated base class list")
             base_classes.append(self.parse_base_class_entry())
             self.skip_layout_tokens()
 
@@ -479,7 +481,7 @@ class MojoParser:
                 self.skip_layout_tokens()
                 continue
             if self.current_token[0] != "RPAREN":
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected COMMA or RPAREN, got {self.current_token[0]}"
                 )
 
@@ -488,14 +490,14 @@ class MojoParser:
 
     def parse_base_class_entry(self):
         if not self.is_base_class_entry_start():
-            raise SyntaxError(f"Expected base class, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected base class, got {self.current_token[0]}")
 
         tokens = []
         depth = 0
 
         while True:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated base class list")
+                raise MojoSyntaxError("Unterminated base class list")
 
             token_type, token_value = self.current_token
             if depth == 0 and token_type in {"COMMA", "RPAREN"}:
@@ -516,7 +518,7 @@ class MojoParser:
             self.eat(token_type)
 
         if not tokens:
-            raise SyntaxError("Expected base class or trait conformance")
+            raise MojoSyntaxError("Expected base class or trait conformance")
         return self.format_base_class_entry(tokens)
 
     def is_base_class_entry_start(self):
@@ -610,7 +612,7 @@ class MojoParser:
         member_attributes.extend(self.parse_attributes())
 
         if self.current_token[0] in ["DEDENT", "EOF", "RBRACE"]:
-            raise SyntaxError(f"Expected {context} member")
+            raise MojoSyntaxError(f"Expected {context} member")
 
         if self.current_token[0] in ["LET", "VAR"]:
             vtype = self.current_token[1]
@@ -628,8 +630,8 @@ class MojoParser:
         else:
             if self.current_token[0] not in self.TYPE_START_TOKENS:
                 if member_attributes:
-                    raise SyntaxError(f"Expected {context} member after attribute")
-                raise SyntaxError(
+                    raise MojoSyntaxError(f"Expected {context} member after attribute")
+                raise MojoSyntaxError(
                     f"Unexpected token in {context}: {self.current_token[0]}"
                 )
             vtype = self.parse_type()
@@ -681,7 +683,7 @@ class MojoParser:
             else:
                 self.add_class_member(members, methods, self.parse_class_member())
         else:
-            raise SyntaxError(f"Expected class body, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected class body, got {self.current_token[0]}")
 
         return ClassNode(
             name,
@@ -722,7 +724,7 @@ class MojoParser:
             else:
                 self.add_class_member(members, methods, self.parse_class_member())
         else:
-            raise SyntaxError(f"Expected trait body, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected trait body, got {self.current_token[0]}")
 
         node = TraitNode(
             name,
@@ -762,7 +764,9 @@ class MojoParser:
             else:
                 self.add_class_member(members, methods, self.parse_class_member())
         else:
-            raise SyntaxError(f"Expected extension body, got {self.current_token[0]}")
+            raise MojoSyntaxError(
+                f"Expected extension body, got {self.current_token[0]}"
+            )
 
         return ExtensionNode(
             name,
@@ -801,8 +805,10 @@ class MojoParser:
             return self.parse_typed_member("class", attributes)
 
         if attributes:
-            raise SyntaxError("Expected class member after attribute")
-        raise SyntaxError(f"Unexpected token in class body: {self.current_token[0]}")
+            raise MojoSyntaxError("Expected class member after attribute")
+        raise MojoSyntaxError(
+            f"Unexpected token in class body: {self.current_token[0]}"
+        )
 
     def add_class_member(self, members, methods, node):
         if isinstance(node, FunctionNode):
@@ -842,7 +848,7 @@ class MojoParser:
             else:
                 members.append(self.parse_constant_buffer_member())
         else:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Expected constant buffer body, got {self.current_token[0]}"
             )
 
@@ -857,8 +863,8 @@ class MojoParser:
 
         if self.current_token[0] not in self.TYPE_START_TOKENS:
             if attributes:
-                raise SyntaxError("Expected constant buffer member after attribute")
-            raise SyntaxError(
+                raise MojoSyntaxError("Expected constant buffer member after attribute")
+            raise MojoSyntaxError(
                 f"Unexpected token in constant buffer: {self.current_token[0]}"
             )
 
@@ -890,13 +896,15 @@ class MojoParser:
         if self.current_token[0] in self.FUNCTION_TOKENS:
             self.eat(self.current_token[0])
         else:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Expected function declaration, got {self.current_token[0]}"
             )
 
         return_type = None
         if self.current_token[0] not in self.IDENTIFIER_NAME_TOKENS:
-            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
+            raise MojoSyntaxError(
+                f"Expected function name, got {self.current_token[0]}"
+            )
         name = self.current_token[1]
         self.eat(self.current_token[0])
 
@@ -1031,7 +1039,7 @@ class MojoParser:
         depth = 1
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError(f"Unterminated Mojo {open_token} group")
+                raise MojoSyntaxError(f"Unterminated Mojo {open_token} group")
             token_type = self.current_token[0]
             if token_type == open_token:
                 depth += 1
@@ -1056,7 +1064,7 @@ class MojoParser:
 
         while True:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated Mojo where clause")
+                raise MojoSyntaxError("Unterminated Mojo where clause")
 
             token_type, token_value = self.current_token
             if token_type in {"NEWLINE", "INDENT", "DEDENT"}:
@@ -1077,7 +1085,7 @@ class MojoParser:
             self.eat(token_type)
 
         if not parts:
-            raise SyntaxError("Expected Mojo where clause constraint")
+            raise MojoSyntaxError("Expected Mojo where clause constraint")
         return " ".join(parts)
 
     def parse_parameters(self):
@@ -1118,12 +1126,12 @@ class MojoParser:
                         name = self.current_token[1]
                         self.eat("IDENTIFIER")
                 else:
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Unexpected token in parameter list: {self.current_token[0]}"
                     )
 
             else:
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Unexpected token in parameter list: {self.current_token[0]}"
                 )
 
@@ -1154,7 +1162,7 @@ class MojoParser:
             elif self.current_token[0] == "RPAREN":
                 break
             else:
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
 
@@ -1273,7 +1281,7 @@ class MojoParser:
             else:
                 self.eat("AT")
                 if self.current_token[0] != "IDENTIFIER":
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Expected attribute name, got {self.current_token[0]}"
                     )
                 name = self.current_token[1]
@@ -1281,7 +1289,7 @@ class MojoParser:
                 while self.current_token[0] == "DOT":
                     self.eat("DOT")
                     if self.current_token[0] != "IDENTIFIER":
-                        raise SyntaxError(
+                        raise MojoSyntaxError(
                             f"Expected attribute name after dot, got {self.current_token[0]}"
                         )
                     name += f".{self.current_token[1]}"
@@ -1301,7 +1309,7 @@ class MojoParser:
                             self.eat("COMMA")
                             self.skip_layout_tokens()
                         elif self.current_token[0] != "RPAREN":
-                            raise SyntaxError(
+                            raise MojoSyntaxError(
                                 f"Expected COMMA or RPAREN, got {self.current_token[0]}"
                             )
                     self.eat("RPAREN")
@@ -1555,7 +1563,7 @@ class MojoParser:
         self.eat("COLON")
         target_type = self.parse_type()
         if self.current_token[0] != "EQUALS":
-            raise SyntaxError("Expected assignment after typed assignment target")
+            raise MojoSyntaxError("Expected assignment after typed assignment target")
         self.eat("EQUALS")
         value = self.parse_expression_list_value()
         assignment = AssignmentNode(target, value, "=")
@@ -1571,7 +1579,7 @@ class MojoParser:
             self.skip_expression_layout()
 
         if self.current_token[0] not in self.ASSIGNMENT_OPERATOR_TOKENS:
-            raise SyntaxError("Expected assignment after expression tuple")
+            raise MojoSyntaxError("Expected assignment after expression tuple")
 
         op = self.current_token[1]
         self.eat(self.current_token[0])
@@ -1588,7 +1596,7 @@ class MojoParser:
     def parse_binding_convention_target_expression(self):
         convention = self.parse_parameter_convention()
         if not convention:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Expected binding convention, got {self.current_token[0]}"
             )
 
@@ -1747,7 +1755,7 @@ class MojoParser:
 
         name = self.parse_identifier_tuple()
         if self.current_token[0] != "EQUALS":
-            raise SyntaxError("Expected assignment after comptime identifier tuple")
+            raise MojoSyntaxError("Expected assignment after comptime identifier tuple")
         self.eat("EQUALS")
         initial_value = self.parse_expression_list_value()
         self.consume_statement_terminator()
@@ -1916,7 +1924,7 @@ class MojoParser:
                 node.else_body = self.parse_loop_else_body()
                 return node
 
-        raise SyntaxError(
+        raise MojoSyntaxError(
             "Invalid for loop syntax. Expected C-style "
             "'for init; condition; update:' or Python-style "
             "'for [convention] target in iterable:'"
@@ -2012,7 +2020,7 @@ class MojoParser:
             self.skip_newlines()
 
         if not except_body and not finally_body:
-            raise SyntaxError("Expected except or finally clause after try block")
+            raise MojoSyntaxError("Expected except or finally clause after try block")
 
         return TryExceptNode(
             try_body,
@@ -2035,7 +2043,7 @@ class MojoParser:
             while self.current_token[0] in ["CASE", "DEFAULT"]:
                 if self.current_token[0] == "DEFAULT":
                     if seen_default:
-                        raise SyntaxError("duplicate default label in switch")
+                        raise MojoSyntaxError("duplicate default label in switch")
                     seen_default = True
                 cases.append(self.parse_switch_case())
                 self.skip_newlines()
@@ -2045,7 +2053,7 @@ class MojoParser:
             while self.current_token[0] in ["CASE", "DEFAULT"]:
                 if self.current_token[0] == "DEFAULT":
                     if seen_default:
-                        raise SyntaxError("duplicate default label in switch")
+                        raise MojoSyntaxError("duplicate default label in switch")
                     seen_default = True
                 cases.append(self.parse_switch_case())
                 self.skip_newlines()
@@ -2064,7 +2072,7 @@ class MojoParser:
             body = self.parse_block()
             return SwitchCaseNode(None, body)
         else:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Unexpected token in switch case: {self.current_token[0]}"
             )
 
@@ -2441,9 +2449,11 @@ class MojoParser:
         elif self.current_token[0] in self.FUNCTION_TYPE_TOKENS:
             return self.parse_function_type()
         elif self.current_token[0] in ["STRUCT", "CLASS", "LET", "VAR"]:
-            raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
+            raise MojoSyntaxError(
+                f"Unexpected top-level keyword: {self.current_token[0]}"
+            )
         else:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
@@ -2490,7 +2500,7 @@ class MojoParser:
                 if self.current_token[0] == "RBRACKET":
                     break
             elif self.current_token[0] != "RBRACKET":
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected COMMA or RBRACKET, got {self.current_token[0]}"
                 )
 
@@ -2517,7 +2527,9 @@ class MojoParser:
 
             if self.current_token[0] == "COLON":
                 if elements:
-                    raise SyntaxError("Cannot mix Mojo dictionary and braced elements")
+                    raise MojoSyntaxError(
+                        "Cannot mix Mojo dictionary and braced elements"
+                    )
                 self.eat("COLON")
                 self.skip_layout_tokens()
                 self.expression_layout_depth += 1
@@ -2535,7 +2547,9 @@ class MojoParser:
                 entries.append((key, value))
             else:
                 if entries:
-                    raise SyntaxError("Cannot mix Mojo dictionary and braced elements")
+                    raise MojoSyntaxError(
+                        "Cannot mix Mojo dictionary and braced elements"
+                    )
                 if not elements and self.current_token[0] == "FOR":
                     comprehension = self.parse_set_comprehension(key)
                     self.eat("RBRACE")
@@ -2548,7 +2562,7 @@ class MojoParser:
                 if self.current_token[0] == "RBRACE":
                     break
             elif self.current_token[0] != "RBRACE":
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected COMMA or RBRACE, got {self.current_token[0]}"
                 )
 
@@ -2589,7 +2603,7 @@ class MojoParser:
 
     def parse_comprehension_pattern(self):
         if not self.is_identifier_like_token():
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Expected comprehension target, got {self.current_token[0]}"
             )
 
@@ -2598,7 +2612,7 @@ class MojoParser:
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             if not self.is_identifier_like_token():
-                raise SyntaxError(
+                raise MojoSyntaxError(
                     f"Expected comprehension target, got {self.current_token[0]}"
                 )
             names.append(self.current_token[1])
@@ -2624,7 +2638,7 @@ class MojoParser:
                     self.eat("COMMA")
                     self.skip_layout_tokens()
                 elif self.current_token[0] != "RPAREN":
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Expected COMMA or RPAREN, got {self.current_token[0]}"
                     )
             self.eat("RPAREN")
@@ -2650,7 +2664,7 @@ class MojoParser:
             return value
 
         else:
-            raise SyntaxError(
+            raise MojoSyntaxError(
                 f"Expected IDENTIFIER or NUMBER, got {self.current_token[0]}"
             )
 
@@ -2696,7 +2710,7 @@ class MojoParser:
                 if isinstance(node, str):
                     # Literals are kept as their source text; mojo rejects them with "expression does not
                     # designate a value with a lifetime".
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"The transfer operator '^' needs a value with a lifetime, got the literal {node}"
                     )
                 node.is_transfer = True
@@ -2726,7 +2740,7 @@ class MojoParser:
                     if self.current_token[0] == "RBRACE":
                         break
                 elif self.current_token[0] != "RBRACE":
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Expected COMMA or RBRACE, got {self.current_token[0]}"
                     )
             self.eat("RBRACE")
@@ -2774,7 +2788,7 @@ class MojoParser:
                     self.eat("COMMA")
                     self.skip_layout_tokens()
                 elif self.current_token[0] != "RPAREN":
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Expected COMMA or RPAREN, got {self.current_token[0]}"
                     )
             self.eat("RPAREN")
@@ -3024,7 +3038,7 @@ class MojoParser:
             return self.parse_parenthesized_type_group()
 
         if self.current_token[0] not in self.TYPE_START_TOKENS:
-            raise SyntaxError(f"Expected type name, got {self.current_token[0]}")
+            raise MojoSyntaxError(f"Expected type name, got {self.current_token[0]}")
 
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -3125,7 +3139,7 @@ class MojoParser:
         depth = 1
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated bracketed suffix")
+                raise MojoSyntaxError("Unterminated bracketed suffix")
             if self.current_token[0] == "LBRACKET":
                 depth += 1
             elif self.current_token[0] == "RBRACKET":
@@ -3139,7 +3153,7 @@ class MojoParser:
 
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated generic type argument list")
+                raise MojoSyntaxError("Unterminated generic type argument list")
 
             token_type, token_value = self.current_token
             if token_type == "LBRACKET":
@@ -3177,7 +3191,7 @@ class MojoParser:
 
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated parenthesized type suffix")
+                raise MojoSyntaxError("Unterminated parenthesized type suffix")
 
             token_type, token_value = self.current_token
             if token_type == "LPAREN":
@@ -3212,7 +3226,7 @@ class MojoParser:
 
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated braced type suffix")
+                raise MojoSyntaxError("Unterminated braced type suffix")
 
             token_type, token_value = self.current_token
             if token_type == "LBRACE":

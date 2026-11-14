@@ -8,6 +8,8 @@ hoisted to module scope after the shader's own structs, in source order.
 
 from __future__ import annotations
 
+from ..refusals import TargetRefusal
+
 
 def _struct_signature(struct):
     return tuple(
@@ -42,7 +44,7 @@ def module_structs(program, backend):
             if previous is not struct and _struct_signature(
                 previous
             ) != _struct_signature(struct):
-                raise ValueError(
+                raise TargetRefusal(
                     f"Conflicting {backend} stage-local struct '{name}': "
                     "two stages declare different members"
                 )

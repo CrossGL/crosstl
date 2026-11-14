@@ -18,6 +18,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterable, Tuple
 
+from ..refusals import OpenGLRefusal
+
 __all__ = ["GLSLDescriptorSetBindingsMixin", "plan_descriptor_set_bindings"]
 
 PlanEntry = Tuple[str, int, int, int, str]  # namespace, set, binding, count, name
@@ -187,7 +189,7 @@ class GLSLDescriptorSetBindingsMixin:
             arguments = getattr(attr, "arguments", []) or []
             value = self.binding_index_value(arguments[0]) if arguments else None
             if value is None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"invalid descriptor set of '{self.resource_node_name(node)}'"
                 )
             return value
@@ -203,7 +205,7 @@ class GLSLDescriptorSetBindingsMixin:
                 continue
             value = self.binding_index_value(arguments[1], ("space",))
             if value is None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     self.unsupported_resource_space_message(
                         node, "register", self.attribute_value_to_string(arguments[1])
                     )

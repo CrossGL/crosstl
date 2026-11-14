@@ -11,6 +11,7 @@ mode to a control stage the program does not have is refused.
 
 from __future__ import annotations
 
+from ..refusals import OpenGLRefusal
 from .stage_utils import collect_stage_entry_records
 
 _CONTROL_STAGE = "tessellation_control"
@@ -61,7 +62,7 @@ def _agreed(values, mode_name):
     stated = [value for value in values if value is not None]
     for value in stated[1:]:
         if value != stated[0]:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"Conflicting GLSL tessellation {mode_name} {stated[0]} with {value} "
                 "across tessellation_control entry points"
             )
@@ -73,7 +74,7 @@ def _merged(own, inherited, mode_name):
     if own is None:
         return inherited
     if inherited is not None and inherited != own:
-        raise ValueError(
+        raise OpenGLRefusal(
             f"Conflicting GLSL tessellation {mode_name}: the tessellation_evaluation stage "
             f"states {own} and the tessellation_control stage states {inherited}"
         )

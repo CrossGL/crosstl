@@ -15,6 +15,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
 from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
+from crosstl.translator.refusals import DirectXSourceRefusal
 
 from ..comma_expressions import (
     comma_operands,
@@ -191,7 +192,7 @@ class HLSLToCrossGLConverter(
         can also express.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "matrix_packing must be one of "
                 f"{', '.join(self.MATRIX_PACKINGS)}, got {matrix_packing!r}"
             )
@@ -199,7 +200,7 @@ class HLSLToCrossGLConverter(
             trigonometric_reduction is not None
             and trigonometric_reduction not in self.TRIGONOMETRIC_REDUCTIONS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "trigonometric_reduction must be one of "
                 f"{', '.join(self.TRIGONOMETRIC_REDUCTIONS)}, "
                 f"got {trigonometric_reduction!r}"
@@ -208,7 +209,7 @@ class HLSLToCrossGLConverter(
             floating_point_contraction is not None
             and floating_point_contraction not in self.FLOATING_POINT_CONTRACTIONS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "floating_point_contraction must be one of "
                 f"{', '.join(self.FLOATING_POINT_CONTRACTIONS)}, "
                 f"got {floating_point_contraction!r}"
@@ -220,7 +221,7 @@ class HLSLToCrossGLConverter(
             unorm_store_rounding is not None
             and unorm_store_rounding not in self.UNORM_STORE_ROUNDINGS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "unorm_store_rounding must be one of "
                 f"{', '.join(self.UNORM_STORE_ROUNDINGS)}, "
                 f"got {unorm_store_rounding!r}"

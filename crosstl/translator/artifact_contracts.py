@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .refusals import MetadataContractError
+
 FROZEN_SPECIALIZATION_PREFIX = "// crosstl-frozen-specializations: "
 RESOURCE_STORAGE_PREFIX = "// crosstl-resource-storage: "
 METADATA_PRECONDITION_PREFIX = "// crosstl-metadata-preconditions: "
@@ -33,13 +35,15 @@ def _split_contracts(source: str) -> tuple[dict[str, str], str]:
             break
         line, _, remaining = remaining.partition("\n")
         if prefix in headers:
-            raise ValueError("Each artifact contract must be declared once.")
+            raise MetadataContractError("Each artifact contract must be declared once.")
         if len(line.encode("utf-8")) > MAX_ARTIFACT_CONTRACT_HEADER_BYTES:
-            raise ValueError("Artifact contract header exceeds the byte limit.")
+            raise MetadataContractError(
+                "Artifact contract header exceeds the byte limit."
+            )
         headers[prefix] = line
     for prefix in ARTIFACT_CONTRACT_PREFIXES:
         if source.count(prefix.rstrip()) != int(prefix in headers):
-            raise ValueError(
+            raise MetadataContractError(
                 "Artifact contracts must be declared once in a contiguous block "
                 "starting on the first line."
             )
@@ -63,10 +67,12 @@ def with_artifact_contract_header(source: str, header: str) -> str:
         return source
     added, tail = _split_contracts(header)
     if len(added) != 1 or tail:
-        raise ValueError("Expected one artifact contract header without source text.")
+        raise MetadataContractError(
+            "Expected one artifact contract header without source text."
+        )
     headers, body = _split_contracts(source)
     if headers.keys() & added.keys():
-        raise ValueError("Each artifact contract must be declared once.")
+        raise MetadataContractError("Each artifact contract must be declared once.")
     headers.update(added)
     return (
         "".join(

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 
 from ..ast import ArrayNode, FunctionNode
+from ..refusals import TranslationRefusal
 from .array_utils import (
     evaluate_literal_int_expression,
     fold_array_type_counts,
@@ -105,8 +106,10 @@ MATRIX_SCALARS = {"i": "int", "u": "uint", "b": "bool"}
 ARRAY_PATTERN = re.compile(r"(?P<element>.+?)\s*\[\s*(?P<count>\d+)\s*\]")
 
 
-class OpenGLHlslConstantBufferError(ValueError):
+class OpenGLHlslConstantBufferError(TranslationRefusal):
     """An HLSL constant buffer whose layout OpenGL storage cannot reproduce."""
+
+    code = "project.translate.opengl-constant-buffer-layout-unsupported"
 
     def __init__(self, message, *, cbuffer=None, reason=None):
         super().__init__(message)

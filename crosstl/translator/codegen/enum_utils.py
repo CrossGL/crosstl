@@ -3,6 +3,7 @@
 import re
 
 from ..ast import EnumNode, StructNode
+from ..refusals import TargetRefusal
 from .array_utils import format_c_style_array_declaration
 
 # An element type followed by one or more ``[size]`` dimensions, such as ``T[2]`` or ``T*[2][3]``.
@@ -331,7 +332,7 @@ def generate_enum_constructor_call(generator, path, args):
 
     fields = getattr(generator, "enum_variant_constructor_fields", {}).get(path, [])
     if len(args) != len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects {len(fields)} arguments, got {len(args)}"
         )
 
@@ -430,13 +431,13 @@ def render_enum_constructor_arguments(generator, path, expr, fields):
     field_names = [field_name for field_name, _field_type in fields]
 
     if len(positional_args) > len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects at most {len(fields)} arguments, "
             f"got {len(positional_args)}"
         )
     unknown_names = sorted(set(named_args) - set(field_names))
     if unknown_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} has no field {', '.join(unknown_names)}"
         )
 
@@ -462,7 +463,7 @@ def render_enum_constructor_arguments(generator, path, expr, fields):
         missing_names.append(field_name)
 
     if missing_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} is missing field {', '.join(missing_names)}"
         )
     return rendered_args
@@ -490,7 +491,7 @@ def generate_generic_enum_constructor_call(generator, path, args):
     if fields is None:
         return None
     if len(args) != len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects {len(fields)} arguments, got {len(args)}"
         )
 

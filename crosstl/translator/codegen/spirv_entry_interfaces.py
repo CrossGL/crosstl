@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
+from ..refusals import VulkanRefusal
+
 __all__ = [
     "RAY_STORAGE_CLASSES",
     "complete_entry_point_interfaces",
@@ -51,7 +53,7 @@ def ray_storage_class(names: Iterable[str]):
         RAY_STORAGE_CLASSES[name] for name in names if name in RAY_STORAGE_CLASSES
     }
     if len(classes) > 1:
-        raise ValueError(
+        raise VulkanRefusal(
             "SPIR-V variable has conflicting ray tracing storage qualifiers: "
             + ", ".join(sorted(classes))
         )

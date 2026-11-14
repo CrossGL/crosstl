@@ -4,6 +4,7 @@ import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
+from ..import_refusals import CudaImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
@@ -31,8 +32,14 @@ from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 
 
-class CudaToCrossGLConverter:
-    """Serialize CUDA backend AST nodes back into CrossGL source."""
+class CudaToCrossGLConverter(ImportRefusalMixin):
+    """Serialize CUDA backend AST nodes back into CrossGL source.
+
+    A CUDA construct with no faithful CrossGL form is refused with :class:`CudaImportRefused`; no CrossGL program is
+    returned while a refusal is pending.
+    """
+
+    IMPORT_REFUSAL_TYPE = CudaImportRefused
 
     CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_CUDA",
@@ -295,6 +302,10 @@ class CudaToCrossGLConverter:
         self.namespace_constant_names = set()
 
     def generate(self, ast_node):
+        """Render ``ast_node`` as CrossGL, or raise :class:`CudaImportRefused` listing every construct it cannot carry."""
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
         self.source_identifier_names = source_identifier_names(ast_node)
@@ -4411,8 +4422,8 @@ class CudaToCrossGLConverter:
                     f"{node.name} maps to a tiled partition of the current workgroup"
                 )
             else:
-                self.emit(
-                    f"// cooperative_groups {group_kind} for {node.name} not directly supported in CrossGL"
+                self.refuse_import(
+                    f"CUDA cooperative_groups {group_kind} '{node.name}': CrossGL has no group of this kind"
                 )
             return
 
@@ -4976,10 +4987,9 @@ class CudaToCrossGLConverter:
         return self.format_cuda_time_function_diagnostic(display_name, args)
 
     def format_cuda_time_function_diagnostic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda time function {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA time function {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            "0",
         )
 
     def format_cuda_comma_expression(self, args):
@@ -4996,10 +5006,12 @@ class CudaToCrossGLConverter:
         if normalized_name != "__nanosleep":
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda nanosleep __nanosleep({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        # The sleep is a scheduling hint whose duration lies in [0, 2 * ns] (CUDA C++ Programming Guide,
+        # "Nanosleep Function"), so a sleep of zero is one of its executions; the argument is still evaluated.
+        if len(args) == 1:
+            return f"({args[0]})"
+        return self.refuse_import(
+            f"CUDA __nanosleep({', '.join(args)}) takes one argument", "0"
         )
 
     def format_cuda_load_cache_intrinsic_call(
@@ -5028,10 +5040,10 @@ class CudaToCrossGLConverter:
         if len(raw_args) == 1:
             return f"(*{formatted_args[0]})"
 
-        args_text = ", ".join(formatted_args)
-        return (
-            f"(/* cuda load cache intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
+            "address",
+            "0",
         )
 
     def format_cuda_memory_fence_call(self, function_name, args):
@@ -5189,10 +5201,10 @@ class CudaToCrossGLConverter:
         return self.format_unsupported_cuda_block_sync_vote(function_name, args)
 
     def format_unsupported_cuda_block_sync_vote(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda thread block sync vote {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA thread block sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
+            "reduces a predicate",
+            "0",
         )
 
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
@@ -5389,10 +5401,9 @@ class CudaToCrossGLConverter:
         return f"(({operand} >> {shift}) & 0xffu)"
 
     def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda integer intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA integer intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
+            "0",
         )
 
     def format_cuda_byte_perm_intrinsic(self, left, right, selector):
@@ -5668,10 +5679,8 @@ class CudaToCrossGLConverter:
     ):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f": {formatted_args}" if formatted_args else ""
-        return (
-            f"// cooperative_groups {group_kind}.{member} "
-            f"not directly supported in CrossGL{arg_suffix}"
+        return self.refuse_import(
+            f"CUDA cooperative_groups {group_kind}.{member}({formatted_args}) has no CrossGL form"
         )
 
     def format_unsupported_cooperative_group_expression(
@@ -5679,10 +5688,9 @@ class CudaToCrossGLConverter:
     ):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f"({formatted_args})" if formatted_args else ""
-        return (
-            f"(/* cooperative_groups {group_kind}.{member}{arg_suffix} "
-            f"not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"CUDA cooperative_groups {group_kind}.{member}({formatted_args}) has no CrossGL form",
+            fallback,
         )
 
     def format_cuda_async_sync_call(self, node):
@@ -5760,16 +5768,17 @@ class CudaToCrossGLConverter:
     def format_unsupported_cuda_async_statement(self, kind, member, args=None):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f": {formatted_args}" if formatted_args else ""
-        return f"// cuda {kind}.{member} not directly supported in CrossGL{arg_suffix}"
-
-    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
-        return (
-            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"CUDA {kind}.{member}({formatted_args}) has no CrossGL form"
         )
 
+    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
+        return self.refuse_import(f"CUDA {kind}.{member} has no CrossGL form", fallback)
+
     def format_cuda_async_sync_declaration(self, name, metadata):
-        return f"// cuda {metadata['kind']} {name} not directly supported in CrossGL"
+        return self.refuse_import(
+            f"CUDA {metadata['kind']} '{name}': CrossGL has no asynchronous copy object"
+        )
 
     def cuda_async_sync_declaration_metadata(self, node):
         declared_metadata = self.cuda_async_sync_metadata_from_type(node.vtype)
@@ -6278,9 +6287,7 @@ class CudaToCrossGLConverter:
         return (text, f"{text}u", f"{text}U", f"{text}ul", f"{text}UL")
 
     def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
-        return (
-            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
-        )
+        return self.refuse_import(f"CUDA {kind}.{member} has no CrossGL form", fallback)
 
     def format_vector_constructor(self, vector_name, args, element_type="f32"):
         if vector_name == "vec1":
@@ -6313,9 +6320,8 @@ class CudaToCrossGLConverter:
 
     def format_cuda_fold_expression(self, args):
         expression = args[0] if args else ""
-        return (
-            f"0 /* CUDA fold expression {expression} is not directly supported "
-            "in CrossGL */"
+        return self.refuse_import(
+            f"CUDA fold expression {expression}: CrossGL has no parameter packs", "0"
         )
 
     def is_get_method_call(self, node):
@@ -6360,10 +6366,8 @@ class CudaToCrossGLConverter:
 
     def visit_DeleteNode(self, node):
         target = self.visit(node.expression)
-        if node.is_array:
-            self.emit(f"// delete array: {target}")
-        else:
-            self.emit(f"// delete: {target}")
+        form = "delete[]" if node.is_array else "delete"
+        self.refuse_import(f"CUDA {form} {target}: CrossGL has no device heap")
 
     def visit_TypeAliasNode(self, node):
         """Write ``typedef``/``using`` as a CrossGL ``typedef`` (#3309).
@@ -6430,37 +6434,51 @@ class CudaToCrossGLConverter:
             "atomicDec": "atomicDec",
         }
 
-        crossgl_func = atomic_map.get(operation, operation)
+        # The parser builds this node only for ATOMIC_FUNCTION_NAMES, whose base names atomic_map covers.
+        crossgl_func = atomic_map[operation]
         expression = f"{crossgl_func}({args_str})"
-        if scope is not None:
-            return (
-                f"(/* cuda {scope}-scope atomic {node.operation} lowered to "
-                f"{crossgl_func}; scope not preserved */ {expression})"
+        if scope == "system":
+            return self.refuse_import(
+                f"CUDA {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
+                "atomic for the host and peer devices",
+                expression,
             )
+        # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
+        # thread on the device, which includes the block.
         return expression
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
+        elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
+            # __syncwarp over the whole warp waits for every lane and orders their memory accesses, as
+            # subgroupBarrier does for the subgroup.
+            self.emit("subgroupBarrier();")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
+            self.refuse_import(
+                f"CUDA __syncwarp({args}): CrossGL has no barrier over a subset of the subgroup"
+            )
         else:
-            self.emit(f"// {node.sync_type}();")
+            self.refuse_import(f"CUDA {node.sync_type}() has no CrossGL form")
+
+    def is_full_warp_mask(self, args):
+        """Whether ``__syncwarp`` arguments name every lane: none, or the literal mask ``0xffffffff``."""
+        if not args:
+            return True
+        if len(args) != 1:
+            return False
+        value = self.visit(args[0]).strip().rstrip("uUlL")
+        try:
+            return int(value, 0) == 0xFFFFFFFF
+        except ValueError:
+            return False
 
     def visit_CudaAsmNode(self, node):
         volatility = " volatile" if node.is_volatile else ""
-        self.emit(f"// CUDA inline PTX{volatility}: {node.template}")
-        if node.outputs:
-            self.emit(
-                f"// CUDA inline PTX outputs: {self.format_cuda_asm_operands(node.outputs)}"
-            )
-        if node.inputs:
-            self.emit(
-                f"// CUDA inline PTX inputs: {self.format_cuda_asm_operands(node.inputs)}"
-            )
-        if node.clobbers:
-            self.emit(f"// CUDA inline PTX clobbers: {', '.join(node.clobbers)}")
+        self.refuse_import(
+            f"CUDA inline PTX asm{volatility}({node.template}): CrossGL has no inline assembly"
+        )
 
     def format_cuda_asm_operands(self, operands):
         formatted = []
@@ -6490,7 +6508,8 @@ class CudaToCrossGLConverter:
             "warpSize": "32",  # Constant in CrossGL
         }
 
-        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
+        # The parser builds this node only for the five built-in tokens builtin_map covers.
+        base_name = builtin_map[node.builtin_name]
         if node.component:
             return f"{base_name}.{node.component}"
         else:

@@ -35,6 +35,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 
 __all__ = ["generate_ordered_writeback_statement"]
 
@@ -167,7 +168,7 @@ def _hoisted_parameter_type(codegen, call, index):
         == argument_count
     ]
     if len(overloads) != 1:
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal cannot keep the left-to-right argument order of '{func_name}': the call has "
             f"{len(overloads)} overloads of {argument_count} parameters"
         )
@@ -183,7 +184,7 @@ def _hoisted_parameter_type(codegen, call, index):
         or "[" in type_name
         or codegen.is_resource_parameter_type(type_name)
     ):
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal cannot keep the left-to-right argument order of '{func_name}': argument {index + 1} "
             f"has type '{type_name}', which cannot be evaluated into a temporary first"
         )
@@ -215,7 +216,7 @@ def _plan_hoists(codegen, stmt, writebacks, written, shared_names):
         last_effect = max(effectful)
         func_name = codegen.function_call_name(call)
         if min(copied) < last_effect or _head_call(codegen, stmt) is not call:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal cannot copy a reference argument of '{func_name}' in and out after an argument with "
                 "side effects in this position; evaluate the earlier argument into a local first"
             )
@@ -245,7 +246,7 @@ def _index_type(codegen, index):
     type_name = codegen.type_name_string(codegen.expression_result_type(index))
     mapped = codegen.map_type(type_name) if type_name else None
     if not mapped or codegen.vector_value_width(mapped) is not None:
-        raise ValueError(
+        raise MetalRefusal(
             "Metal cannot copy a reference argument back: the type of its index "
             f"'{codegen.generate_expression(index)}' is unknown"
         )

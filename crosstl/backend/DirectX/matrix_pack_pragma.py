@@ -11,6 +11,8 @@ the HLSL importer records it: CrossGL keeps the orientation on each member
 
 import re
 
+from crosstl.translator.refusals import DirectXSyntaxError
+
 from .DirectxAst import PragmaNode
 
 MATRIX_ORIENTATIONS = ("row_major", "column_major")
@@ -36,7 +38,7 @@ def pack_matrix_orientation(directive):
         return None
     match = PACK_MATRIX_PATTERN.fullmatch(text[len("pack_matrix") :].strip())
     if match is None:
-        raise SyntaxError(f"unsupported #pragma {text}")
+        raise DirectXSyntaxError(f"unsupported #pragma {text}")
     return match.group(1)
 
 

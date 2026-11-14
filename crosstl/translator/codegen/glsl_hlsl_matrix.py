@@ -24,6 +24,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import TranslationRefusal
 
 EMULATED_MATRIX_PATTERN = re.compile(
     r"(?P<scalar>int|uint|bool)(?P<rows>[2-4])x(?P<columns>[2-4])"
@@ -64,8 +65,10 @@ COMPARISON_FUNCTIONS = {
 COMPONENTWISE_BUILTINS = {"abs": 1, "sign": 1, "min": 2, "max": 2, "clamp": 3}
 
 
-class OpenGLEmulatedMatrixError(ValueError):
+class OpenGLEmulatedMatrixError(TranslationRefusal):
     """An integer or boolean matrix operation OpenGL cannot reproduce."""
+
+    code = "project.translate.opengl-matrix-operation-unsupported"
 
     def __init__(self, message, *, operation=None, operand_types=None, reason=None):
         super().__init__(message)

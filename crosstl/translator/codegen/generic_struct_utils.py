@@ -8,6 +8,7 @@ declared without it.
 
 from ..ast import ArrayNode, ArrayType, EnumNode, FunctionNode, StructNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import TargetRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .enum_utils import (
     collect_generic_parameter_names,
@@ -471,13 +472,13 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
     field_names = [field_name for field_name, _field_type in fields]
 
     if len(positional_args) > len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} expects at most {len(fields)} "
             f"arguments, got {len(positional_args)}"
         )
     unknown_names = sorted(set(named_args) - set(field_names))
     if unknown_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} has no field "
             f"{', '.join(unknown_names)}"
         )
@@ -523,23 +524,23 @@ def named_struct_constructor_arguments(constructor_name, expr, fields):
     names = [name for name, _type in fields]
     unknown = sorted(set(named) - set(names))
     if unknown:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} has no field {', '.join(unknown)}"
         )
     duplicates = sorted(set(names[: len(positional)]) & set(named))
     if duplicates:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} initializes more than once: "
             f"{', '.join(duplicates)}"
         )
     arguments = constructor_argument_expressions(expr, fields)
     if arguments is None:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} expects at most {len(fields)} arguments"
         )
     missing = [name for name in names if name not in arguments]
     if missing:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} is missing fields: {', '.join(missing)}"
         )
     return [(arguments[name], field_type) for name, field_type in fields]

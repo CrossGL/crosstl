@@ -90,5 +90,8 @@ def test_conflicting_struct_of_one_name_is_refused(tmp_path, backend):
         "shader StageStruct {\n    struct Pair { int first; int second; int third; }",
     )
 
-    with pytest.raises(ValueError, match="stage-local struct 'Pair'"):
+    with pytest.raises(
+        ValueError,
+        match="the structure 'Pair' is declared twice with different members in the compute stage",
+    ):
         translate(tmp_path, backend, source)

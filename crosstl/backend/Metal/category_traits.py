@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+from crosstl.translator.refusals import MetalSourceRefusal
+
 __all__ = ["CATEGORY_TRAITS", "evaluate_category_trait"]
 
 CATEGORY_TRAITS = frozenset({"is_scalar", "is_vector", "is_arithmetic"})
@@ -72,4 +74,4 @@ def evaluate_category_trait(preprocessor, trait: str, operand: str) -> bool | No
         return category == "vector"
     if trait == "is_arithmetic":
         return category in {"scalar", "vector"}
-    raise ValueError(f"not a category trait: {trait}")
+    raise MetalSourceRefusal(f"not a category trait: {trait}")
