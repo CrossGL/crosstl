@@ -27,12 +27,19 @@ NAMES = {
     ir.LANGUAGE: "CrossGL IR",
 }
 
-WIDTH = 780
+WIDTH = 880
 ROW = 24
 TOP = 58
 BAR_X = 190
 BAR_WIDTH = 340
 BAR_HEIGHT = 12
+# Where a row says how many of its probes ran, past the longest count ("1333 of 1497, 24 untested").
+EXECUTION_X = 770
+# The two lines of the legend under the rows.
+LEGEND = (
+    "Score = supported / (supported + refused + wrong), per generated probe validated by the reference tool.",
+    "Executed compute probes also ran on the GPU or Mesa's software drivers; a compile-only language has no runtime.",
+)
 
 STYLE = """\
 text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif;font-size:13px}
@@ -69,6 +76,16 @@ def _counts(row: dict) -> str:
     return f"{text}, {untested} untested" if untested else text
 
 
+def execution(row: dict) -> str:
+    """Whether a row's probes ran: ``<n> executed``, ``compile-only`` when its language has no runtime, or nothing
+    for the CrossGL IR row and for a report measured without running any probe."""
+    if row.get("executes") is False:
+        return "compile-only"
+    if "executed" in row:
+        return f"{row['executed']} executed"
+    return ""
+
+
 def _bar(row: dict, y: float) -> list[str]:
     top = y - BAR_HEIGHT + 2
     parts = [
@@ -84,12 +101,15 @@ def _bar(row: dict, y: float) -> list[str]:
         )
     parts.append(svg_text(BAR_X + BAR_WIDTH + 10, y, percent(row), "t"))
     parts.append(svg_text(BAR_X + BAR_WIDTH + 70, y, _counts(row), "m"))
+    if execution(row):
+        parts.append(svg_text(EXECUTION_X, y, execution(row), "m"))
     return parts
 
 
 def _summary(rows: list[dict]) -> str:
     return "; ".join(
         f"{name(r['language'])} {'' if r['language'] == ir.LANGUAGE else r['direction'] + ' '}{percent(r)}"
+        + (f", {execution(r)}" if r.get("offered") and execution(r) else "")
         for r in rows
     )
 
@@ -102,7 +122,8 @@ def render(report: dict) -> str:
         TOP
         + ROW * (len(rows) + len(expressiveness))
         + (14 if expressiveness else 0)
-        + 34
+        + 18 * len(LEGEND)
+        + 16
     )
     stamp = f"{report['commit'][:7] or 'uncommitted'} · {report['date'][:10]}"
     body = [
@@ -129,15 +150,10 @@ def render(report: dict) -> str:
             body.append(svg_text(100, y, "expressive", "m"))
             body += _bar(row, y)
             y += ROW
-    body.append(
-        svg_text(
-            20,
-            height - 14,
-            "Score = supported / (supported + refused + wrong), per generated probe "
-            "validated by the reference tool.",
-            "m",
+    for index, line in enumerate(LEGEND):
+        body.append(
+            svg_text(20, height - 14 - 18 * (len(LEGEND) - 1 - index), line, "m")
         )
-    )
     title = "CrossTL coverage per language and direction"
     return "\n".join(
         [

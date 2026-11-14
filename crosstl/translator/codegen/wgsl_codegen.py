@@ -131,6 +131,7 @@ from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
     MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
+    is_abstract_integer_literal,
     mixed_integer_call_is_unsigned,
     mixed_integer_call_type,
     unsigned_bitwise_operand_types,
@@ -4115,13 +4116,27 @@ class WGSLCodeGen(
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
             if not mixed_integer_call_is_unsigned(self, node.arguments):
                 # An unsigned mixed call already has its scalars written as vecN<u32>.
-                args = self.replicate_scalar_call_arguments(node.arguments, args)
+                args = self.convert_integer_call_arguments(
+                    normalized_name, node.arguments, args
+                )
+                args = self.replicate_scalar_call_arguments(
+                    node.arguments,
+                    args,
+                    self.float_call_component(normalized_name, node.arguments),
+                )
             return f"{normalized_name}({args[0]}, {args[1]})"
         if normalized_name in {"step", "smoothstep"} and not (
             self.is_user_function_name(function_name)
         ):
             args = [self.generate_expression(arg) for arg in node.arguments]
-            args = self.replicate_scalar_call_arguments(node.arguments, args)
+            args = self.convert_integer_call_arguments(
+                normalized_name, node.arguments, args
+            )
+            args = self.replicate_scalar_call_arguments(
+                node.arguments,
+                args,
+                self.float_call_component(normalized_name, node.arguments),
+            )
             return f"{normalized_name}({', '.join(args)})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
@@ -4225,9 +4240,30 @@ class WGSLCodeGen(
             )
             if dispatch_call is not None:
                 return dispatch_call
-        args = self.generate_call_arguments(
-            function_name, node.arguments, function=resolved_function
-        )
+        if (
+            resolved_function is None
+            and (
+                function_name in self.FLOAT_ARGUMENT_BUILTINS
+                or function_name in self.FLOAT_ONLY_BUILTINS
+            )
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            args = [self.generate_expression(arg) for arg in node.arguments]
+            args = self.convert_integer_call_arguments(
+                function_name, node.arguments, args
+            )
+            args = ", ".join(
+                self.replicate_scalar_call_arguments(
+                    node.arguments,
+                    args,
+                    self.float_call_component(function_name, node.arguments),
+                )
+            )
+        else:
+            args = self.generate_call_arguments(
+                function_name, node.arguments, function=resolved_function
+            )
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name)
         if (
             function_name == "atan"
@@ -4641,8 +4677,11 @@ class WGSLCodeGen(
                 "WGSL target supports mod() calls with exactly 2 arguments; got "
                 f"{len(node.arguments)}"
             )
-        left = self.generate_expression(node.arguments[0])
-        right = self.generate_expression(node.arguments[1])
+        left, right = self.convert_integer_call_arguments(
+            "mod",
+            node.arguments,
+            [self.generate_expression(arg) for arg in node.arguments],
+        )
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
 
     def generate_fmod_call(self, node):
@@ -4704,6 +4743,68 @@ class WGSLCodeGen(
             "mix",
             "step",
             "smoothstep",
+            "fma",
+        }
+    )
+    # GLSL math built-ins declared for floating-point arguments (min, max and clamp
+    # also for integers), whose int or uint argument GLSL converts to float when
+    # another argument is floating point (GLSL 4.60 sections 4.1.10, 6.1, 8.1-8.5).
+    FLOAT_ARGUMENT_BUILTINS = frozenset(
+        {
+            "min",
+            "max",
+            "clamp",
+            "mix",
+            "step",
+            "smoothstep",
+            "pow",
+            "atan",
+            "mod",
+            "distance",
+            "fma",
+        }
+    )
+    # GLSL math built-ins declared only for floating-point arguments, whose int or
+    # uint argument GLSL converts to float even when no argument is floating point
+    # (GLSL 4.60 sections 8.1-8.5). min, max, clamp, mix, abs and sign also have
+    # integer overloads and are not listed.
+    FLOAT_ONLY_BUILTINS = frozenset(
+        {
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "floor",
+            "ceil",
+            "fract",
+            "round",
+            "roundEven",
+            "trunc",
+            "mod",
+            "step",
+            "smoothstep",
+            "fma",
+            "length",
+            "distance",
+            "dot",
+            "normalize",
         }
     )
     VECTOR_COMPONENT_NAMES = "xyzw"
@@ -4912,13 +5013,36 @@ class WGSLCodeGen(
         value_expr = self.generate_expression(node.arguments[0])
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
-        if vector_type_name is None or mixed_integer_call_is_unsigned(
-            self, node.arguments
+        float_component = self.float_call_component("clamp", node.arguments)
+        if float_component is None and (
+            vector_type_name is None
+            or mixed_integer_call_is_unsigned(self, node.arguments)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
             return f"clamp({', '.join(args)})"
-        lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
-        upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
+        if vector_type_name is None:
+            # A float argument picks the float overload, so each integer argument converts to
+            # float from its own value; through the mixed-integer u32 form a negative int
+            # would wrap first.
+            args = self.convert_integer_call_arguments(
+                "clamp",
+                node.arguments,
+                [self.generate_expression(argument) for argument in node.arguments],
+            )
+            return f"clamp({', '.join(args)})"
+        if float_component is not None:
+            vector_type_name = (
+                f"vec{self.vector_component_count(value_type)}<{float_component}>"
+            )
+        # generate_clamp_bound replicates a scalar bound, converted or not.
+        value_expr, lower, upper = self.convert_integer_call_arguments(
+            "clamp",
+            node.arguments,
+            [value_expr]
+            + [self.generate_expression(bound) for bound in node.arguments[1:]],
+        )
+        lower = self.generate_clamp_bound(node.arguments[1], vector_type_name, lower)
+        upper = self.generate_clamp_bound(node.arguments[2], vector_type_name, upper)
         return f"clamp({value_expr}, {lower}, {upper})"
 
     def generate_boolean_mix_call(self, node):
@@ -4992,7 +5116,9 @@ class WGSLCodeGen(
             return self.vector_component_count(self.expression_type(expr.arguments[0]))
         return None
 
-    def replicate_scalar_call_arguments(self, arguments, rendered):
+    def replicate_scalar_call_arguments(
+        self, arguments, rendered, component_override=None
+    ):
         """Replicate the scalar arguments of a min, max, step or smoothstep call beside a vector.
 
         GLSL has min(genType, float), max(genType, float), step(float, genType)
@@ -5000,7 +5126,9 @@ class WGSLCodeGen(
         declares them with one type T for every argument, so a scalar is written
         as the vector type of the other arguments, as clamp's bounds are. Only a
         scalar of the vector's component type or a literal is replicated; a
-        scalar of another type is left as written.
+        scalar of another type is left as written. ``component_override`` is the
+        float type of a call whose integer arguments convert_integer_call_arguments
+        converted; those scalars are replicated too.
         """
         argument_types = [self.expression_type(arg) for arg in arguments]
         vector_shape = next(
@@ -5014,21 +5142,107 @@ class WGSLCodeGen(
         if vector_shape is None:
             return list(rendered)
         component, size = vector_shape
+        if component_override is not None:
+            component = component_override
         replicated = []
         for arg, arg_type, text in zip(arguments, argument_types, rendered):
             literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
             if self.vector_shape(arg_type) is None and (
                 isinstance(literal, LiteralNode)
                 or self.scalar_type_name(arg_type) == component
+                or (
+                    component_override is not None
+                    and self.scalar_type_name(arg_type) in {"i32", "u32"}
+                )
             ):
                 text = f"vec{size}<{component}>({text})"
             replicated.append(text)
         return replicated
 
+    def float_call_component(self, function_name, arguments):
+        """The float type an int or uint argument of a float built-in call is converted to.
+
+        Returns ``f32`` or ``f16`` when an argument other than an abstract integer
+        literal is an integer and either ``function_name`` is one of
+        FLOAT_ARGUMENT_BUILTINS and another argument is floating point, or
+        ``function_name`` is one of FLOAT_ONLY_BUILTINS (``f32`` when no argument is
+        floating point). Else None.
+        """
+        float_only = function_name in self.FLOAT_ONLY_BUILTINS
+        if function_name not in self.FLOAT_ARGUMENT_BUILTINS and not float_only:
+            return None
+        components = [
+            self.call_argument_component(arg, arg_type)
+            for arg, arg_type in zip(
+                arguments, (self.expression_type(arg) for arg in arguments)
+            )
+        ]
+        if not {"i32", "u32"} & set(components):
+            return None
+        float_component = next((c for c in components if c in {"f32", "f16"}), None)
+        if float_component is None and float_only:
+            return "f32"
+        return float_component
+
+    def call_argument_component(self, arg, arg_type):
+        """Scalar or vector component type of a call argument; None for an integer literal."""
+        literal = arg
+        while isinstance(literal, UnaryOpNode) and literal.operator in {"-", "+"}:
+            literal = literal.operand
+        if is_abstract_integer_literal(literal):
+            return None
+        shape = self.vector_shape(arg_type)
+        return shape[0] if shape is not None else self.scalar_type_name(arg_type)
+
+    def convert_integer_call_arguments(self, function_name, arguments, rendered):
+        """Convert the int and uint arguments of a float built-in call to the float type.
+
+        GLSL picks the float overload of max(float, int) and converts the int
+        argument (GLSL 4.60 sections 4.1.10 and 6.1). WGSL has no implicit
+        conversions and its built-ins take arguments of one type, so the argument
+        is written as f32(k), or vecN<f32>(iv) for an ivecN. A converted scalar
+        beside a vector is replicated afterwards, by replicate_scalar_call_arguments
+        or generate_clamp_bound. Integer literals are abstract in WGSL and are
+        left as written.
+        """
+        rendered = list(rendered)
+        float_component = self.float_call_component(function_name, arguments)
+        if float_component is None:
+            return rendered
+        for index, arg in enumerate(arguments):
+            arg_type = self.expression_type(arg)
+            if self.call_argument_component(arg, arg_type) not in {"i32", "u32"}:
+                continue
+            shape = self.vector_shape(arg_type)
+            target = (
+                float_component
+                if shape is None
+                else f"vec{shape[1]}<{float_component}>"
+            )
+            rendered[index] = f"{target}({rendered[index]})"
+        return rendered
+
     def builtin_math_call_type(self, function_name, arguments):
         """Return the result type of a GLSL math built-in call, or None if unknown."""
         if not arguments or self.is_user_function_name(function_name):
             return None
+        float_component = self.float_call_component(function_name, arguments)
+        if float_component is not None:
+            # The int and uint arguments are converted (convert_integer_call_arguments).
+            if function_name in self.COMPONENT_RESULT_BUILTINS:
+                return float_component
+            size = next(
+                (
+                    shape[1]
+                    for shape in (
+                        self.vector_shape(self.expression_type(arg))
+                        for arg in arguments
+                    )
+                    if shape is not None
+                ),
+                None,
+            )
+            return float_component if size is None else f"vec{size}<{float_component}>"
         if function_name in self.COMPONENT_RESULT_BUILTINS:
             argument_type = self.expression_type(arguments[0])
             return self.vector_component_type(argument_type) or self.scalar_type_name(
@@ -5045,8 +5259,9 @@ class WGSLCodeGen(
                 return argument_types[0]
         return None
 
-    def generate_clamp_bound(self, bound, vector_type_name):
-        rendered = self.generate_expression(bound)
+    def generate_clamp_bound(self, bound, vector_type_name, rendered=None):
+        if rendered is None:
+            rendered = self.generate_expression(bound)
         if self.vector_component_count(self.expression_type(bound)) is not None:
             return rendered
         return f"{vector_type_name}({rendered})"
@@ -8147,8 +8362,10 @@ class WGSLCodeGen(
                 function_name in {"min", "max", "clamp"}
                 and not self.is_user_function_name(function_name)
                 and mixed_integer_call_is_unsigned(self, expr.arguments)
+                and self.float_call_component(function_name, expr.arguments) is None
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
+                # A float argument picks the float overload instead (generate_clamp_call).
                 return mixed_integer_call_type(self, expr.arguments)
             math_call_type = self.builtin_math_call_type(function_name, expr.arguments)
             if math_call_type is not None:

@@ -16,9 +16,10 @@ CI measures this chart on every push to `main` and nightly. Every feature in a p
 generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result.
 Compute probes also run, on the GPU or on Mesa's software drivers, where the translation must compute what the
 native probe computes: Metal, GLSL and SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
-reference compilers produce. A translation must also keep the built-ins and decorations, such as `flat` or the subgroup
-size, that the feature needs in the SPIR-V its compiler produces, or in the AIR for Metal. The score is supported /
-(supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+reference compilers produce. The chart gives each row the number of probes that ran, and marks CUDA, HIP, OpenCL C,
+Mojo and WebGL compile-only. A translation must also keep the built-ins and decorations, such as `flat` or the
+subgroup size, that the feature needs in the SPIR-V its compiler produces, or in the AIR for Metal. The score is
+supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 lists every gap behind each bar.
 
 ## Install

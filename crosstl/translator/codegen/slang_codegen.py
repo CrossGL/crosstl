@@ -50,6 +50,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..host_workgroup_size import function_entry_execution_config
 from ..matrix_shape import matrix_type_spelling
 from ..refusals import SlangRefusal
 from ..renames import renamed
@@ -227,6 +228,7 @@ from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_n
 from .slang_workgroup_locals import slang_workgroup_local_prefix
 from .slang_workgroup_size import SlangWorkgroupSizeConstants
 from .stage_utils import (
+    function_stage_name,
     is_fragment_output_parameter,
     normalize_stage_name,
 )
@@ -2034,7 +2036,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             stage_name = self.get_function_stage(function)
             if stage_name:
                 result += f"// {stage_name.title()} Shader\n"
-                result += self.generate_function(function, shader_type=stage_name)
+                result += self.generate_function(
+                    function,
+                    shader_type=stage_name,
+                    execution_config=function_entry_execution_config(function),
+                )
                 result += "\n\n"
             else:
                 result += self.generate_function(function) + "\n\n"
@@ -2152,13 +2158,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         return str(stage_type).split(".")[-1].lower()
 
     def get_function_stage(self, function):
-        if hasattr(function, "qualifiers") and function.qualifiers:
-            qualifier = function.qualifiers[0]
-        else:
-            qualifier = getattr(function, "qualifier", None)
-
-        if qualifier in {"vertex", "fragment", "compute"}:
-            return qualifier
+        """The stage a top-level entry declares, as a qualifier or as an ``@ compute``-style attribute."""
+        stage_name = function_stage_name(function)
+        if stage_name in {"vertex", "fragment", "compute"}:
+            return stage_name
         return None
 
     def slang_shader_stage_name(self, stage_name):

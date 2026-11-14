@@ -41,18 +41,35 @@ def cell(text: str) -> str:
     return line.replace("|", "\\|").replace("`", "'")
 
 
+def _executed_cell(row: dict) -> str:
+    """How many of a row's probes ran and on which runtimes, ``compile-only`` when its language has none, ``not run``
+    when the report was measured without running probes, and nothing for the CrossGL IR row, whose outcomes come
+    from the output rows."""
+    if row["language"] == ir.LANGUAGE:
+        return ""
+    if row.get("executes") is False:
+        return "compile-only"
+    if "executed" not in row:
+        return "not run"
+    if row.get("runtime"):
+        return f"{row['executed']} on {row['runtime']}"
+    return str(row["executed"])
+
+
 def _table(report: dict) -> list[str]:
     lines = [
-        "| Language | Direction | Score | Supported | Refused | Wrong | Untested |",
-        "|---|---|---:|---:|---:|---:|---:|",
+        "| Language | Direction | Score | Supported | Refused | Wrong | Untested | Executed |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
     ]
     for row in report["backends"]:
         language, direction = label(row)
         if not row["offered"]:
-            lines.append(f"| {language} | {direction} | not offered | | | | |")
+            lines.append(f"| {language} | {direction} | not offered | | | | | |")
             continue
         counts = " | ".join(str(row["counts"][o]) for o in OUTCOMES)
-        lines.append(f"| {language} | {direction} | {chart.percent(row)} | {counts} |")
+        lines.append(
+            f"| {language} | {direction} | {chart.percent(row)} | {counts} | {_executed_cell(row)} |"
+        )
     lines += [
         "",
         *(
@@ -127,21 +144,16 @@ def _sources(report: dict, repository: str) -> list[str]:
     return lines + ["", f"Reference tools: {tools}."]
 
 
-def _executed(report: dict) -> list[str]:
-    """Which rows also ran their compute probes on a runtime, as a paragraph, or nothing."""
-    rows = [r for r in report["backends"] if r.get("executed")]
-    if not rows:
-        return []
-    ran = "; ".join(
-        f"{' '.join(label(r))}, {r['executed']} probes on {r['runtime']}" for r in rows
-    )
+def _executed() -> list[str]:
+    """What the Executed column of the table counts."""
     return [
-        "Where Core's conformance harness has a runtime for the language, a supported compute probe whose "
-        "translation reads the native probe's input buffers also runs: the two get the same inputs, and a "
-        "translation that binds other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust "
-        "probes run as the SPIR-V their reference compiler writes for them, and so do GLSL probes that "
-        "llvmpipe's OpenGL rejects. "
-        f"Executed: {ran}.",
+        "The Executed column counts the compute probes that also ran on a runtime of Core's conformance harness, "
+        "on the GPU or on Mesa's software drivers. A supported compute probe whose translation reads the native "
+        "probe's input buffers runs next to the native probe on the same inputs, and a translation that binds "
+        "other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust probes run as the SPIR-V "
+        "their reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. The "
+        "harness has no runtime for the language of a compile-only row, so the reference tool alone decides its "
+        "score; 0 means that no supported probe of the row could run.",
         "",
     ]
 
@@ -295,7 +307,7 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "CrossGL probe translates correctly to at least one language that has it, or to valid SPIR-V that lowers "
         "to the same semantic feature.",
         "",
-        *_executed(report),
+        *_executed(),
         *_table(report),
         "",
         "## Trend",

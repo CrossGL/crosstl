@@ -6,6 +6,10 @@ from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..import_refusals import CudaImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
+from ..no_contraction import (
+    PRECISE_FUNCTION_ATTRIBUTE,
+    function_requires_no_contraction,
+)
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -4235,6 +4239,8 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
                 params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
+            if function_requires_no_contraction(node):
+                self.emit(PRECISE_FUNCTION_ATTRIBUTE)
             self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
@@ -4288,6 +4294,8 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
                 self.emit(f"// CUDA grid constant parameter: {param.name}")
 
         self.emit("@compute")
+        if function_requires_no_contraction(kernel):
+            self.emit(PRECISE_FUNCTION_ATTRIBUTE)
         self.emit(
             kernel_workgroup_size_attribute(self.threadgroup_size, whole_groups=True)
         )
