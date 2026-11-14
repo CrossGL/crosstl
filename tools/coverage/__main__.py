@@ -180,7 +180,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
-    data = report.build(results, languages, directions)
+    data = report.build(results, languages, directions, execute=args.execute)
     report.write(data, args.output)
     print(report.summary(data))
     if args.feature:

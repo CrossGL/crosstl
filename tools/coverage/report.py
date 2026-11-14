@@ -13,7 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import ir, lowering, upstream, validators
+from . import execution, ir, lowering, upstream, validators
 from .features import metal
 from .model import DIRECTIONS, OUTCOMES, Result, Score
 
@@ -63,8 +63,34 @@ def _sources(languages: list[str]) -> dict[str, dict[str, str]]:
     return dict(sorted(sources.items()))
 
 
-def build(results: list[Result], languages: list[str], directions: list[str]) -> dict:
-    """Group ``results`` by language and direction and score each group."""
+def _execution(language: str, group: list[Result], execute: bool) -> dict:
+    """What a row records about running its probes.
+
+    ``executes`` says whether the conformance harness has a runtime for the language at all; a row without one is
+    compile-only. ``executed`` counts the probes that ran, 0 included, once ``execute`` asked for them to run, and
+    ``runtime`` names the runtimes they ran on.
+    """
+    runtimes = sorted({r.runtime for r in group if r.runtime})
+    executed = sum(1 for r in group if r.runtime)
+    executes = execution.runs(language)
+    return {
+        "executes": executes,
+        **({"executed": executed} if executed or (execute and executes) else {}),
+        **({"runtime": ", ".join(runtimes)} if runtimes else {}),
+    }
+
+
+def build(
+    results: list[Result],
+    languages: list[str],
+    directions: list[str],
+    execute: bool = False,
+) -> dict:
+    """Group ``results`` by language and direction and score each group.
+
+    ``execute`` says that the executable probes of ``results`` were run, so a row records how many of them ran even
+    when none did.
+    """
     backends = []
     for language in languages:
         for direction in directions:
@@ -91,21 +117,13 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
             score = Score()
             for item in group:
                 score.add(item.outcome)
-            executed = [r.runtime for r in group if r.runtime]
             backends.append(
                 {
                     "language": language,
                     "direction": direction,
                     "offered": True,
                     "validator": validators.TOOLS[language],
-                    **(
-                        {
-                            "runtime": ", ".join(sorted(set(executed))),
-                            "executed": len(executed),
-                        }
-                        if executed
-                        else {}
-                    ),
+                    **_execution(language, group, execute),
                     "score": None if score.percent is None else round(score.percent, 1),
                     "counts": score.counts,
                     "features": [
