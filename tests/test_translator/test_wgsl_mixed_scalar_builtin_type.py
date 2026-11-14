@@ -1,6 +1,7 @@
 """WGSL output types an untyped mixed-type scalar built-in call by its converted type (#4508)."""
 
 import textwrap
+
 import crosstl
 
 PROGRAM = textwrap.dedent("""
