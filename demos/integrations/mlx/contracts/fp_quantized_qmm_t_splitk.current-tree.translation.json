@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fp-quantized-qmm-t-splitk-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "sourceSha256": "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425",
+    "headers": {
+      "mlx/backend/metal/kernels/fp_quantized.h": "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f",
+      "mlx/backend/metal/kernels/fp4.h": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/quantized_utils.h": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a",
+      "mlx/backend/metal/kernels/steel/gemm/gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
+      "mlx/backend/metal/kernels/steel/gemm/loader.h": "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e",
+      "mlx/backend/metal/kernels/steel/gemm/mma.h": "9b37709de40c3acaa5411875e52c8d26e6de093261741f671fbdab9c39a852b7",
+      "mlx/backend/metal/kernels/steel/gemm/transforms.h": "73487e29beab5af9478bc931c49b5e8d66937c2fa2651499867f47ac5529afc2"
+    },
+    "hostSource": {
+      "path": "mlx/backend/metal/quantized.cpp",
+      "sha256": "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "nvfp4_qmm_t_splitk_float_gs_16_b_4_alN_true",
+    "nvfp4_qmm_t_splitk_float_gs_16_b_4_alN_false",
+    "mxfp8_qmm_t_splitk_float_gs_32_b_8_alN_true",
+    "mxfp8_qmm_t_splitk_float_gs_32_b_8_alN_false",
+    "mxfp4_qmm_t_splitk_float_gs_32_b_4_alN_true",
+    "mxfp4_qmm_t_splitk_float_gs_32_b_4_alN_false",
+    "nvfp4_qmm_t_splitk_bfloat16_t_gs_16_b_4_alN_true",
+    "nvfp4_qmm_t_splitk_bfloat16_t_gs_16_b_4_alN_false",
+    "mxfp8_qmm_t_splitk_bfloat16_t_gs_32_b_8_alN_true",
+    "mxfp8_qmm_t_splitk_bfloat16_t_gs_32_b_8_alN_false",
+    "mxfp4_qmm_t_splitk_bfloat16_t_gs_32_b_4_alN_true",
+    "mxfp4_qmm_t_splitk_bfloat16_t_gs_32_b_4_alN_false",
+    "nvfp4_qmm_t_splitk_float16_t_gs_16_b_4_alN_true",
+    "nvfp4_qmm_t_splitk_float16_t_gs_16_b_4_alN_false",
+    "mxfp8_qmm_t_splitk_float16_t_gs_32_b_8_alN_true",
+    "mxfp8_qmm_t_splitk_float16_t_gs_32_b_8_alN_false",
+    "mxfp4_qmm_t_splitk_float16_t_gs_32_b_4_alN_true",
+    "mxfp4_qmm_t_splitk_float16_t_gs_32_b_4_alN_false"
+  ],
+  "artifacts": {
+    "nvfp4_qmm_t_splitk_float_gs_16_b_4_alN_true": {"metal": "21efebd2b5a320916aa2a5c171a9338d91da838b8a9c584246a9efc4830f7657:39682", "opengl": "22ad5819a875a0a80073540e01038d68a9b1819749ecd841fe590308d6cd6aab:116924", "directx": "f9591f4f5d8a24d5024e8b9c66d39fd3bd52f3cbb1fb670297458118110372da:86893"},
+    "nvfp4_qmm_t_splitk_float_gs_16_b_4_alN_false": {"metal": "99a21e8c2cb5686c114e95bedb30c84bf0f3fadcffeee9fafed9a566aee4013c:39707", "opengl": "76eecc2afd090bfbe1777f3999c807954ef590d74ee3702fec27629939aa2731:125332", "directx": "115ac5c621a069457d9628a62396bf20ca30ac9c847a223a1a22a349909e0b38:89003"},
+    "mxfp8_qmm_t_splitk_float_gs_32_b_8_alN_true": {"metal": "7fdbf81382d0ad68ec62d2998f8379c24fef9372eb383cc3575d60ed134fb314:38362", "opengl": "f44adabc802d13ba6c5b83e27d23927cf158de2659e5233d89553f393c7efabd:100890", "directx": "04ff5893c0bb4963a71570162cd5ef1bcaf653ffd90d7fd0bf936ac7d8767fd5:84429"},
+    "mxfp8_qmm_t_splitk_float_gs_32_b_8_alN_false": {"metal": "d63e9f12c0652ae564560a0dba80df1f51d059c8303a3c912083e74102706814:38387", "opengl": "9e346b65e9b6ee8c99ddaf660cc2f9d63ba169cbc2b4091dd7ef5a6bb940cfa5:110068", "directx": "f03cbe57ef939ac19d687972d695fe9213fba42452e09e5ddf2d959fc6dfc6a1:86539"},
+    "mxfp4_qmm_t_splitk_float_gs_32_b_4_alN_true": {"metal": "4657de4f38d85d5e0c3c837da1457fe58f1642cae74a8b889f25847c35c44031:38354", "opengl": "17c5f1f88d7a123c3668240c171d1f82660854d026f01d7f75e7dfc3c4d2943d:102144", "directx": "baf4d97eed6193a17ab2b3fdd40139402c949efb7fc9b9c9755cab14ffda97d6:84603"},
+    "mxfp4_qmm_t_splitk_float_gs_32_b_4_alN_false": {"metal": "5bb78f1e80f52587aaf1150dd82fe5698fad9e3322cda6d4f4c4146efc1af980:38379", "opengl": "7f2b77bf0dc85876bf0cc8ed16680fa5fa0e799c0f32b65ce0a6188b83593e59:111322", "directx": "db6b0cff1ab90779a055ed8634984f26431e3f0e12c38178b5bd0c302855e12d:86713"},
+    "nvfp4_qmm_t_splitk_bfloat16_t_gs_16_b_4_alN_true": {"metal": "7b64c243a4d336f27d3f0607a8d476e88904a15f8ec1bd2ff1cbf55d3669d884:40521", "opengl": "d5b65f08db603062f07c05f2b022fbb4e08e6e3bf2369211a4446d12453171b1:118720", "directx": "0dfba3f11d7c45739b7376eefbc5321938b263df7378ad8abdc6ec20a4ee9c87:90671"},
+    "nvfp4_qmm_t_splitk_bfloat16_t_gs_16_b_4_alN_false": {"metal": "252eb026b28864680947f06c01e7d0ad52b791e6b31ea41a3d4a61dee5098e6f:40546", "opengl": "917882c0609ee9f357b132ad60d3202aa0f51350146350ae700f27568557b211:127219", "directx": "6a4105cddbe49f2b65af75cfb3c617f0e8b390dad681c4925923f956b349ab28:92841"},
+    "mxfp8_qmm_t_splitk_bfloat16_t_gs_32_b_8_alN_true": {"metal": "476158d1634ce971fa8746b3f2862dd043bcf2beabb522e4fdb8403d28c0976f:39160", "opengl": "ca06298672efd2dd6a0edec868ce194b726c2f6db8a33f6dc145a852909118a5:102527", "directx": "4d20a68f6ddc35e4e2ae9127168f4345cb7ddf7b80691c8108757907f2f3fd57:88121"},
+    "mxfp8_qmm_t_splitk_bfloat16_t_gs_32_b_8_alN_false": {"metal": "d0bd7067deb09920f2505ef0106e11c74c7e12f2c759038c481585940b299d47:39185", "opengl": "5277caed4ab38034f6904f9ac8676f2cb4d286eae7b83ce2435dc9411c9d69a5:111808", "directx": "4e339adbc044c2be86d62e531ec4161d59856f965e820b5d335091689fa2aa62:90291"},
+    "mxfp4_qmm_t_splitk_bfloat16_t_gs_32_b_4_alN_true": {"metal": "579d0841e6ba183684c1a2d6763425dfa3a18cf6a24b471f3865612345de8881:39153", "opengl": "1ad0551c1ce2c670a0f84801c1a6633fc66d1a36ba12d5cd6bc58b24e0d91824:103819", "directx": "d1a1ee009e883bdac97ca816ffb36d99bbea816a44e14424276e69a5a9cc844f:88329"},
+    "mxfp4_qmm_t_splitk_bfloat16_t_gs_32_b_4_alN_false": {"metal": "97b4e3abd22dfb74f27dce84dd75c12635cafd45d66ec9ac25dd419f922a2c32:39178", "opengl": "185396ef6a0a793ee5ae10bad22e4a97975704aa8ccb3b58726757eae9e6639a:113100", "directx": "232a17b637b4fb9febd58713d6d118bc84a64efa8f5e9f74f9088dd6d26c3ad4:90499"},
+    "nvfp4_qmm_t_splitk_float16_t_gs_16_b_4_alN_true": {"metal": "d8f6f1b98649812ceb27e2a43601defd4d1c7e64e5699bb85c33b90590989382:40238", "opengl": "5398f98ae7f2fd32188313a1f649c312656947c3492b81e5682487cd616560f9:118061", "directx": "ff1f366b816abd6cfada59903589243afc010cd8a766810dc32fd56581f097ae:89414"},
+    "nvfp4_qmm_t_splitk_float16_t_gs_16_b_4_alN_false": {"metal": "4cbe57e6c5f02dc51d49e05c70b9482fbe5e22dda1783383464f9b815e2f4df4:40263", "opengl": "cd736d3d4b032c3d4a377c6fc9100d4a7876680fb7b126a1fc82bdc585b146e9:126540", "directx": "1416199acbbe034dd0467e665e0a2645d542233a8199b947f058ba849da0e57e:91572"},
+    "mxfp8_qmm_t_splitk_float16_t_gs_32_b_8_alN_true": {"metal": "d12af85676c90c32c048a4b02d4d1822a8f751c3e0b2601fba16c7ece23855dc:38887", "opengl": "46d22d1a75576c141784b8c429d3880dfe4e54ec29d53908c198f159f12d17c6:101909", "directx": "d342c83c7feef5686d5f410549d857409d1c1bd35f63b74341e74c5542afb78e:86881"},
+    "mxfp8_qmm_t_splitk_float16_t_gs_32_b_8_alN_false": {"metal": "21e31f609852d5ccc7982ce080cdb1d8e96a634feba882e258dabfd812a60ecd:38912", "opengl": "b9737c4f9a5e1a3eb0347a215fc97ce3b4de3b908d08c89116732bb4449a4003:111166", "directx": "b5f00374197c9848a4dfd8f0b03952ff8219655f27b09d1939830a3a0f950ad8:89039"},
+    "mxfp4_qmm_t_splitk_float16_t_gs_32_b_4_alN_true": {"metal": "0b88ee32a45256f230ee32d276b7f1ae9000e9ebfd681abc97f6bbfd4d9bb941:38878", "opengl": "f9e751d8af865f3dbabc650544d7b3a3b886a2ddaa1fe65bbfab2dba4571164a:103194", "directx": "f0ef24e6a303db5c313ae1024db19cc7b688d742fd0c9f5a2cb427018388777c:87080"},
+    "mxfp4_qmm_t_splitk_float16_t_gs_32_b_4_alN_false": {"metal": "4e516717b1839c555003cc5c4dc928f1ac4573a4ba3b4ba81247faa9367dc10b:38903", "opengl": "3ff5c85926bf7f51e110d100c8417646ad5537ed5ec9f89c28639bd0b87f1ffb:112451", "directx": "11ab410de16229de0498a865125e4540f346d50fbe5a1974e0ad302cb0bc7ba7:89238"}
+  },
+  "validationContract": {
+    "model": "fp_qmm_t_impl tile by tile per partition after fp_qmm_t_splitk's partition offsets: the BlockLoader and fp QuantizedBlockLoader blocks over k_partition_size columns with their safe loads, one scale per thread's eight codes stepped by 32 / group_size per block, BlockMMA's float32 fragment products and the whole or safe stores into the partition's slice, against direct dequantized partial dot products",
+    "packing": "least-significant-bit-first code stream per weight row",
+    "weights": "N rows of K codes, quantized along K",
+    "comparison": "exact words",
+    "workgroupSize": [
+      32,
+      2,
+      2
+    ],
+    "grid": "(ceil(N / 32), ceil(M / 32), split_k)",
+    "tile": {
+      "BM": 32,
+      "BN": 32,
+      "BK": 32,
+      "WM": 2,
+      "WN": 2
+    },
+    "split": "qmm_splitk's split_k: 512 over the output tiles, at most K / max(group_size, 32), lowered until split_k * max(group_size, 32) divides K; k_partition_size = K / split_k, whole blocks of 32 codes, and split_k_partition_stride = M * N",
+    "routing": "unbatched products with transposed weights, M at or above get_qmv_batch_limit's largest limit and split_k > 1, on every device; alN_true exactly when N is a multiple of 32",
+    "cases": {
+      "alN_true": {
+        "halves": {
+          "M": 40,
+          "N": 64,
+          "K": 64,
+          "splitK": 2
+        },
+        "thirds": {
+          "M": 33,
+          "N": 96,
+          "K": 96,
+          "splitK": 3
+        },
+        "deep": {
+          "M": 33,
+          "N": 32,
+          "K": 256,
+          "splitK": 4
+        }
+      },
+      "alN_false": {
+        "halves": {
+          "M": 40,
+          "N": 40,
+          "K": 64,
+          "splitK": 2
+        },
+        "thirds": {
+          "M": 33,
+          "N": 72,
+          "K": 96,
+          "splitK": 3
+        },
+        "deep": {
+          "M": 33,
+          "N": 8,
+          "K": 256,
+          "splitK": 4
+        }
+      }
+    },
+    "deepHostShape": {
+      "M": 33,
+      "N": 2048,
+      "K": 256
+    },
+    "inputs": "x in quarters of [-1, 1]; every E2M1 code; E4M3 codes of either sign with exponent fields 0 to 9; nvfp4 scales E4M3 with exponent fields 5 to 8, mx scales E8M0 bytes 124 to 128",
+    "exactness": "every dequantized weight is exact in the element type and every product a multiple of 2^-f whose magnitudes sum below 2^(24 - f) per partition; only each partition's final static_cast<T> rounds, to nearest even",
+    "intermediate": "the (split_k, M, N) partial sums the kernel writes, before qmm_splitk's strided sum reduction",
+    "guards": {
+      "count": 8,
+      "sentinel": -3.25
+    },
+    "softwareSubgroups": {
+      "width": 32,
+      "directxShuffleOutOfRange": "self"
+    },
+    "cooperativeMatrices": "DirectX and OpenGL lower simdgroup_matrix to software fragments with BaseMMAFrag::get_coord's tile_4x4_row_pair lane mapping",
+    "workgroupAccessAssertions": "the activation BlockLoader's dst stays within the slots load_unsafe writes",
+    "openglIndexRangeAssertions": "buffer element and weight and scale byte indices fit GLSL's 32-bit indices; tile indices stay within the BM x BK slots",
+    "metadataPreconditions": {
+      "K": [
+        0,
+        2147483584
+      ],
+      "k_partition_size": [
+        0,
+        2147483584
+      ]
+    },
+    "upstreamBuffers": 9,
+    "metalUpstreamComparison": "unchanged fp_quantized.metal, word for word"
+  },
+  "scope": {
+    "instantiatedEntryCount": 518,
+    "coveredEntryCount": 18,
+    "quantizeGateEntryCount": 36,
+    "qmvGateEntryCount": 54,
+    "qmvFastGateEntryCount": 66,
+    "qvmGateEntryCount": 54,
+    "qmvQuadGateEntryCount": 36,
+    "qmvWideGateEntryCount": 72,
+    "qvmSplitKGateEntryCount": 18,
+    "qmmTGateEntryCount": 38,
+    "qmmNGateEntryCount": 36,
+    "excludedEntries": {
+      "kernels": [
+        "fp_gather_qmm_n",
+        "fp_gather_qmm_t",
+        "fp_gather_qmm_rhs"
+      ],
+      "count": 90,
+      "reason": "the gather matrix-matrix kernels are not gated yet"
+    },
+    "runtimeCoveredEntryCount": 18,
+    "artifactCountByTarget": 18,
+    "dispatchCountByTarget": 54,
+    "checkedElementCountByTarget": 272520,
+    "ciShardCount": 2,
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

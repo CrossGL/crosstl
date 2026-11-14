@@ -2183,9 +2183,40 @@ one group per block, drop or unmask the last pass, ignore a tile offset,
 transpose the weight tile, store whole tiles or ignore the batch offsets are
 rejected. Every target must match the model word for word and leave the
 guards untouched; on Metal the translation must also match the unchanged
-upstream kernel. The other matrix-matrix kernels are not gated yet. This
-covers 36/17,832 entries; it does not run the upstream MLX test suite or
-redirect the MLX host runtime.
+upstream kernel. This covers 36/17,832 entries; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmm_t_splitk.current-tree.translation.json` pins a
+further 18 entries of `fp_quantized.metal` and their 54 artifacts:
+`fp_qmm_t_splitk` with aligned and unaligned `N` for the three element types
+in `nvfp4`, `mxfp8` and `mxfp4`. `QuantizedMatmul` sends an unbatched
+product with transposed weights and `M` at or above the vector limit to
+`qmm_splitk`, which splits `K` into `split_k` partitions of whole 32-code
+blocks (512 over the output tiles, at most `K / 32`, lowered until it divides
+`K / 32`) and, for `split_k > 1`, dispatches `fp_qmm_t_splitk` over
+`(32, 2, 2)` threadgroups and a `(ceil(N / 32), ceil(M / 32), split_k)` grid
+into a `(split_k, M, N)` intermediate that a strided sum then folds. The
+kernel moves the activations, weight bytes and scales to its partition's
+first column and `y` to its partition's slice, then runs `fp_qmm_t_impl`
+without a global scale over `k_partition_size` columns while its rows keep
+the stride `K`. The entries run in the `fp-quantized-qmm-0` and
+`fp-quantized-qmm-1` legs beside `fp_qmm_t`, with its options, `K` and
+`k_partition_size` bounded, and the `fp_qmv` gate's inputs. The cases split
+`K` into two and three partitions of one block and four of two blocks, as
+`qmm_splitk` splits a 33 by 2,048 by 256 product, and reach whole and partial
+row and column tiles. A tile-level model replays `fp_qmm_t_impl` per
+partition, must reach each partition's direct dequantized partial dot
+products and store every intermediate element once, and must read no weight
+or scale past a row. Besides `fp_qmm_t`'s mutations that apply, mutated
+models that keep the activations, weight bytes or scales on the first
+partition, run every partition over all of `K` or place the partitions `N`
+outputs apart are rejected. Every target must match the model word for word
+and leave the guards untouched; on Metal the translation must also match the
+unchanged upstream kernel. The gather matrix-matrix kernels are not gated
+yet. This covers 18/17,832 entries; it does not run the upstream MLX test
+suite or redirect the MLX host runtime. The strided sum that folds the
+partitions is `reduce.metal`'s, which `contracts/reduce.current-tree.translation.json`
+pins.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with

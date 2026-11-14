@@ -335,11 +335,14 @@ def _target_options(info):
     return options
 
 
-def fp_qmm_config(directory, target, entry, info, access_assertions, index_items):
+def fp_qmm_config(
+    directory, target, entry, info, access_assertions, index_items, bounded=("K",)
+):
     """One fp qmm entry's translation with its loader and index assertions.
 
     ``index_items`` are ``_opengl_index_items``-shaped and asserted on
-    OpenGL only; ``access_assertions`` apply off Metal.
+    OpenGL only; ``access_assertions`` apply off Metal. Each ``bounded``
+    scalar parameter lies in ``[0, K_LIMIT]``.
     """
     index_assertions = ()
     if target == "opengl":
@@ -368,10 +371,11 @@ def fp_qmm_config(directory, target, entry, info, access_assertions, index_items
             dict(
                 source=SOURCE,
                 entryPoint=entry,
-                parameter="K",
+                parameter=parameter,
                 minimum=0,
                 maximum=K_LIMIT,
             )
+            for parameter in bounded
         ],
         source_options={
             "metal": {

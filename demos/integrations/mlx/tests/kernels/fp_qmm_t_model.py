@@ -111,6 +111,16 @@ def _loaders(context, wl, scales, mutation):
     return loaders
 
 
+def _narrow(context, value):
+    """``value`` in the element type; a mutated model's overflow is infinite."""
+    try:
+        return _to_type(context["dtype"], value)
+    except OverflowError:
+        if context["strict"]:
+            raise
+        return math.copysign(math.inf, value)
+
+
 def _weights(context, byte, scale, mutation, exact):
     """dequantize<T, bits>: static_cast<T>(scale * Dequantize<bits, float>)."""
     bits = context["bits"]
@@ -123,7 +133,7 @@ def _weights(context, byte, scale, mutation, exact):
     weights = []
     for code in codes:
         value = _f32(scale * _code_value(bits, code))
-        weight = _to_type(context["dtype"], value)
+        weight = _narrow(context, value)
         if context["strict"]:
             assert math.isfinite(weight), (byte, scale)
             if exact:
@@ -154,7 +164,7 @@ def _load_w(context, state, loaders, columns, first_column, tiles, mutation):
             scale_byte = 0
         # float(dequantize_scale<T, group_size>(*scales)) * inv_scale_enc.
         scale = _scale_value(context["mode"], scale_byte)
-        narrowed = _to_type(context["dtype"], scale)
+        narrowed = _narrow(context, scale)
         if context["strict"] and not over:
             assert narrowed == scale, scale_byte
         scale = _f32(narrowed * inverse)
@@ -285,11 +295,14 @@ def _offsets(info, extra):
     return offsets
 
 
-def simulate(info, data, families, mutation=None):
+def simulate(info, data, families, mutation=None, offsets=None, tile=None):
     """The kernel tile by tile; returns outputs, stores, reads and paths.
 
     ``overreads`` holds the weight words and scales the tail reads past each
-    row, which the in-row ``reads`` leave out.
+    row, which the in-row ``reads`` leave out. ``offsets`` replaces
+    adjust_matrix_offsets as ``quantized_qmm_t_model.simulate`` takes it, and
+    ``tile(run, context, bases, tid_x, tid_y, mutation)`` wraps
+    ``fp_qmm_t_impl``'s threadgroup ``run``.
     """
     storage = {name: values for name, (_, values) in data["values"].items()}
     extra = {"overreads": {"w": set(), "scales": set()}, "strides": set()}
@@ -299,13 +312,16 @@ def simulate(info, data, families, mutation=None):
         "mode": info["mode"],
         "globalScale": info["globalScale"],
     }
+    run_tile = functools.partial(_tile, state)
+    if tile is not None:
+        run_tile = functools.partial(tile, run_tile)
     run = base.simulate(
         info,
         data,
         families,
         mutation,
-        tile=functools.partial(_tile, state),
-        offsets=_offsets(info, extra),
+        tile=run_tile,
+        offsets=offsets or _offsets(info, extra),
     )
     if "strides" in run["records"]:
         run["records"]["strides"] = set(extra["strides"])
