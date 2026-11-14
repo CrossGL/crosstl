@@ -2589,7 +2589,9 @@ class TestCudaCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
-    def test_cuda_device_graph_launch_runtime_conversion(self):
+    def test_cuda_device_graph_launch_is_refused(self):
+        # A kernel cannot launch a graph on any CrossGL target, so the launch and its status must not become a
+        # comment and cudaSuccess.
         code = """
         __global__ void launchDeviceGraphs(cudaGraphExec_t child) {
             cudaGraphExec_t current = cudaGetCurrentGraphExec();
@@ -2601,38 +2603,16 @@ class TestCudaCodeGen:
             );
             tail = cudaGetCurrentGraphExec();
             err = cudaGraphLaunch(tail, cudaStreamGraphTailLaunch);
-            err = cudaGraphLaunch(
-                cudaGetCurrentGraphExec(),
-                cudaStreamGraphFireAndForgetAsSibling
-            );
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert "// CUDA device graph get current exec" in result
-        assert "var current: cudaGraphExec_t = 0;" in result
-        assert "tail = 0;" in result
-        assert (
-            "// CUDA graph device launch: exec: child, mode: fire-and-forget" in result
-        )
-        assert "// CUDA graph device launch: exec: tail, mode: tail" in result
-        assert (
-            "// CUDA graph device launch: "
-            "exec: (/* CUDA device graph get current exec */ 0), "
-            "mode: fire-and-forget sibling"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
-        assert "cudaGetCurrentGraphExec(" not in result
-        assert "cudaGraphLaunch(" not in result
+        assert "runtime call cudaGetCurrentGraphExec() in device code" in message
+        assert "runtime call cudaGraphLaunch() in device code" in message
 
-    def test_cuda_device_graph_kernel_node_update_runtime_conversion(self):
+    def test_cuda_device_graph_kernel_node_update_is_refused(self):
         code = """
         __device__ void updateDeviceGraphKernelNode(
             cudaGraphDeviceNode_t node,
@@ -2645,40 +2625,19 @@ class TestCudaCodeGen:
             err = cudaGraphKernelNodeUpdatesApply(updates, 2);
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert (
-            "// CUDA device graph kernel node set enabled: " "node: node, enabled: true"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set grid dim: "
-            "node: node, grid dim: vec3<u32>(2, 3, 4)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set param: "
-            "node: node, offset: 16, value: (&value), bytes: sizeof(value)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node updates apply: "
-            "updates: updates, count: 2"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
         for function_name in [
             "cudaGraphKernelNodeSetEnabled",
             "cudaGraphKernelNodeSetGridDim",
             "cudaGraphKernelNodeSetParam",
             "cudaGraphKernelNodeUpdatesApply",
         ]:
-            assert f"{function_name}(" not in result
+            assert f"runtime call {function_name}() in device code" in message
 
-    def test_cuda_graph_conditional_runtime_conversion(self):
+    def test_cuda_device_graph_set_conditional_is_refused(self):
         code = """
         __device__ void setConditional(
             cudaGraphConditionalHandle handle,
@@ -2686,7 +2645,15 @@ class TestCudaCodeGen:
         ) {
             cudaGraphSetConditional(handle, value);
         }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "runtime call cudaGraphSetConditional() in device code" in message
+
+    def test_cuda_graph_conditional_runtime_conversion(self):
+        code = """
         void buildConditionalGraph(
             cudaGraph_t graph,
             cudaGraphNode_t* deps,
@@ -2742,7 +2709,6 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "// CUDA graph set conditional: handle: handle, value: value" in result
         assert (
             "// CUDA graph conditional handle create: output: handle, "
             "graph: graph, default launch value: 1u, "
@@ -2765,7 +2731,6 @@ class TestCudaCodeGen:
         assert "var err: cudaError_t = cudaSuccess;" in result
         assert "err = cudaSuccess;" in result
         for function_name in [
-            "cudaGraphSetConditional",
             "cudaGraphConditionalHandleCreate",
             "cudaGraphConditionalHandleCreate_v2",
             "cudaGraphAddNode",

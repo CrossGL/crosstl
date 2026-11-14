@@ -5880,6 +5880,66 @@
       "outcome": "preserved",
       "sourceSHA256": "eb8d1a29c6d9c1d1f5d5747a9bf640b435822b6979695c12debaaf06c198df1c"
     },
+    "x_warp_sync_memory|cgl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
+    "x_warp_sync_memory|cgl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
+      "outcome": "preserved",
+      "sourceSHA256": "ed5ef55a408cbcb7d7ea665c7d6c19b57af94c043d950e38e758162640984b52"
+    },
     "x_warp_vote|cgl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "fbf0cb5ba4cd9d9512459f66a30bf4af40c1f241d52aad7108e28f3572be988b",
       "outcome": "preserved",

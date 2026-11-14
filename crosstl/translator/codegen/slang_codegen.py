@@ -10447,7 +10447,9 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             "barrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
-            "groupMemoryBarrier": "GroupMemoryBarrier",
+            # groupMemoryBarrier orders buffer, image and shared memory (GLSL 4.60 section 8.16); Slang's
+            # GroupMemoryBarrier orders groupshared memory only, as HLSL's does, so it is AllMemoryBarrier.
+            "groupMemoryBarrier": "AllMemoryBarrier",
             "memoryBarrierShared": "GroupMemoryBarrier",
             "memoryBarrierBuffer": "DeviceMemoryBarrier",
             "deviceMemoryBarrier": "DeviceMemoryBarrier",

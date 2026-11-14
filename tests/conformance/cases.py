@@ -2080,6 +2080,18 @@ CASES = [
         out_count=96 * warp_cases.VOTE_RESULTS,
     ),
     Case(
+        "x_warp_sync_memory",
+        "S29",
+        "CUDA __syncwarp ordering storage-buffer writes and reads between the lanes of a full and a partial warp",
+        "__syncwarp orders the global and shared memory accesses of the lanes it waits for",
+        SMALL[:96],
+        np.int32,
+        warp_cases.sync_memory_reference,
+        threads=96,
+        group=warp_cases.VOTE_GROUP,
+        out_count=96 * warp_cases.SYNC_MEMORY_RESULTS,
+    ),
+    Case(
         "x_buffer_helper_parameters",
         "composite",
         "Helpers that take storage buffers as buffer T name[] parameters",

@@ -3308,7 +3308,10 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "// cooperative_groups thread_block_tile<32> tile32 maps to a tiled "
         "partition of the current workgroup"
     ) in crossgl
-    assert crossgl.count("workgroupBarrier();") == 3
+    # cg::sync(cta) is __syncthreads(), fenced over all memory; cg::sync(tile32) is the warp's __syncwarp().
+    assert crossgl.count("workgroupBarrier();") == 2
+    assert crossgl.count("groupMemoryBarrier();") == 4
+    assert crossgl.count("__syncwarp();") == 1
     assert "var globaltid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "for (var i: i32 = (32 / 2); (i > 0); i >>= 1)" in crossgl
     assert "tmp[gl_LocalInvocationIndex] = beta;" in crossgl

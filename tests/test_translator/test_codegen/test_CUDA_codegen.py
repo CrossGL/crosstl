@@ -1231,7 +1231,9 @@ class TestCudaCodeGen:
         assert "__syncthreads();" in cuda_code
         assert cuda_code.count("__syncthreads();") == 2
         assert cuda_code.count("__threadfence();") == 5
-        assert cuda_code.count("__threadfence_block();") == 2
+        # The groupMemoryBarrier right after barrier() merges into its __syncthreads(), which already orders all
+        # memory for the block; the memoryBarrierShared between device fences stays a block fence.
+        assert cuda_code.count("__threadfence_block();") == 1
         assert "barrier();" not in cuda_code
         assert "groupMemoryBarrier();" not in cuda_code
         assert "memoryBarrier();" not in cuda_code
@@ -1690,8 +1692,9 @@ class TestCudaCodeGen:
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
         assert "__shared__ float tile[32];" in cuda_code
         assert "tile[threadIdx.x] = 0.0f;" in cuda_code
-        assert "__syncthreads();" in cuda_code
-        assert "__threadfence_block();" in cuda_code
+        # memoryBarrierShared right after barrier() adds nothing to __syncthreads() and merges into it.
+        assert cuda_code.count("__syncthreads();") == 1
+        assert "__threadfence_block();" not in cuda_code
         assert "synchronizeTile();" in cuda_code
         assert "__syncthreads(1)" not in cuda_code
         assert "memoryBarrierShared();" not in cuda_code

@@ -3558,9 +3558,10 @@ def test_synchronization_intrinsics_lower_to_slang_barriers():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert generated_code.count("GroupMemoryBarrier();") == 2
+    # groupMemoryBarrier orders buffer and image memory too, which Slang's GroupMemoryBarrier does not.
+    assert generated_code.count("GroupMemoryBarrier();") == 1
     assert generated_code.count("DeviceMemoryBarrier();") == 3
-    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert generated_code.count("AllMemoryBarrier();") == 3
     assert "barrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
     assert "groupMemoryBarrier();" not in generated_code

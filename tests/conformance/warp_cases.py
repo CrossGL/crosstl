@@ -1,4 +1,5 @@
-"""Oracles of the CUDA warp cases (``x_warp_shuffle``, ``x_warp_vote``), written from the CUDA C++ Programming Guide.
+"""Oracles of the CUDA warp cases (``x_warp_shuffle``, ``x_warp_vote``, ``x_warp_sync_memory``), written from the
+CUDA C++ Programming Guide.
 
 A warp is 32 threads of consecutive index. With ``width`` < 32 each group of ``width`` consecutive lanes behaves as
 a separate warp whose logical lanes start at 0 ("Warp Shuffle Functions"):
@@ -110,3 +111,18 @@ def vote_reference(inputs, group=VOTE_GROUP):
                 )
                 out[base + lane] = row + [int(matches)]
     return out.reshape(-1).astype(np.uint32).view(np.int32)
+
+
+SYNC_MEMORY_RESULTS = 2
+
+
+def sync_memory_reference(inputs):
+    """Oracle of ``x_warp_sync_memory``: ``__syncwarp`` makes a lane's global writes visible to its warp.
+
+    Lane ``i`` stores ``3 inp[i] + 7``, then reads its neighbour's (``i ^ 1``, in the same warp) store after the
+    barrier, and keeps its own input in the second slot.
+    """
+    values = inputs.astype(np.int64)
+    lanes = np.arange(values.size)
+    out = np.stack(((values[lanes ^ 1] * 3 + 7), values), axis=1)
+    return out.reshape(-1).astype(np.int32)
