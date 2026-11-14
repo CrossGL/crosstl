@@ -5702,12 +5702,12 @@
     },
     "u_warp_reduce|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "driver-rejected",
+      "outcome": "preserved",
       "sourceSHA256": "f43f483fb153bb05ef02566a6a6a3bb8dcbf3d462ab214b4662a338b0c0c877d"
     },
     "u_warp_reduce|cuda|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "driver-rejected",
+      "outcome": "preserved",
       "sourceSHA256": "f43f483fb153bb05ef02566a6a6a3bb8dcbf3d462ab214b4662a338b0c0c877d"
     },
     "u_warp_reduce|cuda|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
@@ -5737,7 +5737,7 @@
     },
     "u_warp_reduce|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "f43f483fb153bb05ef02566a6a6a3bb8dcbf3d462ab214b4662a338b0c0c877d"
     },
     "u_warp_reduce|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
@@ -5752,7 +5752,7 @@
     },
     "u_warp_reduce|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "f43f483fb153bb05ef02566a6a6a3bb8dcbf3d462ab214b4662a338b0c0c877d"
     },
     "u_warp_reduce|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {

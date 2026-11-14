@@ -2783,7 +2783,7 @@ def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "i32 shfl_sync(i32 var_, i32 srcLane)" in crossgl
-    assert "return WaveReadLaneAt(var_, srcLane);" in crossgl
+    assert "return __shfl_sync(0xffffffffu, var_, srcLane);" in crossgl
     assert "::__shfl_sync" not in crossgl
 
 

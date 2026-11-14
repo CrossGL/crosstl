@@ -1171,8 +1171,9 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "return WaveReadLaneAt(value, lane);" in result
-        assert "cuda warp intrinsic __shfl_sync" not in result
+        # A shuffle keeps CUDA's 32-lane warp semantics in CrossGL; wave operations act on subgroups of another size.
+        assert "return __shfl_sync(0xffffffff, value, lane, 32);" in result
+        assert "WaveReadLaneAt" not in result
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_cuda_calls(self):
         code = """
@@ -1196,17 +1197,14 @@ class TestCudaCodeGen:
         assert "WaveActiveBallot(true).x" in result
         assert "WaveActiveBallot((pred != 0)).x" in result
         assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
-        assert "WaveReadLaneAt(value, lane)" in result
         assert "__ballot_sync(mask, pred)" in result
         assert "not directly supported" not in result
-        assert (
-            "(((WaveGetLaneIndex() + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
-        ) in result
+        # Shuffles stay CUDA calls, which crosstl.translator.semantics.warp emulates or refuses per target.
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_down_sync(0xffffffff, value, 1)" in result
+        assert "WaveReadLaneAt" not in result
         assert "__activemask()" not in result
         assert "__ballot_sync(0xffffffff, pred)" not in result
-        assert "__shfl_sync(0xffffffff, value, lane)" not in result
-        assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
 
     def test_cuda_full_warp_mask_variable_reassignment_clears_vote_lowering(self):
         code = """
@@ -1247,18 +1245,11 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
-        ) in result
-        assert (
-            "((WaveGetLaneIndex() + (delta)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
-        ) in result
-        assert "WaveReadLaneAt(value, (WaveGetLaneIndex() ^ (mask)))" in result
-        assert "cuda warp intrinsic __shfl" not in result
-        assert "__shfl_" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_up_sync(0xffffffff, value, delta)" in result
+        assert "__shfl_down_sync(0xffffffff, value, delta, 32)" in result
+        assert "__shfl_xor_sync(0xffffffff, value, mask, 32)" in result
+        assert "WaveReadLaneAt" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_docs_full_warp_reduce_sync_variants_convert(self):

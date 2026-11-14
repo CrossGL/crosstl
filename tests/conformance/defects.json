@@ -574,7 +574,7 @@
         "m_simd_sum",
         "m_simd_divergent"
       ],
-      "note": "Single-file Metal to HLSL still emits numthreads(1, 1, 1) and CUDA to SPIR-V LocalSize 1 1 1; u_warp_reduce diverges on lavapipe. The project layer supplies host sizes, but a single file has no refusal."
+      "note": "Single-file host-sized kernels now take the host's size from the threadgroup_size source option, or emit specialization constants (SPIR-V, GLSL) or macros (HLSL), and refuse where a size is required. CUDA warp shuffles no longer lower to wave operations, whose subgroup has 4 or 8 lanes on lavapipe: they are emulated per 32-lane warp through workgroup memory (u_warp_reduce is preserved on lavapipe, llvmpipe, MoltenVK, KosmicKrisp and Metal). Remaining: the WARP cells of u_warp_reduce need a fresh Windows run, and m_simd_sum and m_simd_divergent are driver-rejected on llvmpipe GL."
     },
     {
       "id": "S30",

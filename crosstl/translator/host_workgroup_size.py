@@ -37,6 +37,7 @@ __all__ = [
     "has_explicit_workgroup_size",
     "host_workgroup_size_mark",
     "host_workgroup_size_attribute_text",
+    "is_compute_function_entry",
     "normalize_threadgroup_size_option",
     "require_static_workgroup_size",
     "resolve_host_workgroup_sizes",
@@ -91,7 +92,8 @@ _SIZE_DEPENDENT_CALLS = frozenset(
     )
 )
 
-# Subgroup, quad and cooperative-matrix operations act on a partition of the workgroup.
+# Subgroup, quad and cooperative-matrix operations act on a partition of the workgroup, and so do the CUDA warp
+# intrinsics that CrossGL keeps as calls (a warp is 32 consecutive invocations of the block).
 _SIZE_DEPENDENT_CALL_PREFIXES = (
     "wave",
     "quad",
@@ -99,6 +101,14 @@ _SIZE_DEPENDENT_CALL_PREFIXES = (
     "simd",
     "cooperative",
     "coopmat",
+    "__shfl",
+    "__ballot",
+    "__any",
+    "__all",
+    "__reduce_",
+    "__match_",
+    "__syncwarp",
+    "__activemask",
 )
 
 _WORKGROUP_MEMORY_QUALIFIERS = frozenset(
@@ -443,7 +453,7 @@ def _function_stage(function: Any) -> str | None:
     return None
 
 
-def _is_compute_function(function: Any) -> bool:
+def is_compute_function_entry(function: Any) -> bool:
     """Whether a top-level function is a compute entry, as ``@ compute fn`` or a ``compute`` qualifier declares it."""
     return _function_stage(function) == "compute"
 
@@ -472,7 +482,7 @@ def function_entry_execution_config(function: Any) -> dict:
 
 def _resolve_function_entries(shader: Any, render) -> None:
     for function in getattr(shader, "functions", None) or []:
-        if not _is_compute_function(function):
+        if not is_compute_function_entry(function):
             continue
         attributes = list(getattr(function, "attributes", None) or [])
         config: dict = {}

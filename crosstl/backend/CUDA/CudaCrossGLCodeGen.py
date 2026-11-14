@@ -5099,30 +5099,11 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "__shfl_down_sync",
             "__shfl_xor_sync",
         }:
-            if (
-                len(args) not in {3, 4}
-                or not self.is_full_or_active_warp_mask(args[0])
-                or not self.is_full_warp_shuffle_width(args[3:] or None)
-            ):
-                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-            value, lane_or_delta = args[1], args[2]
-            if function_name == "__shfl_sync":
-                return f"WaveReadLaneAt({value}, {lane_or_delta})"
-            if function_name == "__shfl_up_sync":
-                return (
-                    f"((WaveGetLaneIndex() >= ({lane_or_delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane_or_delta}))) "
-                    f": {value})"
-                )
-            if function_name == "__shfl_down_sync":
-                return (
-                    f"(((WaveGetLaneIndex() + ({lane_or_delta})) < 32) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane_or_delta}))) "
-                    f": {value})"
-                )
-            return (
-                f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ ({lane_or_delta})))"
-            )
+            # A shuffle exchanges values within a warp of 32 consecutive threads. Wave operations act on a subgroup
+            # of implementation-defined size and layout, so they computed something else wherever a subgroup is not
+            # exactly such a warp (lavapipe's has 4 or 8 lanes). The shuffle stays a CUDA call:
+            # crosstl.translator.semantics.warp emulates it exactly or refuses it for every other target.
+            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
 
         reduce_map = {
             "__reduce_add_sync": "WaveActiveSum",
