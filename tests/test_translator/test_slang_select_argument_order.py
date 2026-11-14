@@ -30,9 +30,7 @@ def test_scalar_condition_is_reordered():
 
 
 def test_scalar_condition_with_vector_values_is_reordered():
-    generated = generate(
-        "vec3 v = select(vec3(1.0), vec3(2.0), b); output[1] = v.x;"
-    )
+    generated = generate("vec3 v = select(vec3(1.0), vec3(2.0), b); output[1] = v.x;")
     assert "select(float3(1.0), float3(2.0), b)" not in generated
 
 
@@ -57,4 +55,3 @@ def test_user_defined_select_is_unchanged():
     )
     generated = generate("output[1] = select(10.0, 20.0, b);", helper)
     assert "select(10.0, 20.0, b)" in generated
-
