@@ -155,6 +155,15 @@ EXPECTED_REJECTIONS = {
         "WGSL allows workgroup barriers only in uniform control flow (WGSL "
         "section 15.2), and the warp shuffle inside the divergent branch needs one."
     ),
+    (
+        "gpu_computing",
+        "MatrixMultiplication",
+        "mojo",
+    ): (
+        "The Mojo generator emits each compute invocation as its own function "
+        "with no warp, so a warp shuffle has no other lane to read and is "
+        "refused rather than replaced by a one-lane stand-in."
+    ),
 }
 
 
