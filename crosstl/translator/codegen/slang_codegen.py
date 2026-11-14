@@ -7934,6 +7934,26 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             "IgnoreHit": "void",
         }.get(operation)
 
+    def slang_ray_transform_call_type(self, func_name, args):
+        """The matrix type of a DXR transform call such as ``ObjectToWorld3x4()``, or ``None``.
+
+        Slang declares these as HLSL does (DXR spec, "ObjectToWorld3x4"): the unsuffixed names are aliases of the
+        ``3x4`` ones. Knowing the type lets ``ObjectToWorld3x4() * p`` become ``mul(...)`` and an element index on
+        the call swap to Slang's row-first order, as they do on a local of the same type.
+        """
+        if args or not isinstance(func_name, str):
+            return None
+        if func_name in self.user_function_names:
+            return None
+        return {
+            "ObjectToWorld": "float3x4",
+            "ObjectToWorld3x4": "float3x4",
+            "ObjectToWorld4x3": "float4x3",
+            "WorldToObject": "float3x4",
+            "WorldToObject3x4": "float3x4",
+            "WorldToObject4x3": "float4x3",
+        }.get(func_name)
+
     def slang_ray_tracing_expected_target_type(self):
         expected_type = self.type_name_string(self.current_expression_expected_type)
         if not expected_type:
@@ -9623,6 +9643,9 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
+            if ray_transform_type is not None:
+                return ray_transform_type
             if isinstance(func_name, str) and "::" in func_name:
                 enum_name, _variant_name = func_name.split("::", 1)
                 if func_name in self.enum_variant_constructor_fields:
