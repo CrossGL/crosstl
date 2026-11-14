@@ -4709,7 +4709,7 @@ class WGSLCodeGen(
     # Built-ins whose scalar GLSL overloads are floating-point only. Integer
     # arguments are implicitly converted to f32 for these calls.
     FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS = frozenset(
-        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp"}
+        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp", "mix"}
     )
     VECTOR_COMPONENT_NAMES = "xyzw"
 

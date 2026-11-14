@@ -18,6 +18,7 @@ PROGRAM = textwrap.dedent("""
             buffer float data[];
             void main() {
                 float f = data[1];
+                bool b = true;
                 vec3 v = vec3(data[0], data[1], data[2]);
                 %s
             }
@@ -60,6 +61,9 @@ def validate_wgsl_with_naga(tmp_path, code):
         ("atan(1, f)", "f32"),
         ("clamp(1, f, 3.0)", "f32"),
         ("mix(1, f, 0.5)", "f32"),
+        ("mix(1, 2, b)", "i32"),
+        ("mix(U, U, b)", "u32"),
+        ("mix(f, f, b)", "f32"),
         ("step(1, f)", "f32"),
         ("smoothstep(0, 1, f)", "f32"),
         ("max(1, 2u)", "u32"),
