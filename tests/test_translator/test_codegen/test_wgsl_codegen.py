@@ -2833,3 +2833,36 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_converts_int_conditional_branches_to_the_other_type():
+    shader = """
+    shader WGSLSelectIntegerBranch {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 1;
+                uint d = k > 0 ? -3 : 4u;
+                uint e = k > 1 ? k : 5u;
+                float f = k > 2 ? k : 0.5;
+                uvec2 w = k > 3 ? uvec2(1u, 2u) : ivec2(k, -1);
+                uint same = k > 4 ? 6u : 7u;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    # GLSL 4.60 §5.8 converts the int branch to the other branch's type, and
+    # select() requires both operands to match, so the conversion is written
+    # out. An integer literal is typed first: `u32(-3)` is not representable.
+    assert "select(4u, u32(-3i), (k > 0))" in generated
+    assert "select(5u, u32(k), (k > 1))" in generated
+    assert "select(0.5, f32(k), (k > 2))" in generated
+    assert (
+        "select(vec2<u32>(vec2<i32>(k, -1)), vec2<u32>(1u, 2u), (k > 3))" in generated
+    )
+    # Branches that already share a type are left alone.
+    assert "select(7u, 6u, (k > 4))" in generated

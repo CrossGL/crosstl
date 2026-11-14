@@ -2827,6 +2827,90 @@ class WGSLCodeGen:
             return narrowed
         return f"{self.type_name_string(target_type)}({narrowed})"
 
+    def normalized_type_name(self, vtype):
+        try:
+            return self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+
+    def ternary_int_conversion_target(self, branch_type, other_type):
+        """Return the type an `int` ternary branch converts to, or None.
+
+        GLSL 4.60 §5.8 converts an `int` operand of the conditional operator to
+        the other operand's `uint` or `float` type, and §4.1.10 does the same
+        per component for vectors. WGSL has no implicit conversion and `select`
+        requires both operands to share a type, so the conversion has to be
+        written out.
+        """
+        branch_name = self.normalized_type_name(branch_type)
+        other_name = self.normalized_type_name(other_type)
+        branch_shape = self.vector_shape(branch_name)
+        other_shape = self.vector_shape(other_name)
+        if branch_shape is None:
+            if branch_name != "i32" or other_name not in {"u32", "f32"}:
+                return None
+            return other_name
+        if branch_shape[0] != "i32" or other_shape is None:
+            return None
+        if other_shape[1] != branch_shape[1]:
+            return None
+        if other_shape[0] not in {"u32", "f32"}:
+            return None
+        return f"vec{other_shape[1]}<{other_shape[0]}>"
+
+    def ternary_result_type(self, true_type, false_type):
+        true_name = self.normalized_type_name(true_type)
+        false_name = self.normalized_type_name(false_type)
+        if true_name == false_name:
+            return true_name
+        if true_name is None or false_name is None:
+            return true_name or false_name
+        target = self.ternary_int_conversion_target(true_name, false_name)
+        if target is not None:
+            return target
+        target = self.ternary_int_conversion_target(false_name, true_name)
+        if target is not None:
+            return target
+        return true_name
+
+    def is_integer_literal_expression(self, expr):
+        if isinstance(expr, UnaryOpNode) and expr.operator in {"+", "-"}:
+            expr = expr.operand
+        if not isinstance(expr, LiteralNode):
+            return False
+        return self.normalized_type_name(getattr(expr, "literal_type", None)) == "i32"
+
+    def convert_ternary_int_branch(self, rendered, expr, target):
+        # An integer literal is an abstract value in WGSL, and `u32(-3)` is a
+        # shader-creation error because the value is not representable. Typing
+        # the literal first makes the conversion a runtime one, which wraps the
+        # way GLSL's int -> uint conversion does.
+        if self.is_integer_literal_expression(expr):
+            return f"{target}({rendered}i)"
+        return f"{target}({rendered})"
+
+    def generate_ternary_expression(self, expr):
+        true_type = self.expression_type(expr.true_expr)
+        false_type = self.expression_type(expr.false_expr)
+        true_rendered = self.generate_expression(expr.true_expr)
+        false_rendered = self.generate_expression(expr.false_expr)
+        if true_type is not None and false_type is not None:
+            target = self.ternary_int_conversion_target(true_type, false_type)
+            if target is not None:
+                true_rendered = self.convert_ternary_int_branch(
+                    true_rendered, expr.true_expr, target
+                )
+            else:
+                target = self.ternary_int_conversion_target(false_type, true_type)
+                if target is not None:
+                    false_rendered = self.convert_ternary_int_branch(
+                        false_rendered, expr.false_expr, target
+                    )
+        return (
+            f"select({false_rendered}, {true_rendered}, "
+            f"{self.generate_expression(expr.condition)})"
+        )
+
     def generate_expression(self, expr):
         if expr is None:
             return ""
@@ -2873,11 +2957,7 @@ class WGSLCodeGen:
                 return f"{operand} -= 1"
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
-            return (
-                f"select({self.generate_expression(expr.false_expr)}, "
-                f"{self.generate_expression(expr.true_expr)}, "
-                f"{self.generate_expression(expr.condition)})"
-            )
+            return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
@@ -5406,6 +5486,15 @@ class WGSLCodeGen:
             return self._struct_member_types.get((struct_name, expr.member))
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
+        if isinstance(expr, TernaryOpNode):
+            return self.ternary_result_type(
+                self.expression_type(expr.true_expr),
+                self.expression_type(expr.false_expr),
+            )
+        if isinstance(expr, UnaryOpNode):
+            if expr.operator == "!":
+                return "bool"
+            return self.expression_type(expr.operand)
         if isinstance(expr, FunctionCallNode):
             function_name = self.expression_name(expr.function)
             option_call_type = self.builtin_option_call_type(expr, function_name)
