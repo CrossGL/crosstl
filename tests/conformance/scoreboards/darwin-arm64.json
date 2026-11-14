@@ -5450,6 +5450,66 @@
       "outcome": "diverged",
       "sourceSHA256": "f43f483fb153bb05ef02566a6a6a3bb8dcbf3d462ab214b4662a338b0c0c877d"
     },
+    "x_bfloat16_arithmetic|cgl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "compiled-only",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "compiled-only",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
     "x_warp_shuffle|cgl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
       "outcome": "preserved",
@@ -5512,13 +5572,13 @@
     }
   },
   "counts": {
-    "compiled-only": 194,
+    "compiled-only": 196,
     "diverged": 96,
     "driver-rejected": 8,
     "interface-changed": 4,
     "invalid": 12,
     "observed": 40,
-    "preserved": 732,
+    "preserved": 742,
     "refused": 16
   },
   "keys": [

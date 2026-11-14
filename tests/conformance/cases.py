@@ -17,6 +17,7 @@ import numpy as np
 
 from . import (
     array_argument_cases,
+    bfloat16_cases,
     constants_cases,
     control_flow_cases,
     conversion_cases,
@@ -2014,6 +2015,18 @@ CASES = [
         np.int32,
         o_buffer_helper_parameters,
         threads=128,
+    ),
+    Case(
+        "x_bfloat16_arithmetic",
+        "S13",
+        "bfloat16 x * y, x + y and x - y, read as float and assigned to a float",
+        "MSL bfloat and CUDA __nv_bfloat16 operators round each result to bfloat16, ties to even",
+        bfloat16_cases.inputs(),
+        np.float32,
+        bfloat16_cases.reference,
+        threads=256,
+        out_count=256 * bfloat16_cases.RESULTS,
+        compare="bits",
     ),
     Case(
         "x_array_list_assignment",

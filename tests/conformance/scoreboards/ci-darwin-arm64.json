@@ -1420,6 +1420,16 @@
       "outcome": "refused",
       "sourceSHA256": "61746300aaa6edb6dd2092a5f661fbe9416a2a6796073ea9cfbdc25fb2728ea7"
     },
+    "x_bfloat16_arithmetic|cgl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
+    "x_bfloat16_arithmetic|cgl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "3951182f57774f0b331f536a25573480a0b4838c087efba1e2e2021968ade69d",
+      "outcome": "preserved",
+      "sourceSHA256": "52c2bd86d47ba7e74cf8237334d54dbe2b05eefa23ab0f845c78808f553e57eb"
+    },
     "x_buffer_helper_parameters|cgl|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
       "outcome": "preserved",
@@ -2585,7 +2595,7 @@
     "diverged": 8,
     "interface-changed": 4,
     "observed": 25,
-    "preserved": 468,
+    "preserved": 470,
     "refused": 8
   },
   "keys": [
