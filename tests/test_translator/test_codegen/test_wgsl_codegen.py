@@ -340,6 +340,74 @@ def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
+    # GLSL converts an int or uint argument of a float built-in to float in
+    # overload resolution (GLSL 4.60 sections 4.1.10 and 6.1); WGSL has no
+    # implicit conversions (#4503).
+    shader = """
+    shader Probe {
+        buffer float* fo;
+        buffer int* io;
+        buffer uint* uo;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float f = fo[0];
+                vec2 v = vec2(fo[1], fo[2]);
+                int k = io[0];
+                uint u = uo[0];
+                float a = max(f, k);
+                float b = min(k, f);
+                float c = max(f, u);
+                vec2 d = clamp(v, k, 2.0);
+                float e = clamp(f, k, 1.0);
+                float g = step(k, f);
+                float h = smoothstep(k, f, f);
+                float i = mix(f, k, 0.5);
+                vec2 j = mix(v, v, k);
+                float l = pow(f, k);
+                float m = atan(f, k);
+                float n = mod(f, k);
+                float o = distance(f, k);
+                float p = fma(f, k, 1.0);
+                vec2 q = max(v, k);
+                float r = max(k, f);
+                float s = max(f, 1);
+                int t = max(k, 1);
+                fo[3] = a + b + c + d.x + e + g + h + i + j.x + l + m + n + o + p + q.x + r + s + t;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: f32 = max(f, f32(k));" in generated
+    assert "var b: f32 = min(f32(k), f);" in generated
+    assert "var c: f32 = max(f, f32(u));" in generated
+    assert (
+        "var d: vec2<f32> = clamp(v, vec2<f32>(f32(k)), vec2<f32>(2.0));"
+        in generated
+    )
+    assert "var e: f32 = clamp(f, f32(k), 1.0);" in generated
+    assert "var g: f32 = step(f32(k), f);" in generated
+    assert "var h: f32 = smoothstep(f32(k), f, f);" in generated
+    assert "var i: f32 = mix(f, f32(k), 0.5);" in generated
+    assert "var j: vec2<f32> = mix(v, v, vec2<f32>(f32(k)));" in generated
+    assert "var l: f32 = pow(f, f32(k));" in generated
+    assert "var m: f32 = atan2(f, f32(k));" in generated
+    assert "var n: f32 = ((f) - ((f32(k)) * floor((f) / (f32(k)))));" in generated
+    assert "var o: f32 = distance(f, f32(k));" in generated
+    assert "var p: f32 = fma(f, f32(k), 1.0);" in generated
+    assert "var q: vec2<f32> = max(v, vec2<f32>(f32(k)));" in generated
+    # The result type of max(k, f) is float, not the type of its first argument.
+    assert "var r: f32 = max(f32(k), f);" in generated
+    # An abstract integer literal needs no conversion, and an integer call keeps its type.
+    assert "var s: f32 = max(f, 1);" in generated
+    assert "var t: i32 = max(k, 1);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
