@@ -1,0 +1,1 @@
+WGSL output converts an `int` branch of a conditional to the other branch's `uint` or `float` type, scalar or vector, as GLSL does. It used to pass both branches to `select()` unconverted, which naga rejects (#4512).

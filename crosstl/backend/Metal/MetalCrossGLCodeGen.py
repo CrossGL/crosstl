@@ -90,6 +90,7 @@ from .dependent_builtins import (
 )
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
+from .floating_point import contraction_directive_requires_precise
 from .generic_call_return_types import (
     deduced_call_return_type,
     expression_call_return_type,
@@ -3670,7 +3671,17 @@ class MetalToCrossGLConverter(
         self.prepare_metal_source_overload_transport(ast)
         self.prepare_metal_atomic_fence_transport_constants(ast)
         code = ""
-        includes = getattr(ast, "includes", []) or []
+        # Contraction and reassociation directives are carried as @precise functions (floating_point.py).
+        self.no_contraction_scope = bool(getattr(ast, "no_contraction", False))
+        includes = [
+            inc
+            for inc in getattr(ast, "includes", []) or []
+            if not (
+                isinstance(inc, PreprocessorNode)
+                and str(inc.directive).strip() == "#pragma"
+                and contraction_directive_requires_precise(str(inc.content)) is not None
+            )
+        ]
         for inc in includes:
             if isinstance(inc, PreprocessorNode):
                 line = f"{inc.directive} {inc.content}".strip()
@@ -10195,6 +10206,8 @@ class MetalToCrossGLConverter(
             specialization = explicit_specialization_annotation(self, func)
             if specialization is not None:
                 linkage_annotations.append(specialization)
+        if getattr(self, "no_contraction_scope", False):
+            linkage_annotations.append("@precise")
         code += "    " * indent
         implicit_buffer_bindings = (
             self.apply_implicit_stage_entry_buffer_bindings(func) if stage_entry else []

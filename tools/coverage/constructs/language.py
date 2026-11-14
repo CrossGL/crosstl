@@ -338,4 +338,6 @@ TYPES = (
     # A local that holds the address of a buffer element, and pointers moved by offsets.
     c("type", "pointer-local", "OpAccessChain", "OpStore"),
     c("type", "pointer-arithmetic", "OpPtrAccessChain"),
+    # A program-scope variable in device memory with an initializer, shared by every invocation.
+    c("type", "device-global", "StorageClass.CrossWorkgroup"),
 )

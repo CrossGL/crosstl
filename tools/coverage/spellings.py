@@ -430,7 +430,11 @@ COUNTERPARTS["metal"].update(
 # built-in value. A ``gl_`` name is a built-in value (GLSL 4.60 section 3.7 reserves the prefix), which the probe reads
 # instead of calling, with a ``{}`` for each argument that indexes it.
 OTHER_NAMES = {
+    # HLSL's and Slang's select take the condition first, select(c, t, f), where CrossGL's, like Metal's, takes it
+    # last: select(f, t, c). The HLSL importer reorders the arguments, and the HLSL generator orders them back.
+    "hlsl": {"select": "select({2}, {1}, {0})"},
     "slang": {
+        "select": "select({2}, {1}, {0})",
         # Slang's WavePrefixMax, WavePrefixMin and bitwise prefix operations are exclusive scans, as its
         # WavePrefixSum and HLSL's are; CrossGL names those that HLSL lacks after the GLSL scan.
         "WavePrefixMax": "WavePrefixExclusiveMax",

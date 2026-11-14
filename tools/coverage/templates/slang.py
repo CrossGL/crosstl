@@ -13,6 +13,7 @@ from . import (
     fragments,
     interfaces,
     interlocks,
+    memory,
     meshes,
     pipeline,
     pointers,
@@ -66,6 +67,7 @@ SLANG = {
     **specializations.SLANG,
     **qualifiers.SLANG,
     **pointers.SLANG,
+    **memory.ELSEWHERE,
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
     # The stage attribute goes on the entry point, after the output struct.
