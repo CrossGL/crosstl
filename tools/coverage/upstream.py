@@ -52,6 +52,13 @@ SOURCES = {
         "95c602702118f5aabba3a5e8569abfca9865d4c86e02a210021eed16b5dd6bc5",
         "GLSL 4.60 specification, chapter 8 (built-in functions)",
     ),
+    "glsl-subgroup": Source(
+        "KhronosGroup/GLSL",
+        "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+        "extensions/khr/GL_KHR_shader_subgroup.txt",
+        "fc653cfd7e9392e3a42824ebddb7edbd19678fae974b0a925969d4c4a191d2d8",
+        "GL_KHR_shader_subgroup (section 8.18, shader invocation group functions)",
+    ),
     # HIP is pinned to the versions Ubuntu 24.04 packages (hipcc 5.7.1 on clang 17.0.6), the compiler the probes are
     # validated with, so the list names exactly what that compiler's headers define.
     "hip": Source(

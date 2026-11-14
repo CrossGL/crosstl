@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import constructs, execution
+from . import constructs, execution, lanes
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import (
@@ -432,9 +432,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     atomic = any(p.direction == "inout" for p in signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
+    extra = {"prelude": dialect.enable(feature.extension)} if feature.extension else {}
     if feature.stage == "fragment":
         source = dialect.fragment(
-            buffers, body, declarations=declarations, inputs=builder.inputs
+            buffers, body, declarations=declarations, inputs=builder.inputs, **extra
         )
         return Probe(
             language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
@@ -458,5 +459,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
             traced=builder.traced,
         )
         return Probe(language, source, dialect.entry, dialect.suffix)
-    source = dialect.kernel(buffers, body, declarations=declarations)
+    if lanes.cooperative(feature):
+        extra["lanes"] = execution.THREADS
+        if lanes.divergent(feature):
+            body = dialect.active(body, lanes.SKIPPED)
+    source = dialect.kernel(buffers, body, declarations=declarations, **extra)
     return Probe(language, source, dialect.entry, dialect.suffix)

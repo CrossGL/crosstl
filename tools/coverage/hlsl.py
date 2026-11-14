@@ -21,7 +21,8 @@ class HLSL(Dialect):
     language = "hlsl"
     suffix = ".hlsl"
     rows_first = True
-    entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
+    # ``{lanes}`` is the workgroup size (:meth:`.Dialect.kernel`).
+    entry_attributes: tuple[str, ...] = ("[numthreads({lanes}, 1, 1)]",)
     fragment_attributes: tuple[str, ...] = ()
     # The validators compile with 16-bit types enabled, so ``half`` is a 16-bit float (HLSL shader model 6.2).
     wide_integers = True
@@ -76,7 +77,7 @@ class HLSL(Dialect):
         params = ", ".join(["uint3 id : SV_DispatchThreadID", *parts.get("params", ())])
         lines = [
             *self._globals(buffers, parts),
-            *self.entry_attributes,
+            *(a.format(lanes=parts.get("lanes", 1)) for a in self.entry_attributes),
             f"void main({params}) {{",
             "    uint i = id.x;",
         ]
@@ -272,7 +273,7 @@ class Slang(HLSL):
     language = "slang"
     suffix = ".slang"
     string = "String"
-    entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
+    entry_attributes = ('[shader("compute")]', "[numthreads({lanes}, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
     stage_attributes = {
         "geometry": ('[shader("geometry")]',),

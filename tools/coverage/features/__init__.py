@@ -8,6 +8,7 @@ from ..upstream import fetch
 from . import (
     cuda,
     glsl,
+    glsl_subgroup,
     hip,
     hlsl,
     metal,
@@ -34,7 +35,9 @@ def _cuda(offline: bool) -> list[Feature]:
 
 
 def _glsl(offline: bool) -> list[Feature]:
-    return glsl.parse(fetch("glsl", offline=offline))
+    return glsl.parse(fetch("glsl", offline=offline)) + glsl_subgroup.parse(
+        fetch("glsl-subgroup", offline=offline)
+    )
 
 
 def _hip(offline: bool) -> list[Feature]:
@@ -109,7 +112,9 @@ def _slang(offline: bool) -> list[Feature]:
 def _spirv(offline: bool) -> list[Feature]:
     glsl_text = fetch("glsl", offline=offline)
     return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
-        fetch("spirv-core", offline=offline), glsl_text
+        fetch("spirv-core", offline=offline),
+        glsl_text,
+        fetch("glsl-subgroup", offline=offline),
     )
 
 
