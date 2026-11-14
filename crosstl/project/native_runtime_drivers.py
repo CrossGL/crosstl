@@ -2086,13 +2086,31 @@ class VulkanComputeRuntime:
         return self.load_artifact(None, None, request.module_path)
 
     def _create_instance(self, vk: Any) -> Any:
+        enumerate_version = getattr(vk, "vkEnumerateInstanceVersion", None)
+        if callable(enumerate_version):
+            try:
+                loader_version = enumerate_version()
+                loader_minor = (loader_version >> 12) & 0x3FF
+            except Exception:
+                loader_minor = 0
+        else:
+            loader_minor = 0
+        if loader_minor >= 1:
+            make_version = getattr(vk, "VK_MAKE_VERSION", None)
+            if callable(make_version):
+                requested_api_version = make_version(1, 1, 0)
+            else:
+                requested_api_version = (1 << 22) | (1 << 12)
+        else:
+            requested_api_version = vk.VK_API_VERSION_1_0
+        self._instance_api_version = requested_api_version
         application_info = vk.VkApplicationInfo(
             sType=vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             pApplicationName=self.application_name,
             applicationVersion=1,
             pEngineName="CrossTL",
             engineVersion=1,
-            apiVersion=getattr(vk, "VK_API_VERSION_1_1", vk.VK_API_VERSION_1_0),
+            apiVersion=requested_api_version,
         )
         options: dict[str, Any] = {}
         instance_extensions = self._instance_extension_names(vk)
@@ -2207,6 +2225,16 @@ class _VulkanDispatchContext:
         # Keep the properties alive: cffi frees it, and its nested limits, once unreferenced.
         properties = vk.vkGetPhysicalDeviceProperties(self.physical_device)
         limits = properties.limits
+        device_api_version = getattr(properties, "apiVersion", None)
+        if isinstance(device_api_version, int) and device_api_version > 0:
+            self._effective_api_version = min(
+                getattr(self.runtime, "_instance_api_version", vk.VK_API_VERSION_1_0),
+                device_api_version,
+            )
+        else:
+            self._effective_api_version = getattr(
+                self.runtime, "_instance_api_version", vk.VK_API_VERSION_1_0
+            )
         _validate_dispatch_limits(
             self.workgroup_count,
             self.workgroup_size,
@@ -2241,6 +2269,8 @@ class _VulkanDispatchContext:
 
     def _create_shader_module(self) -> None:
         vk = self.vk
+        api_ver = getattr(self, "_effective_api_version", vk.VK_API_VERSION_1_0)
+        _validate_vulkan_spirv_module_version(self.shader_code, api_ver)
         create_info = vk.VkShaderModuleCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             codeSize=len(self.shader_code),
@@ -2511,6 +2541,58 @@ def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
         destroy(handle, None)
     else:
         destroy(owner, handle, None)
+
+
+# SPIR-V module version helpers (used by _create_shader_module to enforce
+# the SPIR-V version accepted by the active Vulkan device before submitting).
+_SPIRV_MAGIC_LE = b"\x03\x02\x23\x07"
+
+
+def _spirv_module_version(code: bytes) -> "tuple[int, int] | None":
+    if len(code) < 8 or len(code) % 4:
+        return None
+    if code[:4] == _SPIRV_MAGIC_LE:
+        word = struct.unpack_from("<I", code, 4)[0]
+    elif code[:4] == _SPIRV_MAGIC_LE[::-1]:
+        word = struct.unpack_from(">I", code, 4)[0]
+    else:
+        return None
+    return (word >> 16) & 0xFF, (word >> 8) & 0xFF
+
+
+def _vulkan_spirv_ceiling(api_version: int) -> "tuple[int, int]":
+    maj = (api_version >> 22) & 0x7F
+    min_ = (api_version >> 12) & 0x3FF
+    if maj > 1 or min_ >= 3:
+        return 1, 6
+    if min_ >= 2:
+        return 1, 5
+    if min_ >= 1:
+        return 1, 3
+    return 1, 0
+
+
+def _validate_vulkan_spirv_module_version(code: bytes, api_version: int) -> None:
+    ver = _spirv_module_version(code)
+    if ver is None:
+        return
+    ceil = _vulkan_spirv_ceiling(api_version)
+    if ver <= ceil:
+        return
+    vk_maj = (api_version >> 22) & 0x7F
+    vk_min = (api_version >> 12) & 0x3FF
+    raise RuntimeAdapterSetupError(
+        f"SPIR-V module {ver[0]}.{ver[1]} rejected: "
+        f"Vulkan {vk_maj}.{vk_min} accepts up to SPIR-V {ceil[0]}.{ceil[1]}.",
+        details={
+            "target": "vulkan",
+            "runtime": VulkanComputeRuntime.name,
+            "reasonKind": "spirv-version-incompatible",
+            "spirvModuleVersion": f"{ver[0]}.{ver[1]}",
+            "maxAcceptedSpirvVersion": f"{ceil[0]}.{ceil[1]}",
+            "vulkanApiVersion": f"{vk_maj}.{vk_min}",
+        },
+    )
 
 
 def _first_vulkan_handle(handles: Any) -> Any:
