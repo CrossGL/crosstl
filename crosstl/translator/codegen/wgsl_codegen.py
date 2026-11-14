@@ -4107,7 +4107,16 @@ class WGSLCodeGen(
             and not self.is_user_function_name(function_name)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            if not mixed_integer_call_is_unsigned(self, node.arguments):
+                # An unsigned mixed call already has its scalars written as vecN<u32>.
+                args = self.replicate_scalar_call_arguments(node.arguments, args)
             return f"{normalized_name}({args[0]}, {args[1]})"
+        if normalized_name in {"step", "smoothstep"} and not (
+            self.is_user_function_name(function_name)
+        ):
+            args = [self.generate_expression(arg) for arg in node.arguments]
+            args = self.replicate_scalar_call_arguments(node.arguments, args)
+            return f"{normalized_name}({', '.join(args)})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
@@ -4646,6 +4655,51 @@ class WGSLCodeGen(
     # and no matrixCompMult or outerProduct built-in (WGSL sections 8.7, 17.5), so
     # these build the result one column at a time.
     COLUMNWISE_MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
+    # Built-ins that reduce a vector to its component type (GLSL 4.60 section 8.5).
+    COMPONENT_RESULT_BUILTINS = frozenset({"length", "distance", "dot"})
+    # Component-wise built-ins whose result has the type of their vector argument,
+    # or of their first argument when all are scalars (GLSL 4.60 sections 8.1-8.3, 8.5).
+    COMPONENTWISE_MATH_BUILTINS = frozenset(
+        {
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "trunc",
+            "round",
+            "roundEven",
+            "fract",
+            "mod",
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "normalize",
+            "min",
+            "max",
+            "clamp",
+            "mix",
+            "step",
+            "smoothstep",
+        }
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -4930,6 +4984,59 @@ class WGSLCodeGen(
             and not self.is_user_function_name(expr.function.name)
         ):
             return self.vector_component_count(self.expression_type(expr.arguments[0]))
+        return None
+
+    def replicate_scalar_call_arguments(self, arguments, rendered):
+        """Replicate the scalar arguments of a min, max, step or smoothstep call beside a vector.
+
+        GLSL has min(genType, float), max(genType, float), step(float, genType)
+        and smoothstep(float, float, genType) (GLSL 4.60 section 8.3), but WGSL
+        declares them with one type T for every argument, so a scalar is written
+        as the vector type of the other arguments, as clamp's bounds are. Only a
+        scalar of the vector's component type or a literal is replicated; a
+        scalar of another type is left as written.
+        """
+        argument_types = [self.expression_type(arg) for arg in arguments]
+        vector_shape = next(
+            (
+                shape
+                for shape in map(self.vector_shape, argument_types)
+                if shape is not None
+            ),
+            None,
+        )
+        if vector_shape is None:
+            return list(rendered)
+        component, size = vector_shape
+        replicated = []
+        for arg, arg_type, text in zip(arguments, argument_types, rendered):
+            literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
+            if self.vector_shape(arg_type) is None and (
+                isinstance(literal, LiteralNode)
+                or self.scalar_type_name(arg_type) == component
+            ):
+                text = f"vec{size}<{component}>({text})"
+            replicated.append(text)
+        return replicated
+
+    def builtin_math_call_type(self, function_name, arguments):
+        """Return the result type of a GLSL math built-in call, or None if unknown."""
+        if not arguments or self.is_user_function_name(function_name):
+            return None
+        if function_name in self.COMPONENT_RESULT_BUILTINS:
+            argument_type = self.expression_type(arguments[0])
+            return self.vector_component_type(argument_type) or self.scalar_type_name(
+                argument_type
+            )
+        if function_name in self.COMPONENTWISE_MATH_BUILTINS:
+            argument_types = [self.expression_type(arg) for arg in arguments]
+            vector_type = next(
+                (t for t in argument_types if self.vector_shape(t) is not None), None
+            )
+            if vector_type is not None:
+                return vector_type
+            if self.scalar_type_name(argument_types[0]) is not None:
+                return argument_types[0]
         return None
 
     def generate_clamp_bound(self, bound, vector_type_name):
@@ -8037,6 +8144,9 @@ class WGSLCodeGen(
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
                 return mixed_integer_call_type(self, expr.arguments)
+            math_call_type = self.builtin_math_call_type(function_name, expr.arguments)
+            if math_call_type is not None:
+                return math_call_type
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
