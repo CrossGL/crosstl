@@ -76,6 +76,8 @@ CAPABILITIES = (
     "SampledCubeArray",
     "Image1D",
     "ImageBuffer",
+    "ImageQuery",
+    "InputAttachment",
     "Geometry",
     "GeometryStreams",
     "Tessellation",

@@ -18,6 +18,7 @@ from . import (
     rust,
     slang,
     spirv,
+    spirv_std,
     webgl,
     wgsl,
 )
@@ -112,6 +113,7 @@ def _rust(offline: bool) -> list[Feature]:
         glsl_names,
     )
     features += rust.packing(fetch("rust-packing", offline=offline), glsl_names)
+    features += spirv_std.images(fetch("rust-image", offline=offline))
     features += glam.parse(
         {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
         glsl_names,

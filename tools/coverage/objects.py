@@ -201,6 +201,22 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
     ),
     # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
+    # rust-gpu's images as spirv_std's Image! macro spells them, the 2D ones features/spirv_std.py probes methods on,
+    # and its sampler. A subpass input names the attachment it reads.
+    "rust": {
+        **_same(
+            "Sampler",
+            "Image!(2D, type=f32, sampled)",
+            "Image!(2D, type=f32, sampled, depth)",
+            "Image!(2D, type=f32, sampled, multisampled)",
+            "Image!(2D, format=rgba32f, sampled=false)",
+            "SampledImage<Image!(2D, type=f32, sampled)>",
+            "SampledImage<Image!(2D, type=f32, sampled, multisampled)>",
+        ),
+        "Image!(subpass, type=f32, sampled=false)": Uniform(
+            "Image!(subpass, type=f32, sampled=false)", "input_attachment_index = 0"
+        ),
+    },
 }
 # Uniforms bind past the probe's buffers.
 _FIRST_UNIFORM = 8
@@ -229,7 +245,7 @@ class Uniforms:
         self.declarations.append(
             self.dialect.uniform(uniform.spelling, name, binding, uniform.qualifier)
         )
-        return name
+        return self.dialect.uniform_argument(uniform.spelling, name)
 
 
 # Methods whose object must hold another element type: GatherRaw returns raw texel bits, so its texture holds uint.

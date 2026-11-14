@@ -239,12 +239,15 @@ class Rust(Dialect):
         "Quat": (Type("float", (4,)), "Vec4::from({})"),
         "DQuat": (Type("double", (4,)), "DVec4::from({})"),
     }
-    # Arguments of glam's types that no buffer holds, made from the values glam converts them from.
+    # Arguments of glam's types that no buffer holds, made from the values glam converts them from. A projective depth
+    # comparison's coordinate and depth reference come from one vector in GLSL's order, the depth reference third
+    # (features/spirv_std.py, PROJECTIVE_DEPTH); the argument is two arguments.
     _MADE = {
         "Vec3A": (Type("float", (3,)), "Vec3A::from({})"),
         "Mat3A": (Type("float", (3, 3)), "Mat3A::from({})"),
         "Quat": (Type("float", (4,)), "Quat::from_vec4({})"),
         "DQuat": (Type("double", (4,)), "DQuat::from_vec4({})"),
+        "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
     }
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
@@ -326,6 +329,30 @@ class Rust(Dialect):
         if kind.scalar == "bool":
             return "false"
         return "0" if kind.scalar in self._INTEGERS else "0.0"
+
+    def constant(self, kind: Type) -> str:
+        # glam's zero vectors are constants.
+        if len(kind.shape) == 1:
+            return f"{self.type(kind)}::ZERO"
+        return super().constant(kind)
+
+    # rust-gpu takes a shader's resources as parameters of its entry point, which _entry moves these declarations to.
+    _RESOURCE = "#[spirv("
+    # The spirv_std items a resource's type names.
+    _RESOURCE_IMPORTS = (
+        ("Image!", "use spirv_std::Image;"),
+        ("Sampler", "use spirv_std::Sampler;"),
+        ("SampledImage<", "use spirv_std::image::SampledImage;"),
+    )
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        attributes = [qualifier] if qualifier else []
+        attributes += ["descriptor_set = 0", f"binding = {binding}"]
+        return f"{self._RESOURCE}{', '.join(attributes)})] {name}: &{spelling}"
+
+    def uniform_argument(self, spelling: str, name: str) -> str:
+        # A method takes a sampler by value, which the entry point takes a reference to.
+        return f"*{name}" if spelling == "Sampler" else name
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         if not value:
@@ -462,11 +489,19 @@ class Rust(Dialect):
             params.append(
                 f"#[spirv(storage_buffer, descriptor_set = 0, binding = {binding})] {name}: {access}[{kind}]"
             )
+        declarations = list(parts.get("declarations", ()))
+        resources = [line for line in declarations if line.startswith(self._RESOURCE)]
+        declarations = [line for line in declarations if line not in resources]
+        params += resources
         params += parts.get("params", ())
         prelude = list(parts.get("prelude", ()))
+        prelude += [
+            line
+            for name, line in self._RESOURCE_IMPORTS
+            if any(name in resource.partition(":")[2] for resource in resources)
+        ]
         # Crate attributes (``#![feature(f16)]``) have to precede every item.
         attributes = [line for line in prelude if line.startswith("#!")]
-        declarations = list(parts.get("declarations", ()))
         if declarations:
             declarations.append("")
         lines = [
