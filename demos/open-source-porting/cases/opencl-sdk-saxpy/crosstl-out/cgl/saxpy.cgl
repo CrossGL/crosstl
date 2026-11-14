@@ -1,3 +1,4 @@
+#pragma cgl_rules(fp_ieee)
 // OpenCL to CrossGL conversion
 // Kernel: saxpy
 @compute
