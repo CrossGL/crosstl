@@ -1,0 +1,443 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-lock",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "contractSHA256": "7876e1aaa1b6dde7ba0737852659124746585ed6cab008244115a252f099a865",
+  "testMethodCount": 30,
+  "caseCount": 137,
+  "allCasesDigest": "ef8fa8a1e66106556a0bcd1b7b2429e8bf107a173f0cbb13a55101c104590517",
+  "totals": {
+    "required-gpu": {
+      "methods": 15,
+      "cases": 109
+    },
+    "cpu-only": {
+      "methods": 15,
+      "cases": 28
+    },
+    "windows-specific": {
+      "methods": 0,
+      "cases": 0
+    }
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "execution": "software",
+      "expected": {
+        "pass": 86,
+        "inconclusive": 0,
+        "optional": 51,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 58,
+        "inconclusive": 0,
+        "optional": 51,
+        "excluded": 0
+      }
+    },
+    "metal-apple-gpu": {
+      "role": "translated-target",
+      "execution": "hardware",
+      "expected": {
+        "pass": 137,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 109,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "role": "translated-target",
+      "execution": "software",
+      "expected": {
+        "pass": 137,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 109,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.Internals.AlignmentHelperTests.AlignToBoundary(System.Int32,System.Int32,System.Int32,System.Int32)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/AlignmentHelperTests.cs",
+        "line": 48
+      },
+      "cases": 8,
+      "devices": {
+        "none": 8
+      },
+      "caseDigest": "bf7057dec8e93cd4436d7db51dad777fa08e86341a25af615589f558c56aaa03"
+    },
+    "ComputeSharp.Tests.Internals.AlignmentHelperTests.Pad(System.Int32,System.Int32,System.Int32)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/AlignmentHelperTests.cs",
+        "line": 19
+      },
+      "cases": 7,
+      "devices": {
+        "none": 7
+      },
+      "caseDigest": "ca21316796d846927841fe65855f46e3a6cdc9a3fd684c8a2dc2b0d831854a44"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 24
+      },
+      "cases": 18,
+      "devices": {
+        "Discrete": 9,
+        "Warp": 9
+      },
+      "caseDigest": "de80785fe7edfa0bc6e9c142f5b676862481573cb419db1397d11a5aaab2e5ff"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 38
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "e586111913401c8cb4bd017983227ffb4d4fd188fae21fbda9a3f904742979bf"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 54
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "8f4b45a205fc5a1879f7e1b51c5a6975f0736d8df6cd6425261ee1827283f7ae"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 103
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "aa18e50ecb8dd2f3465f5afd430a18bc525a759c7720c97e8e409a3b9b94bf08"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_WithTPixel_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 76
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "88213848a90c96d07dcee62262c3fcd8bda771ab6450a941f8ae55a839239539"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 119
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "8eba12a23bdad3bb496744d9b8598a1c424b8c3975f43cf31e7336bc914f7520"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 173
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "d83c12e9d2467c6d6954f0b7cbc83acfc950b69b1a16beba4a1bf1a6fc251073"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 142
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "34f72abeb4151ec7e086dc356b397759056c2aaf5879231fcfa5ddf3fb1f6a4e"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferBufferDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 189
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "ca29ce3cac20cadfe6238e9c981679dce6f05240c44a1ef4caaebc0fb9129838"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferBufferDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 205
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "4cf53d0168dba3e779b2cd3b6665adb61c9617b45630883905537552a6023c18"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture2DDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 221
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "d8abba3b87c79b33e02768813519f4506b721a6ce647171343518278bd04962f"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture2DDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 256
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "af17e1d04d1da122daa7221eb58c1716b6d1da3ff9445b2647a1848b341e5dab"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture3DDebugView_NotNull(ComputeSharp.Tests.Extensions.Device,System.Type,System.Int32,System.Int32,System.Int32)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 272
+      },
+      "cases": 12,
+      "devices": {
+        "Discrete": 6,
+        "Warp": 6
+      },
+      "caseDigest": "4392b35d849659072ca9dce22b3b0c559661a0fabf7fe8d5ded2f0ec03e99745"
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture3DDebugView_Null()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/DebugViewTests.cs",
+        "line": 314
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "2b394ea1cc4e5fcffd230b23230d7820c0c3015b8d23598bdc25e75d74d8cead"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.DisposeWithDangerousAddRefsAndRelease()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 69
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "9650ed2a12e18223a9d35eb4fc83ac1b6615af0256a9acf71705c56014468ef0"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.DisposeWithLease()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 30
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "31276973247d82b25617866eae0f654bab1e875abdc956634bf3961f3be9f3ca"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.DisposeWithTryGetLease()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 49
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "2ba6d0bf7f9cc9bb4443c1ac8f05c98a7971d3fd84f85df3e79d350a308c84a1"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.Dispose_Multithreaded()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 85
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8165e5828a3b6dd07f915394485a29dc852a644936e1cc283e1d621b4760f8c6"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.Dispose_MultithreadedWithConcurrentDispose()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 105
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8dfeec12669e97f711c9b3d3628bc721c54d13a15ff366e94528e7464051b9b1"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.Dispose_MultithreadedWithConcurrentDisposeAndOutstandingLease()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 135
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "e577ac8c603e381b301ddb8ea921fa4e3637755c943edf4c0336f1aad32d2c1a"
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests.NormalDispose_GettingLeasesFails()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/NativeObjectTests.cs",
+        "line": 14
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "71f9c35a308c439fa04a0403551ae9c46b86f4e860f278fefe7d10fbf6da0eb4"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.AmbiguousNames()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 439
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a1f60565e1753283dd718f0c86d12b9c9e4ce4a12894f245b88b81389a30dac6"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.CapturedResource()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 28
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "df5251f5bdc36871a063f807c071a78122d4d89e70d43f0f4af3a6c91b380347"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.LoadFlatCustomTypeShader()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 248
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "5a66435067000a961104d5ee1c4d2165f46e264d73f3a7f00db2e021998e0c5c"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.LoadMultipleResourcesAndPrimitives()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 68
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "aa937f4131111294ed5135ceeaa874aa1b3cd05127b9a3a774536d1bd58506e1"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.LoadNestedCustomTypes()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 340
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "f97c6ef60c49a41866ceb546d855f3c05acf69667d535f71656d75940cfafa71"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.LoadScalarAndVectorTypes()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 116
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "3db98af4e2eadade1fb1c7d1a7828ca2f83752931b91dbcf79feb6bf1853e9d3"
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests.LoadScalarVectorAndMatrixTypes()": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.Internals/ShaderDataLoaderTests.cs",
+        "line": 169
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "4a0a20c5627597f3d3edd5146b0a7142f6b1f38db1c9d61595845bb5889bfb6c"
+    }
+  }
+}

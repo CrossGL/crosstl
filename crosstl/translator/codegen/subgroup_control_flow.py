@@ -8,6 +8,7 @@ from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -37,8 +38,14 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    VectorType,
     WaveOpNode,
     WhileNode,
+)
+from .constant_guards import (
+    guarded_dead_nodes,
+    lexical_constant_guards,
+    literal_guard_value,
 )
 from .loop_induction import (
     checked_induction_value,
@@ -46,12 +53,16 @@ from .loop_induction import (
     geometric_loop_terminates,
     walk_control_scopes,
 )
+from .subgroup_uniformity import subgroup_uniformity
 
 _FLOATS = {
     "float",
     "float32_t",
     "half",
     "float16_t",
+    # CrossGL spells binary16 as ``float16`` and ``f16``.
+    "float16",
+    "f16",
     "bfloat",
     "bfloat16",
     "bfloat16_t",
@@ -61,8 +72,25 @@ _VOTES = {"WaveActiveAnyTrue", "WaveActiveAllTrue"}
 _REDUCTIONS = {"WaveActiveSum", "WaveActiveProduct", "WaveActiveMin", "WaveActiveMax"}
 
 
-def _type_name(value):
-    return value if isinstance(value, str) else getattr(value, "name", None)
+def _type_name(value, aliases=None):
+    """A type's spelling, resolved through ``aliases`` when they are given."""
+    name = value if isinstance(value, str) else getattr(value, "name", None)
+    seen = set()
+    while aliases and name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
+
+
+def _type_aliases(nodes):
+    """Program type aliases, such as ``typedef f16 float16_t;``, by alias name."""
+    aliases = {}
+    for node in nodes:
+        if isinstance(node, VariableNode) and getattr(node, "is_type_alias", False):
+            target = _type_name(node.var_type)
+            if isinstance(target, str) and target != node.name:
+                aliases[node.name] = target
+    return aliases
 
 
 def _statements(body):
@@ -84,13 +112,21 @@ def _operation(node):
     return None
 
 
-def _safe_value(node, names, map_operator, declared_functions, *, speculate=False):
+def _safe_value(
+    node, names, map_operator, declared_functions, *, speculate=False, aliases=None
+):
     def safe(child):
         return _safe_value(
-            child, names, map_operator, declared_functions, speculate=speculate
+            child,
+            names,
+            map_operator,
+            declared_functions,
+            speculate=speculate,
+            aliases=aliases,
         )
 
     def safe_conversion(type_name):
+        type_name = _type_name(type_name, aliases)
         return type_name in _SCALARS and (
             not speculate or type_name in {"bool"} | _FLOATS
         )
@@ -110,7 +146,7 @@ def _safe_value(node, names, map_operator, declared_functions, *, speculate=Fals
         )
     if isinstance(node, FunctionCallNode):
         return (
-            _operation(node) in _SCALARS
+            _type_name(_operation(node), aliases) in _SCALARS
             and _operation(node) not in declared_functions
             and safe_conversion(_operation(node))
             and len(node.arguments) == 1
@@ -139,21 +175,24 @@ def _safe_value(node, names, map_operator, declared_functions, *, speculate=Fals
     return False
 
 
-def _collective_value(node, declared_functions):
+def _collective_value(node, declared_functions, aliases=None):
     """Look through pure floating conversions without removing their rounding."""
     while True:
-        if isinstance(node, CastNode) and _type_name(node.target_type) in _FLOATS:
+        if (
+            isinstance(node, CastNode)
+            and _type_name(node.target_type, aliases) in _FLOATS
+        ):
             node = node.expression
         elif (
             isinstance(node, ConstructorNode)
-            and _type_name(node.constructor_type) in _FLOATS
+            and _type_name(node.constructor_type, aliases) in _FLOATS
             and not node.named_arguments
             and len(node.arguments) == 1
         ):
             node = node.arguments[0]
         elif (
             isinstance(node, FunctionCallNode)
-            and _operation(node) in _FLOATS
+            and _type_name(_operation(node), aliases) in _FLOATS
             and _operation(node) not in declared_functions
             and not getattr(node, "generic_args", None)
             and len(node.arguments) == 1
@@ -163,8 +202,10 @@ def _collective_value(node, declared_functions):
             return node
 
 
-def _guarded_return_plan(function, declared_names, map_operator, declared_functions):
-    if _type_name(function.return_type) not in _SCALARS - {"bool"}:
+def _guarded_return_plan(
+    function, declared_names, map_operator, declared_functions, aliases=None
+):
+    if _type_name(function.return_type, aliases) not in _SCALARS - {"bool"}:
         return None
     parameters = function.parameters or []
     # Unused receiver/resource parameters need not disqualify a pure method.
@@ -172,7 +213,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
     names = {
         parameter.name
         for parameter in parameters
-        if _type_name(parameter.param_type) in _SCALARS
+        if _type_name(parameter.param_type, aliases) in _SCALARS
         and not set(parameter.qualifiers or []) & {"out", "inout", "volatile"}
     }
     names.update({"NAN", "INFINITY"} - declared_names)
@@ -180,7 +221,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
     alias = None
     if statements and isinstance(statements[0], VariableNode):
         alias = statements.pop(0)
-        if _type_name(alias.var_type) != "bool" or alias.name in names:
+        if _type_name(alias.var_type, aliases) != "bool" or alias.name in names:
             return None
     if not statements or not isinstance(statements[0], IfNode):
         return None
@@ -208,7 +249,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
         if not isinstance(vote, IdentifierNode) or vote.name != alias.name:
             return None
         vote = alias.initial_value
-    reduction = _collective_value(tail[0].value, declared_functions)
+    reduction = _collective_value(tail[0].value, declared_functions, aliases)
     if _operation(vote) not in _VOTES or _operation(reduction) not in _REDUCTIONS:
         return None
     if _operation(vote) in declared_names or _operation(reduction) in declared_names:
@@ -220,9 +261,12 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
             map_operator,
             declared_functions,
             speculate=call is reduction,
+            aliases=aliases,
         ):
             return None
-    if not _safe_value(early[0].value, names, map_operator, declared_functions):
+    if not _safe_value(
+        early[0].value, names, map_operator, declared_functions, aliases=aliases
+    ):
         return None
     return alias, condition, tail[0].value, early[0].value
 
@@ -243,13 +287,14 @@ def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
         if not isinstance(node, IdentifierNode)
         and isinstance(getattr(node, "name", None), str)
     }
+    aliases = _type_aliases(nodes)
     plans = [
         (node, plan)
         for node in nodes
         if isinstance(node, FunctionNode)
         and (
             plan := _guarded_return_plan(
-                node, declared_names, map_operator, declared_functions
+                node, declared_names, map_operator, declared_functions, aliases
             )
         )
         is not None
@@ -1949,7 +1994,8 @@ def converge_subgroup_bounded_loops(ast, entries, walk_ast, map_operator):
 
 
 _CONVERSIONS = re.compile(
-    r"(?:bool|half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
+    r"(?:bool|half|float|double|float(?:16|32|64)_t|bfloat(?:16(?:_t)?)?"
+    r"|u?int(?:8|16|32|64)?(?:_t)?)"
 )
 _WORKGROUP_BARRIERS = frozenset({"workgroupBarrier", "workgroupExecutionBarrier"})
 # Updates a pure function may apply to its own value parameters and locals:
@@ -2110,29 +2156,55 @@ _RELATIVE_SHUFFLES = frozenset(
 )
 
 
-def _collective_call(node, functions, wrappers=frozenset()):
-    """Whether ``node`` is a shuffle that invocations that left may run.
+# Collectives whose result depends on which lanes take part. Invocations
+# that left may run them only where every subgroup agrees on the predicate.
+_UNIFORM_COLLECTIVES = (
+    _RELATIVE_SHUFFLES
+    | _REDUCTIONS
+    | _VOTES
+    | frozenset(
+        {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+        }
+    )
+)
+
+
+def _collective_call(
+    node, functions, wrappers=frozenset(), operations=_RELATIVE_SHUFFLES
+):
+    """Whether ``node`` is a collective that invocations that left may run.
 
     A relative shuffle returns another lane's value, and a source lane that
     left gives an undefined value in Metal and HLSL alike, so the value it
     supplies after convergence refines the source. Sums, scans, votes,
     broadcasts and lane reads by index depend on which invocations are
-    active, or are not needed by MLX's kernels; they stay unproven.
+    active; callers pass them in ``operations`` only where every subgroup
+    agrees on the predicate (``_UNIFORM_COLLECTIVES``).
     """
     if isinstance(node, WaveOpNode):
-        return node.operation in _RELATIVE_SHUFFLES
+        return node.operation in operations
     name = _call_name(node) if isinstance(node, FunctionCallNode) else None
     if isinstance(name, str) and name in wrappers:
         # A user overload set that only applies relative shuffles to its
         # arguments, as complex ``simd_shuffle_down`` shuffles both halves.
         return True
-    return (
-        isinstance(name, str) and name not in functions and name in _RELATIVE_SHUFFLES
-    )
+    return isinstance(name, str) and name not in functions and name in operations
 
 
 def _inactive_collective_statement(
-    statement, constants, private, functions, map_operator
+    statement,
+    constants,
+    private,
+    functions,
+    map_operator,
+    operations=_RELATIVE_SHUFFLES,
 ):
     """``x op= collective(...)`` writing only private ``x`` from private values."""
     node = statement
@@ -2153,7 +2225,10 @@ def _inactive_collective_statement(
 
     def safe(expression):
         if _collective_call(
-            expression, functions, constants.get("__collective__", frozenset())
+            expression,
+            functions,
+            constants.get("__collective__", frozenset()),
+            operations,
         ):
             arguments = (
                 expression.arguments
@@ -2185,18 +2260,48 @@ def _inactive_collective_statement(
     return safe(value)
 
 
-def _value_function_kinds(functions, walk_ast, map_operator):
+def _value_struct_arities(nodes):
+    """Member counts of non-generic structs built only from value members.
+
+    ``Name(a, b)`` of such a struct, as the Metal frontend lowers MLX's
+    ``IndexValPair<U>{index, val}``, only copies its arguments.
+    """
+    arities = {}
+    for node in nodes:
+        if not isinstance(node, StructNode) or (
+            node.generic_params or node.inheritance or node.attributes
+        ):
+            continue
+        members = node.members or []
+        if members and all(
+            isinstance(member, StructMemberNode)
+            and not isinstance(member.member_type, (PointerType, ReferenceType))
+            and not (
+                member.attributes or member.resource_qualifiers or member.default_value
+            )
+            and not set(getattr(member.member_type, "qualifiers", None) or [])
+            & _SHARED_QUALIFIERS
+            for member in members
+        ):
+            arities.setdefault(node.name, set()).add(len(members))
+    return {name: counts.pop() for name, counts in arities.items() if len(counts) == 1}
+
+
+def _value_function_kinds(functions, walk_ast, map_operator, structs=None):
     """Classify user overload sets that only compute values from arguments.
 
     A ``"pure"`` function takes value parameters, declares private value
     locals, assigns them or their members and ends in a return; every
     expression reads only those names, literals and conversions through
-    side-effect-free operators and calls to pure functions. A
-    ``"collective"`` one may also apply relative shuffles to such values,
-    as the complex overload of ``simd_shuffle_down`` shuffles both halves.
+    side-effect-free operators, constructions of value ``structs`` (name to
+    member count, see ``_value_struct_arities``) and calls to pure
+    functions. A ``"collective"`` one may also apply relative shuffles to
+    such values, as the complex overload of ``simd_shuffle_down`` shuffles
+    both halves and MLX's ``IndexValPair`` overload shuffles both members.
     A name is classified only when each of its overloads qualifies, so any
     resolution of a call is safe for invocations that left early.
     """
+    structs = structs or {}
     kinds = {}
 
     def classify(name, visiting):
@@ -2292,6 +2397,10 @@ def _value_function_kinds(functions, walk_ast, map_operator):
                 kind = classify(name, visiting)
                 collective = collective or kind == "collective"
                 return kind is not None and not getattr(node, "generic_args", None)
+            if name in structs:
+                return len(node.arguments) == structs[name] and not getattr(
+                    node, "generic_args", None
+                )
             if _bitcast_name(name, node):
                 return len(node.arguments) == 1
             if name.startswith(("Wave", "Quad", "subgroup", "simd_", "quad_")):
@@ -2370,13 +2479,19 @@ def _inactive_loop_header(loop, constants, map_operator):
         )
     if isinstance(update, ExpressionStatementNode):
         update = update.expression
-    return (
+    if not (
         isinstance(update, AssignmentNode)
-        and map_operator(update.operator) in {"+=", "-=", "*=", ">>=", "<<="}
         and isinstance(update.target, IdentifierNode)
         and update.target.name == counter
         and _inactive_safe(update.value, constants, map_operator)
-    )
+    ):
+        return False
+    operator = map_operator(update.operator)
+    if operator in {"/=", "%="}:
+        # MLX's ``offset /= 2`` halving loops; as for ``/`` and ``%``, only a
+        # nonzero constant divisor other than -1 cannot trap.
+        return _literal_divisor(update.value, constants) is not None
+    return operator in {"+=", "-=", "*=", ">>=", "<<="}
 
 
 def _escapes(statement, walk_ast):
@@ -2725,6 +2840,8 @@ def _early_exit_statements(statements, active, context):
             # run its statements and leave, which clears their ``active``.
             if not flush(statements[index:]):
                 return None
+            if not _subgroup_uniform(statement.condition, context):
+                context["uniform_state"]["active"] = False
             result.extend(_predicated_exit(statement, active, context))
             continue
         if _escapes(statement, walk_ast):
@@ -2801,32 +2918,35 @@ def _early_exit_statements(statements, active, context):
             if block is None:
                 return None
             result.append(block)
+        elif isinstance(statement, IfNode) and not getattr(
+            statement, "else_if_conditions", None
+        ):
+            block = _predicated_if_else(statement, active, context)
+            if block is None:
+                return None
+            result.append(block)
         elif isinstance(statement, ForNode):
-            counter = getattr(statement.init, "name", None)
-            if not _inactive_loop_header(
-                statement, constants, map_operator
-            ) or counter in _written_roots(statement.body, walk_ast):
+            loop = _predicated_loop(statement, active, context)
+            if loop is None:
                 return None
-            body = _early_exit_statements(
-                _statements(statement.body),
-                active,
-                dict(context, constants=dict(constants)),
-            )
-            if body is None:
-                return None
-            result.append(
-                ForNode(
-                    statement.init,
-                    statement.condition,
-                    statement.update,
-                    BlockNode(body),
-                    source_location=getattr(statement, "source_location", None),
-                )
-            )
+            result.extend(loop)
         elif _inactive_collective_statement(
             statement, constants, private, functions, map_operator
+        ) or (
+            context.get("uniform_state", {}).get("active")
+            and _inactive_collective_statement(
+                statement,
+                constants,
+                private,
+                functions,
+                map_operator,
+                _UNIFORM_COLLECTIVES,
+            )
         ):
-            result.append(statement)
+            guarded = _guarded_collective(statement, active, context)
+            if guarded is None:
+                return None
+            result.extend(guarded)
         else:
             return None
     if not flush([]):
@@ -2891,21 +3011,268 @@ def _predicated_if(statement, active, context):
             ]
     elif active is None:
         return None
-    body = _early_exit_statements(
-        _statements(statement.then_branch),
-        inner,
-        dict(context, constants=dict(constants)),
-    )
+    nested = dict(context, constants=dict(constants))
+    if inner != active:
+        nested["uniform_state"] = {
+            "active": (
+                active is not None
+                and context.get("uniform_state", {}).get("active", False)
+                and _subgroup_uniform(condition, context)
+            )
+        }
+    body = _early_exit_statements(_statements(statement.then_branch), inner, nested)
     if body is None:
         return None
     return BlockNode(prefix + body, source_location=location)
 
 
+def _guarded_collective(statement, active, context):
+    """Keep a collective's update of a private value to ``active`` invocations.
+
+    Every invocation runs the collective. Where ``active`` only marks the
+    invocations that have not left, the others never read their private
+    values again. A nested predicate, such as a branch's or a loop's
+    ``running``, also clears in invocations that continue past it, so
+    ``x op= value`` becomes ``T tmp = value; if (active) { x op= tmp; }``
+    with ``T`` the declared type of ``x``. A declaration names a value
+    only later predicated statements and collectives read; it stays.
+    """
+    node = statement
+    if isinstance(node, ExpressionStatementNode):
+        node = node.expression
+    if active == context.get("exit_active") or isinstance(node, VariableNode):
+        return [statement]
+    value_type = _declared_type(node.target, context)
+    if value_type is None:
+        return None
+    location = getattr(statement, "source_location", None)
+    value = context["fresh"]("__crossgl_subgroup_value")
+    return [
+        VariableNode(value, deepcopy(value_type), node.value, source_location=location),
+        IfNode(
+            IdentifierNode(active),
+            BlockNode(
+                [
+                    ExpressionStatementNode(
+                        AssignmentNode(
+                            deepcopy(node.target), IdentifierNode(value), node.operator
+                        ),
+                        source_location=location,
+                    )
+                ]
+            ),
+        ),
+    ]
+
+
+def _declared_type(target, context):
+    """The scalar or vector type of a private name or of its array elements."""
+    depth = 0
+    while isinstance(target, ArrayAccessNode):
+        target, depth = target.array_expr, depth + 1
+    if not isinstance(target, IdentifierNode):
+        return None
+    declared = context.get("declared_types", {}).get(target.name)
+    for _ in range(depth):
+        if not isinstance(declared, ArrayType):
+            return None
+        declared = declared.element_type
+    if isinstance(declared, ArrayType) or not isinstance(
+        declared, (PrimitiveType, NamedType, VectorType)
+    ):
+        return None
+    return declared
+
+
+def _subgroup_uniform(expression, context):
+    """Whether every invocation of a subgroup agrees on ``expression``."""
+    uniformity = context.get("uniformity")
+    return uniformity is not None and uniformity.expression(expression)
+
+
+def _predicated_if_else(statement, active, context):
+    """Keep ``if (c) { A } else { B }`` whose branches synchronize.
+
+    Invocations that left evaluate ``c`` too, so it must be inactive-safe,
+    and take one branch, where they run only its collectives and barriers;
+    every other statement of ``A`` and ``B`` runs under ``active``. The code
+    generators still prove ``c`` uniform before accepting the collectives.
+    Nothing proves it uniform across the workgroup for a workgroup barrier,
+    so a branch that synchronizes the workgroup stays unproven.
+    """
+    constants, map_operator = context["constants"], context["map_operator"]
+    condition = statement.condition
+    if "barrier" in context["effects"](statement):
+        return None
+    if not _inactive_safe(condition, constants, map_operator, context["private"]):
+        return None
+    uniform = context.get("uniform_state", {}).get(
+        "active", False
+    ) and _subgroup_uniform(condition, context)
+    branches = []
+    for branch in (statement.then_branch, statement.else_branch):
+        nested = dict(
+            context, constants=dict(constants), uniform_state={"active": uniform}
+        )
+        body = _early_exit_statements(_statements(branch), active, nested)
+        if body is None:
+            return None
+        branches.append(BlockNode(body))
+    return IfNode(
+        condition,
+        branches[0],
+        branches[1],
+        source_location=getattr(statement, "source_location", None),
+    )
+
+
+def _conjuncts(expression, map_operator):
+    if (
+        isinstance(expression, BinaryOpNode)
+        and map_operator(expression.operator) == "&&"
+    ):
+        return _conjuncts(expression.left, map_operator) + _conjuncts(
+            expression.right, map_operator
+        )
+    return [expression]
+
+
+def _predicated_loop(statement, active, context):
+    """Lower a counted loop around collectives or barriers; ``None`` if unproven.
+
+    The loop's header must be one every invocation may run. A header
+    ``i < n && p``, as MLX's quantized ``row < results && out_row + row <
+    out_size``, leaves early only for some subgroups; it becomes::
+
+        bool running = active;
+        for (int i = 0; i < n; i++) {
+            running = running && p;
+            ...  // as for any statement list, predicated by ``running``
+        }
+
+    ``running`` holds exactly in the source's iterations: the counter is
+    fresh and the body writes neither it nor anything ``p`` reads, and ``p``
+    is inactive-safe. Only ``i < n`` then decides the trip count.
+    """
+    constants, map_operator, walk_ast = (
+        context["constants"],
+        context["map_operator"],
+        context["walk_ast"],
+    )
+    counter = getattr(statement.init, "name", None)
+    written = _written_roots(statement.body, walk_ast)
+    location = getattr(statement, "source_location", None)
+    if counter is None or counter in written:
+        return None
+    conjuncts = (
+        _conjuncts(statement.condition, map_operator)
+        if statement.condition is not None
+        else [None]
+    )
+    head = ForNode(statement.init, conjuncts[0], statement.update, statement.body)
+    if not _inactive_loop_header(head, constants, map_operator):
+        return None
+    nested = dict(context, constants=dict(constants))
+    if len(conjuncts) == 1:
+        body = _early_exit_statements(_statements(statement.body), active, nested)
+        if body is None:
+            return None
+        return [
+            ForNode(
+                statement.init,
+                statement.condition,
+                statement.update,
+                BlockNode(body),
+                source_location=location,
+            )
+        ]
+    rest = conjuncts[1]
+    for conjunct in conjuncts[2:]:
+        rest = BinaryOpNode(rest, "&&", conjunct)
+    if not _inactive_safe(
+        rest, constants, map_operator, context["private"]
+    ) or _read_names(rest, walk_ast) & (written | {active}):
+        return None
+    running = context["fresh"]("__crossgl_subgroup_running")
+    uniformity = context.get("uniformity")
+    update = statement.update
+    if isinstance(update, ExpressionStatementNode):
+        update = update.expression
+    step = update.value if isinstance(update, AssignmentNode) else None
+    if uniformity is not None and all(
+        uniformity.expression(part)
+        for part in (statement.init.initial_value, step)
+        if part is not None
+    ):
+        # Every invocation steps the counter through the same values.
+        uniformity = uniformity.with_names({counter})
+        nested["uniformity"] = uniformity
+    nested["uniform_state"] = {
+        "active": (
+            context.get("uniform_state", {}).get("active", False)
+            and uniformity is not None
+            and uniformity.expression(rest)
+        )
+    }
+    body = _early_exit_statements(_statements(statement.body), running, nested)
+    if body is None:
+        return None
+    return [
+        VariableNode(
+            running,
+            PrimitiveType("bool"),
+            IdentifierNode(active),
+            source_location=location,
+        ),
+        ForNode(
+            statement.init,
+            conjuncts[0],
+            statement.update,
+            BlockNode(
+                [
+                    ExpressionStatementNode(
+                        AssignmentNode(
+                            IdentifierNode(running),
+                            BinaryOpNode(IdentifierNode(running), "&&", rest),
+                            "=",
+                        ),
+                        source_location=location,
+                    ),
+                    *body,
+                ]
+            ),
+            source_location=location,
+        ),
+    ]
+
+
 def _early_exit_context(
-    function, effects, walk_ast, map_operator, functions, kinds=None, fresh=None
+    function,
+    effects,
+    walk_ast,
+    map_operator,
+    functions,
+    kinds=None,
+    fresh=None,
+    uniformity=None,
 ):
     kinds = kinds or {}
+    declared = {}
+    for node in walk_ast(function.body):
+        if isinstance(node, VariableNode):
+            declared.setdefault(node.name, []).append(node.var_type)
     return {
+        # Subgroup-uniform names of ``function``, and whether every subgroup
+        # agrees on the current predicate (see ``subgroup_uniformity``).
+        "uniformity": uniformity,
+        "uniform_state": {"active": False},
+        # The predicate of invocations that have not left; set by callers.
+        "exit_active": None,
+        "declared_types": {
+            name: types[0]
+            for name, types in declared.items()
+            if all(repr(item) == repr(types[0]) for item in types)
+        },
         "effects": effects,
         "walk_ast": walk_ast,
         "map_operator": map_operator,
@@ -2982,7 +3349,16 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
         if isinstance(node, FunctionNode):
             functions.setdefault(node.name, []).append(node)
     effects = _effect_checker(nodes, walk_ast)
-    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    kinds = _value_function_kinds(
+        functions, walk_ast, map_operator, _value_struct_arities(nodes)
+    )
+    uniformities = subgroup_uniformity(
+        ast,
+        entries,
+        walk_ast,
+        map_operator,
+        frozenset(name for name, kind in kinds.items() if kind == "pure"),
+    )
     reachable = set()
     pending = [entry for stage, entry, _config in entries if stage == "compute"]
     while pending:
@@ -3003,13 +3379,23 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             ):
                 continue
             context = _early_exit_context(
-                function, effects, walk_ast, map_operator, functions, kinds
+                function,
+                effects,
+                walk_ast,
+                map_operator,
+                functions,
+                kinds,
+                uniformity=uniformities.get(id(function)),
             )
             plan = _early_exit_plan(function, context)
             if plan is None:
                 continue
             index, simple = plan
             statements = _statements(function.body)
+            context["uniform_state"]["active"] = not simple or _subgroup_uniform(
+                statements[index].condition, context
+            )
+            context["exit_active"] = "__crossgl_subgroup_active"
             context["constants"].update(_const_literals(statements[:index]))
             rest = _early_exit_statements(
                 statements[index + int(simple) :], "__crossgl_subgroup_active", context
@@ -3038,8 +3424,19 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
         exit_branch = statements[index]
         active = fresh("__crossgl_subgroup_active")
         context = _early_exit_context(
-            function, copied_effects, walk_ast, map_operator, functions, kinds, fresh
+            function,
+            copied_effects,
+            walk_ast,
+            map_operator,
+            functions,
+            kinds,
+            fresh,
+            uniformity=uniformities.get(id(original)),
         )
+        context["uniform_state"]["active"] = not simple or _subgroup_uniform(
+            exit_branch.condition, context
+        )
+        context["exit_active"] = active
         context["constants"].update(_const_literals(statements[:index]))
         rest = _early_exit_statements(
             statements[index + int(simple) :], active, context
@@ -3184,9 +3581,32 @@ def _varying_names(function, varying_parameters, walk_ast):
             return names
 
 
-def _divergent_barrier_plan(function, varying, effects, walk_ast):
-    """Top-level ``if (c) { ... barrier ... }`` statements whose ``c`` may vary."""
-    if any(isinstance(node, ReturnNode) for node in walk_ast(function.body)):
+def _constant_dead_nodes(function, walk_ast, map_operator):
+    """Ids of the nodes in branches that boolean constants of ``function`` rule out."""
+    guards = lexical_constant_guards(
+        function,
+        {},
+        written=_written_roots(function.body, walk_ast),
+        fold=lambda expression, constants: literal_guard_value(
+            expression, constants, map_operator
+        ),
+        tracked=lambda declaration: _type_name(declaration.var_type) == "bool",
+    )
+    return guarded_dead_nodes(function, guards, walk_ast)
+
+
+def _divergent_barrier_plan(function, varying, effects, walk_ast, map_operator):
+    """Top-level ``if (c) { ... barrier ... }`` statements whose ``c`` may vary.
+
+    A return inside a branch that a boolean constant rules out, such as a
+    folded template guard ``if (false) { ...; return; }``, never runs, so
+    the function still has no exit and its barriers converge here.
+    """
+    dead = _constant_dead_nodes(function, walk_ast, map_operator)
+    if any(
+        isinstance(node, ReturnNode) and id(node) not in dead
+        for node in walk_ast(function.body)
+    ):
         return None  # converge_subgroup_early_exits owns functions that exit
     indices = tuple(
         index
@@ -3273,14 +3693,18 @@ def converge_subgroup_divergent_barriers(ast, entries, walk_ast, map_operator):
                         queued.add(id(callee))
                         pending.append(callee)
     effects = _effect_checker(nodes, walk_ast)
-    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    kinds = _value_function_kinds(
+        functions, walk_ast, map_operator, _value_struct_arities(nodes)
+    )
     plans = []
     for key, function in reachable.items():
         if _type_name(function.return_type) != "void" or getattr(
             function, "generic_params", None
         ):
             continue
-        indices = _divergent_barrier_plan(function, varying[key], effects, walk_ast)
+        indices = _divergent_barrier_plan(
+            function, varying[key], effects, walk_ast, map_operator
+        )
         if indices is not None:
             plans.append((function, indices))
     if not plans:

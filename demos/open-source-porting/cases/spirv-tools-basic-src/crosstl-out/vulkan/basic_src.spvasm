@@ -3,6 +3,8 @@
 ; Generator: CrossGL Vulkan SPIR-V Generator
 ; Bound: 26
 OpCapability Shader
+OpCapability ClipDistance
+OpCapability CullDistance
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint Vertex %23 "main" %13 %16
@@ -20,9 +22,9 @@ OpName %21 "gl_CullDistance"
 OpDecorate %13 Location 0
 OpDecorate %15 Location 0
 OpDecorate %16 BuiltIn Position
-OpDecorate %18 Location 1
-OpDecorate %20 Location 2
-OpDecorate %21 Location 10
+OpDecorate %18 BuiltIn PointSize
+OpDecorate %20 BuiltIn ClipDistance
+OpDecorate %21 BuiltIn CullDistance
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

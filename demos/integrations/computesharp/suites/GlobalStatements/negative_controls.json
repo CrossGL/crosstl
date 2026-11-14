@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp-negative-controls",
+  "description": "Faults injected by the portable runtime (CROSSTL_COMPUTESHARP_FAULT) and the upstream test methods that must fail under each fault. Every discovered case of every listed method must execute and fail; a pass, a skip or a missing case fails the control. The same cases must pass in the unfaulted run.",
+  "controls": [
+    {
+      "fault": "omit-dispatch",
+      "purpose": "Dispatches are recorded in the evidence but never reach the device, so outputs keep their initial contents.",
+      "methods": [
+        "Program.<Main>$"
+      ]
+    },
+    {
+      "fault": "perturb-constants",
+      "purpose": "The first user constant (or the dispatch width when there is none) changes before the dispatch.",
+      "methods": [
+        "Program.<Main>$"
+      ]
+    },
+    {
+      "fault": "corrupt-readback",
+      "purpose": "The first byte of every buffer and texture readback is altered on the host.",
+      "methods": [
+        "Program.<Main>$"
+      ]
+    },
+    {
+      "fault": "corrupt-guard",
+      "purpose": "After each dispatch the device writes four bytes just past the visible region of the first writable buffer, as an out-of-bounds store would.",
+      "messagePattern": "Buffer guard violation",
+      "methods": [
+        "Program.<Main>$"
+      ]
+    }
+  ]
+}

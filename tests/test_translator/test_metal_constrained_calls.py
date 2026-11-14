@@ -66,8 +66,12 @@ def test_transitive_specializations_are_reused(reverse):
 
 def test_nested_calls_keep_declaration_namespace():
     output = MetalPreprocessor().preprocess(_source(namespace=True))
-    assert "return inner_int(value) * int(2);" in output
-    assert "int inner_int(int value) { return value + int(1); }" in output
+    assert "return ::selected::inner_int(value) * int(2);" in output
+    assert (
+        "namespace selected {\ninline int inner_int(int value) { return value + int(1); }\n}"
+        in output
+    )
+    assert "inner_int(int value) { return value + int(99); }" not in output
 
 
 def test_nested_calls_exclude_later_competing_declarations():

@@ -2,6 +2,8 @@ name: Complete Test Suite
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  POWERSHELL_TELEMETRY_OPTOUT: "1"
+  POWERSHELL_UPDATECHECK: "Off"
 
 on:
   push:
@@ -21,10 +23,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  pytest:
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    # Hosted runners have taken 33 to 59 minutes for the whole suite.
-    timeout-minutes: 90
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      tested: ${{ steps.queue.outputs.tested }}
+    steps:
+      - name: Check whether the merge queue tested this commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The merge queue moves main to the commit its merge group tested, so a
+          # push to main would repeat a run that already passed on that commit.
+          # When the lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
+          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  pytest:
+    name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    runs-on: ubuntu-latest
+    # tools/pytest_shard.py splits the suite by test id. Six shards ran their tests
+    # for about 10 minutes each, the longest job of a merge-queue run once macOS
+    # translator tests were split; eight bring a shard under the translator legs.
+    # Each shard still collects the whole suite.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
       - name: Checkout repository
@@ -34,48 +68,59 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
+
+      - name: Rewrite test modules
+        # Otherwise each xdist worker rewrites the asserts of all 800 test modules itself.
+        run: python -m tools.pytest_warm tests demos/integrations
+
+      - name: Start PowerShell once
+        # The first pwsh start on a runner writes its JIT profile and module cache. The MLX
+        # tests that run pwsh allow 15 s, and a cold start under xdist load has exceeded it.
+        run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
       - name: Run complete test suite
+        # The default xdist scheduler hands each worker a fixed run of consecutive
+        # tests, so the worker that drew the slow ones finished minutes after the
+        # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
-          mkdir -p support/generated
-          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
+          mkdir -p build/reports
+          python -m pytest tests demos/integrations \
+            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/full-tests-pytest.xml \
-            --json-output support/generated/full-tests-failure-summary.json \
-            --markdown-output support/generated/full-tests-failure-summary.md
-          cat support/generated/full-tests-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/full-tests-pytest.xml \
+            --json-output build/reports/full-tests-failure-summary.json \
+            --markdown-output build/reports/full-tests-failure-summary.md
+          cat build/reports/full-tests-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload complete test failure summary
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: full-test-failure-summary
+          name: full-test-failure-summary-${{ matrix.shard }}
           path: |
-            support/generated/full-tests-pytest.xml
-            support/generated/full-tests-failure-summary.json
-            support/generated/full-tests-failure-summary.md
+            build/reports/full-tests-pytest.xml
+            build/reports/full-tests-failure-summary.json
+            build/reports/full-tests-failure-summary.md
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 14
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -91,27 +136,12 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install optional shader validators
         if: runner.os == 'Linux'
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install GLSL validator (macOS)
         if: runner.os == 'macOS'
@@ -181,7 +211,8 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -194,22 +225,25 @@ jobs:
               Start-Sleep -Seconds (10 * $attempt)
             }
           }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
+          }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           Join-Path $dxcRoot "bin\x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
+          python -m pip install -e ".[test]"
 
       - name: Run external shader validator tests
         shell: bash
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
-            --junitxml support/generated/shader-validators-pytest.xml \
+            --junitxml build/reports/shader-validators-pytest.xml \
             -rs
 
       - name: Write shader validator failure summary
@@ -217,10 +251,10 @@ jobs:
         shell: bash
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/shader-validators-pytest.xml \
-            --json-output support/generated/shader-validators-failure-summary.json \
-            --markdown-output support/generated/shader-validators-failure-summary.md
-          cat support/generated/shader-validators-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/shader-validators-pytest.xml \
+            --json-output build/reports/shader-validators-failure-summary.json \
+            --markdown-output build/reports/shader-validators-failure-summary.md
+          cat build/reports/shader-validators-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload shader validator failure summary
         if: always()
@@ -229,14 +263,16 @@ jobs:
         with:
           name: shader-validator-failure-summary-${{ matrix.os }}
           path: |
-            support/generated/shader-validators-pytest.xml
-            support/generated/shader-validators-failure-summary.json
-            support/generated/shader-validators-failure-summary.md
+            build/reports/shader-validators-pytest.xml
+            build/reports/shader-validators-failure-summary.json
+            build/reports/shader-validators-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
   runtime-parity:
     name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -246,19 +282,17 @@ jobs:
           - os: ubuntu-latest
             adapter: opengl
             required_tools: glslangValidator
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
+            apt_packages: glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
           - os: ubuntu-latest
             adapter: vulkan
             required_tools: spirv-val,spirv-as
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+            apt_packages: glslang-tools libvulkan-dev libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
           - os: macOS-latest
             adapter: metal
             required_tools: xcrun
-            install_command: xcrun -sdk macosx -f metal
           - os: windows-latest
             adapter: directx
             required_tools: dxc
-            install_command: ""
 
     steps:
       - name: Checkout repository
@@ -268,32 +302,25 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
-      - name: Install adapter toolchain
-        shell: bash
-        env:
-          INSTALL_COMMAND: ${{ matrix.install_command }}
+      # The packages.microsoft.com sources on hosted runners are not needed here, and apt-get update fails when that
+      # repository is unavailable.
+      - name: Remove optional hosted-runner apt sources
+        if: matrix.apt_packages
         run: |
-          if [ "${RUNNER_OS:-}" = "Linux" ] && [ -n "$INSTALL_COMMAND" ]; then
-            mapfile -t runner_apt_sources < <(
-              grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-            )
+          { grep -rl packages.microsoft.com /etc/apt/sources.list.d || true; } | xargs -r sudo rm -fv
 
-            if ((${#runner_apt_sources[@]})); then
-              printf 'Removing optional hosted-runner apt sources before apt update:\n'
-              printf '  %s\n' "${runner_apt_sources[@]}"
-              sudo rm -f "${runner_apt_sources[@]}"
-            fi
-          fi
+      - name: Install adapter toolchain
+        if: matrix.apt_packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ${{ matrix.apt_packages }}
 
-          if [ -n "$INSTALL_COMMAND" ]; then
-            eval "$INSTALL_COMMAND"
-          fi
+      - name: Check the Metal compiler
+        if: runner.os == 'macOS'
+        run: xcrun -sdk macosx -f metal
 
       - name: Probe runtime parity adapter availability
         id: probe_runtime_parity
@@ -330,8 +357,7 @@ jobs:
         if: steps.probe_runtime_parity.outputs.available == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
+          python -m pip install -e ".[test]"
 
       - name: Install optional Vulkan runtime dependency
         if: matrix.adapter == 'vulkan' && steps.probe_runtime_parity.outputs.available == 'true'
@@ -349,7 +375,7 @@ jobs:
         env:
           RUNTIME_PARITY_ADAPTER: ${{ matrix.adapter }}
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           if [ "$RUNTIME_PARITY_ADAPTER" = "vulkan" ]; then
             export CROSTL_RUN_VULKAN_DEVICE_TEST=1
             vulkaninfo --summary || true
@@ -358,7 +384,7 @@ jobs:
             tests/test_translator/test_runtime_verification.py \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "runtime_parity" \
-            --junitxml support/generated/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
+            --junitxml build/reports/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
 
       - name: Run OpenGL compute runtime test
         if: matrix.adapter == 'opengl' && steps.probe_runtime_parity.outputs.available == 'true'
@@ -371,6 +397,61 @@ jobs:
           python -m pytest -q \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_executes_vector_scale_on_device"
+
+      - name: Check HLSL evaluation semantics on the native driver
+        if: (matrix.adapter == 'opengl' || matrix.adapter == 'metal') && steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        env:
+          CROSSTL_REQUIRE_BUFFER_STRIDE_EXECUTION: "1"
+          CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_OPENGL_EXECUTION: ${{ matrix.adapter == 'opengl' && '1' || '' }}
+          CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_SPECIALIZED_MEMBER_TYPE_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
+          CROSSTL_REQUIRE_CLASS_TEMPLATE_MEMBER_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
+          CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
+          CROSSTL_REQUIRE_STRUCTURED_MEMBER_LAYOUT_EXECUTION: ${{ matrix.adapter == 'opengl' && '1' || '' }}
+          CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
+          CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
+          CROSSTL_REQUIRE_BUFFER_PARAMETER_EXECUTION: "1"
+          CROSSTL_REQUIRE_FUNCTION_CONSTANT_EXECUTION: "1"
+          CROSSTL_REQUIRE_REFERENCE_ALIASING_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
+          CROSSTL_REQUIRE_THREADGROUP_BINDING_EXECUTION: "1"
+          CROSSTL_REQUIRE_HLSL_STRUCTURED_MATRIX_EXECUTION: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_translator/test_buffer_strides.py \
+            tests/test_translator/test_nested_member_placement_registers.py \
+            tests/test_backend/test_directx/test_hlsl_value_array_parameters.py \
+            tests/test_backend/test_directx/test_hlsl_buffer_parameter_layouts.py \
+            tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
+            tests/test_backend/test_directx/test_hlsl_structured_buffer_matrices.py \
+            tests/test_translator/test_metal_reference_aliasing.py \
+            tests/test_translator/test_metal_conditional_reference_copies.py \
+            tests/test_translator/test_metal_loop_reference_copies.py \
+            tests/test_translator/test_structured_buffer_counters.py \
+            tests/test_translator/test_metal_buffer_arrays.py \
+            tests/test_backend/test_metal/test_specialized_member_types.py \
+            tests/test_backend/test_metal/test_class_template_member_uses.py \
+            tests/test_translator/test_append_consume_layouts.py \
+            tests/test_translator/test_structured_buffer_array_layouts.py \
+            tests/test_translator/test_structured_buffer_member_layouts.py \
+            tests/test_translator/test_metal_specialization_constants.py \
+            tests/test_translator/test_metal_threadgroup_parameter_indices.py
+
+      # The conformance harness builds vkrun against libvulkan-dev and runs it on the host lavapipe ICD.
+      - name: Check SPIR-V member placements on lavapipe
+        if: matrix.adapter == 'vulkan' && steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        env:
+          CROSSTL_CONFORMANCE_MESA: host
+          CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_EXECUTION: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_translator/test_spirv_nested_member_placements.py \
+            tests/test_translator/test_nested_member_placement_registers.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'
@@ -385,6 +466,8 @@ jobs:
 
   directx-native-runtime-smoke:
     name: Direct3D 12 Native Runtime Smoke (Windows)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -396,10 +479,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -408,7 +488,8 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -420,6 +501,10 @@ jobs:
               Write-Warning "DXC download failed on attempt $attempt; retrying."
               Start-Sleep -Seconds (10 * $attempt)
             }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
           }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
@@ -440,6 +525,8 @@ jobs:
 
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -454,26 +541,11 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
@@ -531,9 +603,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
 
       - name: Verify compiler toolchain is active
         run: |
@@ -607,21 +677,21 @@ jobs:
 
       - name: Run external shader validator tests
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_preprocessor \
-            --junitxml support/generated/compiler-smoke-linux-pytest.xml \
+            --junitxml build/reports/compiler-smoke-linux-pytest.xml \
             -rs
 
       - name: Write compiler smoke failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/compiler-smoke-linux-pytest.xml \
-            --json-output support/generated/compiler-smoke-linux-failure-summary.json \
-            --markdown-output support/generated/compiler-smoke-linux-failure-summary.md
-          cat support/generated/compiler-smoke-linux-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/compiler-smoke-linux-pytest.xml \
+            --json-output build/reports/compiler-smoke-linux-failure-summary.json \
+            --markdown-output build/reports/compiler-smoke-linux-failure-summary.md
+          cat build/reports/compiler-smoke-linux-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload compiler smoke failure summary
         if: always()
@@ -630,14 +700,16 @@ jobs:
         with:
           name: compiler-smoke-linux-failure-summary
           path: |
-            support/generated/compiler-smoke-linux-pytest.xml
-            support/generated/compiler-smoke-linux-failure-summary.json
-            support/generated/compiler-smoke-linux-failure-summary.md
+            build/reports/compiler-smoke-linux-pytest.xml
+            build/reports/compiler-smoke-linux-failure-summary.json
+            build/reports/compiler-smoke-linux-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: macOS-latest
     timeout-minutes: 60
 
@@ -649,10 +721,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install GLSL validator
@@ -661,9 +730,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
 
       - name: Verify Metal toolchain is active
         run: |
@@ -674,24 +741,24 @@ jobs:
 
       - name: Run Metal compiler smoke tests
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_codegen/test_shader_validation.py \
             tests/test_translator/test_codegen/test_metal_codegen.py \
             tests/test_translator/test_preprocessor/test_dialects.py \
             -k "metal" \
-            --junitxml support/generated/compiler-smoke-macos-pytest.xml \
+            --junitxml build/reports/compiler-smoke-macos-pytest.xml \
             -rs
 
       - name: Write Metal compiler smoke failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/compiler-smoke-macos-pytest.xml \
-            --json-output support/generated/compiler-smoke-macos-failure-summary.json \
-            --markdown-output support/generated/compiler-smoke-macos-failure-summary.md
-          cat support/generated/compiler-smoke-macos-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/compiler-smoke-macos-pytest.xml \
+            --json-output build/reports/compiler-smoke-macos-failure-summary.json \
+            --markdown-output build/reports/compiler-smoke-macos-failure-summary.md
+          cat build/reports/compiler-smoke-macos-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Metal compiler smoke failure summary
         if: always()
@@ -700,9 +767,9 @@ jobs:
         with:
           name: compiler-smoke-macos-failure-summary
           path: |
-            support/generated/compiler-smoke-macos-pytest.xml
-            support/generated/compiler-smoke-macos-failure-summary.json
-            support/generated/compiler-smoke-macos-failure-summary.md
+            build/reports/compiler-smoke-macos-pytest.xml
+            build/reports/compiler-smoke-macos-failure-summary.json
+            build/reports/compiler-smoke-macos-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
@@ -710,7 +777,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue require.
     name: Complete Test Suite result
     if: always()
-    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    needs: [plan, pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

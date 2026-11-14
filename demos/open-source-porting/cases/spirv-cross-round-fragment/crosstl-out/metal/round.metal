@@ -3,8 +3,8 @@
 using namespace metal;
 
 struct FragmentInput {
-    float4 vA [[attribute(0)]];
-    float vB [[attribute(1)]];
+    float4 vA [[user(locn0)]];
+    float vB [[user(locn1)]];
 };
 // Fragment Shader
 fragment float4 fragment_main(FragmentInput input [[stage_in]]) {

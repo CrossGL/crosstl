@@ -326,13 +326,13 @@ def test_unproven_overload_is_not_selected(declarations, call):
 
 
 def test_resource_overload_execution_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

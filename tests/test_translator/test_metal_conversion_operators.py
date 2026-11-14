@@ -128,13 +128,13 @@ def test_concrete_conversion_helpers_execute(tmp_path, alias):
 
 
 def test_conversion_execution_reuses_required_alias_gate():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate scalar alias resolution"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp-image-checks",
+  "description": "Image comparisons applied by qualify.py in addition to the upstream TolerantImageComparer assertions, which stay unchanged. Metrics use RGB channels in 0-255 units. The DirectX bounds come from the original Windows WARP output and the upstream reference image only, never from a translated output: by the triangle inequality, a translated image that is no less accurate than WARP relative to the reference satisfies meanAbsoluteError(target, WARP) <= 2 * meanAbsoluteError(WARP, reference) and largePixelFraction(target, WARP, 2t) <= 2 * largePixelFraction(WARP, reference, t). The margins allow for float-to-unorm rounding and isolated edge pixels.",
+  "captureCases": [
+    "ComputeSharp.Tests.ShadersTests."
+  ],
+  "metrics": {
+    "largeDifference": 16,
+    "referenceLargeDifference": 8
+  },
+  "bounds": {
+    "meanAbsoluteErrorScale": 2.0,
+    "meanAbsoluteErrorMargin": 0.5,
+    "largePixelFractionScale": 2.0,
+    "largePixelFractionMargin": 0.001
+  },
+  "shaderImages": {
+    "description": "Every ShadersTests case reads back one RGBA8 texture whose pixels the runtime captures by content hash. Upstream saves it as Shaders/<shader>.png and compares it with Assets/<shader>.png using the threshold of the test method.",
+    "methodPrefix": "ComputeSharp.Tests.ShadersTests.",
+    "reference": "references/Assets/{shader}.png",
+    "directx": "outputs/Shaders/{shader}.png",
+    "upstreamThresholds": {
+      "HelloWorld": 4e-07,
+      "ColorfulInfinity": 4e-07,
+      "FourColorGradient": 0.00021,
+      "FractalTiling": 5e-07,
+      "MengerJourney": 1.1e-05,
+      "TwoTiledTruchet": 0.00032,
+      "Octagrams": 6e-07,
+      "ProteanClouds": 4e-07,
+      "ExtrudedTruchetPattern": 0.00011,
+      "PyramidPattern": 0.00021,
+      "TriangleGridContouring": 0.0006,
+      "ContouredLayers": 0.000703,
+      "TerracedHills": 2.6e-05
+    }
+  },
+  "processingImages": {
+    "description": "ImageProcessingTests save the GPU result and the ImageSharp CPU reference as JPEG files. The DirectX bound comes from the WARP GPU output and the CPU reference of the Windows run.",
+    "cases": {
+      "ComputeSharp.Tests.ImageProcessingTests.BokehBlur": {
+        "gpu": "outputs/Imaging/city_bokeh_gpu.jpg",
+        "cpu": "references/Imaging/city_bokeh_cpu.jpg",
+        "upstreamThreshold": 9e-06
+      },
+      "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
+        "gpu": "outputs/Imaging/city_gaussian_gpu.jpg",
+        "cpu": "references/Imaging/city_gaussian_cpu.jpg",
+        "upstreamThreshold": 4.6e-06
+      }
+    }
+  }
+}

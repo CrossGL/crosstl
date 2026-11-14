@@ -11,6 +11,7 @@ import pytest
 from demos.integrations.mlx.tests.kernels.test_current_unary_fma import (
     _run_current_unary,
 )
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_precise_asin import _inputs as _asin_inputs
 from tests.test_translator.test_metal_precise_trig import (
@@ -19,7 +20,6 @@ from tests.test_translator.test_metal_precise_trig import (
     _inputs,
     _oracle,
 )
-from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG"
 
@@ -180,7 +180,7 @@ def test_ci_requires_pinned_trigonometry(job_id):
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = (
-        ci_coverage.workflow_job_text(text, job_id)
+        workflow_text.workflow_job_text(text, job_id)
         .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )

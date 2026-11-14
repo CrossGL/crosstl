@@ -1,0 +1,54 @@
+#version 450
+// S11: m[i] is column i of every matrix-valued expression, not only of a matrix variable or product. A
+// matrix and a scalar, or two matrices of one shape, combined with +, - or / give that matrix type
+// (GLSL 4.60 section 5.9), and matrixCompMult and outerProduct (section 8.6) give column-major matrices.
+// Negation and the compound updates +=, -= and /= are componentwise too.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { float a[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint b = i * 6u;
+    uint w = i * 20u;
+    int k = int(i & 1u);
+    mat2x3 m = mat2x3(a[b], a[b + 1u], a[b + 2u], a[b + 3u], a[b + 4u], a[b + 5u]);
+    mat2x3 n = mat2x3(1.0, 2.0, 3.0, a[b + 5u], a[b], 4.0);
+    vec3 c = vec3(a[b], a[b + 2u], a[b + 4u]);
+    vec2 r = vec2(a[b + 1u], 10.0);
+    vec3 q = (m / 2.0)[1];
+    vec3 s = (m + 1.0)[k];
+    vec3 t = (10.0 - m)[1];
+    vec3 u = matrixCompMult(m, n)[1];
+    vec3 v = outerProduct(c, r)[k];
+    vec3 x = (m - 1.0) * r;
+    vec2 y = c * (m + n);
+    mat2x3 d = mat2x3(2.0, 4.0, 0.5, 8.0, 1.0, 0.25) * float(1 << k);
+    mat2x3 p = -m;
+    mat2x3 h = m;
+    h += 1.0;
+    h -= n;
+    h -= 0.5;
+    h /= d;
+    vec3 e = (4.0 / d)[1];
+    vec3 f = (m / d)[k];
+    o[w + 0u] = q.x;
+    o[w + 1u] = q.z;
+    o[w + 2u] = s.y;
+    o[w + 3u] = s.z;
+    o[w + 4u] = t.x;
+    o[w + 5u] = t.y;
+    o[w + 6u] = u.x;
+    o[w + 7u] = u.z;
+    o[w + 8u] = v.x;
+    o[w + 9u] = v.y;
+    o[w + 10u] = x.x;
+    o[w + 11u] = x.z;
+    o[w + 12u] = y.x;
+    o[w + 13u] = y.y;
+    o[w + 14u] = (m * 2.0)[1].y;
+    o[w + 15u] = (2.0 * m - n)[k].z;
+    o[w + 16u] = p[1].x;
+    o[w + 17u] = h[k].y;
+    o[w + 18u] = e.z;
+    o[w + 19u] = f.x;
+}

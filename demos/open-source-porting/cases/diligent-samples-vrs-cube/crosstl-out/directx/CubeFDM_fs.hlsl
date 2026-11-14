@@ -22,18 +22,13 @@ float __crossgl_uint_to_float1(uint value) {
     return asfloat(((exponent + 127u) << 23u) | (significand & 0x7fffffu));
 }
 
-struct g_Constants {
-    float4x4 WorldViewProj;
-    int PrimitiveShadingRate;
-    int DrawMode;
-};
 struct FragmentInput {
     float2 in_UV: TEXCOORD0;
 };
 Texture2D g_Texture : register(t0);
 SamplerState g_TextureSampler : register(s0);
 // Constant Buffers
-cbuffer Uniforms : register(b0) {
+cbuffer g_Constants : register(b0) {
     float4x4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;

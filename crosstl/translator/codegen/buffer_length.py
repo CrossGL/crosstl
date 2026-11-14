@@ -36,6 +36,9 @@ COUNTED_BUFFERS = {
     "StructuredBuffer": 2,
     "RWStructuredBuffer": 2,
     "RasterizerOrderedStructuredBuffer": 2,
+    # Append and consume buffers report their structure count and stride as well.
+    "AppendStructuredBuffer": 2,
+    "ConsumeStructuredBuffer": 2,
     "Buffer": 1,
     "RWBuffer": 1,
     "RasterizerOrderedBuffer": 1,
@@ -51,7 +54,9 @@ class BufferLengthUnsupportedError(TranslationDiagnostic):
     def __init__(self, target, reason):
         self.missing_capabilities = (f"{target}.buffer-length",)
         super().__init__(
-            reason, target=target, code=f"{CODE_PREFIX}{target}-buffer-length-unsupported"
+            reason,
+            target=target,
+            code=f"{CODE_PREFIX}{target}-buffer-length-unsupported",
         )
 
 
@@ -67,13 +72,32 @@ class HlslBufferLength:
         if outputs is None or not hlsl_type:
             return None
         if outputs == 2:
-            body = "uint count; uint stride; b.GetDimensions(count, stride); return count;"
+            body = (
+                "uint count; uint stride; b.GetDimensions(count, stride); return count;"
+            )
         else:
             body = "uint count; b.GetDimensions(count); return count;"
         self.helpers[("cgl_buffer_count", hlsl_type)] = (
             f"uint cgl_buffer_count({hlsl_type} b) {{ {body} }}\n"
         )
         return f"cgl_buffer_count({buffer_code})"
+
+    def dimension_outputs(self, buffer_code, resource_name, hlsl_type, outputs):
+        """``buffer_dimensions(b, out...)`` as a statement writing ``outputs``, or ``None`` when ``b`` has no such query.
+
+        The outputs follow the resource's own ``GetDimensions``: count and stride for a structured buffer, count for a
+        typed buffer, bytes for a byte-address buffer. A structured buffer has no overload with only a count, so a lone
+        output is assigned the element count instead.
+        """
+        declared = COUNTED_BUFFERS.get(resource_name)
+        if declared is None and resource_name in BYTE_ADDRESS_BUFFERS:
+            declared = 1
+        if declared is None or not outputs or len(outputs) > declared:
+            return None
+        if len(outputs) == declared:
+            return f"{buffer_code}.GetDimensions({', '.join(outputs)})"
+        count = self.element_count(buffer_code, resource_name, hlsl_type)
+        return None if count is None else f"{outputs[0]} = {count}"
 
     def byte_size(self, buffer_code, resource_name):
         if resource_name not in BYTE_ADDRESS_BUFFERS:

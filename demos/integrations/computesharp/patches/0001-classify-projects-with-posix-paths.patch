@@ -1,0 +1,20 @@
+diff --git a/build/Directory.Build.props b/build/Directory.Build.props
+index 7ddb7b1..013a0f9 100644
+--- a/build/Directory.Build.props
++++ b/build/Directory.Build.props
+@@ -157,6 +157,7 @@
+   <PropertyGroup>
+     <ProjectDirectoryPathFromSourceRoot>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)..\', $(MSBuildProjectDirectory)))</ProjectDirectoryPathFromSourceRoot>
+     <IsPublishedProject>$(ProjectDirectoryPathFromSourceRoot.StartsWith('src\'))</IsPublishedProject>
++    <IsPublishedProject Condition="$(ProjectDirectoryPathFromSourceRoot.StartsWith('src/'))">true</IsPublishedProject>
+     <IsSourceGeneratorProject>false</IsSourceGeneratorProject>
+     <IsSourceGeneratorProject Condition="$(IsPublishedProject) AND $(MSBuildProjectName.EndsWith('.SourceGenerators'))">true</IsSourceGeneratorProject>
+     <IsCodeFixersProject>false</IsCodeFixersProject>
+@@ -166,6 +167,7 @@
+     <IsPackagedProject>false</IsPackagedProject>
+     <IsPackagedProject Condition="$(IsPublishedProject) AND !$(IsAnalyzersProject)">true</IsPackagedProject>
+     <IsTestProject>$(ProjectDirectoryPathFromSourceRoot.StartsWith('tests\'))</IsTestProject>    
++    <IsTestProject Condition="$(ProjectDirectoryPathFromSourceRoot.StartsWith('tests/'))">true</IsTestProject>
+     <IsInternalsTestProject>false</IsInternalsTestProject>
+     <IsInternalsTestProject Condition="$(IsTestProject) AND $(MSBuildProjectName.EndsWith('.Internals'))">true</IsInternalsTestProject>
+   </PropertyGroup>

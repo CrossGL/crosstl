@@ -2,6 +2,9 @@
 
 import re
 
+from crosstl.translator.refusals import DirectXSyntaxError
+
+from ...translator.integer_literals import integer_literal_parts
 from ..common_ast import (
     ArrayAccessNode,
     AttributeNode,
@@ -12,6 +15,7 @@ from ..common_ast import (
     PreprocessorNode,
     TextureSampleNode,
 )
+from ..switch_clauses import record_default_position
 from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
@@ -27,6 +31,7 @@ from .DirectxAst import (
     MemberAccessNode,
     PragmaNode,
     ReturnNode,
+    ScopedBlockNode,
     ShaderNode,
     StructNode,
     SwitchNode,
@@ -37,6 +42,16 @@ from .DirectxAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .function_templates import (
+    begin_template_declaration,
+    expire_template_declaration,
+    parse_specialization_declarator_arguments,
+    skip_specialization_declarator_arguments_at,
+    take_template_parameters,
+)
+from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
+from .namespaces import qualify_namespace_declarations, using_directive_path
 
 TYPE_TOKENS = {
     "FLOAT",
@@ -376,6 +391,10 @@ class HLSLParser:
         self.synthetic_cbuffer_names = set()
         self.synthetic_enum_count = 0
         self.effect_stage_entries = {}
+        # The orientation the last ``#pragma pack_matrix`` set, if any.
+        self.matrix_pack_orientation = None
+        # ``(scope, kind, target)`` for each file- or namespace-scope ``using`` directive (see .namespaces).
+        self.hlsl_using_directives = []
 
     def parse(self):
         structs = []
@@ -386,8 +405,9 @@ class HLSLParser:
         typedefs = []
 
         while self.current_token[0] != "EOF":
+            expire_template_declaration(self)
             if self.current_token_is_keyword("USING", "using"):
-                alias = self.parse_using_directive()
+                alias = self.parse_using_directive(record=True)
                 if alias is not None:
                     typedefs.append(alias)
                 continue
@@ -404,6 +424,11 @@ class HLSLParser:
 
             if self.current_token[0] == "PREPROCESSOR":
                 directive = self.parse_preprocessor_directive()
+                orientation = pack_matrix_orientation(directive)
+                if orientation is not None:
+                    # The matrices declared after it carry the orientation themselves.
+                    self.matrix_pack_orientation = orientation
+                    continue
                 if directive is not None:
                     structs.append(directive)
                 continue
@@ -417,6 +442,7 @@ class HLSLParser:
                     continue
                 synthetic_start = len(self.synthetic_structs)
                 struct = self.parse_struct()
+                apply_matrix_orientation(struct, self.matrix_pack_orientation)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 structs.append(struct)
                 continue
@@ -436,7 +462,7 @@ class HLSLParser:
                 continue
 
             if self.is_template_declaration_prefix():
-                self.parse_template_declaration_prefix()
+                begin_template_declaration(self)
                 continue
 
             if self.is_effect_metadata_block():
@@ -455,13 +481,16 @@ class HLSLParser:
                     declaration_qualifiers=qualifiers,
                     declaration_attributes=attributes,
                 )
+                apply_matrix_orientation(struct, self.matrix_pack_orientation)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 structs.append(struct)
                 continue
 
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 synthetic_start = len(self.synthetic_structs)
-                cbuffers.append(self.parse_cbuffer(attributes=attributes))
+                cbuffer = self.parse_cbuffer(attributes=attributes)
+                apply_matrix_orientation(cbuffer, self.matrix_pack_orientation)
+                cbuffers.append(cbuffer)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 continue
 
@@ -480,11 +509,13 @@ class HLSLParser:
             attributes.extend(self.parse_attribute_list())
             declarator_type = return_type + self.parse_pointer_declarator_suffix()
             if not self.is_declarator_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_function_declarator_name()
+            name = parse_specialization_declarator_arguments(
+                self, self.parse_function_declarator_name()
+            )
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
@@ -503,12 +534,15 @@ class HLSLParser:
                     allow_semantic=True,
                     consume_semicolon=True,
                 )
+                for declaration in self.ensure_statement_list(declarations):
+                    apply_matrix_orientation(declaration, self.matrix_pack_orientation)
                 global_variables.extend(declarations)
 
+        demote_name_hinted_helpers(self, functions, structs)
         self.apply_struct_parameter_stage_qualifiers(functions, structs)
         self.apply_effect_stage_entries(functions)
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes=[],
             functions=functions,
             structs=structs,
@@ -517,6 +551,8 @@ class HLSLParser:
             enums=enums,
             typedefs=typedefs,
         )
+        shader.hlsl_using_directives = list(self.hlsl_using_directives)
+        return shader
 
     def is_effect_metadata_block(self):
         if self.current_token[0] != "IDENTIFIER":
@@ -637,6 +673,9 @@ class HLSLParser:
             entries.append(record)
 
     def eat(self, expected_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if expected_type == "EOF" and self.current_token[0] == "EOF":
+            raise DirectXSyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -645,7 +684,9 @@ class HLSLParser:
             else:
                 self.current_token = ("EOF", "")
             return token
-        raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
+        raise DirectXSyntaxError(
+            f"Expected {expected_type}, got {self.current_token[0]}"
+        )
 
     def peek(self, offset=1):
         idx = self.current_index + offset
@@ -700,14 +741,14 @@ class HLSLParser:
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected identifier, got {self.current_token[0]}")
 
     def parse_declarator_identifier(self):
         if self.is_declarator_identifier_token(self.current_token[0]):
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Expected declarator identifier, got {self.current_token[0]}"
         )
 
@@ -720,7 +761,7 @@ class HLSLParser:
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(f"Expected typedef name, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected typedef name, got {self.current_token[0]}")
 
     def current_token_is_keyword(self, token_type, value):
         return self.current_token[0] == token_type or (
@@ -754,8 +795,12 @@ class HLSLParser:
         self.skip_template_argument_list()
 
     def parse_template_declaration_prefixes(self):
+        """Consume template prefixes; return whether any were present."""
+        parsed = False
         while self.is_template_declaration_prefix():
             self.parse_template_declaration_prefix()
+            parsed = True
+        return parsed
 
     def skip_template_argument_list(self):
         self.eat("LESS_THAN")
@@ -776,30 +821,27 @@ class HLSLParser:
                     return
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated template argument list")
+        raise DirectXSyntaxError("Unterminated template argument list")
 
     def eat_keyword(self, token_type, value):
         if self.current_token[0] == token_type:
             return self.eat(token_type)
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value:
             return self.eat("IDENTIFIER")
-        raise SyntaxError(f"Expected {value}, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected {value}, got {self.current_token[0]}")
 
     def eat_double_colon(self):
         self.eat("COLON")
         self.eat("COLON")
 
-    def parse_using_directive(self):
+    def parse_using_directive(self, record=False):
+        """Parse a ``using`` alias, directive or declaration; ``record`` keeps a file-scope directive."""
         self.eat_keyword("USING", "using")
         if self.current_token_is_keyword("NAMESPACE", "namespace"):
             self.eat_keyword("NAMESPACE", "namespace")
-            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
-                if self.current_token_is_double_colon():
-                    self.eat_double_colon()
-                else:
-                    self.eat(self.current_token[0])
-            if self.current_token[0] == "SEMICOLON":
-                self.eat("SEMICOLON")
+            path = self.skip_using_target()
+            if record:
+                self.hlsl_using_directives.append(((), "namespace", path))
             return None
 
         if (
@@ -823,14 +865,23 @@ class HLSLParser:
             alias.array_sizes = array_sizes
             return alias
 
+        path = self.skip_using_target()
+        if record and len(path) > 1:
+            self.hlsl_using_directives.append(((), "declaration", path))
+        return None
+
+    def skip_using_target(self):
+        """Consume the rest of a ``using`` directive; returns the identifiers of the path it names."""
+        names = []
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
             else:
+                names.append(self.current_token[1])
                 self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return None
+        return using_directive_path(names)
 
     def is_class_declaration_prefix(self):
         return self.current_token_is_keyword(
@@ -896,14 +947,17 @@ class HLSLParser:
             self.eat(token_type)
 
         if depth != 0:
-            raise SyntaxError("Unterminated brace block")
+            raise DirectXSyntaxError("Unterminated brace block")
 
     def parse_namespace_block(self):
         self.eat_keyword("NAMESPACE", "namespace")
+        path = []
         if self.current_token[0] == "IDENTIFIER":
+            path.append(self.current_token[1])
             self.eat("IDENTIFIER")
             while self.current_token_is_double_colon():
                 self.eat_double_colon()
+                path.append(self.current_token[1])
                 self.eat("IDENTIFIER")
 
         self.eat("LBRACE")
@@ -933,6 +987,11 @@ class HLSLParser:
         parser.synthetic_enum_count = self.synthetic_enum_count
         namespace_ast = parser.parse()
         self.synthetic_enum_count = parser.synthetic_enum_count
+        self.hlsl_using_directives.extend(
+            qualify_namespace_declarations(
+                namespace_ast, path, parser.hlsl_using_directives
+            )
+        )
         return namespace_ast
 
     def parse_preprocessor_directive(self):
@@ -954,7 +1013,14 @@ class HLSLParser:
             path = text[len("#include") :].strip()
             return IncludeNode(path, False)
 
-        directive = text[1:].split(None, 1)[0] if text.startswith("#") else text
+        name = text[1:].split(None, 1) if text.startswith("#") else [text]
+        if not name:
+            # A null directive on its own line is removed by the preprocessor; a '#' that reaches the parser
+            # follows other tokens on its line, where C and HLSL give it no meaning.
+            raise DirectXSyntaxError(
+                f"Stray '#' outside a preprocessor directive: {text!r}"
+            )
+        directive = name[0]
         content = text[len(directive) + 1 :].strip() if directive else text
         return PreprocessorNode(directive, content)
 
@@ -1083,12 +1149,12 @@ class HLSLParser:
             self.eat("IDENTIFIER")
 
         if not self.is_type_token(self.current_token[0]):
-            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
+            raise DirectXSyntaxError(f"Expected type, got {self.current_token[0]}")
 
         if self.current_token[0] == "STRUCT":
             self.eat("STRUCT")
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected struct type name, got {self.current_token[0]}"
                 )
             return self.parse_type_suffixes(self.parse_identifier())
@@ -1123,7 +1189,7 @@ class HLSLParser:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
                 if self.current_token[0] != "IDENTIFIER":
-                    raise SyntaxError(
+                    raise DirectXSyntaxError(
                         "Expected identifier after scoped type, "
                         f"got {self.current_token[0]}"
                     )
@@ -1167,7 +1233,7 @@ class HLSLParser:
                 depth -= 1
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated generic argument list")
+        raise DirectXSyntaxError("Unterminated generic argument list")
 
     def format_generic_argument_tokens(self, tokens):
         result = []
@@ -1286,7 +1352,7 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected semantic identifier, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
@@ -1320,7 +1386,7 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected semantic identifier, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
@@ -1362,7 +1428,7 @@ class HLSLParser:
                 parts.append(str(token_value))
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated semantic argument list")
+            raise DirectXSyntaxError("Unterminated semantic argument list")
         return "".join(parts).strip()
 
     def parse_register_binding(self, token_type):
@@ -1384,7 +1450,7 @@ class HLSLParser:
         base_classes = []
         while True:
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected struct base identifier, got {self.current_token[0]}"
                 )
             base_name = self.parse_type_suffixes(self.parse_identifier())
@@ -1472,13 +1538,20 @@ class HLSLParser:
     def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
         declaration_qualifiers = list(declaration_qualifiers or [])
         declaration_attributes = list(declaration_attributes or [])
+        # A struct template's parameters belong to the struct, not to its members (see .struct_templates).
+        template_parameters = take_template_parameters(self)
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
+        specialization_arguments = None
         if self.is_identifier_token(self.current_token[0]):
             name = self.parse_identifier()
-            if self.current_token[0] == "LESS_THAN":
+            if self.current_token[0] == "LESS_THAN" and template_parameters == []:
+                # ``template <> struct Box<float>``: an explicit specialization keeps its arguments.
+                specialization_arguments = self.parse_generic_arguments()
+            elif self.current_token[0] == "LESS_THAN":
                 self.skip_template_argument_list()
+                specialization_arguments = True
 
         semantic = None
         base_classes = []
@@ -1489,9 +1562,9 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes()
             attributes = self.parse_attribute_list()
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes() or templated
             qualifiers = self.parse_qualifiers()
             if self.skip_unexpanded_member_macro():
                 continue
@@ -1518,21 +1591,21 @@ class HLSLParser:
                 members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
             member_name = self.parse_member_declarator_name()
             if self.current_token[0] == "LPAREN":
-                methods.append(
-                    self.parse_function(
-                        return_type,
-                        member_name,
-                        qualifiers=qualifiers,
-                        attributes=attributes,
-                    )
+                method = self.parse_function(
+                    return_type,
+                    member_name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
                 )
+                method.is_template = templated
+                methods.append(method)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
                     return_type,
@@ -1574,6 +1647,8 @@ class HLSLParser:
         struct_node.semantic = semantic
         struct_node.base_classes = base_classes
         struct_node.methods = methods
+        struct_node.template_parameters = template_parameters
+        struct_node.specialization_arguments = specialization_arguments
         return struct_node
 
     def parse_nested_struct_member(
@@ -1626,7 +1701,7 @@ class HLSLParser:
                 nested_members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
@@ -1659,7 +1734,9 @@ class HLSLParser:
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
                     return nested_members
-                raise SyntaxError("Expected identifier after anonymous struct member")
+                raise DirectXSyntaxError(
+                    "Expected identifier after anonymous struct member"
+                )
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
             nested_struct = StructNode(nested_name, nested_members)
@@ -1719,10 +1796,10 @@ class HLSLParser:
                 return "operator()"
             if self.is_type_token(self.current_token[0]):
                 return f"operator {self.parse_type()}"
-            raise SyntaxError(
+            raise DirectXSyntaxError(
                 f"Expected overloaded operator name, got {self.current_token[0]}"
             )
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Expected overloaded operator name, got {self.current_token[0]}"
         )
 
@@ -1790,7 +1867,7 @@ class HLSLParser:
             elif self.current_token[0] == "RBRACE":
                 break
             else:
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected comma or closing brace in enum, got {self.current_token[0]}"
                 )
         self.eat("RBRACE")
@@ -1873,7 +1950,7 @@ class HLSLParser:
                 members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in typedef struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
@@ -2013,7 +2090,7 @@ class HLSLParser:
             self.eat(token_type)
 
         if depth != 0:
-            raise SyntaxError(f"Unterminated {open_token} block")
+            raise DirectXSyntaxError(f"Unterminated {open_token} block")
 
     def looks_like_nested_struct_definition(self):
         if self.current_token[0] != "STRUCT":
@@ -2074,7 +2151,7 @@ class HLSLParser:
                 continue
 
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in cbuffer member, got {self.current_token[0]}"
                 )
 
@@ -2131,6 +2208,7 @@ class HLSLParser:
         return name
 
     def parse_function(self, return_type, name, qualifiers, attributes):
+        template_parameters = take_template_parameters(self)
         params = self.parse_parameters()
         qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
         return_array_sizes = self.parse_array_suffixes()
@@ -2152,6 +2230,17 @@ class HLSLParser:
         qualifier = self.infer_function_qualifier(
             name, attributes, params, semantic, body
         )
+        if qualifier in ("compute", "task", "mesh") and str(
+            getattr(return_type, "name", return_type) or ""
+        ).strip() not in ("", "void"):
+            # Compute, mesh and amplification entry points return void; DXC ignores [numthreads] on a
+            # function that returns a value, which is a helper.
+            qualifier = None
+            attributes = [
+                attribute
+                for attribute in attributes
+                if str(attribute.name).lower() not in ("numthreads", "outputtopology")
+            ]
 
         function = FunctionNode(
             return_type=return_type,
@@ -2165,6 +2254,7 @@ class HLSLParser:
             array_sizes=return_array_sizes,
         )
         function.is_prototype = is_prototype
+        function.template_parameters = template_parameters
         return function
 
     def parse_trailing_function_qualifiers(self):
@@ -2174,7 +2264,9 @@ class HLSLParser:
             self.eat("CONST")
         return qualifiers
 
-    def infer_function_qualifier(self, name, attributes, params, semantic, body=None):
+    def infer_function_qualifier(
+        self, name, attributes, params, semantic, body=None, *, use_name_hint=True
+    ):
         attribute_names = {str(attr.name).lower() for attr in attributes}
         for attr in attributes:
             if attr.name.lower() == "shader" and attr.args:
@@ -2204,23 +2296,11 @@ class HLSLParser:
                 }
                 if stage_name in stage_map:
                     return stage_map[stage_name]
-        name_lower = name.lower()
-        if name_lower.startswith("vs"):
-            return "vertex"
-        if name_lower.startswith("ps"):
-            return "fragment"
-        if name_lower.startswith("cs"):
-            return "compute"
-        if name_lower.startswith("gs"):
-            return "geometry"
-        if name_lower.startswith("hs"):
-            return "tessellation_control"
-        if name_lower.startswith("ds"):
-            return "tessellation_evaluation"
-        if name_lower.startswith("ms"):
-            return "mesh"
-        if name_lower.startswith("as"):
-            return "task"
+        name_stage = (
+            entry_name_stage_hint(name, attribute_names) if use_name_hint else None
+        )
+        if name_stage is not None:
+            return name_stage
         has_mesh_output_parameter = any(
             any(
                 str(attr.name).lower() in {"vertices", "indices", "primitives"}
@@ -2232,10 +2312,9 @@ class HLSLParser:
             "numthreads" in attribute_names or has_mesh_output_parameter
         ):
             return "mesh"
+        # A geometry entry point needs [maxvertexcount]; a function that only takes the output stream is a helper.
         has_geometry_parameter = any(
-            self.is_geometry_stream_type(getattr(param, "vtype", None))
-            or self.parameter_has_geometry_primitive(param)
-            for param in params
+            self.parameter_has_geometry_primitive(param) for param in params
         )
         if "maxvertexcount" in attribute_names or has_geometry_parameter:
             return "geometry"
@@ -2252,6 +2331,9 @@ class HLSLParser:
             return "task"
         if "numthreads" in attribute_names:
             return "compute"
+        if "earlydepthstencil" in attribute_names:
+            # [earlydepthstencil] applies to pixel shaders only.
+            return "fragment"
         if semantic:
             semantic_upper = semantic.upper()
             if semantic_upper.startswith("SV_TARGET"):
@@ -2353,12 +2435,24 @@ class HLSLParser:
                 has_struct_input = True
                 input_semantics.update(param_semantics)
 
-        if not has_struct_input or not has_struct_output:
+        # A structure returned by ``main`` is the stage output, as an ``out`` structure parameter is.
+        return_struct = structs_by_name.get(
+            self.struct_type_base_name(getattr(function, "return_type", None))
+        )
+        if return_struct is not None:
+            has_struct_output = True
+            output_semantics.update(self.struct_member_stage_semantics(return_struct))
+        elif not has_struct_input:
+            return None
+
+        if not has_struct_output:
             return None
         if any(self.is_fragment_output_semantic(name) for name in output_semantics):
             return "fragment"
         if any(self.is_vertex_output_semantic(name) for name in output_semantics):
             return "vertex"
+        if not has_struct_input:
+            return None
         if any(self.is_vertex_input_semantic(name) for name in input_semantics) or any(
             self.is_vertex_attribute_semantic(name) for name in input_semantics
         ):
@@ -2366,12 +2460,14 @@ class HLSLParser:
         return None
 
     def parameter_struct_node(self, param, structs_by_name):
-        type_name = str(getattr(param, "vtype", "") or "").strip()
-        if not type_name:
-            return None
+        type_name = self.struct_type_base_name(getattr(param, "vtype", None))
+        return structs_by_name.get(type_name) if type_name else None
+
+    def struct_type_base_name(self, type_name):
+        type_name = str(type_name or "").strip()
         if "<" in type_name and type_name.endswith(">"):
             type_name = type_name.split("<", 1)[0].strip()
-        return structs_by_name.get(type_name)
+        return type_name or None
 
     def struct_member_stage_semantics(self, struct):
         semantics = set()
@@ -2495,7 +2591,7 @@ class HLSLParser:
                     attributes, primitive_qualifiers, mesh_parameter_roles
                 )
                 if not self.is_type_token(self.current_token[0]):
-                    raise SyntaxError(
+                    raise DirectXSyntaxError(
                         f"Unexpected token in parameter list: {self.current_token[0]}"
                     )
                 param_type = self.parse_type()
@@ -2666,19 +2762,20 @@ class HLSLParser:
             return "discard"
 
         if self.current_token[0] == "LBRACE":
-            return self.parse_block()
+            # A nested compound statement opens a scope (HLSL follows C here), so it stays a node.
+            return ScopedBlockNode(self.parse_block())
 
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()
             return None
 
         if self.current_token_is_keyword("USING", "using"):
-            self.parse_using_directive()
-            return None
+            # A block-scope alias is a statement: it names a type from here to
+            # the end of the block.
+            return self.parse_using_directive()
 
         if self.current_token[0] == "TYPEDEF":
-            self.parse_typedef()
-            return None
+            return self.parse_typedef()
 
         if self.is_class_declaration_prefix():
             self.parse_class_declaration()
@@ -2910,7 +3007,7 @@ class HLSLParser:
         if not self.is_declarator_identifier_token_at(idx):
             return False
 
-        idx += 1
+        idx = skip_specialization_declarator_arguments_at(self, idx + 1)
         idx = self.skip_array_suffixes_at(idx)
         if idx is None or idx >= len(self.tokens):
             return False
@@ -3134,7 +3231,7 @@ class HLSLParser:
     def parse_anonymous_bitfield_declaration_rest(self):
         bit_width = self.parse_bitfield_width()
         if bit_width is None:
-            raise SyntaxError(
+            raise DirectXSyntaxError(
                 f"Expected anonymous bitfield width, got {self.current_token[0]}"
             )
         self.parse_attribute_list()
@@ -3234,7 +3331,7 @@ class HLSLParser:
                 return
             self.eat(self.current_token[0])
 
-        raise SyntaxError("Unterminated effect annotation block")
+        raise DirectXSyntaxError("Unterminated effect annotation block")
 
     def is_sampler_state_type(self, vtype):
         return str(vtype).split("<", 1)[0] in {
@@ -3287,7 +3384,7 @@ class HLSLParser:
             tokens.append(self.current_token)
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated sampler_state angle-bracket value")
+        raise DirectXSyntaxError("Unterminated sampler_state angle-bracket value")
 
     def parse_condition_expression(self):
         if self.looks_like_declaration():
@@ -3416,6 +3513,7 @@ class HLSLParser:
 
         cases = []
         default_body = None
+        default_index = None
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "CASE":
@@ -3425,10 +3523,12 @@ class HLSLParser:
                 nested_default = getattr(case, "additional_default_body", None)
                 if nested_default is not None:
                     default_body = nested_default
+                    default_index = len(cases)
             elif self.current_token[0] == "DEFAULT":
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_body = []
+                default_index = len(cases)
                 while self.current_token[0] not in [
                     "CASE",
                     "DEFAULT",
@@ -3452,7 +3552,9 @@ class HLSLParser:
                         default_body.append(stmt)
 
         self.eat("RBRACE")
-        return SwitchNode(condition, cases, default_body)
+        return record_default_position(
+            SwitchNode(condition, cases, default_body), default_index
+        )
 
     def parse_switch_case(self):
         self.eat("CASE")
@@ -3928,7 +4030,7 @@ class HLSLParser:
 
     def parse_scoped_name(self, prefix):
         if not isinstance(prefix, str):
-            raise SyntaxError("Expected identifier before scoped name separator")
+            raise DirectXSyntaxError("Expected identifier before scoped name separator")
 
         scoped_name = prefix
         while self.current_token_is_double_colon():
@@ -3998,13 +4100,14 @@ class HLSLParser:
         if self.current_token_is_double_colon():
             self.eat_double_colon()
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected identifier after global scope qualifier, got {self.current_token[0]}"
                 )
             scoped_name = self.parse_identifier()
             if self.current_token_is_double_colon():
                 scoped_name = self.parse_scoped_name(scoped_name)
-            return scoped_name
+            # ``::f`` names the global ``f`` even inside a namespace that declares one (see .namespaces).
+            return f"::{scoped_name}"
         if self.is_template_type_constructor_start():
             type_name = self.parse_type()
             args = self.parse_call_arguments()
@@ -4029,15 +4132,10 @@ class HLSLParser:
             self.eat("CHAR_LITERAL")
             return value
         if token_type == "LPAREN":
+            # ``(a, b)`` is the comma operator, as in C: DXC and FXC evaluate ``(1, 0, 0, 1)`` to ``1``
+            # (FXC warns X3081, "comma expression used where a vector constructor may have been intended").
             self.eat("LPAREN")
-            expr = self.parse_expression()
-            if self.current_token[0] == "COMMA":
-                elements = [expr]
-                while self.current_token[0] == "COMMA":
-                    self.eat("COMMA")
-                    elements.append(self.parse_expression())
-                self.eat("RPAREN")
-                return InitializerListNode(elements)
+            expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
         if token_type == "LBRACE":
@@ -4057,7 +4155,7 @@ class HLSLParser:
                 return VectorConstructorNode(type_name, args)
             return type_name
 
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Unexpected token in primary expression: {self.current_token}"
         )
 
@@ -4120,16 +4218,32 @@ class HLSLParser:
             )
             if base != 10 or not any(c in stripped for c in ".eE"):
                 return IntegerLiteral(int(stripped, base), integer_suffix.group())
-        if token_type == "HEX_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 16)
-        if token_type == "BINARY_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 2)
-        if token_type == "OCT_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 8)
+        if token_type in {"HEX_NUMBER", "BINARY_NUMBER", "OCT_NUMBER"}:
+            return self.unsuffixed_nondecimal_literal(token_type, value)
         stripped = re.sub(r"[fFhHuUlL]+$", "", value)
         if "." in stripped or "e" in stripped or "E" in stripped:
             return float(stripped)
         return int(stripped)
+
+    # Suffixes that spell the C type of an unsuffixed non-decimal literal.
+    NONDECIMAL_LITERAL_SUFFIXES = {
+        "int": "",
+        "uint": "u",
+        "int64_t": "l",
+        "uint64_t": "ul",
+    }
+
+    def unsuffixed_nondecimal_literal(self, token_type, value):
+        """Type an unsuffixed hex, binary or octal literal as C does.
+
+        Such a literal takes the first of int, uint, int64_t and uint64_t that
+        holds its value, so ``0xFFC00000`` is a uint rather than a wider
+        signed integer.
+        """
+        spelling = value
+        if token_type == "OCT_NUMBER":
+            spelling = "0o" + value[1:]
+        _, type_name = integer_literal_parts(spelling)
+        number = int(spelling, 0)
+        suffix = self.NONDECIMAL_LITERAL_SUFFIXES[type_name]
+        return IntegerLiteral(number, suffix) if suffix else number

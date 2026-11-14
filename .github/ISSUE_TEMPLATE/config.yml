@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/CrossGL/crosstl/discussions
+    about: Ask how to use CrossTL or discuss a design before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/CrossGL/crosstl/security/advisories/new
+    about: Report vulnerabilities privately, not in a public issue.

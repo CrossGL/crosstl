@@ -1,0 +1,29 @@
+#version 450
+// Unpacking built-ins (GLSL 4.60 section 8.4): the least significant bits hold the first component.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { uint a[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint p = a[i];
+    vec4 u4 = unpackUnorm4x8(p);
+    vec4 s4 = unpackSnorm4x8(p);
+    vec2 u2 = unpackUnorm2x16(p);
+    vec2 s2 = unpackSnorm2x16(p);
+    vec2 h2 = unpackHalf2x16(p);
+    uint b = 14u * i;
+    o[b] = u4.x;
+    o[b + 1u] = u4.y;
+    o[b + 2u] = u4.z;
+    o[b + 3u] = u4.w;
+    o[b + 4u] = s4.x;
+    o[b + 5u] = s4.y;
+    o[b + 6u] = s4.z;
+    o[b + 7u] = s4.w;
+    o[b + 8u] = u2.x;
+    o[b + 9u] = u2.y;
+    o[b + 10u] = s2.x;
+    o[b + 11u] = s2.y;
+    o[b + 12u] = h2.x;
+    o[b + 13u] = h2.y;
+}

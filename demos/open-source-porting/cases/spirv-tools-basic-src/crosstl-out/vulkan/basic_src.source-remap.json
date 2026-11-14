@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 53,
-        "endOffset": 1331,
+        "endLine": 55,
+        "endOffset": 1409,
         "file": "crosstl-out/vulkan/basic_src.spvasm",
-        "length": 1331,
+        "length": 1409,
         "line": 1,
         "offset": 0
       },

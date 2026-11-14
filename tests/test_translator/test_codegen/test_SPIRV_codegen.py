@@ -41,6 +41,32 @@ from crosstl.translator.codegen.SPIRV_codegen import (
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.cooperative_matrix_parsing import parse_keeping_untyped_cooperative_matrices
+
+
+def spirv_narrowed_image_read(spv_code, component_type_id, operands=""):
+    """Whether a one-channel image read reads four components and keeps the first.
+
+    Vulkan requires the result of ``OpImageRead`` to have four components
+    (VUID-StandaloneSpirv-Result-04780), so a scalar texel is extracted from it.
+    """
+    vector_type = re.search(
+        rf"(%\d+) = OpTypeVector {re.escape(component_type_id)} 4\b", spv_code
+    )
+    if vector_type is None:
+        return False
+    reads = re.findall(
+        rf"(%\d+) = OpImageRead {re.escape(vector_type.group(1))} %\d+ %\d+" + operands,
+        spv_code,
+    )
+    return any(
+        re.search(
+            rf"= OpCompositeExtract {re.escape(component_type_id)} "
+            rf"{re.escape(read)} 0\b",
+            spv_code,
+        )
+        for read in reads
+    )
 
 
 def spirv_named_ids(spv_code, name):
@@ -73,6 +99,47 @@ def spirv_named_variable(spv_code, name, pointer_type=None, storage_class=None):
         ):
             return variable_id
     raise AssertionError(f"Missing variable {name}")
+
+
+def spirv_whole_copies(spv_code):
+    """``(line, destination, source)`` for every ``OpStore`` of a value loaded whole from another variable."""
+    lines = spv_code.splitlines()
+    loads = {}
+    copies = []
+    for line_number, line in enumerate(lines):
+        load = re.match(r"\s*(%\d+) = OpLoad %\d+ (%\d+)\s*$", line)
+        if load:
+            loads[load.group(1)] = load.group(2)
+            continue
+        store = re.match(r"\s*OpStore (%\d+) (%\d+)\s*$", line)
+        if store and store.group(2) in loads:
+            copies.append((line_number, store.group(1), loads[store.group(2)]))
+    return copies
+
+
+def spirv_value_result_temporaries(spv_code, variable):
+    """The unnamed Function variables an ``out``/``inout`` argument ``variable`` is copied into or back from.
+
+    GLSL 4.60 section 6.1.1 and HLSL pass ``out`` and ``inout`` by value-result, so the parameter has its own
+    variable: the argument is copied in (``inout``) when it is evaluated and copied back after the call.
+    """
+    named = set(re.findall(r"OpName (%\d+) ", spv_code))
+    function_variables = {
+        variable
+        for variable in re.findall(r"(%\d+) = OpVariable %\d+ Function\b", spv_code)
+        if variable not in named
+    }
+    copies = spirv_whole_copies(spv_code)
+    related = {variable}
+    changed = True
+    while changed:
+        changed = False
+        for _line, destination, source in copies:
+            for a, b in ((destination, source), (source, destination)):
+                if a in related and b not in related and b in function_variables:
+                    related.add(b)
+                    changed = True
+    return related - {variable}
 
 
 def spirv_pointer_type(spv_code, pointee_type, storage_class):
@@ -509,13 +576,12 @@ kernel void vector_list(device uint* results [[buffer(0)]]) {{
     output = crosstl.translate(str(source), backend="vulkan", format_output=False)
     assert "WARNING" not in output
     if global_scope:
-        variable = spirv_named_variable(output, "value", storage_class="Private")
-        initializer = re.search(
-            rf"{variable} = OpVariable %\d+ Private (%\d+)", output
-        )[1]
-        components = re.search(
-            rf"{initializer} = OpConstantComposite %\d+ (.*)", output
-        )[1].split()
+        # An immutable program-scope vector is a named constant composite.
+        (constant,) = spirv_named_ids(output, "value")
+        assert f"{constant} = OpVariable" not in output
+        components = re.search(rf"{constant} = OpConstantComposite %\d+ (.*)", output)[
+            1
+        ].split()
         constants = spirv_uint_constant_values(output)
         assert [constants[item] for item in components] == list(range(1, count + 1)) + [
             0
@@ -631,7 +697,7 @@ def assert_cooperative_matrix_multiply_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == feature
@@ -647,7 +713,7 @@ def assert_cooperative_matrix_element_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == feature
@@ -662,7 +728,7 @@ def assert_cooperative_matrix_role_specialization_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == (
@@ -3026,14 +3092,12 @@ class TestVulkanSPIRVCodeGen:
     def test_helper_fixed_array_parameter_called_with_buffer_pointer_matches_types(
         self, tmp_path
     ):
-        # A helper that takes a fixed-size array parameter (int64_t strides[2])
-        # lowers its parameter to a Function-storage pointer to an array
-        # (OpTypePointer Function <array>). When the matching caller argument is a
-        # buffer pointer (constant const int64_t*), it lowers to a Uniform block
-        # struct wrapping a runtime array. The argument must be materialized into a
-        # Function-local array copy so its type matches the parameter type; otherwise
-        # the OpFunctionCall argument and parameter types diverge and spirv-val
-        # rejects the module.
+        # A helper parameter declared as an array in constant memory
+        # (constant const int64_t strides[2]) is a pointer to its element: C++
+        # adjusts "array of T" to "pointer to T" ([dcl.fct]/5) and MSL keeps the
+        # address space on that pointer. The helper therefore reads the caller's
+        # buffer by reference instead of a Function-local array copy, and every
+        # call that remains must pass arguments of the declared parameter types.
         source_code = """
         #include <metal_stdlib>
         using namespace metal;
@@ -3071,30 +3135,32 @@ class TestVulkanSPIRVCodeGen:
             source_backend="metal",
         )
 
-        # The helper's fixed-size array parameter must survive as a Function-storage
-        # pointer to an array of 64-bit ints, taken by an OpFunctionParameter (i.e.
-        # the helper was emitted as a real function, not inlined).
+        # No Function-local copy of the strides exists: there is no array of 64-bit
+        # ints, and each stride is loaded through a Uniform-storage pointer to one
+        # 64-bit element of the caller's buffer.
         long_type = re.search(r"(%\d+) = OpTypeInt 64 1\b", spv_code)
         assert long_type is not None
-        array_type = re.search(
-            rf"(%\d+) = OpTypeArray {re.escape(long_type.group(1))} %\d+", spv_code
+        long_id = re.escape(long_type.group(1))
+        assert not re.search(rf"= OpTypeArray {long_id} %\d+", spv_code)
+        uniform_long_ptr = re.search(
+            rf"(%\d+) = OpTypePointer Uniform {long_id}\b", spv_code
         )
-        assert array_type is not None
-        function_array_ptr = re.search(
-            rf"(%\d+) = OpTypePointer Function {re.escape(array_type.group(1))}\b",
+        assert uniform_long_ptr is not None
+        stride_loads = re.findall(
+            rf"(%\d+) = OpAccessChain {re.escape(uniform_long_ptr.group(1))} %\d+",
             spv_code,
         )
-        assert function_array_ptr is not None
-        assert re.search(
-            rf"%\d+ = OpFunctionParameter {re.escape(function_array_ptr.group(1))}\b",
-            spv_code,
-        )
+        assert len(stride_loads) >= 2
+        for pointer in stride_loads:
+            assert re.search(
+                rf"= OpLoad {long_id} {re.escape(pointer)}\b", spv_code
+            ), pointer
 
         # The call argument type matches the parameter type, and the module is valid.
         assert_spirv_function_calls_use_declared_parameter_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_inout_fixed_array_parameter_aliases_caller_storage(self, tmp_path):
+    def test_inout_fixed_array_parameter_copies_in_and_back(self, tmp_path):
         source_code = """
         shader WritableArrayParameter {
             compute {
@@ -3115,17 +3181,27 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
         caller_array = spirv_named_variable(
             spv_code, "values", storage_class="Function"
         )
+        copies = spirv_whole_copies(spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, caller_array)
+        copy_in = [
+            line for line, dst, src in copies if (dst, src) == (parameter, caller_array)
+        ]
+        copy_out = [
+            line for line, dst, src in copies if (dst, src) == (caller_array, parameter)
+        ]
+        write = [
+            number
+            for number, line in enumerate(spv_code.splitlines())
+            if re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", line)
+        ]
 
-        assert re.search(
-            rf"OpAccessChain %\d+ {re.escape(caller_array)} %\d+", spv_code
-        )
+        # Copied in, written through the parameter's own variable, then copied back.
+        assert copy_in and write and copy_out
+        assert copy_in[0] < write[0] < copy_out[-1]
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -3190,7 +3266,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_out_scalar_parameter_aliases_caller_storage(self, tmp_path):
+    def test_out_scalar_parameter_is_copied_back(self, tmp_path):
         source_code = """
         shader WritableScalarParameter {
             void assign(out int value) {
@@ -3213,13 +3289,18 @@ class TestVulkanSPIRVCodeGen:
 
         result = spirv_named_variable(spv_code, "result", storage_class="Function")
         integer_constants = spirv_integer_constant_values(spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, result)
         stored_values = [
             stored_value
             for pointer, stored_value in re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
-            if pointer == result
+            if pointer == parameter
         ]
+        copies = {(dst, src) for _line, dst, src in spirv_whole_copies(spv_code)}
 
-        assert 7 in {integer_constants.get(stored) for stored in stored_values}
+        # An out parameter is not copied in; its final value is copied back.
+        assert integer_constants.get(stored_values[0]) == 7
+        assert (parameter, result) not in copies
+        assert (result, parameter) in copies
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -3261,12 +3342,18 @@ class TestVulkanSPIRVCodeGen:
 
         state = spirv_named_variable(spv_code, "state", storage_class="Function")
         scalar = spirv_named_variable(spv_code, "scalar", storage_class="Function")
-        state_members = set(
-            re.findall(
-                rf"(%\d+) = OpAccessChain %\d+ {re.escape(state)} %\d+",
+        # leaf's parameters are copied from relay's, which are copied from main's variables, and back.
+        states = spirv_value_result_temporaries(spv_code, state)
+        scalars = spirv_value_result_temporaries(spv_code, scalar)
+        assert len(states) == len(scalars) == 2 and not states & scalars
+        state_members = {
+            member
+            for variable in states
+            for member in re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable)} %\d+",
                 spv_code,
             )
-        )
+        }
         integer_constants = spirv_integer_constant_values(spv_code)
         stores = re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
         assert any(
@@ -3281,7 +3368,7 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert seven is not None
-        assert (scalar, seven.group(1)) in stores
+        assert any((variable, seven.group(1)) in stores for variable in scalars)
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -3310,7 +3397,9 @@ class TestVulkanSPIRVCodeGen:
         assert "argument 1" in str(error)
         assert "not addressable" in str(error)
 
-    def test_inlined_storage_buffer_helper_aliases_inout_fixed_array(self, tmp_path):
+    def test_inlined_storage_buffer_helper_copies_back_inout_fixed_array(
+        self, tmp_path
+    ):
         source_code = """
         shader WritableArrayInline {
             StructuredBuffer<float> input @binding(0);
@@ -3335,18 +3424,21 @@ class TestVulkanSPIRVCodeGen:
         )
 
         values = spirv_named_variable(spv_code, "values", storage_class="Function")
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
-        accesses = re.findall(rf"OpAccessChain %\d+ {re.escape(values)} %\d+", spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, values)
+        copies = {(dst, src) for _line, dst, src in spirv_whole_copies(spv_code)}
 
-        assert len(accesses) >= 2
+        # dst[0] is written through the parameter's variable, copied back, and read from values.
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", spv_code)
+        assert (values, parameter) in copies
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(values)} %\d+", spv_code)
         assert not spirv_named_ids(spv_code, "load")
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_nested_inout_fixed_array_helpers_share_caller_storage(self, tmp_path):
+    def test_nested_inout_fixed_array_helpers_copy_back_to_caller_storage(
+        self, tmp_path
+    ):
         source_code = """
         shader NestedWritableArrayParameter {
             compute {
@@ -3371,16 +3463,24 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
         caller_array = spirv_named_variable(
             spv_code, "values", storage_class="Function"
+        )
+        # relay's and writeAt's parameters, each copied in and back in turn.
+        parameters = spirv_value_result_temporaries(spv_code, caller_array)
+        assert len(parameters) == 2
+        assert any(
+            re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", spv_code)
+            for parameter in parameters
+        )
+        assert any(
+            dst == caller_array and src in parameters
+            for _line, dst, src in spirv_whole_copies(spv_code)
         )
         assert re.search(
             rf"OpAccessChain %\d+ {re.escape(caller_array)} %\d+", spv_code
         )
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -7805,12 +7905,18 @@ class TestVulkanSPIRVCodeGen:
             f"OpMemoryBarrier {workgroup_scope.group(1)} {shared_semantics.group(1)}"
             in spv_code
         )
+        # memoryBarrierShared orders workgroup memory; groupMemoryBarrier orders buffer, image and workgroup
+        # memory within the workgroup (GLSL 4.60 section 8.16), as glslang emits it.
         assert (
             spv_code.count(
                 f"OpMemoryBarrier {workgroup_scope.group(1)} "
                 f"{shared_semantics.group(1)}"
             )
-            == 2
+            == 1
+        )
+        assert (
+            f"OpMemoryBarrier {workgroup_scope.group(1)} {all_semantics.group(1)}"
+            in spv_code
         )
         assert (
             f"OpMemoryBarrier {device_scope.group(1)} {buffer_semantics.group(1)}"
@@ -7923,13 +8029,16 @@ class TestVulkanSPIRVCodeGen:
             "groupMemoryBarrier",
             "memoryBarrierShared",
         ]:
-            assert (
-                spv_code_refused.count(
-                    f"synchronization builtin '{function_name}' "
-                    "requires a workgroup-capable execution model"
-                )
-                == 2
-            )
+            # GLSL's barrier() orders a tessellation control patch's invocations
+            # (GLSL 4.60 section 8.16); only the evaluation stage refuses it.
+            assert spv_code_refused.count(
+                f"synchronization builtin '{function_name}' "
+                "requires a workgroup-capable execution model"
+            ) == (1 if function_name == "barrier" else 2)
+        assert (
+            "synchronization builtin 'barrier' requires a workgroup-capable "
+            "execution model; current execution model: TessellationEvaluation"
+        ) in spv_code_refused
 
     def test_geometry_stage_layouts_emit_execution_modes(self, tmp_path):
         source_code = """
@@ -9812,7 +9921,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "hitDistance",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "customAttributeToken",
@@ -9847,7 +9956,7 @@ class TestVulkanSPIRVCodeGen:
             "IntersectionKHR stages"
         ) in spv_code
         assert "Proceed yet" in spv_code
-        assert "CandidateRayT yet" in spv_code
+        assert "CandidateTriangleRayT yet" in spv_code
         assert "CommittedTriangleCustomAttribute yet" in spv_code
         assert "SetMeshOutputCounts yet" in spv_code
         assert (
@@ -11877,7 +11986,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "candidateT",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "committedT",
@@ -11919,7 +12028,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed();
-                    float candidateT = rq.CandidateRayT();
+                    float candidateT = rq.CandidateTriangleRayT();
                     float committedT = rq.CommittedRayT();
                 }
             }
@@ -12034,10 +12143,10 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort();
-                    rq.Terminate();
-                    rq.GenerateIntersection(1.0);
+                    rq.Abort();
+                    rq.CommitProceduralPrimitiveHit(1.0);
                     rq.CommitProceduralPrimitiveHit(2.0);
-                    rq.ConfirmIntersection();
+                    rq.CommitNonOpaqueTriangleHit();
                     rq.CommitNonOpaqueTriangleHit();
                 }
             }
@@ -12053,7 +12162,9 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpRayQueryGenerateIntersectionKHR") == 2
         assert spv_code.count("OpRayQueryConfirmIntersectionKHR") == 2
         assert "RayQuery.Abort yet; using a default" not in spv_code
-        assert "RayQuery.GenerateIntersection yet; using a default" not in spv_code
+        assert (
+            "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
+        )
         assert (
             "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
         )
@@ -12070,7 +12181,7 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort(1);
                     rq.CommitNonOpaqueTriangleHit(1.0);
-                    rq.GenerateIntersection(vec3(0.0, 1.0, 2.0));
+                    rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                     rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                 }
             }
@@ -12086,7 +12197,7 @@ class TestVulkanSPIRVCodeGen:
             "SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 " "arguments"
         ) in spv_code_refused
         assert (
-            "SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance argument "
             "must be a 32-bit floating-point scalar"
         ) in spv_code_refused
         assert (
@@ -12103,11 +12214,11 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     uint candidateType = rq.CandidateType();
-                    uint committedType = rq.CommittedType();
+                    uint committedType = rq.CommittedStatus();
                     uint candidatePrimitive = rq.CandidatePrimitiveIndex();
                     uint committedPrimitive = rq.CommittedPrimitiveIndex();
-                    uint candidateInstance = rq.CandidateInstanceID();
-                    uint committedInstance = rq.CommittedInstanceID();
+                    uint candidateInstance = rq.CandidateInstanceIndex();
+                    uint committedInstance = rq.CommittedInstanceIndex();
                     uint candidateGeometry = rq.CandidateGeometryIndex();
                     uint committedGeometry = rq.CommittedGeometryIndex();
                     vec2 candidateBarycentrics = rq.CandidateTriangleBarycentrics();
@@ -12179,12 +12290,12 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin();
                     uint rayFlags = rq.RayFlags();
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex();
-                    uint committedCustomIndex = rq.CommittedInstanceCustomIndex();
+                    uint candidateCustomIndex = rq.CandidateInstanceID();
+                    uint committedCustomIndex = rq.CommittedInstanceID();
                     uint candidateSbt =
-                        rq.CandidateInstanceShaderBindingTableRecordOffset();
+                        rq.CandidateInstanceContributionToHitGroupIndex();
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset();
+                        rq.CommittedInstanceContributionToHitGroupIndex();
                 }
             }
         }
@@ -12206,7 +12317,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "RayTMin yet; using a default" not in spv_code
         assert "RayFlags yet; using a default" not in spv_code
-        assert "CandidateInstanceCustomIndex yet; using a default" not in spv_code
+        assert "CandidateInstanceID yet; using a default" not in spv_code
         assert (
             "CommittedInstanceShaderBindingTableRecordOffset yet; using a default"
             not in spv_code
@@ -12222,9 +12333,9 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin(1);
                     uint rayFlags = rq.RayFlags(1);
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex(1);
+                    uint candidateCustomIndex = rq.CandidateInstanceID(1);
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset(1);
+                        rq.CommittedInstanceContributionToHitGroupIndex(1);
                 }
             }
         }
@@ -12237,11 +12348,11 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code_refused
         assert "SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code_refused
         assert (
-            "SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 " "arguments"
+            "SPIR-V RayQuery.CandidateInstanceID requires 0 " "arguments"
         ) in spv_code_refused
         assert (
             "SPIR-V "
-            "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
+            "RayQuery.CommittedInstanceContributionToHitGroupIndex requires 0 "
             "arguments"
         ) in spv_code_refused
 
@@ -12403,7 +12514,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque();
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 }
             }
         }
@@ -12415,7 +12526,11 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCapability RayQueryKHR" in spv_code
         assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
         assert spv_code.count("OpRayQueryGetIntersectionCandidateAABBOpaqueKHR") == 1
-        assert "CandidateAABBOpaque yet; using a default" not in spv_code
+        # DXR asks whether the candidate is non-opaque: the opaque bit is negated.
+        assert spv_code.count("OpLogicalNot") == 1
+        assert (
+            "CandidateProceduralPrimitiveNonOpaque yet; using a default" not in spv_code
+        )
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -12425,7 +12540,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque(1);
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque(1);
                 }
             }
         }
@@ -12436,7 +12551,7 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert (
-            "SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            "SPIR-V RayQuery.CandidateProceduralPrimitiveNonOpaque requires 0 arguments"
             in spv_code_refused
         )
 
@@ -12696,7 +12811,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed(1);
-                    float candidateT = rq.CandidateRayT(2);
+                    float candidateT = rq.CandidateTriangleRayT(2);
                 }
             }
         }
@@ -12707,7 +12822,10 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert "SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code_refused
-        assert "SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code_refused
+        assert (
+            "SPIR-V RayQuery.CandidateTriangleRayT requires 0 arguments"
+            in spv_code_refused
+        )
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
@@ -14723,7 +14841,8 @@ class TestVulkanSPIRVCodeGen:
             "assignable scalar uint target"
         ) in spv_code_refused
         assert (
-            "RWByteAddressBuffer.InterlockedMax original operand must be " "scalar uint"
+            "RWByteAddressBuffer.InterlockedMax original operand must be "
+            "scalar int or uint"
         ) in spv_code_refused
         assert (
             "RWByteAddressBuffer.InterlockedCompareExchange requires byte "
@@ -15622,8 +15741,10 @@ class TestVulkanSPIRVCodeGen:
 
         assert f"OpMemberDecorate {std430_block} 1 Offset 16" in spv_code
         assert f"OpMemberDecorate {std430_block} 3 Offset 32" in spv_code
+        # std140 sizes vec3 as three components, so tail packs at 28 and values starts at 32 (glslang agrees).
         assert f"OpMemberDecorate {std140_block} 1 Offset 16" in spv_code
-        assert f"OpMemberDecorate {std140_block} 3 Offset 48" in spv_code
+        assert f"OpMemberDecorate {std140_block} 2 Offset 28" in spv_code
+        assert f"OpMemberDecorate {std140_block} 3 Offset 32" in spv_code
         assert f"OpMemberDecorate {scalar_block} 1 Offset 4" in spv_code
         assert f"OpMemberDecorate {scalar_block} 3 Offset 20" in spv_code
         assert "ArrayStride 16" in spv_code
@@ -20310,10 +20431,9 @@ class TestVulkanSPIRVCodeGen:
         assert (
             "imageAtomicAdd requires a 2-component integer coordinate " "for uimage2D"
         ) in spv_code_refused
-        assert (
-            "imageStore value operand does not match v4float "
-            "storage image texel type"
-        ) in spv_code_refused
+        # A three-component value for a four-channel format takes the alpha
+        # fill (GLSL 4.60 section 8.12), so only the wrong kinds are refused.
+        assert "does not match v4float" not in spv_code_refused
         assert (
             "imageStore value operand does not match uint " "storage image texel type"
         ) in spv_code_refused
@@ -20578,7 +20698,7 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageWrite") == 2
         assert "OpImageSampleImplicitLod" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert f"OpImageSampleExplicitLod {vec4_type.group(1)}" in spv_code
         assert "OpFunctionCall" not in spv_code
         assert "imageLoad" not in spv_code
@@ -20617,10 +20737,7 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 R32ui", spv_code)
         assert spv_code.count("OpImageRead") == 2
         assert spv_code.count("OpImageWrite") == 2
-        assert re.search(
-            rf"OpImageRead {uint_type.group(1)} %\d+ %\d+ Sample %\d+",
-            spv_code,
-        )
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1), r" Sample %\d+")
         assert re.search(
             rf"OpImageRead {vec4_type.group(1)} %\d+ %\d+ Sample %\d+",
             spv_code,
@@ -20791,8 +20908,8 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageRead") == 4
         assert spv_code.count("OpImageWrite") == 4
         assert f"OpImageRead {vec4_type.group(1)}" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
-        assert f"OpImageRead {int_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
+        assert spirv_narrowed_image_read(spv_code, int_type.group(1))
 
         image_access_lines = [
             line
@@ -20881,8 +20998,8 @@ class TestVulkanSPIRVCodeGen:
         assert " 1D 0 0 0 2 R32f" in spv_code
         assert " 1D 0 0 0 2 R32ui" in spv_code
         assert " 1D 0 1 0 2 Rgba16f" in spv_code
-        assert f"OpImageRead {float_type.group(1)}" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, float_type.group(1))
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert spv_code.count("OpImageRead") == 3
         assert spv_code.count("OpImageWrite") == 3
         assert "OpAtomicIAdd" in spv_code
@@ -21067,24 +21184,23 @@ class TestVulkanSPIRVCodeGen:
                     int layer = 1;
                     vec2 uv = vec2(0.25, 0.75);
                     ivec2 pixel = ivec2(4, 8);
-                    ivec2 offset = ivec2(1, 0);
-                    vec4 offsetColor = textureOffset(colorMap, uv, offset);
+                    vec4 offsetColor = textureOffset(colorMap, uv, ivec2(1, 0));
                     vec4 gathered = textureGather(colorMap, uv);
                     vec4 fetched = texelFetch(colorMap, pixel, 2);
                     vec4 fetchedOffset = texelFetchOffset(
                         colorMap,
                         pixel,
                         2,
-                        offset
+                        ivec2(1, 0)
                     );
-                    vec4 arrayOffset = textureOffset(textures[layer], uv, offset);
+                    vec4 arrayOffset = textureOffset(textures[layer], uv, ivec2(1, 0));
                     vec4 arrayGathered = textureGather(textures[layer], uv, 1);
                     vec4 arrayFetched = texelFetch(textures[layer], pixel, 0);
                     vec4 arrayFetchedOffset = texelFetchOffset(
                         textures[layer],
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -21109,14 +21225,17 @@ class TestVulkanSPIRVCodeGen:
         assert array_type is not None
         assert spv_code.count("OpImageSampleImplicitLod") == 0
         assert spv_code.count("OpImageSampleExplicitLod") == 2
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; a non-constant Offset is valid on gathers only
+        # (VUID-RuntimeSpirv-Offset-10213), and only gathers with offsets need ImageGatherExtended.
+        assert not re.search(r"(?<!Const)Offset %", spv_code)
         assert (
-            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bOffset\b", spv_code)) == 2
+            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bConstOffset\b", spv_code))
+            == 2
         )
-        assert spv_code.count("OpCapability ImageGatherExtended") == 1
+        assert "OpCapability ImageGatherExtended" not in spv_code
         assert spv_code.count("OpImageGather") == 2
         assert spv_code.count("OpImageFetch") == 4
-        assert len(re.findall(r"\bOpImageFetch\b.*\bOffset\b", spv_code)) == 2
+        assert len(re.findall(r"\bOpImageFetch\b.*\bConstOffset\b", spv_code)) == 2
         assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -21647,7 +21766,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         linearSampler,
                         uv,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGather(colorMap, linearSampler, uv, 1);
                     vec4 gatherOffset = textureGatherOffset(
@@ -21701,8 +21820,10 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageGather") == 6
         assert spv_code.count("OpImageFetch") == 1
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
-        assert len(re.findall(r"\bOffset\b", spv_code)) == 6
+        # The constant textureOffset offset is a ConstOffset; the gathers keep their variable Offset operands,
+        # which Vulkan accepts on gathers only (VUID-RuntimeSpirv-Offset-10213).
+        assert len(re.findall(r"\bConstOffset\b", spv_code)) == 1
+        assert len(re.findall(r"(?<!Const)\bOffset\b", spv_code)) == 5
         assert "ConstOffsets" not in spv_code
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -21929,6 +22050,7 @@ class TestVulkanSPIRVCodeGen:
             uimage3D volumeImage @r32ui;
 
             compute {
+                @ numthreads(2, 2, 1)
                 void main() {
                     int layer = 1;
                     vec2 uv = vec2(0.25, 0.75);
@@ -22392,7 +22514,7 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpLoad {r32ui_grid.group(1)}" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
         assert spv_code.count("OpImageRead") >= 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "OpImageQuerySizeLod" in spv_code
         assert "OpImageQuerySize" in spv_code
         assert "textureSize(" not in spv_code
@@ -23250,20 +23372,20 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpBranchConditional" in spv_code
+        # Only the selected arm's call runs; the merge block joins the two results.
         assert re.search(
-            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
-            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpSelectionMerge (?P<merge>%\d+) None\n"
             r"OpBranchConditional %\d+ (?P<true_label>%\d+) (?P<false_label>%\d+)\n"
             r"(?P=true_label) = OpLabel\n"
-            r"OpStore (?P<result>%\d+) (?P=true_value)\n"
+            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=false_label) = OpLabel\n"
-            r"OpStore (?P=result) (?P=false_value)\n"
+            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=merge) = OpLabel\n"
-            r"(?P<loaded>%\d+) = OpLoad %\d+ (?P=result)\n"
-            r"OpReturnValue (?P=loaded)",
+            r"(?P<selected>%\d+) = OpPhi %\d+ (?P=true_value) (?P=true_label) "
+            r"(?P=false_value) (?P=false_label)\n"
+            r"OpReturnValue (?P=selected)",
             spv_code,
         )
         assert not re.search(r"=\s+OpSelect\b", spv_code)
@@ -25619,37 +25741,26 @@ class TestVulkanSPIRVCodeGen:
         assert not re.search(r"OpConstant %\d+ true", spv_code)
 
         def has_composite_selection_flow():
-            lines = spv_code.splitlines()
-            for index in range(len(lines) - 10):
-                merge = re.match(r"OpSelectionMerge (%\d+) None", lines[index])
-                branch = re.match(
-                    r"OpBranchConditional %\d+ (%\d+) (%\d+)",
-                    lines[index + 1],
+            # Each arm calls its constructor in its own block and the merge block joins the
+            # two struct values, so only the selected payload is built.
+            return (
+                re.search(
+                    r"OpSelectionMerge (?P<merge>%\d+) None\n"
+                    r"OpBranchConditional %\d+ (?P<then>%\d+) (?P<else>%\d+)\n"
+                    r"(?P=then) = OpLabel\n"
+                    r"(?P<first>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=else) = OpLabel\n"
+                    r"(?P<second>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=merge) = OpLabel\n"
+                    r"(?P<selected>%\d+) = OpPhi %\d+ (?P=first) (?P=then) "
+                    r"(?P=second) (?P=else)\n"
+                    r"OpReturnValue (?P=selected)\n",
+                    spv_code,
                 )
-                then_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 3])
-                else_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 6])
-                load = re.match(
-                    r"(%\d+) = OpLoad %\d+ (%\d+)",
-                    lines[index + 9],
-                )
-                if not all([merge, branch, then_store, else_store, load]):
-                    continue
-
-                merge_label = merge.group(1)
-                then_label = branch.group(1)
-                else_label = branch.group(2)
-                selected_value = load.group(1)
-                return (
-                    lines[index + 2] == f"{then_label} = OpLabel"
-                    and lines[index + 4] == f"OpBranch {merge_label}"
-                    and lines[index + 5] == f"{else_label} = OpLabel"
-                    and lines[index + 7] == f"OpBranch {merge_label}"
-                    and lines[index + 8] == f"{merge_label} = OpLabel"
-                    and then_store.group(1) == else_store.group(1)
-                    and load.group(2) == then_store.group(1)
-                    and lines[index + 10] == f"OpReturnValue {selected_value}"
-                )
-            return False
+                is not None
+            )
 
         assert has_composite_selection_flow()
 
@@ -26178,7 +26289,7 @@ class TestVulkanSPIRVCodeGen:
         assert len(re.findall(r"\bOpImageSampleExplicitLod\b", spv_code)) == 2
         assert len(re.findall(r"\bOpImageRead\b", spv_code)) == 3
         assert len(re.findall(r"\bOpImageWrite\b", spv_code)) == 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         for array_type in [
             sampled_inner,
             sampled_outer,
@@ -26379,6 +26490,8 @@ class TestVulkanSPIRVCodeGen:
             sampler samplers[2];
 
             compute {
+                // textureQueryLod in compute needs a derivative group (2x2 quads).
+                layout(local_size_x = 2, local_size_y = 2) in;
                 void main() {
                     int layer = 1;
                     vec3 uvLayer = vec3(0.25, 0.75, 1.0);
@@ -26499,6 +26612,7 @@ class TestVulkanSPIRVCodeGen:
             sampler querySampler;
 
             compute {
+                @ numthreads(2, 2, 1)
                 void main() {
                     vec3 uvLayer = vec3(0.25, 0.75, 1.0);
                     vec4 cubeLayer = vec4(1.0, 0.0, 0.0, 2.0);
@@ -26819,7 +26933,7 @@ class TestVulkanSPIRVCodeGen:
                         uv,
                         0.45,
                         1.0,
-                        offset
+                        ivec2(1, 0)
                     );
                     float grad = textureCompareGrad(
                         shadowMap,
@@ -26836,13 +26950,13 @@ class TestVulkanSPIRVCodeGen:
                         0.35,
                         dx,
                         dy,
-                        offset
+                        ivec2(1, 0)
                     );
                     float offsetShadow = textureCompareOffset(
                         shadowMaps[layer],
                         uv,
                         0.3,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGatherCompare(shadowMap, uv, 0.6);
                     vec4 gatheredOffset = textureGatherCompareOffset(
@@ -26887,11 +27001,17 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageSampleDrefImplicitLod") == 0
         assert spv_code.count("OpImageDrefGather") == 2
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; only the gather keeps a variable Offset
+        # (VUID-RuntimeSpirv-Offset-10213).
         assert (
-            len(re.findall(r"\bOpImageSampleDrefExplicitLod\b.*\bOffset\b", spv_code))
+            len(
+                re.findall(
+                    r"\bOpImageSampleDrefExplicitLod\b.*\bConstOffset\b", spv_code
+                )
+            )
             == 3
         )
+        assert not re.search(r"OpImageSampleDref\w+ .*(?<!Const)Offset %", spv_code)
         assert len(re.findall(r"\bOpImageDrefGather\b.*\bOffset\b", spv_code)) == 1
         assert f"OpImageSampleDrefExplicitLod {float_type.group(1)}" in spv_code
         assert f"OpImageSampleDrefImplicitLod {float_type.group(1)}" not in spv_code
@@ -26905,11 +27025,11 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|Offset %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|Offset %\d+ %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
             spv_code,
         )
         assert f"OpLoad {array_type.group(1)}" not in spv_code
@@ -27980,7 +28100,7 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageWrite") == 2
         assert "OpImageSampleImplicitLod" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "WARNING" not in spv_code
 
     def test_separate_texture_sampler_arrays_use_sampled_image_nonuniform(
@@ -28174,7 +28294,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpImageSampleExplicitLod" in spv_code
         assert spv_code.count("OpImageRead") >= 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "WARNING" not in spv_code
 
     def test_bitwise_and_or_xor_shift_operations(self, tmp_path):
@@ -28468,10 +28588,18 @@ class TestVulkanSPIRVCodeGen:
         )
         assert u64_runtime_array is not None
         assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        # Each arm reads only its own buffer, so the unselected index is never dereferenced.
         assert re.search(
-            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            r"OpBranchConditional %\d+ (?P<left>%\d+) (?P<right>%\d+)\n"
+            r"(?P=left) = OpLabel\n(?:[^\n]+\n)*?"
+            r"(?P<left_value>%\d+) = OpLoad [^\n]+\nOpBranch (?P<merge>%\d+)\n"
+            r"(?P=right) = OpLabel\n(?:[^\n]+\n)*?OpBranch (?P=merge)\n"
+            r"(?P=merge) = OpLabel\n"
+            rf"%\d+ = OpPhi {re.escape(u64_type.group(1))} (?P=left_value) (?P=left) "
+            r"%\d+ %\d+\n",
             spv_code,
         )
+        assert not re.search(r"= OpSelect\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -30300,7 +30428,6 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     vec2 uv = vec2(0.5, 0.5);
                     ivec2 pixel = ivec2(10, 20);
-                    ivec2 offset = ivec2(1, 0);
                     vec2 ddx = vec2(0.1, 0.0);
                     vec2 ddy = vec2(0.0, 0.1);
                     vec4 lodWithOffset = textureLodOffset(
@@ -30320,7 +30447,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -30347,7 +30474,7 @@ class TestVulkanSPIRVCodeGen:
         assert grad_offset_match.group(1) == "Grad|ConstOffset"
 
         fetch_offset_match = re.search(
-            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|(?:Const)?Offset) %\d+ %\d+",
+            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|ConstOffset) %\d+ %\d+",
             spv_code,
         )
         assert fetch_offset_match is not None
@@ -32151,7 +32278,7 @@ class TestSpirvShaderValidation:
                     VariableNode(
                         "status",
                         uint_type,
-                        RayQueryOpNode("CommittedType", "rq", []),
+                        RayQueryOpNode("CommittedStatus", "rq", []),
                     ),
                 ]
             ),
@@ -35203,6 +35330,7 @@ class TestSpirvShaderValidation:
             str(source_path),
             backend="vulkan-khr-cooperative-matrix",
             format_output=False,
+            source_options={"threadgroup_size": 32},
         )
 
         assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
@@ -35572,6 +35700,7 @@ class TestSpirvShaderValidation:
             str(source_path),
             backend="vulkan-khr-cooperative-matrix",
             format_output=False,
+            source_options={"threadgroup_size": 32},
         )
 
         assert spv_code.count("OpTypeCooperativeMatrixKHR") == 3
@@ -36578,3 +36707,193 @@ class TestSpirvShaderValidation:
         assert "OpCompositeExtract" in spv_code
         assert "OpCompositeConstruct" in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_specialization_constant_vector_composite_emits_spec_constant_composite(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SpecConstantVectorRepro {
+            const int scale @constant_id(0) = 3;
+            const ivec2 steps = ivec2(scale, 1);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "scale")
+        steps_id = spirv_named_id(spv_code, "steps")
+        assert f"OpDecorate {scale_id} SpecId 0" in spv_code
+        assert re.search(
+            rf"{re.escape(steps_id)} = OpSpecConstantComposite %\d+ {re.escape(scale_id)} %\d+",
+            spv_code,
+        )
+        assert (
+            re.search(rf"{re.escape(steps_id)} = OpConstantComposite\b", spv_code)
+            is None
+        )
+        # Round trip through the SPIR-V importer preserves steps
+        spv_file = tmp_path / "spec_steps.spvasm"
+        spv_file.write_text(spv_code, encoding="utf-8")
+        reparsed_cgl = crosstl.translate(str(spv_file), backend="crossgl")
+        assert "const int scale @constant_id(0) = 3;" in reparsed_cgl
+        assert "const int2 steps = int2(scale, 1);" in reparsed_cgl
+
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_specialization_constant_nested_composite_emits_spec_constant_composite(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SpecConstantNestedComposite {
+            const float scale @constant_id(0) = 2.0;
+            const mat2 m = mat2(scale, 0.0, 0.0, 1.0);
+
+            struct Data {
+                ivec2 v;
+                int x;
+            };
+            const int offset @constant_id(1) = 5;
+            const Data d = Data(ivec2(offset, 1), 10);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "scale")
+        m_id = spirv_named_id(spv_code, "m")
+        offset_id = spirv_named_id(spv_code, "offset")
+        d_id = spirv_named_id(spv_code, "d")
+
+        # Column containing scale must be OpSpecConstantComposite
+        assert re.search(
+            rf"%\d+ = OpSpecConstantComposite %\d+ {re.escape(scale_id)} %\d+",
+            spv_code,
+        )
+        # Matrix m itself must be OpSpecConstantComposite of columns
+        assert re.search(
+            rf"{re.escape(m_id)} = OpSpecConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        # Vector inside struct must be OpSpecConstantComposite
+        assert re.search(
+            rf"%\d+ = OpSpecConstantComposite %\d+ {re.escape(offset_id)} %\d+",
+            spv_code,
+        )
+        # Struct d itself must be OpSpecConstantComposite
+        assert re.search(
+            rf"{re.escape(d_id)} = OpSpecConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_all_literal_vector_composite_emits_op_constant_composite(self, tmp_path):
+        source_code = """
+        shader LiteralVectorComposite {
+            const ivec2 steps = ivec2(3, 1);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        steps_id = spirv_named_id(spv_code, "steps")
+        assert re.search(
+            rf"{re.escape(steps_id)} = OpConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            re.search(rf"{re.escape(steps_id)} = OpSpecConstantComposite\b", spv_code)
+            is None
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+
+def test_shader_clock_builtins_lower_to_op_read_clock(tmp_path):
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            buffer uvec2* pair_buf;
+            void main() {
+                out_buf[0] = clockARB() + clockRealtimeEXT();
+                pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+            }
+        }
+    }
+"""
+    spv_code = VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "OpCapability ShaderClockKHR" in spv_code
+    assert 'OpExtension "SPV_KHR_shader_clock"' in spv_code
+    assert "OpCapability Int64" in spv_code
+    ulong = re.search(r"%(\d+) = OpTypeInt 64 0", spv_code).group(1)
+    reads = re.findall(r"= OpReadClockKHR %(\d+) %(\d+)", spv_code)
+    scopes = {
+        scope: int(value)
+        for scope, value in re.findall(r"%(\d+) = OpConstant %\d+ (\d+)\b", spv_code)
+    }
+    assert len(reads) == 4
+    assert sorted(type_id == ulong for type_id, _ in reads) == [False] * 2 + [True] * 2
+    # The ARB forms read at Subgroup (3) scope, the Realtime forms at Device (1) scope.
+    assert sorted(scopes[scope] for _, scope in reads) == [1, 1, 3, 3]
+    assert "OpFunctionCall" not in spv_code
+    assert_spirv_module_validates(spv_code, tmp_path, "vulkan1.1")
+
+
+def test_shader_clock_builtin_with_arguments_is_refused_for_spirv():
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint64_t* out_buf;
+            void main() {
+                out_buf[0] = clockARB(1);
+            }
+        }
+    }
+    """
+    with pytest.raises(SpirvLoweringRefused, match="clockARB.*requires 0 operands"):
+        VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+
+def test_user_function_named_like_a_shader_clock_is_not_lowered_for_spirv():
+    source_code = """
+    shader Clock {
+        uint clockARB() { return 7u; }
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint* out_buf;
+            void main() {
+                out_buf[0] = clockARB();
+            }
+        }
+    }
+    """
+    spv_code = VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    assert "OpReadClockKHR" not in spv_code
+    assert "ShaderClockKHR" not in spv_code

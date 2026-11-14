@@ -33,6 +33,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -58,8 +59,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "a78e20a5906b0112db43aa7b6a587f412c944f7e16a4fbda8e4dd3ca2a64df75",
-        "sizeBytes": 9395,
+        "sha256": "b9fbebd38d12c4253dc135ab790e42af7497afd43a85f82bf822d56336f2e187",
+        "sizeBytes": 9459,
     },
     "opengl": {
         "sha256": "5631a0011d909fa5fae3d720dea11738031a18acaeba9b68472fe35925146274",
@@ -399,11 +400,11 @@ def _build_runtime_package(
         "algorithm": "sha256",
         "value": MLX_GEMV_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_GEMV_ENTRY,
         "target": "CSMain" if target == "directx" else "main",

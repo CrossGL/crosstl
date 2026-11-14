@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import textwrap
@@ -11,6 +12,7 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -404,7 +406,11 @@ def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang(
 
     assert "const S sc = S(float16_t(0.125));" in crossgl
     assert "S{" not in crossgl
-    assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
+    # The anonymous block stays a buffer block (its members are buffer members, GLSL 4.60 section 4.3.9).
+    assert re.search(
+        r"layout\((?=[^)]*\bstd430\b)(?=[^)]*\brow_major\b)[^)]*\)\s*buffer\s+B2\s*\{\s*S v\[2\];\s*\}\s*b2;",
+        crossgl,
+    )
     assert "0.125hf" not in crossgl
     assert "const int64_t signedLong = (-10);" in crossgl
     assert "const uint64_t unsignedLong = 0xFFFFFFFFu;" in crossgl
@@ -435,6 +441,34 @@ def test_codegen_unary_rhs_after_newline_from_crt_royale_roundtrip():
     assert "-0.0597255978950933" in crossgl
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "-0.0597255978950933" in glsl
+
+
+def test_codegen_assignment_operand_keeps_grouping():
+    # An assignment used as an operand of a larger expression is itself an expression
+    # whose value is the assigned value; dropping its parentheses made the surrounding
+    # operator bind to the assignment's right-hand side instead.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        void main() {
+            float b = 1.0;
+            float c = (b = b + 1.0) * 2.0;
+            float d = (b += 1.0) + 1.0;
+            b = 4.0;
+            gl_Position = vec4(b + c + d);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "(b = (b + 1.0)) * 2.0" in crossgl
+    assert "(b += 1.0) + 1.0" in crossgl
+    # A bare assignment statement stays an unparenthesized statement.
+    assert re.search(r"(?m)^\s+b = 4\.0;$", crossgl)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "(b = (b + 1.0)) * 2.0" in glsl
+    assert "(b += 1.0) + 1.0" in glsl
+    assert re.search(r"(?m)^\s+b = 4\.0;$", glsl)
 
 
 def test_codegen_fragment_roundtrip():
@@ -655,8 +689,8 @@ def test_codegen_interface_block_nested_struct_member_from_glsl_460_grammar():
     output = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
 
     assert "struct Light" in output
-    assert "struct Scene" in output
-    assert output.index("struct Light") < output.index("struct Scene")
+    assert "cbuffer Scene @binding(0)" in output
+    assert output.index("struct Light") < output.index("cbuffer Scene")
     assert "Light light;" in output
     assert "gl_Position = light.position;" in output
 
@@ -971,7 +1005,8 @@ def test_codegen_debug_printf_string_literal_roundtrip_from_saschawillems():
     """).strip()
 
     crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
-    assert 'debugPrintfEXT("Position = %v4f", pos);' in crossgl
+    assert 'printf("Position = %v4f", pos);' in crossgl
+    assert "debugPrintfEXT" not in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert 'debugPrintfEXT("Position = %v4f", pos);' in glsl
@@ -1191,7 +1226,7 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(shadowMapSampler, input.uv, 0.5)" in hlsl
     assert (
-        "shadowMap.SampleCmpLevel(" "shadowMapSampler, uvz.xy, uvz.z, 0.0, int2(1, -1))"
+        "shadowMap.SampleCmpLevelZero(shadowMapSampler, uvz.xy, uvz.z, int2(1, -1))"
     ) in hlsl
     assert "shadowMap.Sample(" not in hlsl
 
@@ -1279,7 +1314,7 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(" in hlsl
-    assert "shadowMap.SampleCmpLevel(" in hlsl
+    assert "shadowMap.SampleCmpLevelZero(" in hlsl
     assert "shadowMap.SampleCmpGrad(" in hlsl
     assert "shadowMap.Sample(" not in hlsl
 
@@ -1288,9 +1323,12 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
     assert "shadowMap.sample(" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z))" in glsl
     assert (
-        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z), 0.0, offset)"
+        "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z))"
+        in glsl
+    )
+    assert (
+        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z), 0.0, offset)"
         in glsl
     )
     assert "textureCompareProj" not in glsl
@@ -1364,8 +1402,9 @@ def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_refer
     metal = MetalCodeGen().generate(shader_ast)
     assert (
         "shadowCubeArray.sample_compare("
-        "sampler(mag_filter::linear, min_filter::linear), "
-        "input.cubeLayer.xyz, uint(input.cubeLayer.w), 0.5)" in metal
+        "shadowCubeArraySampler, "
+        "input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), 0.5)"
+        in metal
     )
     assert "shadowCubeArray.sample(" not in metal
 
@@ -1495,7 +1534,7 @@ def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
 
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
-    assert "float[4][7] foo(float a[5][7])" in crossgl
+    assert "float[4][7] foo(in float a[5][7])" in crossgl
     assert "return { a[0], a[1], r, a[3] };" in crossgl
     assert "float u[][7];" in crossgl
 
@@ -1594,7 +1633,9 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
-def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign():
+def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
+    tmp_path,
+):
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.glsl.register.autoassign.frag, which samples separate texture and
     # sampler resources through sampler1D(g_tTex1, g_sSamp1).
@@ -1618,8 +1659,14 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
     assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
+    # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
+    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
+    assert "texture(g_tTex1, 0.1)" in glsl
+    assert "g_sSamp1" not in glsl
+    assert "texture1D" not in glsl
+    validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.sampledImageBlock.frag, which fetches from sampler2D(tex0, samp0).
@@ -1645,6 +1692,8 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
 
     fetch_glsl = GLSLCodeGen().generate(parse_crossgl(fetch_crossgl))
     assert "texelFetch(tex0, ivec2(0), 0)" in fetch_glsl
+    assert "layout(binding = 0) uniform sampler2D tex0;" in fetch_glsl
+    validate_glsl_with_glslang(tmp_path, fetch_glsl, "frag")
 
 
 def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
@@ -1704,7 +1753,11 @@ def test_codegen_constant_expression_resource_binding_from_godot_scene_forward()
 
     shader_ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(binding = 1036) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    # Set 1 keeps its Vulkan set and binding; OpenGL keeps binding 12, which no set-0 sampler takes.
+    assert (
+        "layout(CROSSGL_BINDING(1, 12, 12)) uniform sampler2D SAMPLER_NEAREST_CLAMP;"
+        in glsl
+    )
     GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
 
 
@@ -1907,7 +1960,7 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
-def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
+def test_codegen_refuses_tensor_arm_uniforms_from_vulkan_samples():
     # Reduced from KhronosGroup/Vulkan-Samples
     # shaders/tensor_and_data_graph/compute_shaders_with_tensors/glsl/postprocessing.comp.
     code = textwrap.dedent("""
@@ -1932,16 +1985,12 @@ def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code, "compute")
+    # CrossGL has no tensor resource. Dropping the declarations left tensorReadARM naming an undeclared
+    # input_tensor in every target, so the import refuses them.
+    from crosstl.backend.GLSL.unsupported_types import GLSLTypeUnsupportedError
 
-    assert "tensorARM" not in crossgl
-    assert "cbuffer Uniforms" not in crossgl
-    assert "cbuffer push_constants @push_constant" in crossgl
-    assert "tensorReadARM(input_tensor, pixel_coords, value)" in crossgl
-    assert "tensorWriteARM(output_tensor, pixel_coords, value)" in crossgl
-
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    GLSLParser(GLSLLexer(glsl).tokenize(), "compute").parse()
+    with pytest.raises(GLSLTypeUnsupportedError, match="tensorARM"):
+        generate_crossgl(code, "compute")
 
 
 def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
@@ -2048,6 +2097,37 @@ def test_codegen_parenthesized_assignment_array_access_from_glslang_coopmat():
     assert "md1 += (m += m)[2];" in crossgl
     assert "mats[1].length()" not in crossgl
     assert "md1 += m += m[2];" not in crossgl
+
+
+def test_codegen_marks_unqualified_array_parameters_in():
+    # GLSL copies an array parameter without out or inout into the callee (#3162).
+    code = textwrap.dedent("""
+        #version 450
+        layout(local_size_x = 1) in;
+        layout(std430, binding = 0) buffer B { float results[]; };
+
+        float first(float v[2]) { v[0] = 3.0; return v[0] + v[1]; }
+        float grid(float x, const float m[2][3]) { return x + m[1][2]; }
+        float named(in float n[2]) { return n[0]; }
+        void fill(inout float w[2]) { w[1] = 7.0; }
+        void reset(out float o[2]) { o[0] = 0.0; o[1] = 0.0; }
+
+        void main() {
+            float a[2] = float[2](1.0, 2.0);
+            float g[2][3];
+            results[0] = first(a) + grid(1.0, g) + named(a);
+            fill(a);
+            reset(a);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "float first(in float v[2])" in crossgl
+    assert "float grid(float x, in float m[2][3])" in crossgl
+    assert "float named(in float n[2])" in crossgl
+    assert "void fill(inout float w[2])" in crossgl
+    assert "void reset(out float o[2])" in crossgl
 
 
 def test_codegen_unnamed_function_parameters_get_stable_names():
@@ -2520,8 +2600,9 @@ def test_codegen_interface_block_roundtrip():
     output = assert_roundtrip(INTERFACE_BLOCK_GLSL, "vertex", ShaderStage.VERTEX)
     assert "struct VertexIn" in output
     assert "struct VertexOut" in output
-    assert "struct Globals" in output
-    assert "cbuffer Uniforms" in output
+    # The uniform block is its own constant buffer, with its name and binding.
+    assert "cbuffer Globals @binding(0)" in output
+    assert "cbuffer Uniforms" not in output
 
 
 def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
@@ -2545,10 +2626,10 @@ def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
     parse_crossgl(crossgl)
 
 
-def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslang():
+def test_codegen_uniform_blocks_keep_their_names_from_glslang():
     # Reduced from KhronosGroup/glslang Test/spv.int16.frag, where an
-    # interface block named Uniforms collides with the fallback loose-uniform
-    # CrossGL cbuffer name.
+    # interface block is named Uniforms like the fallback loose-uniform
+    # CrossGL cbuffer.
     code = textwrap.dedent("""
         #version 450
 
@@ -2570,9 +2651,10 @@ def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslan
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "struct Uniforms" in crossgl
-    assert "cbuffer GlobalUniforms" in crossgl
-    assert "cbuffer Uniforms" not in crossgl
+    # Each uniform block keeps its own name and binding, so no fallback block is needed.
+    assert "cbuffer Uniforms @binding(0)" in crossgl
+    assert "cbuffer Block @binding(1)" in crossgl
+    assert "GlobalUniforms" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -2672,7 +2754,7 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
 
     crossgl = generate_crossgl(code, "vertex")
 
-    assert "cbuffer MVPUniform @push_constant {" in crossgl
+    assert "cbuffer MVPUniform @push_constant @buffer_layout(std430) {" in crossgl
     assert "mat4 model;" in crossgl
     assert "mat4 view_proj;" in crossgl
     assert "cbuffer Uniforms" not in crossgl
@@ -2697,7 +2779,7 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
     crossgl = generate_crossgl(code, "vertex")
     wgsl = WGSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "cbuffer Material @push_constant {" in crossgl
+    assert "cbuffer Material @push_constant @buffer_layout(std430) {" in crossgl
     assert "float fa[3];" in crossgl
     assert (
         "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
@@ -2723,7 +2805,11 @@ def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():
 
     assert "struct UBO" in crossgl
     assert "Foo foo;" in crossgl
-    assert "uniform UBO ubos[2] @set(2) @binding(4);" in crossgl
+    # An array of uniform blocks is one buffer per element: an array of constant buffers.
+    assert (
+        "ConstantBuffer<UBO> ubos[2] @set(2) @binding(4) @buffer_layout(std140);"
+        in crossgl
+    )
     assert "cbuffer Uniforms" not in crossgl
     assert "ubos[1].foo.v" in crossgl
 
@@ -2829,9 +2915,28 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
     assert "memoryBarrier();" in crossgl
     assert "memoryBarrierAtomicCounter(" not in crossgl
 
-    shader_ast = parse_crossgl(crossgl)
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "AllMemoryBarrier();" in hlsl
+    # HLSL has no atomic counter type: the counter must not reach the output as `atomic_uint counter;`.
+    with pytest.raises(LoweringRefused, match="the built-in type 'atomic_uint'"):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    buffer_code = textwrap.dedent("""
+        #version 450 core
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer Counter { uint value; } counter;
+
+        void main() {
+            uint value = atomicAdd(counter.value, 1u);
+            memoryBarrierAtomicCounter();
+            barrier();
+            atomicAdd(counter.value, value);
+        }
+    """).strip()
+    buffer_crossgl = assert_roundtrip(buffer_code, "compute", ShaderStage.COMPUTE)
+    assert "memoryBarrierAtomicCounter(" not in buffer_crossgl
+    hlsl = HLSLCodeGen().generate(parse_crossgl(buffer_crossgl))
+    # memoryBarrier(); barrier(); is one HLSL barrier over all memory with group sync.
+    assert "AllMemoryBarrierWithGroupSync();" in hlsl
+    assert "GroupMemoryBarrierWithGroupSync();" not in hlsl
     assert "memoryBarrierAtomicCounter(" not in hlsl
 
 
@@ -2879,6 +2984,25 @@ def test_codegen_inserts_default_version_when_missing():
     assert ShaderStage.VERTEX in shader_ast.stages
     glsl_code = GLSLCodeGen().generate(shader_ast)
     assert glsl_code.lstrip().startswith("#version 450 core")
+
+
+def test_codegen_untyped_var_keeps_the_function_body():
+    source = textwrap.dedent("""
+        shader main {
+            compute {
+                buffer float data[];
+                void main() {
+                    var i = 1;
+                    data[0] = 2.0;
+                }
+            }
+        }
+    """).strip()
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(source))
+
+    assert "int i = 1;" in glsl
+    assert "data[0] = 2.0;" in glsl
 
 
 if __name__ == "__main__":

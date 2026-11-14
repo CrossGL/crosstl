@@ -231,14 +231,14 @@ def test_floating_remainder_executes_on_opengl(tmp_path, bits):
 
 
 def test_ci_requires_floating_remainder_in_existing_math_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     path = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     )
     workflow = path.read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Validate OpenGL Metal math semantics"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

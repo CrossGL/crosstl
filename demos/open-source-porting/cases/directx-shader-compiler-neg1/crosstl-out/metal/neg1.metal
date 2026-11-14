@@ -4,7 +4,7 @@ using namespace metal;
 
 // Fragment Shader
 struct fragment_main_Input {
-    float4 a [[attribute(0)]];
+    float4 a [[user(A0)]];
 };
 
 fragment float4 fragment_main(fragment_main_Input _crossglInput [[stage_in]]) {

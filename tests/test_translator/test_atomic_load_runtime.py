@@ -207,7 +207,7 @@ def test_atomic_load_executes_natively(tmp_path, kind, case):
     )
 
 
-def _report(root, source, target):
+def _report(root, source, target, workgroup_size=None):
     (root / "load.metal").write_text(source, encoding="utf-8")
     return translate_project(
         ProjectConfig(
@@ -215,6 +215,7 @@ def _report(root, source, target):
             targets=(target,),
             include_patterns=("load.metal",),
             output_dir="out",
+            workgroup_size=workgroup_size,
         ),
         format_output=False,
     ).to_json()
@@ -352,7 +353,7 @@ def test_atomic_load_readonly_storage_contract(tmp_path, target):
 
 
 def test_atomic_loads_are_required_on_each_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
@@ -363,7 +364,7 @@ def test_atomic_loads_are_required_on_each_native_target():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate indexed OpenGL gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_atomic_load_runtime.py" in step
         assert "test_atomic_load_runtime.py" in step

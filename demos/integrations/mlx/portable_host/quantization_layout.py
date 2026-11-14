@@ -40,6 +40,17 @@ def pack_factor(bits):
     return 8 if bits in (3, 5) else 4 if bits == 6 else 8 // bits
 
 
+def launches(elements, group):
+    """Quantize::eval_gpu's dispatches for ``elements`` values in ``group``s.
+
+    backend.cpp launches at most MAX_GROUPS complete groups at a time.
+    """
+    groups, remainder = divmod(elements, group)
+    if type(elements) is not int or elements < 1 or remainder:
+        raise ValueError("Quantization requires complete groups")
+    return -(-groups // MAX_GROUPS)
+
+
 def workgroup_size(entry):
     operation, _, group, bits = signature(entry)
     return min(group, 32) if operation == "quantize" else group // pack_factor(bits)

@@ -3,6 +3,8 @@
 import re
 from dataclasses import dataclass
 
+from .pointer_view_uses import metal_pointer_view_is_read_only_use
+
 
 @dataclass(frozen=True)
 class ScalarStorageLayout:
@@ -111,7 +113,10 @@ def same_scalar_lane_view(target_type, source_layout):
         if match is None:
             return None
         component, lanes = match.group(1), int(match.group(2))
-        component = _CROSSGL_LANE_VIEW_COMPONENTS.get(component, component)
+        # ``f16vec4`` names its lane type by a prefix; ``half4`` names it by the scalar type itself, which
+        # ``scalar_storage_layout`` checks below.
+        if component in _CROSSGL_LANE_VIEW_COMPONENTS:
+            component = _CROSSGL_LANE_VIEW_COMPONENTS[component]
     if (
         not isinstance(component, str)
         or isinstance(lanes, bool)
@@ -177,6 +182,8 @@ class PointerReinterpretationError(ValueError):
 
 METAL_LOCAL_SINGLE_FIELD_READ_ANNOTATION = "metalLocalSingleFieldReinterpretRead"
 METAL_STORAGE_POINTER_REINTERPRET_ANNOTATION = "metalStoragePointerReinterpret"
+# Enough parents to see a view through nested pointer arithmetic to its use.
+_VIEW_USE_ANCESTOR_DEPTH = 15
 
 
 def metal_local_single_field_reinterpret_contract(expression):
@@ -404,7 +411,14 @@ def _metal_homogeneous_scalar_array_struct_contract(struct_node):
     if member_type is None or member_type.__class__.__name__ != "ArrayType":
         return None
     element_type = getattr(member_type, "element_type", None)
-    if element_type is None or element_type.__class__.__name__ != "PrimitiveType":
+    # Narrow scalars such as ``uint8`` parse as plain named types.
+    if element_type is None or not (
+        element_type.__class__.__name__ == "PrimitiveType"
+        or (
+            element_type.__class__.__name__ == "NamedType"
+            and not getattr(element_type, "generic_args", None)
+        )
+    ):
         return None
     element_type_name = getattr(element_type, "name", None)
     element_layout = scalar_storage_layout(element_type_name)
@@ -450,7 +464,7 @@ def _metal_vector_pointee_name(pointee):
 
 
 def _metal_storage_pointer_reinterpret_contract(
-    expression, structs_by_name, parent=None, grandparent=None
+    expression, structs_by_name, parent=None, grandparent=None, ancestors=()
 ):
     """Admit only explicitly qualified, layout-proven storage pointer views.
 
@@ -487,6 +501,7 @@ def _metal_storage_pointer_reinterpret_contract(
         return None
     byte_view_contract = None
     homogeneous_array_contract = None
+    wrapper_member = None
     target_struct = structs_by_name.get(target_name)
     if target_struct is not None:
         byte_view_contract = _metal_aligned_byte_view_struct_contract(target_struct)
@@ -495,7 +510,11 @@ def _metal_storage_pointer_reinterpret_contract(
                 _metal_homogeneous_scalar_array_struct_contract(target_struct)
             )
         if byte_view_contract is None and homogeneous_array_contract is None:
-            return None
+            from .scalar_wrapper_views import scalar_wrapper_member
+
+            wrapper_member = scalar_wrapper_member(target_struct)
+            if wrapper_member is None:
+                return None
 
     access_mode = getattr(target_pointer, "access_mode", None)
     if access_mode not in {None, "read", "write", "read_write"}:
@@ -532,6 +551,10 @@ def _metal_storage_pointer_reinterpret_contract(
         "isMutable": is_mutable,
         "accessMode": access_mode,
         "usage": usage,
+        "readOnlyUse": (
+            immediate_value_read
+            or metal_pointer_view_is_read_only_use(expression, ancestors)
+        ),
     }
     if byte_view_contract is not None:
         contract.update(
@@ -539,6 +562,16 @@ def _metal_storage_pointer_reinterpret_contract(
                 "aggregateByteView": True,
                 "alignment": byte_view_contract["alignment"],
                 "byteWidth": byte_view_contract["byteWidth"],
+            }
+        )
+    elif wrapper_member is not None:
+        # ``struct { S m; }`` has the size and alignment of its 32-bit scalar.
+        contract.update(
+            {
+                "scalarWrapperView": True,
+                "alignment": 4,
+                "byteWidth": 4,
+                "elementTypeName": str(wrapper_member[1].name),
             }
         )
     elif homogeneous_array_contract is not None:
@@ -557,7 +590,19 @@ def _metal_storage_pointer_reinterpret_contract(
 def validate_pointer_reinterpretation_target(ast, target):
     """Reject targets that cannot preserve the shared pointer-view contract."""
 
+    if target in {"metal", "directx", "opengl", "vulkan"}:
+        from .lane_records import lower_record_byte_copies
+
+        # Byte-view copies between lane-record elements become element copies
+        # on every target, which need no alignment proof.
+        lower_record_byte_copies(ast)
+
     if target in {"directx", "opengl", "vulkan"}:
+        from .scalar_wrapper_views import normalize_scalar_wrapper_views
+
+        # Metal keeps record views natively; typed-buffer targets reuse their
+        # scalar view lowering for one-scalar wrapper records.
+        normalize_scalar_wrapper_views(ast)
         return
 
     from ..ast import FunctionNode, PointerReinterpretNode
@@ -570,7 +615,7 @@ def validate_pointer_reinterpretation_target(ast, target):
     seen = set()
     unsupported = []
 
-    def walk(value, parent=None, grandparent=None, function=None):
+    def walk(value, parent=None, grandparent=None, function=None, ancestors=()):
         if value is None or isinstance(value, (str, int, float, bool)):
             return
         value_id = id(value)
@@ -592,7 +637,7 @@ def validate_pointer_reinterpretation_target(ast, target):
                 )
                 if local_contract is None:
                     storage_contract = _metal_storage_pointer_reinterpret_contract(
-                        value, structs_by_name, parent, grandparent
+                        value, structs_by_name, parent, grandparent, ancestors
                     )
             if local_contract is not None:
                 value.annotations[METAL_LOCAL_SINGLE_FIELD_READ_ANNOTATION] = (
@@ -616,8 +661,9 @@ def validate_pointer_reinterpretation_target(ast, target):
             )
         else:
             return
+        child_ancestors = (value, *ancestors[:_VIEW_USE_ANCESTOR_DEPTH])
         for child in children:
-            walk(child, value, parent, function)
+            walk(child, value, parent, function, child_ancestors)
 
     walk(ast)
     if not unsupported:

@@ -3,8 +3,32 @@
 import re
 from decimal import Decimal, InvalidOperation
 
-from crosstl.translator.stage_utils import normalize_stage_name
+from crosstl.translator.integer_literals import crossgl_legacy_octal
+from crosstl.translator.renames import renamed
+from crosstl.translator.stage_utils import requested_stage_name
 
+from ..import_refusals import SlangImportRefused
+from ..storage_image_texels import (
+    IMAGE_FORMAT_ATTRIBUTES,
+    crossgl_image_format,
+    storage_image_element_type,
+    texel_attribute_arguments,
+)
+from .float_literals import check_float_literal_range
+from .slang_matrix_import import SlangMatrixImportMixin
+from .slang_specialization_import import (
+    specialization_ids,
+    specialized_workgroup_sizes,
+)
+from .slang_stage_roles import (
+    slang_mesh_parameter_role,
+    slang_mesh_stage_attributes,
+    slang_ray_parameter_role,
+)
+from .slang_storage_image_access import (
+    SlangStorageImageAccessMixin,
+    texel_element_shape,
+)
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -30,7 +54,7 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter:
+class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMixin):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -120,6 +144,18 @@ class SlangToCrossGLConverter:
         "transpose",
         "trunc",
     }
+    # Cube texture types, whose sample methods take no texel offset.
+    CUBE_TEXTURE_RESOURCE_BASES = frozenset(
+        {
+            "TextureCube",
+            "TextureCubeArray",
+            "SamplerCube",
+            "SamplerCubeArray",
+            "SamplerCubeShadow",
+            "SamplerCubeArrayShadow",
+        }
+    )
+
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
@@ -423,7 +459,14 @@ class SlangToCrossGLConverter:
         "yield",
     }
 
-    def __init__(self):
+    def __init__(self, zero_base_vertex=False):
+        """Create a converter.
+
+        ``zero_base_vertex`` declares that every draw the shader runs in has a zero base vertex. ``SV_VertexID``
+        excludes the base vertex, which the vertex index of OpenGL, Vulkan and Metal includes, so by default it
+        imports as ``gl_RelativeVertexID`` (see ``crosstl.translator.semantics.relative_vertex_ids``); under the
+        declaration it imports as ``gl_VertexID``.
+        """
         self.vertex_inputs = []
         self.vertex_outputs = []
         self.fragment_inputs = []
@@ -445,6 +488,10 @@ class SlangToCrossGLConverter:
             "uint2": "uvec2",
             "uint3": "uvec3",
             "uint4": "uvec4",
+            # Packed 8-bit vectors are plain 32-bit words in CrossGL, matching
+            # the HLSL importer and the uint results of pack_s8/pack_u8.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             "bool": "bool",
             "bool2": "bvec2",
             "bool3": "bvec3",
@@ -486,19 +533,45 @@ class SlangToCrossGLConverter:
             "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
+            "countbits": "bitCount",
             "ddx": "dFdx",
             "ddx_coarse": "dFdxCoarse",
             "ddx_fine": "dFdxFine",
             "ddy": "dFdy",
             "ddy_coarse": "dFdyCoarse",
             "ddy_fine": "dFdyFine",
+            "firstbithigh": "findMSB",
+            "firstbitlow": "findLSB",
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
             "fmod": "fmod",
             "lerp": "mix",
+            "reversebits": "bitfieldReverse",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
+            # HLSL barrier intrinsics, mapped the same way as the HLSL importer.
+            "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
+            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
+            # which orders buffer and image accesses as well.
+            "GroupMemoryBarrier": "memoryBarrierShared",
+            "DeviceMemoryBarrier": "deviceMemoryBarrier",
+            "AllMemoryBarrier": "allMemoryBarrier",
+        }
+        # A barrier with group sync that orders device memory releases the writes before it and acquires them
+        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
+        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
+        self.function_statement_sequences = {
+            "DeviceMemoryBarrierWithGroupSync": (
+                "deviceMemoryBarrier",
+                "workgroupExecutionBarrier",
+                "deviceMemoryBarrier",
+            ),
+            "AllMemoryBarrierWithGroupSync": (
+                "allMemoryBarrier",
+                "workgroupBarrier",
+                "allMemoryBarrier",
+            ),
         }
         self.user_function_names = set()
         self.function_name_map = {}
@@ -512,6 +585,7 @@ class SlangToCrossGLConverter:
         self.identifier_used_name_scopes = [set()]
         self.struct_member_name_maps = {}
         self.generated_temp_index = 0
+        self.vertex_input_structs = set()
 
         self.semantic_map = {
             # Vertex inputs position
@@ -578,13 +652,22 @@ class SlangToCrossGLConverter:
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_VertexID",
-            "SV_VertexID": "gl_VertexID",
+            # SV_VertexID excludes the draw's base vertex, which gl_VertexID
+            # includes; see crosstl.translator.semantics.relative_vertex_ids.
+            "VERTEX_ID": "gl_RelativeVertexID",
+            "SV_VertexID": "gl_RelativeVertexID",
             "SV_InstanceID": "gl_InstanceID",
+            # Draw parameters; slangc lowers them to SPIR-V's BuiltIn
+            # BaseVertex, BaseInstance and DrawIndex.
+            "SV_StartVertexLocation": "gl_BaseVertex",
+            "SV_StartInstanceLocation": "gl_BaseInstance",
+            "SV_DrawIndex": "gl_DrawID",
             "SV_PrimitiveID": "gl_PrimitiveID",
-            # Vertex outputs
-            "SV_Position": "Out_Position",
-            "SV_Position0": "Out_Position0",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
+            # Vertex outputs. The clip position is the built-in, as the HLSL
+            # importer maps it; a fragment input is gl_FragCoord (map_semantic).
+            "SV_Position": "gl_Position",
+            "SV_Position0": "gl_Position",
             "SV_Position1": "Out_Position1",
             "SV_Position2": "Out_Position2",
             "SV_Position3": "Out_Position3",
@@ -596,32 +679,18 @@ class SlangToCrossGLConverter:
             "SV_IsFrontFace": "gl_FrontFacing",
             "SV_SampleIndex": "gl_SampleID",
             "SV_Barycentrics": "gl_BaryCoordEXT",
-            # Fragment outputs
-            "SV_Target": "Out_Color",
-            "SV_Target0": "Out_Color0",
-            "SV_Target1": "Out_Color1",
-            "SV_Target2": "Out_Color2",
-            "SV_Target3": "Out_Color3",
-            "SV_Target4": "Out_Color4",
-            "SV_Target5": "Out_Color5",
-            "SV_Target6": "Out_Color6",
-            "SV_Target7": "Out_Color7",
-            "SV_Depth": "Out_Depth",
-            "SV_Depth0": "Out_Depth0",
-            "SV_Depth1": "Out_Depth1",
-            "SV_Depth2": "Out_Depth2",
-            "SV_Depth3": "Out_Depth3",
-            "SV_Depth4": "Out_Depth4",
-            "SV_Depth5": "Out_Depth5",
-            "SV_Depth6": "Out_Depth6",
-            "SV_Depth7": "Out_Depth7",
+            # Fragment outputs take the CrossGL spellings the HLSL import gives them: SV_Target is gl_FragColor,
+            # SV_Target<N> is gl_FragData[N] (map_semantic) and SV_Depth is gl_FragDepth.
+            "SV_Target": "gl_FragColor",
+            "SV_Depth": "gl_FragDepth",
             # SV_Coverage is also a fragment input, handled contextually
             # for parameters in map_semantic.
             "SV_Coverage": "gl_SampleMask",
-            "SV_ViewID": "gl_ViewID",
+            "SV_ViewID": "gl_ViewIndex",
             "SV_RenderTargetArrayIndex": "gl_Layer",
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
             "SV_ClipDistance": "gl_ClipDistance",
+            "SV_PointSize": "gl_PointSize",
             "SV_CullDistance": "gl_CullDistance",
             # Compute shader
             "SV_GroupID": "gl_WorkGroupID",
@@ -629,6 +698,9 @@ class SlangToCrossGLConverter:
             "SV_DispatchThreadID": "gl_GlobalInvocationID",
             "SV_GroupIndex": "gl_LocalInvocationIndex",
         }
+        if zero_base_vertex:
+            for semantic in ("VERTEX_ID", "SV_VertexID"):
+                self.semantic_map[semantic] = "gl_VertexID"
         self.hlsl_system_semantic_map = {
             semantic.lower(): mapped
             for semantic, mapped in self.semantic_map.items()
@@ -663,6 +735,14 @@ class SlangToCrossGLConverter:
             *exported_functions,
         ]
         local_structs = self.collect_function_local_structs(functions)
+        exported_structs = [
+            exp.item
+            for exp in getattr(ast, "exports", [])
+            if isinstance(getattr(exp, "item", None), StructNode)
+        ]
+        self.vertex_input_structs = self.collect_vertex_input_structs(
+            functions, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
         self.function_name_map = self.collect_function_name_map(functions)
@@ -677,6 +757,20 @@ class SlangToCrossGLConverter:
         self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
+        self.specialization_constant_ids = specialization_ids(
+            ast.global_vars,
+            exported=[
+                exp.item
+                for exp in getattr(ast, "exports", [])
+                if isinstance(
+                    getattr(exp, "item", None), (VariableNode, AssignmentNode)
+                )
+            ],
+        )
+        self.specialization_dependent_names = set()
+        self.reset_matrix_import_state(
+            ast, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.sampleable_resource_scopes = [set(resource_types)]
         self.sampleable_resource_type_scopes = [resource_types]
         self.storage_image_resource_scopes = [set(storage_image_types)]
@@ -710,9 +804,14 @@ class SlangToCrossGLConverter:
         for node in [*ast.structs, *local_structs]:
             if self.is_forward_struct_declaration(node):
                 continue
+            if getattr(node, "is_block_declaration", False):
+                # Written in its block by generate_function_body.
+                continue
             if isinstance(node, StructNode):
+                self.refuse_struct_subscripts(node)
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
+                    code += self.matrix_layout_attributes(member, 2)
                     code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
@@ -739,27 +838,25 @@ class SlangToCrossGLConverter:
                 code += "    }\n\n"
             elif qualifier:
                 code += f"    {qualifier} {{\n"
+                code += slang_mesh_stage_attributes(func, qualifier)
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func)
 
         code += "}\n"
+        setters = self.generate_matrix_row_setters()
+        if setters:
+            head = "shader main {\n"
+            start = code.index(head) + len(head)
+            code = code[:start] + setters + code[start:]
         return code
 
     def generate_typedef(self, node):
+        # CrossGL reads only the C spelling as an alias; ``typealias A = B;``
+        # would declare nothing and leave every use of ``A`` undeclared (#3309).
         original_type = self.map_type(node.original_type)
-        new_type = node.new_type
-        if self.requires_typealias_spelling(original_type):
-            return f"typealias {new_type} = {original_type};"
-        return f"typedef {original_type} {new_type};"
-
-    def requires_typealias_spelling(self, type_name):
-        type_name = str(type_name)
-        return (
-            type_name not in self.CROSSGL_BUILTIN_TYPE_NAMES
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name) is not None
-        )
+        return f"typedef {original_type} {node.new_type};"
 
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
@@ -866,12 +963,81 @@ class SlangToCrossGLConverter:
         )
 
     def effective_function_qualifier(self, func):
-        qualifier = normalize_stage_name(getattr(func, "qualifier", None))
+        # ``qualifier`` holds the stage a ``[shader("...")]`` attribute names; one that names no stage is refused.
+        qualifier = getattr(func, "qualifier", None)
+        qualifier = requested_stage_name(qualifier) if qualifier else None
         if qualifier:
             return qualifier
         if getattr(func, "numthreads", None):
             return "compute"
-        return qualifier
+        return self.stage_from_result_semantic(func) or qualifier
+
+    @staticmethod
+    def stage_from_result_semantic(func):
+        """Return the stage that a result semantic implies for an entry point without ``[shader(...)]``.
+
+        Without the attribute the compiler's ``-stage`` option chooses the stage. A result bound to ``SV_Target``
+        is a fragment output and one bound to ``SV_Position`` a vertex output, as the HLSL import infers them.
+        """
+        semantic = str(getattr(func, "semantic", None) or "").strip().upper()
+        if semantic.startswith("SV_TARGET"):
+            return "fragment"
+        if semantic == "SV_POSITION":
+            return "vertex"
+        return None
+
+    @staticmethod
+    def is_position_semantic(semantic):
+        return re.fullmatch(r"SV_POSITION\d*", str(semantic or "").upper()) is not None
+
+    def collect_vertex_input_structs(self, functions, structs):
+        """Return the structs that entry points use only as vertex inputs.
+
+        A vertex input reads ``SV_Position`` as an ordinary attribute and every other stage interface as the
+        position built-in (DXC's signature interpretation table), so a member of these structs stays an attribute.
+        A CrossGL struct member or parameter carries one semantic, so an ``SV_Position`` that is both a vertex
+        input and a stage output is refused.
+        """
+        vertex_inputs = set()
+        other_uses = set()
+        reasons = []
+        for func in functions:
+            stage = self.effective_function_qualifier(func)
+            if not stage:
+                continue
+            other_uses.add(str(func.return_type))
+            for param in getattr(func, "params", []) or []:
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(param, "qualifiers", []) or []
+                }
+                if stage == "vertex" and "out" not in qualifiers:
+                    vertex_inputs.add(str(param.vtype))
+                if stage != "vertex" or qualifiers.intersection({"out", "inout"}):
+                    other_uses.add(str(param.vtype))
+                if (
+                    stage == "vertex"
+                    and "inout" in qualifiers
+                    and self.is_position_semantic(param.semantic)
+                ):
+                    reasons.append(
+                        f"inout vertex parameter {param.name} : {param.semantic} is an "
+                        "attribute as input and the position built-in as output"
+                    )
+        for struct in structs:
+            name = getattr(struct, "name", None)
+            if name not in vertex_inputs or name not in other_uses:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                if self.is_position_semantic(getattr(member, "semantic", None)):
+                    reasons.append(
+                        f"{name}.{member.name} : {member.semantic} is an attribute in "
+                        f"the vertex input {name} and the position built-in where "
+                        f"{name} is a stage output"
+                    )
+        if reasons:
+            raise SlangImportRefused(reasons)
+        return vertex_inputs - other_uses
 
     def format_import_path(self, path):
         path = str(path)
@@ -893,7 +1059,9 @@ class SlangToCrossGLConverter:
         return name_map
 
     def format_function_name(self, name):
-        return self.function_name_map.get(name, name)
+        # ``function_name_map`` holds the CrossGL name of every function the program declares, and only declared
+        # functions are written or called through it.
+        return self.function_name_map[name]
 
     def register_global_identifier_renames(self, ast):
         for node in getattr(ast, "global_vars", []) or []:
@@ -973,9 +1141,9 @@ class SlangToCrossGLConverter:
 
     def format_struct_member_name(self, struct, member_name):
         struct_name = getattr(struct, "name", struct)
-        return self.struct_member_name_maps.get(struct_name, {}).get(
-            member_name, member_name
-        )
+        # Members of a type the program does not declare (a vector's ``x``, a built-in structure's fields) keep
+        # their name; the maps hold the declared structures' members.
+        return renamed(self.struct_member_name_maps.get(struct_name, {}), member_name)
 
     def format_member_access_name(self, expr):
         object_type = self.unwrap_resource_container_type(
@@ -1031,6 +1199,9 @@ class SlangToCrossGLConverter:
         if not numthreads:
             return ""
 
+        specialized_workgroup_sizes(
+            numthreads, getattr(self, "specialization_dependent_names", ())
+        )
         x, y, z = numthreads
         return (
             "        "
@@ -1048,12 +1219,26 @@ class SlangToCrossGLConverter:
                 code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
                     member_name = self.format_struct_member_name(node, member.name)
+                    code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
-                        f"{self.format_array_suffixes(member)};\n"
+                        f"{self.format_array_suffixes(member)}"
+                        f"{self.format_member_offset(member)};\n"
                     )
                 code += "    }\n"
         return code
+
+    @staticmethod
+    def format_member_offset(member):
+        """`` @offset(N)`` for a block member placed with ``[[vk::offset(N)]]``, else an empty string."""
+        for attribute in getattr(member, "attributes", None) or []:
+            if not isinstance(attribute, dict):
+                continue
+            name = str(attribute.get("name", "")).lower()
+            arguments = attribute.get("arguments") or []
+            if name == "vk::offset" and len(arguments) == 1:
+                return f" @offset({arguments[0]})"
+        return ""
 
     def is_glsl_storage_block(self, node):
         return getattr(node, "glsl_block_kind", None) == "buffer"
@@ -1061,6 +1246,7 @@ class SlangToCrossGLConverter:
     def generate_glsl_storage_block(self, node):
         code = f"    struct {self.format_struct_declaration_name(node)} {{\n"
         for member in node.members:
+            code += self.matrix_layout_attributes(member, 2)
             code += f"        {self.generate_struct_member(node, member)};\n"
         code += "    }\n"
         for instance in getattr(node, "instances", []) or []:
@@ -1069,7 +1255,8 @@ class SlangToCrossGLConverter:
 
     def generate_function(self, func, indent=1):
         """Render one Slang function node as a CrossGL function."""
-        code = " "
+        code = self.generate_function_attributes(func)
+        code += " "
         code += "  " * indent
         self.push_identifier_scope()
         self.push_variable_type_scope(func.params)
@@ -1086,8 +1273,9 @@ class SlangToCrossGLConverter:
                 preserve_parameter_qualifiers,
                 function_qualifier,
                 unnamed_parameter_names.get(id(p)),
+                parameter_index=index,
             )
-            for p in func.params
+            for index, p in enumerate(func.params)
         )
         semantic = self.map_semantic(getattr(func, "semantic", None))
         semantic_suffix = f" {semantic}" if semantic else ""
@@ -1103,6 +1291,26 @@ class SlangToCrossGLConverter:
         self.pop_sampleable_resource_scope()
         self.pop_variable_type_scope()
         self.pop_identifier_scope()
+        return code
+
+    def generate_function_attributes(self, func):
+        """Carry the function attributes CrossGL keeps on an entry point.
+
+        ``[WaveSize(...)]`` (the single and the range forms) is written as ``@ WaveSize(...)``, as the HLSL import
+        writes it, so each target generator writes or refuses it instead of the lane count being dropped.
+        """
+        code = ""
+        for attribute in getattr(func, "attributes", []) or []:
+            if str(attribute.get("name", "")).lower() != "wavesize":
+                continue
+            arguments = [
+                str(argument).strip()
+                for argument in attribute.get("arguments", []) or []
+            ]
+            if arguments:
+                code += f"    @ WaveSize({', '.join(arguments)})\n"
+            else:
+                code += "    @ WaveSize\n"
         return code
 
     def collect_unnamed_parameter_names(self, params):
@@ -1122,10 +1330,16 @@ class SlangToCrossGLConverter:
         preserve_qualifiers=False,
         function_qualifier=None,
         fallback_name=None,
+        parameter_index=None,
     ):
         qualifier_prefix = self.format_parameter_qualifier_prefix(
             param, preserve_qualifiers
         )
+        # ``out vertices V v[N]``, ``out indices``, ``out primitives`` and ``in payload P p``: the mesh roles the
+        # HLSL importer writes as ``@ vertices out V v[N]`` and ``@ mesh_payload in P p``.
+        role = slang_mesh_parameter_role(param, function_qualifier)
+        if role is not None:
+            qualifier_prefix = f"@ {role} {qualifier_prefix}"
         parameter_name = param.name or fallback_name or "_param"
         parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
         array_suffix = self.format_array_suffixes(param)
@@ -1147,6 +1361,12 @@ class SlangToCrossGLConverter:
         )
         if semantic:
             parameter += f" {semantic}"
+        elif param.semantic is None:
+            ray_role = slang_ray_parameter_role(
+                param, function_qualifier, parameter_index
+            )
+            if ray_role is not None:
+                parameter += f" @ {ray_role}"
         return parameter
 
     def format_parameter_metadata(self, param):
@@ -1169,9 +1389,24 @@ class SlangToCrossGLConverter:
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        }
+        if names & {"ref", "__ref"}:
+            # A Slang ref parameter names the caller's storage (Slang language reference, "ref" parameters);
+            # CrossGL inout copies in and copies out, which differs whenever the argument aliases other storage.
+            raise SlangImportRefused(
+                [
+                    f"ref parameter {param.name} binds the caller's storage; CrossGL "
+                    "has only copy-in/copy-out inout parameters"
+                ]
+            )
         if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+            # out and inout carry the parameter's direction for every function, not only for entry points.
+            allowed_qualifiers = {"out", "inout"}
+        else:
+            allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
@@ -1202,6 +1437,11 @@ class SlangToCrossGLConverter:
                 deferred_statements.append(stmt.body)
                 continue
             if isinstance(stmt, StructNode) and getattr(
+                stmt, "is_block_declaration", False
+            ):
+                code += self.generate_block_struct(stmt, indent)
+                continue
+            if isinstance(stmt, StructNode) and getattr(
                 stmt, "is_local_declaration", False
             ):
                 continue
@@ -1214,6 +1454,19 @@ class SlangToCrossGLConverter:
             sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
             if sincos_statement is not None:
                 code += sincos_statement
+                continue
+            lowered_sequence = self.generate_function_call_statement_sequence(
+                stmt, indent
+            )
+            if lowered_sequence is not None:
+                code += lowered_sequence
+                continue
+            texel_statement = self.generate_storage_image_statement(
+                stmt, indent, is_main
+            )
+            if texel_statement is not None:
+                code += self.generate_statement_label(stmt, indent)
+                code += "    " * indent + texel_statement
                 continue
             if isinstance(stmt, ReturnNode):
                 code += self.generate_statement_label(stmt, indent)
@@ -1279,20 +1532,93 @@ class SlangToCrossGLConverter:
                 code += self.generate_jump_statement("continue", stmt) + "\n"
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
+            elif isinstance(stmt, TypedefNode):
+                code += f"{self.generate_typedef(stmt)}\n"
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
 
+    def refuse_struct_subscripts(self, node):
+        """Refuse a ``__subscript`` declaration: ``value[i, j]`` would then index a structure CrossGL cannot index."""
+        subscripts = [
+            method
+            for method in getattr(node, "methods", None) or []
+            if getattr(method, "is_subscript", False)
+        ]
+        if subscripts:
+            raise SlangImportRefused(
+                [
+                    f"the __subscript of Slang structure '{node.name}' has no CrossGL form, so an index of a "
+                    f"'{node.name}' value cannot be written"
+                ]
+            )
+
+    def generate_block_struct(self, node, indent):
+        """Write a structure declared in a function body as a CrossGL block-scoped structure."""
+        unsupported = [
+            label
+            for label, field in (
+                ("member functions", "methods"),
+                ("nested type aliases", "typedefs"),
+                ("nested enumerations", "enums"),
+                ("nested structures", "structs"),
+                ("generic parameters", "generic_parameters"),
+                ("interface conformances", "conformances"),
+            )
+            if getattr(node, field, None)
+        ]
+        if unsupported:
+            raise SlangImportRefused(
+                [
+                    f"Slang structure '{node.name}' declared in a function body has "
+                    f"{' and '.join(unsupported)}, which a CrossGL block-scoped "
+                    "structure does not carry"
+                ]
+            )
+        pad = "    " * indent
+        code = f"{pad}struct {self.format_struct_declaration_name(node)} {{\n"
+        for member in node.members:
+            code += self.matrix_layout_attributes(member, indent + 1)
+            code += f"{pad}    {self.generate_struct_member(node, member)};\n"
+        # The semicolon keeps a following statement from reading as a declarator.
+        return code + f"{pad}}};\n"
+
+    SCALAR_LITERAL_VECTOR_PREFIXES = (
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)"), "ivec"),
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)[uU]"), "uvec"),
+        (re.compile(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?"), "vec"),
+        (re.compile(r"true|false"), "bvec"),
+    )
+
+    def scalar_literal_swizzle(self, literal, member):
+        """``0.xx`` swizzles the scalar literal 0 into a two-component vector, written ``ivec2(0)`` in CrossGL.
+
+        HLSL, which Slang follows, lets a scalar take a swizzle of ``x`` or ``r`` components; CrossGL reads
+        ``0.xx`` as the float ``0.`` followed by a name.
+        """
+        if not isinstance(member, str) or not re.fullmatch(r"x{1,4}|r{1,4}", member):
+            return None
+        for pattern, prefix in self.SCALAR_LITERAL_VECTOR_PREFIXES:
+            if pattern.fullmatch(str(literal)):
+                if len(member) == 1:
+                    return str(literal)
+                return f"{prefix}{len(member)}({literal})"
+        return None
+
     def generate_statement_label(self, stmt, indent=0):
-        label = getattr(stmt, "label", None)
-        if not label:
-            return ""
-        return "    " * indent + f"{self.format_label_identifier(label)}:\n"
+        # Slang has no goto, so a label is only the target of a labeled break or continue, which
+        # generate_jump_statement refuses; a label no jump names has no effect and is not written.
+        return ""
 
     def generate_jump_statement(self, keyword, node):
         target_label = getattr(node, "target_label", None)
         if not target_label:
             return f"{keyword};"
-        return f"{keyword} {self.format_label_identifier(target_label)};"
+        raise SlangImportRefused(
+            [
+                f"'{keyword} {target_label}' leaves an enclosing labeled statement, and CrossGL has no "
+                "labeled break or continue"
+            ]
+        )
 
     def format_label_identifier(self, label):
         return self.sanitize_crossgl_identifier(str(label), set())
@@ -1308,6 +1634,20 @@ class SlangToCrossGLConverter:
         for deferred_body in reversed(deferred_statements or []):
             code += self.generate_function_body(deferred_body, indent, is_main)
         return code
+
+    def generate_function_call_statement_sequence(self, stmt, indent=0):
+        if not isinstance(stmt, FunctionCallNode) or stmt.args:
+            return None
+        function_name, is_hlsl_namespace_builtin = self.canonical_function_call_name(
+            stmt.name
+        )
+        if not is_hlsl_namespace_builtin and stmt.name in self.user_function_names:
+            return None
+        sequence = self.function_statement_sequences.get(function_name)
+        if sequence is None:
+            return None
+        indent_text = "    " * indent
+        return "".join(f"{indent_text}{func_name}();\n" for func_name in sequence)
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt, FunctionCallNode):
@@ -1370,10 +1710,18 @@ class SlangToCrossGLConverter:
 
         code = f"switch ({expression}) {{\n"
         unlabeled_statements = getattr(node, "unlabeled_statements", []) or []
-        if unlabeled_statements:
-            code += self.generate_function_body(
-                unlabeled_statements, indent + 1, is_main, deferred_scopes
+        if any(
+            isinstance(statement, VariableNode) for statement in unlabeled_statements
+        ):
+            # A declaration there is in scope in the cases while its initializer never runs; CrossGL has no
+            # statement before a switch's first label to hold it.
+            raise SlangImportRefused(
+                [
+                    "a declaration before the first case label of a switch has no CrossGL form"
+                ]
             )
+        # The other statements before the first label never run (C11 6.8.4.2/4, which Slang and HLSL follow), so
+        # no statement is written for them.
         ordered_cases = getattr(node, "ordered_cases", None)
         if ordered_cases is not None:
             for case in ordered_cases:
@@ -1438,19 +1786,37 @@ class SlangToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         if isinstance(node.left, VariableNode) and node.left.vtype:
             self.register_identifier_declaration(node.left)
+        self.record_inferred_matrix_type(node)
+        lowered = self.matrix_assignment_expression(node, is_main)
+        if lowered is not None:
+            return lowered
+        texel_store = self.generate_storage_image_texel_store(node, is_main)
+        if texel_store is not None:
+            return texel_store
+        self.refuse_storage_image_texel_write(node.left)
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_global_variable(self, node):
+        declaration = node.left if isinstance(node, AssignmentNode) else node
+        layout = self.matrix_layout_attributes(declaration, 1)
+        self.track_specialization_dependence(node)
         if isinstance(node, AssignmentNode):
             left = self.generate_variable_declaration(
                 node.left, has_initializer=True, initializer=node.right
             )
-            right = self.generate_expression(node.right, False)
-            return f"    {left} {node.operator} {right};\n"
-        return f"    {self.generate_variable_declaration(node)};\n"
+            right = self.matrix_initializer_expression(
+                node.left.vtype,
+                len(getattr(node.left, "array_sizes", None) or []),
+                node.right,
+                False,
+            )
+            if right is None:
+                right = self.generate_expression(node.right, False)
+            return f"{layout}    {left} {node.operator} {right};\n"
+        return f"{layout}    {self.generate_variable_declaration(node)};\n"
 
     def generate_variable_declaration(
         self, node, has_initializer=False, initializer=None
@@ -1482,7 +1848,19 @@ class SlangToCrossGLConverter:
         return None
 
     def format_global_variable_qualifiers(self, node, has_initializer=False):
-        allowed_qualifiers = {"extern", "static", "const", "constexpr"}
+        if any(
+            str(qualifier).lower() == "extern"
+            for qualifier in getattr(node, "qualifiers", []) or []
+        ):
+            # Slang link-time constants (``extern static const``) take their value from another module when the
+            # program is linked; CrossGL has no declaration whose value is supplied that way.
+            raise SlangImportRefused(
+                [
+                    f"extern global {node.name} is a link-time constant; CrossGL has "
+                    "no declaration whose value another module supplies"
+                ]
+            )
+        allowed_qualifiers = {"groupshared", "static", "const", "constexpr"}
         excluded_qualifiers = set()
         if not has_initializer and self.is_plain_uninitialized_const_global(node):
             # CrossGL requires plain top-level const declarations to carry an
@@ -1511,7 +1889,8 @@ class SlangToCrossGLConverter:
         )
         if getattr(member, "value", None) is not None:
             declaration += f" = {self.generate_expression(member.value)}"
-        semantic = self.map_semantic(member.semantic)
+        stage = "vertex" if struct_node.name in self.vertex_input_structs else None
+        semantic = self.map_semantic(member.semantic, stage)
         if semantic:
             declaration += f" {semantic}"
         return declaration
@@ -1533,7 +1912,12 @@ class SlangToCrossGLConverter:
             if str(qualifier).lower() in allowed
             and str(qualifier).lower() not in excluded
         ]
-        storage_order = {"extern": 0, "static": 1, "const": 2, "constexpr": 3}
+        storage_order = {
+            "groupshared": 0,
+            "static": 1,
+            "const": 2,
+            "constexpr": 3,
+        }
         return " ".join(
             qualifier
             for _index, qualifier in sorted(
@@ -1561,6 +1945,9 @@ class SlangToCrossGLConverter:
                 append_metadata("stage_io", "@input")
             elif qualifier_name == "out":
                 append_metadata("stage_io", "@output")
+            elif qualifier_name == "globallycoherent":
+                # A UAV coherent across the device, as the HLSL importer writes it.
+                append_metadata("globallycoherent", "@globallycoherent")
 
             for name, value in self.layout_metadata_entries(qualifier):
                 if name in {"set", "group"} and value:
@@ -1592,6 +1979,13 @@ class SlangToCrossGLConverter:
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
 
+        for text in self.storage_image_format_metadata(node):
+            append_metadata(text.split("(", 1)[0], text)
+
+        specialization = getattr(self, "specialization_constant_ids", {}).get(id(node))
+        if specialization is not None and specialization[0] is node:
+            append_metadata("constant_id", f"@constant_id({specialization[1]})")
+
         register_name = getattr(node, "register", None)
         if self.should_emit_register_metadata(register_name, node):
             register_arguments = self.format_register_metadata_arguments(register_name)
@@ -1600,6 +1994,23 @@ class SlangToCrossGLConverter:
         if not metadata:
             return ""
         return " " + " ".join(metadata)
+
+    def track_specialization_dependence(self, node):
+        """Record a global that is, or is initialized from, a specialization constant."""
+        names = getattr(self, "specialization_dependent_names", None)
+        if names is None:
+            return
+        declaration = node.left if isinstance(node, AssignmentNode) else node
+        specialization = self.specialization_constant_ids.get(id(declaration))
+        dependent = specialization is not None and specialization[0] is declaration
+        if not dependent and isinstance(node, AssignmentNode) and names:
+            initializer = self.generate_expression(node.right, False)
+            dependent = any(
+                name in names for name in re.findall(r"[A-Za-z_]\w*", initializer)
+            )
+        if dependent:
+            names.add(declaration.name)
+            names.add(self.format_identifier(declaration.name))
 
     def glsl_buffer_block_layout(self, node):
         for qualifier in getattr(node, "qualifiers", []) or []:
@@ -1690,6 +2101,9 @@ class SlangToCrossGLConverter:
             left = f"({left})"
         if self.binary_child_needs_parentheses(expr.op, expr.right, True):
             right = f"({right})"
+        product = self.matrix_product_expression(expr, left, right)
+        if product is not None:
+            return product
         return f"{left} {expr.op} {right}"
 
     def maybe_parenthesize_expression(self, expr, rendered):
@@ -1729,6 +2143,40 @@ class SlangToCrossGLConverter:
         addend = self.maybe_parenthesize_expression(expr.args[2], addend)
         return f"(({multiplier} * {multiplicand}) + {addend})"
 
+    def refuse_array_cast(self, expr):
+        """Refuse a cast to an array type other than ``(T[N])0``, the zero-filled array.
+
+        HLSL fills every element from a scalar operand, but Slang fills only the
+        first: ``(float[3])x`` is ``{x, 0, 0}``, and an array operand is copied.
+        Only a literal zero means the same on both readings. slangc rejects a
+        cast to an array of arrays such as ``(float[2][3])0``.
+        """
+        if "][" in expr.target_type:
+            reason = "slangc rejects a cast to an array of arrays"
+        elif not self.is_zero_literal(expr.expression):
+            reason = (
+                "only a literal zero operand, the zero-filled array, is imported; "
+                "Slang fills only the first element from a scalar"
+            )
+        else:
+            return
+        raise SlangImportRefused(
+            [f"cast to the array type {expr.target_type}: {reason}"]
+        )
+
+    @staticmethod
+    def is_zero_literal(value):
+        """Whether ``value`` is a numeric literal equal to zero, such as ``0``, ``0.0f`` or ``0u``."""
+        if not isinstance(value, str):
+            return False
+        text = value.lower()
+        try:
+            if text.startswith(("0x", "0b")):
+                return int(text.rstrip("ul"), 0) == 0
+            return Decimal(text.rstrip("fhul")) == 0
+        except (ValueError, InvalidOperation):
+            return False
+
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
@@ -1744,13 +2192,33 @@ class SlangToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
+            lowered = self.matrix_assignment_expression(expr, is_main)
+            if lowered is not None:
+                return lowered
+            self.refuse_storage_image_texel_write(expr.left)
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, CastNode):
+            matrix_cast = self.matrix_cast_expression(expr, is_main)
+            if matrix_cast is not None:
+                return matrix_cast
             value = self.generate_expression(expr.expression, is_main)
+            base_type, bracket, array_suffix = expr.target_type.partition("[")
+            if bracket:
+                self.refuse_array_cast(expr)
+                # `(float4[2])0` keeps its array suffix after the mapped element type.
+                return f"{self.map_type(base_type)}[{array_suffix}({value})"
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
+            self.refuse_matrix_row_update(expr)
+            if expr.op in {
+                "POST_INCREMENT",
+                "POST_DECREMENT",
+                "PRE_INCREMENT",
+                "PRE_DECREMENT",
+            }:
+                self.refuse_storage_image_texel_write(expr.operand)
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
                 operand = f"({operand})"
@@ -1767,6 +2235,14 @@ class SlangToCrossGLConverter:
             function_name, is_hlsl_namespace_builtin = (
                 self.canonical_function_call_name(expr.name)
             )
+            matrix_value = self.matrix_constructor_expression(
+                function_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
+            interlocked = self.generate_interlocked_call(expr, function_name, is_main)
+            if interlocked is not None:
+                return interlocked
             mul_call = self.generate_hlsl_mul_call(expr, is_main, function_name)
             if mul_call is not None:
                 return mul_call
@@ -1813,7 +2289,7 @@ class SlangToCrossGLConverter:
             elif function_name in self.type_map and function_name[:1].islower():
                 name = self.map_type(function_name)
             else:
-                name = self.function_map.get(function_name, function_name)
+                name = self.crossgl_intrinsic_name(function_name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
@@ -1821,6 +2297,11 @@ class SlangToCrossGLConverter:
             if image_call is not None:
                 return image_call
 
+            byte_address_atomic = self.generate_byte_address_interlocked_call(
+                expr, obj, is_main
+            )
+            if byte_address_atomic is not None:
+                return byte_address_atomic
             byte_address_buffer_call = self.generate_byte_address_buffer_method_call(
                 expr, obj, is_main
             )
@@ -1850,13 +2331,28 @@ class SlangToCrossGLConverter:
             qualified_name = self.member_access_qualified_name(expr)
             if qualified_name and self.lookup_variable_type(qualified_name):
                 return self.format_identifier(qualified_name)
+            matrix_member = self.matrix_member_expression(expr, is_main)
+            if matrix_member is not None:
+                return matrix_member
+            texel_swizzle = self.generate_storage_image_texel_swizzle(expr, is_main)
+            if texel_swizzle is not None:
+                return texel_swizzle
             obj = self.generate_expression(expr.object, is_main)
+            literal_swizzle = self.scalar_literal_swizzle(obj, expr.member)
+            if literal_swizzle is not None:
+                return literal_swizzle
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
             ):
                 obj = f"({obj})"
             return f"{obj}.{self.format_member_access_name(expr)}"
         elif isinstance(expr, ArrayAccessNode):
+            matrix_index = self.matrix_index_expression(expr, is_main)
+            if matrix_index is not None:
+                return matrix_index
+            texel_load = self.generate_storage_image_texel_load(expr, is_main)
+            if texel_load is not None:
+                return texel_load
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_subscript_index(expr.index, is_main)
             return f"{array}[{index}]"
@@ -1877,6 +2373,11 @@ class SlangToCrossGLConverter:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, VectorConstructorNode):
+            matrix_value = self.matrix_constructor_expression(
+                expr.type_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -1928,14 +2429,20 @@ class SlangToCrossGLConverter:
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
         if not float_like and integer_suffix:
-            return self.normalize_integer_suffix(body, integer_suffix)
-        if not float_like or integer_suffix:
+            return crossgl_legacy_octal(
+                self.normalize_integer_suffix(body, integer_suffix)
+            )
+        if not float_like:
+            return crossgl_legacy_octal(value)
+        if integer_suffix:
             return value
 
         try:
-            normalized = format(Decimal(body), "f")
+            decimal_value = Decimal(body)
         except InvalidOperation:
             return value
+        check_float_literal_range(value, decimal_value, suffix)
+        normalized = format(decimal_value, "f")
 
         if "." not in normalized:
             normalized = f"{normalized}.0"
@@ -1966,6 +2473,9 @@ class SlangToCrossGLConverter:
             differential_type = self.map_associated_differential_type(slang_type)
             if differential_type:
                 return f"{differential_type}{pointer_suffix}"
+            matrix_type = self.map_slang_matrix_type(slang_type)
+            if matrix_type:
+                return f"{matrix_type}{pointer_suffix}"
             generic_vector_or_matrix = self.map_generic_vector_or_matrix_type(
                 slang_type
             )
@@ -1977,6 +2487,16 @@ class SlangToCrossGLConverter:
             )
             if pointer_buffer_type:
                 return f"{pointer_buffer_type}{pointer_suffix}"
+            packed_buffer_type = self.map_packed_element_buffer_type(
+                slang_type, base_type
+            )
+            if packed_buffer_type:
+                return f"{packed_buffer_type}{pointer_suffix}"
+            storage_image_type = self.map_integer_storage_image_type(
+                slang_type, base_type
+            )
+            if storage_image_type:
+                return f"{storage_image_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2043,13 +2563,91 @@ class SlangToCrossGLConverter:
             text = f"value_{text}"
         return text
 
+    def map_integer_storage_image_type(self, slang_type, base_type):
+        """``uimage2D`` or ``iimage2D`` for a storage texture of integer texels."""
+        if base_type not in self.STORAGE_IMAGE_RESOURCE_TYPES:
+            return None
+        image_type = self.type_map.get(base_type)
+        element = " ".join(str(storage_image_element_type(slang_type) or "").split())
+        match = re.fullmatch(
+            r"(uint|dword|int)[1-4]?|vector\s*<\s*(uint|dword|int)\s*,\s*[1-4]\s*>",
+            element,
+        )
+        if not image_type or match is None:
+            return None
+        scalar = match.group(1) or match.group(2)
+        return f"{'i' if scalar == 'int' else 'u'}{image_type}"
+
+    # Typed storage textures whose format the bound view decides, as the HLSL
+    # importer reads them.
+    RUNTIME_FORMAT_STORAGE_TEXTURES = frozenset(
+        {
+            "RWTexture1D",
+            "RWTexture1DArray",
+            "RWTexture2D",
+            "RWTexture2DArray",
+            "RWTexture3D",
+        }
+    )
+
+    def storage_image_format_metadata(self, node):
+        """CrossGL ``@format`` (and ``@texel``) of a typed storage texture.
+
+        Slang's ``[format(F)]`` and ``[[vk::image_format(F)]]`` name the format.
+        Without them the view bound at run time decides it, so the declaration
+        carries ``@format(unknown)`` and ``@texel(...)`` keeps an element type
+        other than a four-component one, as the HLSL importer writes them.
+        """
+        vtype = str(getattr(node, "vtype", "") or "")
+        if vtype.split("<", 1)[0].strip() not in self.RUNTIME_FORMAT_STORAGE_TEXTURES:
+            return []
+        for attribute in getattr(node, "attributes", None) or []:
+            name = str(attribute.get("name", "")).lower()
+            if name not in IMAGE_FORMAT_ATTRIBUTES:
+                continue
+            arguments = attribute.get("arguments", []) or []
+            spelled = str(arguments[0]) if arguments else ""
+            image_format = crossgl_image_format(spelled) if arguments else None
+            if image_format is None:
+                raise SlangImportRefused(
+                    [
+                        f"Slang [{name}({spelled})] on '{node.name}': CrossGL has "
+                        "no such storage image format"
+                    ]
+                )
+            if image_format != "unknown":
+                return [f"@format({image_format})"]
+        metadata = ["@format(unknown)"]
+        texel = texel_attribute_arguments(storage_image_element_type(vtype))
+        if texel is not None:
+            metadata.append(f"@texel({texel})")
+        return metadata
+
     def map_pointer_element_buffer_type(self, slang_type, base_type):
         if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
             return None
         args = self.generic_type_arguments(slang_type)
         if len(args) != 1 or "*" not in args[0]:
             return None
-        return f"buffer<{self.map_type(args[0])}>"
+        raise SlangImportRefused(
+            [
+                f"{base_type}<{args[0].strip()}> holds pointers; CrossGL has no "
+                "storage buffer whose elements are pointers"
+            ]
+        )
+
+    def map_packed_element_buffer_type(self, slang_type, base_type):
+        # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+        # buffer of them is a structured buffer of uint, as in the HLSL importer.
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or args[0].strip() not in {
+            "int8_t4_packed",
+            "uint8_t4_packed",
+        }:
+            return None
+        return f"{base_type}<uint>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
@@ -2068,6 +2666,17 @@ class SlangToCrossGLConverter:
             return self.map_generic_matrix_type(slang_type)
         return None
 
+    def crossgl_intrinsic_name(self, name):
+        """The CrossGL name of callee ``name``: the CrossGL spelling of a Slang intrinsic ``function_map`` renames.
+
+        Any other callee is carried as written: a constructor, or a Slang or HLSL built-in that CrossGL spells the
+        same way. The IR accepts HLSL built-ins as plain calls for the generators to map or refuse, and
+        ``declared_functions`` refuses any other name (``builtin_function_names``).
+        """
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
+
     def map_generic_vector_type(self, slang_type):
         args = self.generic_type_arguments(slang_type)
         if len(args) != 2:
@@ -2079,7 +2688,8 @@ class SlangToCrossGLConverter:
             return None
 
         if vector_size == "1":
-            return self.type_map.get(scalar_type, scalar_type)
+            # CrossGL has no one-component vector; ``vector<T, 1>`` holds one ``T``.
+            return self.map_type(scalar_type)
 
         vector_prefixes = {
             "float": "vec",
@@ -2095,6 +2705,9 @@ class SlangToCrossGLConverter:
         return f"{prefix}{vector_size}"
 
     def map_generic_matrix_type(self, slang_type):
+        matrix_type = self.map_slang_matrix_type(slang_type)
+        if matrix_type:
+            return matrix_type
         args = self.generic_type_arguments(slang_type)
         if len(args) != 3:
             return None
@@ -2178,6 +2791,7 @@ class SlangToCrossGLConverter:
             or name in self.HLSL_NAMESPACE_BITCAST_BUILTINS
             or name in self.HLSL_NAMESPACE_PASSTHROUGH_BUILTINS
             or name in self.function_map
+            or name in self.function_statement_sequences
         )
 
     def generate_bitcast_intrinsic_call(
@@ -2277,7 +2891,9 @@ class SlangToCrossGLConverter:
 
         def visit_statement(statement):
             if isinstance(statement, StructNode):
-                if getattr(statement, "is_local_declaration", False):
+                if getattr(statement, "is_local_declaration", False) or getattr(
+                    statement, "is_block_declaration", False
+                ):
                     marker = id(statement)
                     if marker not in seen:
                         seen.add(marker)
@@ -2319,16 +2935,19 @@ class SlangToCrossGLConverter:
             if name is not None and vtype:
                 scope[name] = vtype
         self.variable_type_scopes.append(scope)
+        self.push_matrix_rank_scope(params)
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+        self.pop_matrix_rank_scope()
 
     def register_variable_type(self, node):
         name = getattr(node, "name", None)
         vtype = getattr(node, "vtype", None)
         if name is not None and vtype:
             self.variable_type_scopes[-1][name] = vtype
+            self.record_matrix_rank(node)
 
     def push_sampleable_resource_scope(self, params):
         scope = set()
@@ -2520,14 +3139,27 @@ class SlangToCrossGLConverter:
         resource_type = self.storage_image_resource_expression_type(expr.object)
         resource_base = self.resource_type_base(resource_type)
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
+        shape = texel_element_shape(storage_image_element_type(resource_type))
+        if shape is None:
+            raise SlangImportRefused(
+                [
+                    f"Slang {obj}.{expr.method}: CrossGL images have no texels of "
+                    f"type '{resource_type}'"
+                ]
+            )
         if expr.method == "Load":
-            return f"imageLoad({', '.join([obj] + args)})"
+            # CrossGL image loads return four components; Load returns the element type.
+            narrowing = {1: ".x", 2: ".xy", 3: ".xyz", 4: ""}[shape[1]]
+            return f"imageLoad({', '.join([obj] + args)}){narrowing}"
         if (
             expr.method == "Store"
             and len(args) == 2
             and not self.is_multisample_resource_base(resource_base)
         ):
-            return f"imageStore({', '.join([obj] + args)})"
+            value = self.widen_storage_image_texel(
+                resource_type, self.storage_image_value_shape(expr.args[1]), args[1]
+            )
+            return f"imageStore({obj}, {args[0]}, {value})"
         return None
 
     def generate_byte_address_buffer_method_call(self, expr, obj, is_main=False):
@@ -2820,17 +3452,9 @@ class SlangToCrossGLConverter:
             return "textureLod", prefix + [coord, *extra_args]
 
         if expr.method == "SampleGrad":
-            if len(extra_args) > 2:
-                ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureGradOffset"
-                if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
-                        "SampleGrad",
-                        self.texture_gradient_extra_parameters(rest),
-                    )
-                    texture_func = f"{diagnostic} {texture_func}"
-                return texture_func, prefix + [coord, ddx, ddy, offset]
-            return "textureGrad", prefix + [coord, *extra_args]
+            return self.crossgl_texture_gradient_call_parts(
+                expr, prefix, coord, extra_args
+            )
 
         if expr.method == "SampleCmp":
             if len(extra_args) > 1:
@@ -2864,72 +3488,81 @@ class SlangToCrossGLConverter:
         if expr.method == "SampleCmpGrad":
             if len(extra_args) > 3:
                 compare, ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureCompareGradOffset"
                 if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
+                    self.refuse_texture_overload_extras(
                         "SampleCmpGrad",
                         self.texture_gradient_extra_parameters(
                             rest, includes_lod_clamp=False
                         ),
                     )
-                    texture_func = f"{diagnostic} {texture_func}"
                 return (
-                    texture_func,
+                    "textureCompareGradOffset",
                     prefix + [coord, compare, ddx, ddy, offset],
                 )
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
         return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
 
+    def crossgl_texture_gradient_call_parts(self, expr, prefix, coord, extra_args):
+        """``SampleGrad(s, location, ddx, ddy[, offset][, lodClamp][, out status])`` as a CrossGL texture call.
+
+        A cube texture takes no offset. CrossGL carries the minimum-LOD clamp as ``textureGradClamp`` and
+        ``textureGradOffsetClamp``; a status output, which reports tile residency, is refused.
+        """
+        if len(extra_args) <= 2:
+            return "textureGrad", prefix + [coord, *extra_args]
+        resource_base = self.resource_type_base(
+            self.sampleable_resource_expression_type(expr.object)
+        )
+        if resource_base in self.CUBE_TEXTURE_RESOURCE_BASES:
+            ddx, ddy, *rest = extra_args
+            if len(rest) == 1:
+                return "textureGradClamp", prefix + [coord, ddx, ddy, rest[0]]
+        else:
+            ddx, ddy, offset, *rest = extra_args
+            if not rest:
+                return "textureGradOffset", prefix + [coord, ddx, ddy, offset]
+            if len(rest) == 1:
+                return (
+                    "textureGradOffsetClamp",
+                    prefix + [coord, ddx, ddy, offset, rest[0]],
+                )
+        dropped_parameters = ["status output"]
+        if len(rest) > 2:
+            dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleGrad", dropped_parameters)
+
     def crossgl_texture_compare_bias_call_parts(self, expr, prefix, coord, extra_args):
         if len(extra_args) < 2:
             return "textureCompare", prefix + [coord, *extra_args]
 
-        compare = extra_args[0]
+        # SampleCmpBias(s, location, compare, bias[, offset][, clamp][, status]): CrossGL's textureCompare has no
+        # bias operand, so every call with a bias is refused, naming each operand that would be lost.
         resource_base = self.resource_type_base(
             self.sampleable_resource_expression_type(expr.object)
         )
-        offset_index = (
-            2
-            if len(extra_args) > 2
-            and resource_base not in {
-                "TextureCube",
-                "TextureCubeArray",
-                "SamplerCube",
-                "SamplerCubeArray",
-                "SamplerCubeShadow",
-                "SamplerCubeArrayShadow",
-            }
-            else None
+        has_offset = (
+            len(extra_args) > 2
+            and resource_base not in self.CUBE_TEXTURE_RESOURCE_BASES
         )
+        trailing_args = extra_args[3:] if has_offset else extra_args[2:]
         dropped_parameters = ["LOD bias"]
-
-        if offset_index is None:
-            texture_func = "textureCompare"
-            args = prefix + [coord, compare]
-            trailing_args = extra_args[2:]
-        else:
-            texture_func = "textureCompareOffset"
-            args = prefix + [coord, compare, extra_args[offset_index]]
-            trailing_args = extra_args[offset_index + 1 :]
-
         if trailing_args:
             dropped_parameters.append("LOD clamp")
         if len(trailing_args) > 1:
             dropped_parameters.append("status output")
         if len(trailing_args) > 2:
             dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleCmpBias", dropped_parameters)
 
-        diagnostic = self.texture_overload_extras_diagnostic(
-            "SampleCmpBias", dropped_parameters
-        )
-        return f"{diagnostic} {texture_func}", args
-
-    def texture_overload_extras_diagnostic(self, member, dropped_parameters):
+    def refuse_texture_overload_extras(self, member, dropped_parameters):
+        """Refuse a texture method call whose trailing operands CrossGL's texture functions have no place for."""
         parameters = ", ".join(dropped_parameters)
-        return (
-            f"/* unsupported Slang texture overload extras for {member}: "
-            f"dropped {parameters} */"
+        raise SlangImportRefused(
+            [
+                f"texture overload extras for {member}: CrossGL has no operand for "
+                f"{parameters}"
+            ]
         )
 
     def texture_gradient_extra_parameters(self, trailing_args, includes_lod_clamp=True):
@@ -3231,6 +3864,19 @@ class SlangToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_vertex_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not self.is_position_semantic(semantic):
+            return False
+        if str(function_qualifier or "").lower() != "vertex":
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
     def is_fragment_coverage_input_parameter(
         self, semantic, function_qualifier=None, parameter=None
     ):
@@ -3266,6 +3912,12 @@ class SlangToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_vertex_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            # An ordinary vertex attribute, under the name it had before
+            # SV_Position mapped to gl_Position.
+            return f"@ Out_Position{str(semantic)[len('SV_Position'):]}"
         if self.is_fragment_coverage_input_parameter(
             semantic, function_qualifier, parameter
         ):
@@ -3285,13 +3937,17 @@ class SlangToCrossGLConverter:
             target_match = re.fullmatch(r"SV_TARGET(\d*)", str(semantic).upper())
             if target_match:
                 target_index = target_match.group(1)
-                mapped_semantic = f"Out_Color{target_index}"
+                mapped_semantic = (
+                    f"gl_FragData[{int(target_index)}]"
+                    if target_index
+                    else "gl_FragColor"
+                )
         if mapped_semantic is None:
             depth_match = re.fullmatch(
                 r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
             )
             if depth_match:
-                mapped_semantic = "Out_Depth"
+                mapped_semantic = "gl_FragDepth"
         if mapped_semantic is None:
             for hlsl_prefix, crossgl_semantic in (
                 ("SV_CLIPDISTANCE", "gl_ClipDistance"),

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from .refusals import CrossGLRefusal
+
 ENTRY_DISCOVERY_AVAILABLE = "available"
 ENTRY_DISCOVERY_FAILED = "failed"
 ENTRY_DISCOVERY_UNAVAILABLE = "unavailable"
@@ -123,13 +125,13 @@ class SourceEntryDiscovery:
 
     def __post_init__(self) -> None:
         if self.status not in ENTRY_DISCOVERY_STATUSES:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Unsupported source entry discovery status: {self.status}"
             )
         if self.status == ENTRY_DISCOVERY_UNAVAILABLE and (
             self.entries or self.diagnostics
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "Unavailable source entry discovery cannot contain entries or diagnostics"
             )
 

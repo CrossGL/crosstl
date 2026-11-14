@@ -4,15 +4,25 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from crosstl.project.runtime_values import exact_types_within
+
 FLOAT16_BITS = "ieee754-binary16"
 FLOAT32_BITS = "ieee754-binary32"
 BFLOAT16_BITS = "bfloat16-bits"
+_INT_TYPES = frozenset({int})
 
 
 def storage_words(values: Any, *, width: int = 32) -> list[int]:
     """Flatten exact storage words without conversion through host floats."""
     if width not in (16, 32):
         raise ValueError("Storage word width must be 16 or 32 bits.")
+    if (
+        type(values) is list
+        and exact_types_within(values, _INT_TYPES)
+        and (not values or (min(values) >= 0 and max(values) < (1 << width)))
+    ):
+        # A flat list of in-range words is its own flattening.
+        return list(values)
     if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
         return [word for value in values for word in storage_words(value, width=width)]
     if (

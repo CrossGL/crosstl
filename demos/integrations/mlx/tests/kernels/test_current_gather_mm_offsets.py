@@ -26,6 +26,7 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import (
     MLX_COMMIT,
     ROOT,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -393,11 +394,9 @@ def test_current_mlx_gather_mm_offsets_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": record["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+            check_generated_artifact(
+                artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
+            )
             execution = artifact.get("execution")
             if target == "metal":
                 # Metal selects the threadgroup size when the kernel is dispatched.
@@ -485,14 +484,14 @@ def test_current_mlx_gather_mm_offsets_native_parity(
 
 
 def test_ci_requires_native_gather_mm_offsets_parity():
+    from tests import workflow_text
     from tests.ci_helpers import (
         assert_native_step_prerequisites,
         assert_workflow_triggers,
     )
-    from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow,
         "mlx-metal-porting",
         "Prove current MLX new-unit native parity",
@@ -515,7 +514,7 @@ def test_ci_requires_native_gather_mm_offsets_parity():
         workflow,
         "demos/integrations/mlx/tests/kernels/test_current_gather_mm_offsets.py",
     )
-    upload = ci_coverage.workflow_job_step_section(
+    upload = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
     )
     assert "if: always()" in upload

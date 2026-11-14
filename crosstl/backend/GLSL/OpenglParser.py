@@ -2,6 +2,14 @@
 
 import re
 
+from crosstl.translator.refusals import OpenGLSyntaxError
+
+from ..switch_clauses import record_default_position
+from .default_block_layouts import (
+    DefaultBlockLayouts,
+    member_layouts_with_block_matrix_order,
+)
+from .interface_block_locations import anonymous_block_member_layouts
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -175,6 +183,7 @@ MESH_STORAGE_QUALIFIERS_LOWER = {
 }
 
 VULKAN_MEMORY_MODEL_QUALIFIERS = {
+    "devicecoherent",
     "workgroupcoherent",
     "subgroupcoherent",
     "queuefamilycoherent",
@@ -447,8 +456,11 @@ class GLSLParser:
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
         self.known_type_names = set()
+        self.struct_member_type_names = {}
         self.current_xfb_output_buffer = None
         self.xfb_output_stride_by_buffer = {}
+        self.current_output_stream = None
+        self.default_block_layouts = DefaultBlockLayouts()
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -461,10 +473,13 @@ class GLSLParser:
             self.current_token = ("EOF", "")
 
     def eat(self, token_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise OpenGLSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.advance()
         else:
-            raise SyntaxError(
+            raise OpenGLSyntaxError(
                 f"Expected {token_type}, got {self.current_token[0]} ({self.current_token[1]})"
             )
 
@@ -546,6 +561,12 @@ class GLSLParser:
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                block_interface = self.default_block_layouts.default_interface(
+                    qualifiers, layout
+                )
+                if block_interface is not None:
+                    self.default_block_layouts.declare(block_interface, layout)
+                    continue
                 layout = self.consume_standalone_xfb_output_layout(qualifiers, layout)
                 if layout is not None:
                     layouts.append({"layout": layout, "qualifiers": qualifiers})
@@ -876,6 +897,10 @@ class GLSLParser:
         if not self.has_out_qualifier(qualifiers):
             return layout
 
+        stream = self.get_layout_key(layout, "stream")
+        if stream is not None:
+            self.current_output_stream = stream
+
         remaining = dict(layout)
         xfb_buffer = self.pop_layout_key(remaining, "xfb_buffer")
         if xfb_buffer is not None:
@@ -915,6 +940,23 @@ class GLSLParser:
             if stride is not None:
                 merged["xfb_stride"] = stride
 
+        return merged
+
+    def output_layout_with_stream_default(self, qualifiers, layout):
+        """An output's layout, given the stream that a standalone ``layout(stream = N) out;`` last made the default.
+
+        GLSL 4.60 section 4.4.2.2: an output declared without a stream belongs to the current default stream.
+        Stream 0 is every output's stream unless it names another, so it is not spelled out.
+        """
+        stream = self.current_output_stream
+        if stream is None or not self.has_out_qualifier(qualifiers):
+            return layout
+        if str(self.layout_value_key(stream)) == "0":
+            return layout
+        if self.get_layout_key(layout, "stream") is not None:
+            return layout
+        merged = dict(layout or {})
+        merged["stream"] = stream
         return merged
 
     def apply_variable_io_type(self, var, qualifiers):
@@ -1090,7 +1132,7 @@ class GLSLParser:
                     self.skip_newlines()
                 qualifiers[key] = value
             else:
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Unexpected token in layout qualifier: {self.current_token}"
                 )
             if self.current_token[0] == "COMMA":
@@ -1216,7 +1258,7 @@ class GLSLParser:
         depth = 1
         while depth:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated macro declaration prefix")
+                raise OpenGLSyntaxError("Unterminated macro declaration prefix")
             if self.current_token[0] == "LPAREN":
                 depth += 1
             elif self.current_token[0] == "RPAREN":
@@ -1264,7 +1306,7 @@ class GLSLParser:
                             type_names.append(self.current_token[1])
                             self.advance()
                         else:
-                            raise SyntaxError(
+                            raise OpenGLSyntaxError(
                                 f"Expected subroutine type, got {self.current_token}"
                             )
                         self.skip_newlines()
@@ -1304,7 +1346,7 @@ class GLSLParser:
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
             return type_name + self.parse_type_template_suffix()
-        raise SyntaxError(f"Expected type, got {self.current_token}")
+        raise OpenGLSyntaxError(f"Expected type, got {self.current_token}")
 
     def is_unsigned_int_type_start_at(self, index):
         index = self.skip_newline_index(index)
@@ -1331,7 +1373,7 @@ class GLSLParser:
         nested_depths = {"LPAREN": 0, "LBRACKET": 0, "LBRACE": 0}
         while angle_depth:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated type template argument list")
+                raise OpenGLSyntaxError("Unterminated type template argument list")
             if self.current_token[0] in nested_depths:
                 nested_depths[self.current_token[0]] += 1
                 parts.append(self.current_token[1])
@@ -1433,7 +1475,7 @@ class GLSLParser:
             name = self.current_token[1]
             self.advance()
             return name
-        raise SyntaxError(f"Expected {context}, got {self.current_token}")
+        raise OpenGLSyntaxError(f"Expected {context}, got {self.current_token}")
 
     def is_declaration_start(self):
         if self.current_token[0] in TYPE_TOKENS or self.is_unsigned_int_type_start_at(
@@ -1509,13 +1551,13 @@ class GLSLParser:
             self.skip_newlines()
             declarator_type = type_name + self.parse_pointer_declarator_suffix()
             if not self.is_name_token():
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Expected identifier in declaration, got {self.current_token}"
                 )
 
             name = self.parse_identifier_name()
 
-            array_sizes = list(type_array_sizes) + self.parse_array_suffixes()
+            array_sizes = self.parse_array_suffixes() + list(type_array_sizes)
             is_array = bool(array_sizes)
             array_size = array_sizes[0] if array_sizes else None
 
@@ -1536,6 +1578,9 @@ class GLSLParser:
                 else:
                     semantic = self.parse_hlsl_semantic()
             variable_layout = self.output_layout_with_xfb_defaults(
+                qualifiers, variable_layout
+            )
+            variable_layout = self.output_layout_with_stream_default(
                 qualifiers, variable_layout
             )
 
@@ -1567,7 +1612,7 @@ class GLSLParser:
 
         if consume_semicolon:
             if self.current_token[0] != "SEMICOLON":
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Expected ';' after declaration, got {self.current_token}"
                 )
             self.eat("SEMICOLON")
@@ -1636,6 +1681,9 @@ class GLSLParser:
 
         struct_node = StructNode(name, members)
         struct_node.nested_structs = nested_structs
+        self.struct_member_type_names[name] = [
+            str(getattr(member, "vtype", "") or "") for member in members
+        ]
         return struct_node, variables
 
     def next_anonymous_struct_name(self):
@@ -1666,6 +1714,9 @@ class GLSLParser:
         if register_layout:
             layout = self.merge_layout_qualifiers(layout, register_layout)
         layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
+        layout = self.output_layout_with_stream_default(qualifiers, layout)
+        if not hlsl_cbuffer:
+            layout = self.default_block_layouts.block_layout(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1699,6 +1750,17 @@ class GLSLParser:
 
         self.eat("RBRACE")
         self.skip_newlines()
+        if {"uniform", "buffer"} & {
+            str(qualifier).lower() for qualifier in qualifiers or []
+        }:
+            member_layouts = member_layouts_with_block_matrix_order(
+                layout,
+                members,
+                [member.interface_member_layout for member in members],
+                self.struct_member_type_names,
+            )
+            for member, member_layout in zip(members, member_layouts):
+                member.interface_member_layout = member_layout
 
         instance_name = None
         array_size = None
@@ -1740,11 +1802,14 @@ class GLSLParser:
             block_var.is_array = instance_is_array
             block_vars.append(block_var)
         elif not self.is_buffer_reference_block(qualifiers, layout):
-            for member in members:
+            member_layouts = anonymous_block_member_layouts(
+                block_name, members, qualifiers, layout
+            )
+            for member, member_layout in zip(members, member_layouts):
                 member.qualifiers = list(member.qualifiers or []) + list(
                     qualifiers or []
                 )
-                member.layout = layout
+                member.layout = member_layout
                 block_vars.append(member)
 
         return struct_node, block_vars
@@ -1770,7 +1835,9 @@ class GLSLParser:
             self.current_token[0] == "IDENTIFIER"
             and str(self.current_token[1]).lower() == "register"
         ):
-            raise SyntaxError(f"Expected register annotation, got {self.current_token}")
+            raise OpenGLSyntaxError(
+                f"Expected register annotation, got {self.current_token}"
+            )
         self.eat("IDENTIFIER")
         self.skip_newlines()
         self.eat("LPAREN")
@@ -1922,7 +1989,7 @@ class GLSLParser:
                     params.append(VariableNode("...", "...", is_variadic=True))
                     self.skip_newlines()
                     if self.current_token[0] != "RPAREN":
-                        raise SyntaxError("GLSL variadic parameter must be last")
+                        raise OpenGLSyntaxError("GLSL variadic parameter must be last")
                     break
 
                 qualifiers, layout = self.parse_parameter_prefix()
@@ -1937,7 +2004,7 @@ class GLSLParser:
                     array_sizes = type_array_sizes
                 else:
                     param_name = self.parse_identifier_name("parameter name")
-                    array_sizes = type_array_sizes + self.parse_array_suffixes()
+                    array_sizes = self.parse_array_suffixes() + type_array_sizes
 
                 default_value = None
                 if self.current_token[0] == "EQUALS":
@@ -2250,7 +2317,7 @@ class GLSLParser:
 
         while True:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated GLSL statement attribute list")
+                raise OpenGLSyntaxError("Unterminated GLSL statement attribute list")
             if self.current_token[0] == "RBRACKET":
                 self.eat("RBRACKET")
                 self.skip_newlines()
@@ -2276,7 +2343,7 @@ class GLSLParser:
         depth = 1
         while depth:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated HLSL attribute list")
+                raise OpenGLSyntaxError("Unterminated HLSL attribute list")
             if self.current_token[0] == "LBRACKET":
                 depth += 1
             elif self.current_token[0] == "RBRACKET":
@@ -2300,7 +2367,9 @@ class GLSLParser:
                 type_array_sizes=type_array_sizes,
             )
             if len(declarations) != 1:
-                raise SyntaxError("GLSL condition declarations must declare one name")
+                raise OpenGLSyntaxError(
+                    "GLSL condition declarations must declare one name"
+                )
             return declarations[0]
         return self.parse_expression()
 
@@ -2376,7 +2445,9 @@ class GLSLParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return expr
-        raise SyntaxError(f"Expected ';' after expression, got {self.current_token}")
+        raise OpenGLSyntaxError(
+            f"Expected ';' after expression, got {self.current_token}"
+        )
 
     def parse_if_statement(self):
         self.eat("IF")
@@ -2434,7 +2505,15 @@ class GLSLParser:
                 elif init_decls:
                     init = init_decls
             else:
-                init = self.parse_assignment_expression()
+                # ``k = 0, m = 3``: a comma expression, kept as the list of its operands like the update.
+                inits = [self.parse_assignment_expression()]
+                self.skip_newlines()
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    self.skip_newlines()
+                    inits.append(self.parse_assignment_expression())
+                    self.skip_newlines()
+                init = inits[0] if len(inits) == 1 else inits
 
         self.eat("SEMICOLON")
         self.skip_newlines()
@@ -2492,6 +2571,7 @@ class GLSLParser:
 
         cases = []
         default_statements = None
+        default_index = None
 
         while self.current_token[0] not in ("RBRACE", "EOF"):
             self.skip_newlines()
@@ -2503,6 +2583,7 @@ class GLSLParser:
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_statements = []
+                default_index = len(cases)
                 while self.current_token[0] not in (
                     "CASE",
                     "DEFAULT",
@@ -2518,12 +2599,14 @@ class GLSLParser:
                     elif stmt is not None:
                         default_statements.append(stmt)
             else:
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Unexpected token in switch statement: {self.current_token}"
                 )
 
         self.eat("RBRACE")
-        return SwitchNode(expression, cases, default_statements)
+        return record_default_position(
+            SwitchNode(expression, cases, default_statements), default_index
+        )
 
     def parse_case_statement(self):
         self.eat("CASE")
@@ -2585,7 +2668,9 @@ class GLSLParser:
             true_expr = self.parse_expression()
             self.skip_newlines()
             self.eat("COLON")
-            false_expr = self.parse_expression()
+            # GLSL 4.60 section 9 (grammar): logical_or_expression QUESTION expression COLON
+            # assignment_expression. The false branch stops at a comma, which separates the next argument.
+            false_expr = self.parse_assignment_expression()
             return TernaryOpNode(expr, true_expr, false_expr)
         return expr
 
@@ -2919,7 +3004,7 @@ class GLSLParser:
             value = self.current_token[1]
             self.advance()
             return value
-        raise SyntaxError(f"Unexpected token in expression: {self.current_token}")
+        raise OpenGLSyntaxError(f"Unexpected token in expression: {self.current_token}")
 
     def is_template_call_suffix_start(self):
         if self.current_token[0] != "LESS_THAN":

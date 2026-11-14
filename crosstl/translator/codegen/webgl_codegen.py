@@ -6,6 +6,7 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     FunctionCallNode,
+    PreprocessorNode,
     StageMap,
     TernaryOpNode,
 )
@@ -16,11 +17,33 @@ from .GLSL_codegen import (
     OpenGLBooleanCompoundAssignmentError,
     OpenGLBooleanOrderedIntrinsicError,
     OpenGLIndexTypeError,
+    OpenGLPreciseQualifierError,
     OpenGLStructConstructionError,
 )
+from .glsl_es_expression_forms import GLSLESExpressionFormsMixin
+from .glsl_es_varying_links import es300_linked_varying_name, program_identifier_names
 from .glsl_refusals import WebGLLoweringRefused
+from .glsl_target_builtins import (
+    WEBGL_UNAVAILABLE_BUILTINS,
+    WEBGL_UNAVAILABLE_FUNCTION_PATTERNS,
+)
 from .index_range_contracts import WEBGL_INDEX_PROFILE
-from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .stage_refusals import StageUnsupportedError
+from .stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
+
+
+def webgl_refusal(reason):
+    """Return the typed refusal for a construct WebGL 2 (GLSL ES 3.00) cannot express.
+
+    GLSL ES 3.00 lacks storage buffers, storage images, atomics and texture gathers (added in GLSL ES 3.10),
+    multisampled and cube-array samplers (3.10 and 3.20), 1D, rectangle and buffer samplers, 64-bit floating
+    point, and clip and cull distances. A program that uses one is refused rather than emitted without it.
+    """
+    return WebGLLoweringRefused((reason,))
 
 
 class WebGLArithmeticConversionError(OpenGLArithmeticConversionError):
@@ -62,16 +85,34 @@ class WebGLIndexTypeError(OpenGLIndexTypeError):
     missing_capabilities = ("webgl.index-width-normalization",)
 
 
-class WebGLCodeGen(GLSLCodeGen):
+class WebGLPreciseQualifierError(OpenGLPreciseQualifierError):
+    """Raised when source arithmetic must be evaluated as written in GLSL ES 3.00."""
+
+    project_diagnostic_code = "project.translate.webgl-precise-unsupported"
+    missing_capabilities = ("webgl.precise-qualifier",)
+
+
+class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    GLSL_IMPLICIT_LITERAL_CONVERSIONS = False
+    GLSL_UNAVAILABLE_BUILTINS = WEBGL_UNAVAILABLE_BUILTINS
+    GLSL_UNAVAILABLE_FUNCTION_PATTERNS = WEBGL_UNAVAILABLE_FUNCTION_PATTERNS
+    webgl_program_identifier_names = frozenset()
+    # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
+    GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
     GLSL_INDEX_RANGE_ERROR = WebGLIndexTypeError
+    GLSL_PRECISE_QUALIFIER_ERROR = WebGLPreciseQualifierError
+    GLSL_PRECISE_QUALIFIER_REMEDY = (
+        "WebGL 2 shaders are GLSL ES 3.00, so translate the shader for a "
+        "desktop OpenGL or GLSL ES 3.20 target instead"
+    )
     GLSL_INDEX_TARGET_PROFILE = WEBGL_INDEX_PROFILE
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
@@ -171,7 +212,7 @@ class WebGLCodeGen(GLSLCodeGen):
         mapped_type = super().map_type(vtype)
         base_type = mapped_type.split("[", 1)[0].rstrip("*&")
         if base_type in self.UNSUPPORTED_FLOAT64_TYPES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support 64-bit floating-point type "
                 f"'{base_type}'"
             )
@@ -193,7 +234,7 @@ class WebGLCodeGen(GLSLCodeGen):
 
     def map_image_base_type_with_format(self, vtype, node=None):
         if self.is_storage_image_type(vtype):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(vtype))})"
@@ -208,27 +249,49 @@ class WebGLCodeGen(GLSLCodeGen):
         # WebGL 2 compiles GLSL ES 3.00 only.
         return True
 
+    def should_emit_glsl_preprocessor_directive(self, directive):
+        # A source ``#version`` names the source's language; WebGL 2 output is always GLSL ES 3.00.
+        if isinstance(directive, PreprocessorNode):
+            if str(directive.directive).lstrip("#").strip() == "version":
+                return False
+        elif str(directive).strip().startswith("#version"):
+            return False
+        return super().should_emit_glsl_preprocessor_directive(directive)
+
     def generate_expression(self, expr, is_main=False):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
         if replacement is not None:
             return replacement
         if isinstance(expr, FunctionCallNode):
             self.validate_webgl_function_call_support(self.function_call_name(expr))
+        es_form = self.glsl_es_expression_form(expr)
+        if es_form is not None:
+            return es_form
         return super().generate_expression(expr, is_main=is_main)
+
+    def local_variable_qualifier(self, node):
+        qualifier = super().local_variable_qualifier(node)
+        name = getattr(node, "name", None)
+        if qualifier.startswith("const ") and self.glsl_es_local_const_allowed(node):
+            return qualifier
+        self.glsl_es_constant_locals.discard(name)
+        return (
+            qualifier[len("const ") :] if qualifier.startswith("const ") else qualifier
+        )
 
     def validate_webgl_function_call_support(self, func_name):
         if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image intrinsic "
                 f"'{func_name}'"
             )
         if func_name in self.GLSL_ES_310_TEXTURE_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target requires GLSL ES 3.00 and does not support "
                 f"texture gather intrinsic '{func_name}'"
             )
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 f"WebGL target does not support atomic operation '{func_name}'"
             )
 
@@ -265,10 +328,11 @@ class WebGLCodeGen(GLSLCodeGen):
             static_args[dynamic_info["arg_index"]] = (
                 self.glsl_static_array_access_argument(dynamic_info, index)
             )
-            rendered_args = ", ".join(
-                self.generate_function_call_arguments(func_name, static_args)
-            )
-            cases.append((index, f"{func_name}({rendered_args})"))
+            # Rendered as the call itself, so that texture built-ins drop explicit samplers and take their
+            # GLSL ES spelling as they would with a constant index.
+            static_call = copy(expr)
+            static_call.arguments = static_call.args = static_args
+            cases.append((index, self.generate_expression(static_call)))
 
         return {
             "index_expr": dynamic_info["index_expr"],
@@ -591,8 +655,47 @@ class WebGLCodeGen(GLSLCodeGen):
             return False
         return super().should_emit_stage_io_layout(stage_name, direction)
 
+    def stage_local_interface_linked_name(self, node, direction, stage_name):
+        return es300_linked_varying_name(
+            self,
+            node,
+            direction,
+            stage_name,
+            self.webgl_program_identifier_names,
+            self.resource_node_name(node, ""),
+        )
+
+    def vertex_output_member_name(self, member):
+        output_name = super().vertex_output_member_name(member)
+        if self.is_vertex_builtin_output(output_name):
+            return output_name
+        linked_name = es300_linked_varying_name(
+            self,
+            member,
+            "out",
+            "vertex",
+            self.webgl_program_identifier_names,
+            member.name,
+        )
+        return linked_name or output_name
+
+    def fragment_input_member_name(self, member, struct_name):
+        input_name = super().fragment_input_member_name(member, struct_name)
+        if input_name is None:
+            return None
+        linked_name = es300_linked_varying_name(
+            self,
+            member,
+            "in",
+            "fragment",
+            self.webgl_program_identifier_names,
+            member.name,
+        )
+        return linked_name or input_name
+
     def generate_program(self, ast, target_stage=None):
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
+        self.webgl_program_identifier_names = program_identifier_names(ast)
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
         self.validate_webgl_builtin_support(supported_ast)
@@ -623,7 +726,7 @@ class WebGLCodeGen(GLSLCodeGen):
             )
             if unsupported_builtin is None:
                 continue
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support vertex built-in output "
                 f"'{unsupported_builtin}'"
             )
@@ -673,18 +776,18 @@ class WebGLCodeGen(GLSLCodeGen):
             node_type = pointer_buffer_type
 
         if self.is_webgl_glsl_buffer_block_node(node):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support GLSL buffer block resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}'"
             )
         if self.is_structured_buffer_type(node_type):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage buffer resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.structured_buffer_type_name(node_type)})"
             )
         if self.is_storage_image_type(node_type):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(node_type))})"
@@ -692,7 +795,7 @@ class WebGLCodeGen(GLSLCodeGen):
         sampled_type = self.sampled_image_type(node_type)
         sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
         if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support sampled resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({sampled_base_type})"
@@ -714,7 +817,7 @@ class WebGLCodeGen(GLSLCodeGen):
     def structured_buffer_block_declaration(
         self, vtype, name, binding, array_size=None, node=None
     ):
-        raise ValueError(
+        raise webgl_refusal(
             "WebGL target does not support storage buffer resource "
             f"'{name}' ({self.structured_buffer_type_name(vtype)})"
         )
@@ -722,7 +825,7 @@ class WebGLCodeGen(GLSLCodeGen):
     def glsl_buffer_block_declaration(
         self, node, vtype, name, binding, array_suffix=""
     ):
-        raise ValueError(
+        raise webgl_refusal(
             f"WebGL target does not support GLSL buffer block resource '{name}'"
         )
 
@@ -738,9 +841,11 @@ class WebGLCodeGen(GLSLCodeGen):
             supported = stages & self.SUPPORTED_STAGE_NAMES
             if supported:
                 return
-            raise ValueError(
-                "WebGL target does not support shader stage(s): "
-                + ", ".join(unsupported)
+            raise StageUnsupportedError(
+                "webgl",
+                "WebGL",
+                unsupported,
+                "WebGL 2 (GLSL ES 3.00) has only vertex and fragment shaders",
             )
 
     def webgl_stage_names(self, ast):

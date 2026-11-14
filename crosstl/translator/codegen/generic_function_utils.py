@@ -1,12 +1,15 @@
 """Helpers for monomorphizing generic functions in C-style shader outputs."""
 
+import re
 from copy import deepcopy
 
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    BufferNode,
     ConstructorNode,
+    ExpressionNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
@@ -20,10 +23,60 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
+from ..explicit_specializations import (
+    explicit_specialization_for,
+    explicit_specialization_index,
+)
+from ..refusals import TargetRefusal
+from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
+from ..semantics.declared_types import declared_type_names
+from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
+)
+from .generic_body_types import substitute_body_types
+from .generic_call_collection_keys import (
+    collected_generic_call_key,
+    remember_collected_generic_call_key,
+    reset_collected_generic_call_keys,
+)
+from .generic_call_dependencies import (
+    begin_generic_callee_recording,
+    end_generic_callee_recording,
+    record_generic_callee,
+    reset_generic_callees,
+)
+from .generic_call_results import (
+    generic_call_argument_type_name,
+    generic_call_result_type_name,
+    generic_calls_read_by,
+)
+from .generic_concrete_call_results import (
+    concrete_call_result_type_name,
+    record_concrete_function_overloads,
+)
+from .generic_emission_order import (
+    reject_late_generic_specialization,
+    reset_generic_function_emission,
+)
+from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_prototypes import (
+    reject_undefined_generic_instantiation,
+    without_forward_generic_prototypes,
+)
+from .generic_result_types import reject_expression_result_type
+from .generic_specialization_names import (
+    reserve_program_names,
+    unique_specialization_name,
+)
+from .generic_value_arguments import substitute_value_parameters
+from .generic_vector_deduction import (
+    bind_generic_vector_parameter,
+    generic_vector_signature_name,
+    substituted_generic_type,
+    substituted_generic_type_name,
 )
 from .image_access_contracts import (
     IMAGE_ATOMIC_INTRINSIC_NAMES,
@@ -47,6 +100,18 @@ BUFFER_RESOURCE_INTRINSIC_NAMES = frozenset(
         "buffer_dimensions",
         "buffer_increment_counter",
         "buffer_decrement_counter",
+    }
+)
+
+# ``buffer_load(buffer, index)`` on these yields the single generic element type.
+TYPED_BUFFER_TYPE_NAMES = frozenset(
+    {
+        "Buffer",
+        "RWBuffer",
+        "StructuredBuffer",
+        "RWStructuredBuffer",
+        "RasterizerOrderedBuffer",
+        "RasterizerOrderedStructuredBuffer",
     }
 )
 
@@ -168,11 +233,33 @@ def _generic_member_expression_text(value):
     return str(value)
 
 
-def prepare_generic_function_specializations(generator, functions):
-    """Collect concrete generic function instantiations used by ``functions``."""
+def prepare_generic_function_specializations(
+    generator,
+    functions,
+    global_types=None,
+    *,
+    ast=None,
+    declared_types=None,
+):
+    """Collect concrete generic function instantiations used by ``functions``.
+
+    ``global_types`` maps global and stage-scope declarations to the type spelling the generator
+    gives them while it emits code, so a call such as ``twice(scale)`` on a uniform binds its type
+    parameter here as it does during emission.
+    """
+    generator.generic_collection_global_types = dict(global_types or {})
+    generator.generic_program_block_names = collect_program_block_names(ast)
+    if declared_types is not None:
+        generator.declared_type_names = frozenset(declared_types)
+    elif ast is not None:
+        generator.declared_type_names = declared_type_names(ast)
+    elif getattr(generator, "declared_type_names", None) is None:
+        generator.declared_type_names = frozenset()
     definitions = {}
     definition_ordinals = {}
-    for func in functions or []:
+    for func in without_forward_generic_prototypes(
+        functions, generic_function_parameters
+    ):
         func_name = getattr(func, "name", None)
         if (
             not func_name
@@ -184,27 +271,49 @@ def prepare_generic_function_specializations(generator, functions):
         definitions[func_name].append(func)
     generator.generic_function_definitions = definitions
     generator.generic_function_definition_ordinals = definition_ordinals
+    generator.explicit_generic_specializations = explicit_specialization_index(
+        generator, functions
+    )
+    generator.concrete_function_names = {
+        func.name
+        for func in functions or []
+        if getattr(func, "name", None) and not generic_function_parameters(func)
+    }
+    record_concrete_function_overloads(
+        generator, functions, generic_function_parameters
+    )
+    reserve_program_names(
+        generator, functions, generator.generic_collection_global_types
+    )
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
+    generator.generic_function_resolved_call_ids = set()
+    reset_collected_generic_call_keys(generator)
+    reset_generic_callees(generator)
+    reset_generic_function_emission(generator)
 
     if not definitions:
         return {}
 
     pending = []
-    for func in functions or []:
-        if getattr(func, "name", None) in definitions:
-            continue
-        pending.extend(_collect_from_function(generator, func, {}))
+    generator.collecting_generic_function_specializations = True
+    try:
+        for func in functions or []:
+            if generic_function_parameters(func):
+                continue
+            pending.extend(_collect_from_function(generator, func, {}))
 
-    seen_analysis = set()
-    while pending:
-        key = pending.pop(0)
-        clone = generator.generic_function_specializations.get(key)
-        if clone is None or key in seen_analysis:
-            continue
-        seen_analysis.add(key)
-        substitutions = dict(getattr(clone, "_generic_substitutions", {}) or {})
-        pending.extend(_collect_from_function(generator, clone, substitutions))
+        seen_analysis = set()
+        while pending:
+            key = pending.pop(0)
+            clone = generator.generic_function_specializations.get(key)
+            if clone is None or key in seen_analysis:
+                continue
+            seen_analysis.add(key)
+            substitutions = dict(getattr(clone, "_generic_substitutions", {}) or {})
+            pending.extend(_collect_from_function(generator, clone, substitutions))
+    finally:
+        generator.collecting_generic_function_specializations = False
 
     return generator.generic_function_specializations
 
@@ -283,7 +392,7 @@ def reject_unsupported_generic_functions(
         ):
             continue
         suffix = f" ({', '.join(generic_params)})" if generic_params else ""
-        raise ValueError(
+        raise TargetRefusal(
             f"{target_name} codegen does not support generic functions{suffix}; "
             f"specialize the function before {target_name} generation"
         )
@@ -298,6 +407,8 @@ def collect_unresolved_generic_function_call_names(generator, functions):
     unresolved = []
     seen_names = set()
     visited = set()
+    # Calls that specialization resolved with their function's local types, which this walk does not track.
+    resolved_call_ids = getattr(generator, "generic_function_resolved_call_ids", set())
 
     def visit(value):
         if value is None or isinstance(value, (str, bytes, int, float, bool)):
@@ -316,13 +427,20 @@ def collect_unresolved_generic_function_call_names(generator, functions):
             args = list(getattr(value, "arguments", getattr(value, "args", [])) or [])
             for arg in args:
                 visit(arg)
+            explicit_call = explicit_generic_call_target(generator, func_name)
+            definition_name = func_name if explicit_call is None else explicit_call[0]
+            # A call that a concrete overload of the same name can take is not
+            # unresolved: it falls back to that overload instead of the generic.
+            concrete_names = getattr(generator, "concrete_function_names", None) or ()
             if (
-                func_name in definitions
+                definition_name in definitions
+                and definition_name not in concrete_names
+                and id(value) not in resolved_call_ids
                 and generic_function_call_name(generator, func_name, args) is None
-                and func_name not in seen_names
+                and definition_name not in seen_names
             ):
-                seen_names.add(func_name)
-                unresolved.append(func_name)
+                seen_names.add(definition_name)
+                unresolved.append(definition_name)
             return
 
         if isinstance(value, dict):
@@ -369,6 +487,16 @@ def generic_function_call_name(generator, func_name, args):
     return _compatible_existing_specialized_call_name(generator, func_name, args)
 
 
+def generic_function_specialization_named(generator, specialized_name):
+    """Return the specialized clone emitted as ``specialized_name``, if any."""
+    for func in (
+        getattr(generator, "generic_function_specializations", {}) or {}
+    ).values():
+        if getattr(func, "name", None) == specialized_name:
+            return func
+    return None
+
+
 def raise_unresolved_generic_function_call(generator, func_name, target_name):
     """Raise when a target cannot infer a concrete generic helper call."""
     candidates = (getattr(generator, "generic_function_definitions", {}) or {}).get(
@@ -381,11 +509,27 @@ def raise_unresolved_generic_function_call(generator, func_name, target_name):
     func = candidates[0]
     generic_params = generic_function_parameters(func)
     suffix = f" ({', '.join(generic_params)})" if generic_params else ""
-    raise ValueError(
+    raise TargetRefusal(
         f"{target_name} codegen cannot infer concrete template arguments for "
         f"generic function '{func_name}'{suffix}; specialize the function before "
         f"{target_name} generation"
     )
+
+
+def reject_unresolved_generic_function_call(generator, func_name, target_name):
+    """Raise for a call that names only generic helpers when none of them was specialized for it.
+
+    Covers ``helper(x)`` and ``helper<int>(x)``. The generic helper itself is never emitted, so such a call would
+    name an undeclared function. A concrete function of the same name may still take a call without explicit
+    generic arguments.
+    """
+    explicit_call = explicit_generic_call_target(generator, func_name)
+    if explicit_call is not None:
+        raise_unresolved_generic_function_call(generator, explicit_call[0], target_name)
+        return
+    if func_name in (getattr(generator, "concrete_function_names", None) or ()):
+        return
+    raise_unresolved_generic_function_call(generator, func_name, target_name)
 
 
 def generic_function_value_arguments(generator, func_name, args):
@@ -411,8 +555,16 @@ def generic_function_value_arguments(generator, func_name, args):
 def generic_function_call_key(generator, func_name, args):
     if is_reserved_generic_function_builtin_name(func_name):
         return None
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        collected = collected_generic_call_key(generator, func_name, args)
+        if collected is not None:
+            return collected
 
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    explicit_types = None
+    explicit_call = explicit_generic_call_target(generator, func_name)
+    if explicit_call is not None:
+        func_name, explicit_types = explicit_call
     candidates = definitions.get(func_name) or []
     if not candidates:
         return None
@@ -424,6 +576,7 @@ def generic_function_call_key(generator, func_name, args):
             func,
             func_name,
             args,
+            explicit_types,
         )
         if match is None:
             continue
@@ -433,6 +586,29 @@ def generic_function_call_key(generator, func_name, args):
         return None
 
     matches.sort(key=lambda match: match["rank"], reverse=True)
+    if explicit_types is not None and not getattr(
+        generator, "collecting_generic_function_specializations", False
+    ):
+        # Explicit arguments bind without the call's argument types, so a walk
+        # of an unspecialized generic body would instantiate ``helper<T>`` for
+        # the parameter ``T`` itself. Every reachable explicit call is
+        # instantiated while specializations are collected; later passes only
+        # look them up.
+        return matches[0]["key"]
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        # Leading arguments read as types (``inc(w, w)``) are only trusted while
+        # specializations are collected, when the call's variables are in scope;
+        # later passes may lack that scope, so they only look such calls up.
+        specializations = (
+            getattr(generator, "generic_function_specializations", {}) or {}
+        )
+        matches = [
+            match
+            for match in matches
+            if not match["leading_type_arguments"] or match["key"] in specializations
+        ]
+        if not matches:
+            return None
     for match in matches:
         _ensure_generic_function_specialization(
             generator,
@@ -448,9 +624,15 @@ def _compatible_existing_specialized_call_name(generator, func_name, args):
     specialized_names = (
         getattr(generator, "generic_function_specialized_names", {}) or {}
     )
+    explicit_types = ()
+    explicit_call = explicit_generic_call_target(generator, func_name)
+    if explicit_call is not None:
+        func_name, explicit_types = explicit_call[0], tuple(explicit_call[1])
     matches = []
     for key, specialized_func in specializations.items():
         if not isinstance(key, tuple) or not key or key[0] != func_name:
+            continue
+        if tuple(key[1][: len(explicit_types)]) != explicit_types:
             continue
         if _specialized_function_accepts_call(generator, specialized_func, args):
             specialized_name = specialized_names.get(key)
@@ -462,9 +644,24 @@ def _compatible_existing_specialized_call_name(generator, func_name, args):
     return None
 
 
+def _generic_function_call_arity_range(param_list):
+    """``(minimum, maximum)`` argument counts a call to ``param_list`` may carry.
+
+    Parameters with a default value may be omitted, so the minimum counts
+    only parameters without one; the maximum is the full parameter list.
+    """
+    required = 0
+    for param in param_list:
+        default = getattr(param, "default_value", getattr(param, "value", None))
+        if default is None:
+            required += 1
+    return required, len(param_list)
+
+
 def _specialized_function_accepts_call(generator, func, args):
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    if len(args or []) < len(param_list):
+    minimum_args, maximum_args = _generic_function_call_arity_range(param_list)
+    if not minimum_args <= len(args or []) <= maximum_args:
         return False
 
     saw_informative_argument = False
@@ -487,7 +684,10 @@ def _specialized_function_accepts_call(generator, func, args):
     return saw_informative_argument or saw_unknown_argument
 
 
-def _raw_generic_signature_type_name(generator, type_value):
+def _raw_generic_signature_type_name(generator, type_value, generic_params=()):
+    generic_vector = generic_vector_signature_name(type_value, generic_params)
+    if generic_vector is not None:
+        return generic_vector
     saved_substitutions = getattr(
         generator,
         "current_generic_function_substitutions",
@@ -513,7 +713,9 @@ def _call_argument_type_accepts_expected(generator, expected_type, actual_type):
     return expected_base == actual_base and not actual_args
 
 
-def _generic_function_candidate_call_match(generator, func, func_name, args):
+def _generic_function_candidate_call_match(
+    generator, func, func_name, args, explicit_types=None
+):
     generic_params = generic_function_parameters(func)
     if not generic_params:
         return None
@@ -522,16 +724,31 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
     substitutions = {}
     generic_param_set = set(generic_params)
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    explicit_substitutions, value_args = _explicit_generic_call_parts(
-        generator,
-        generic_params,
-        param_list,
-        call_args,
-    )
-    if explicit_substitutions is not None:
-        substitutions.update(explicit_substitutions)
-    else:
+    if explicit_types is not None:
+        # ``helper<int>(x)`` fixes the leading parameters; the remaining ones
+        # are deduced from the arguments and only then take their defaults.
+        if len(explicit_types) > len(generic_params):
+            return None
+        substitutions.update(zip(generic_params, explicit_types))
         value_args = call_args
+    else:
+        explicit_substitutions, value_args = _explicit_generic_call_parts(
+            generator,
+            generic_params,
+            param_list,
+            call_args,
+        )
+        if explicit_substitutions is not None:
+            substitutions.update(explicit_substitutions)
+        else:
+            value_args = call_args
+
+    # A generic overload matches a call only when the argument count lies
+    # between its parameters without defaults and all its parameters; a
+    # count no parameter list allows must not specialize this overload.
+    minimum_args, maximum_args = _generic_function_call_arity_range(param_list)
+    if not minimum_args <= len(value_args) <= maximum_args:
+        return None
 
     matched_params = len(substitutions)
     exact_matches = 0
@@ -541,6 +758,7 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
         expected_type = _raw_generic_signature_type_name(
             generator,
             getattr(param, "param_type", getattr(param, "vtype", None)),
+            generic_param_set,
         )
         actual_type = _safe_call_argument_type_name(generator, arg)
         if not actual_type:
@@ -614,6 +832,9 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
         "function": func,
         "key": key,
         "substitutions": substitutions,
+        "leading_type_arguments": (
+            explicit_types is None and value_args is not call_args
+        ),
         "rank": (
             matched_params,
             exact_matches,
@@ -623,6 +844,42 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
             -ordinal,
         ),
     }
+
+
+def explicit_generic_call_target(generator, func_name):
+    """``(definition name, type arguments)`` for a call spelled ``helper<int, T>(...)``.
+
+    The CrossGL parser keeps an identifier call's explicit generic arguments in the callee name. They bind the
+    definition's leading generic parameters; arguments that name an enclosing generic parameter take its current
+    substitution. Returns ``None`` when ``func_name`` does not name a generic definition that way.
+    """
+    definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    text = str(func_name or "").strip()
+    if not definitions or text in definitions or "<" not in text:
+        return None
+    base, arguments = generic_type_parts(text)
+    if not arguments or base not in definitions:
+        return None
+    current = getattr(generator, "current_generic_function_substitutions", {}) or {}
+    return base, [
+        substitute_generic_type_name(argument, current) for argument in arguments
+    ]
+
+
+def generic_function_definition_name(generator, func_name):
+    """The generic definition a call names, without any explicit ``<...>`` arguments."""
+    explicit_call = explicit_generic_call_target(generator, func_name)
+    return func_name if explicit_call is None else explicit_call[0]
+
+
+def reject_unresolved_explicit_generic_call(generator, func_name, target_name):
+    """Raise for ``helper<int>(x)`` that no specialization of ``helper`` accepts.
+
+    The generic definition itself is never emitted, so the call must not be emitted verbatim.
+    """
+    explicit_call = explicit_generic_call_target(generator, func_name)
+    if explicit_call is not None:
+        raise_unresolved_generic_function_call(generator, explicit_call[0], target_name)
 
 
 def _explicit_generic_call_parts(generator, generic_params, param_list, args):
@@ -718,22 +975,27 @@ def _collect_from_function(generator, func, substitutions):
         "current_generic_function_substitutions",
         {},
     )
-    generator.local_variable_types = {}
+    generator.local_variable_types = dict(
+        getattr(generator, "generic_collection_global_types", None) or {}
+    )
     generator.current_expression_expected_type = None
     generator.current_generic_function_substitutions = substitutions
     try:
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
-            param_type = generator.type_name_string(
-                getattr(param, "param_type", getattr(param, "vtype", None))
-            )
-            generator.local_variable_types[param.name] = substitute_generic_type_name(
-                param_type,
+            generator.local_variable_types[param.name] = substituted_generic_type_name(
+                generator,
+                getattr(param, "param_type", getattr(param, "vtype", None)),
                 substitutions,
             )
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
-        _analyze_statement(generator, getattr(func, "body", None), substitutions)
-        after = set(getattr(generator, "generic_function_specializations", {}) or {})
-        return [*after - before]
+        recording = begin_generic_callee_recording(generator)
+        try:
+            _analyze_statement(generator, getattr(func, "body", None), substitutions)
+        finally:
+            end_generic_callee_recording(generator, func, recording)
+        # The new keys in creation order: a set difference would order them by hash seed.
+        after = getattr(generator, "generic_function_specializations", {}) or {}
+        return [key for key in after if key not in before]
     finally:
         generator.local_variable_types = previous_local_variable_types
         generator.current_expression_expected_type = previous_expected_type
@@ -760,14 +1022,13 @@ def _analyze_statement(generator, stmt, substitutions):
     if isinstance(stmt, VariableNode):
         initial_value = getattr(stmt, "initial_value", None)
         _analyze_expression(generator, initial_value, substitutions)
-        declared_type = generator.type_name_string(getattr(stmt, "var_type", None))
-        if declared_type is None:
-            declared_type = generator.type_name_string(
-                _safe_expression_result_type(generator, initial_value)
-            )
-        if declared_type:
-            generator.local_variable_types[stmt.name] = substitute_generic_type_name(
-                declared_type,
+        declared_value = getattr(stmt, "var_type", None)
+        if generator.type_name_string(declared_value) is None:
+            declared_value = _safe_expression_result_type(generator, initial_value)
+        if generator.type_name_string(declared_value):
+            generator.local_variable_types[stmt.name] = substituted_generic_type_name(
+                generator,
+                declared_value,
                 substitutions,
             )
         return
@@ -810,8 +1071,16 @@ def _analyze_expression(generator, expr, substitutions):
         args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
         for arg in args:
             _analyze_expression(generator, arg, substitutions)
-        if func_name is not None:
+        key = (
             generic_function_call_key(generator, func_name, args)
+            if func_name is not None
+            else None
+        )
+        if key is not None:
+            # Remember the call: later passes walk it without its function's local types.
+            generator.generic_function_resolved_call_ids.add(id(expr))
+            remember_collected_generic_call_key(generator, func_name, args, key)
+            record_generic_callee(generator, key)
         return
     if isinstance(expr, ConstructorNode):
         for arg in getattr(expr, "arguments", []) or []:
@@ -836,28 +1105,41 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
     specializations = generator.generic_function_specializations
     if key in specializations:
         return
+    explicit = explicit_specialization_for(generator, key)
+    if explicit is not None:
+        # The specialization is a concrete function of the program; calls name it instead of a clone.
+        specializations[key] = explicit
+        generator.generic_function_specialized_names[key] = explicit.name
+        return
+    reject_late_generic_specialization(generator, func, key)
+    reject_undefined_generic_instantiation(func, key)
 
     clone = deepcopy(func)
     overload_ordinal = key[2] if len(key) > 2 else None
-    clone.name = generic_function_specialization_name(
-        key[0],
-        key[1],
-        overload_ordinal,
+    clone.name = unique_specialization_name(
+        generator,
+        generic_function_specialization_name(key[0], key[1], overload_ordinal),
     )
     clone.generic_params = []
-    clone.return_type = substitute_generic_type_name(
-        generator.type_name_string(getattr(func, "return_type", "void")),
+    clone.return_type = substituted_generic_type(
+        generator,
+        getattr(func, "return_type", "void"),
         substitutions,
     )
+    reject_expression_result_type(func, key, clone.return_type)
     for param in getattr(clone, "parameters", getattr(clone, "params", [])) or []:
-        param_type = generator.type_name_string(
-            getattr(param, "param_type", getattr(param, "vtype", None))
+        concrete_type = substituted_generic_type(
+            generator,
+            getattr(param, "param_type", getattr(param, "vtype", None)),
+            substitutions,
         )
-        concrete_type = substitute_generic_type_name(param_type, substitutions)
         if hasattr(param, "param_type"):
             param.param_type = concrete_type
         if hasattr(param, "vtype"):
             param.vtype = concrete_type
+    # Values first: a local array's size (``T values[N]``) is part of the type substituted next.
+    substitute_value_parameters(getattr(clone, "body", None), substitutions, key[0])
+    substitute_body_types(generator, getattr(clone, "body", None), substitutions)
     clone._generic_source_name = key[0]
     clone._generic_source_function_id = id(func)
     clone._generic_substitutions = dict(substitutions)
@@ -911,6 +1193,8 @@ def _collect_type_parameter_bindings(
 
     expected_pointee = _pointer_pointee_type(expected_type)
     actual_pointee = _pointer_pointee_type(actual_type)
+    if expected_pointee is not None and actual_pointee is None:
+        actual_pointee = structured_buffer_element_type(actual_type)
     if expected_pointee is not None and actual_pointee is not None:
         _collect_type_parameter_bindings(
             expected_pointee,
@@ -923,6 +1207,16 @@ def _collect_type_parameter_bindings(
     expected_base, expected_args = generic_type_parts(expected_type)
     actual_base, actual_args = generic_type_parts(actual_type)
     if expected_base != actual_base or len(expected_args) != len(actual_args):
+        bind_generic_vector_parameter(
+            expected_type,
+            actual_type,
+            lambda expected_element, actual_element: _collect_type_parameter_bindings(
+                expected_element,
+                actual_element,
+                substitutions,
+                generic_params,
+            ),
+        )
         return
 
     for expected_arg, actual_arg in zip(expected_args, actual_args):
@@ -948,7 +1242,15 @@ def _safe_expression_result_type(generator, expr):
             return inferred_type
     if result_type:
         return result_type
-    return _infer_generic_constructor_type_name(generator, expr)
+    inferred_type = _infer_generic_constructor_type_name(generator, expr)
+    if inferred_type or not isinstance(expr, FunctionCallNode):
+        return inferred_type
+    return concrete_call_result_type_name(
+        generator,
+        expr,
+        _safe_call_argument_type_name,
+        _normalize_signature_type_name,
+    )
 
 
 def _fallback_expression_result_type(generator, expr):
@@ -1009,7 +1311,8 @@ def _member_access_result_type(generator, expr):
     if set(member) <= set("xyzwrgba") and len(member) <= 4:
         component_type = _scalar_component_type_name(generator, object_type)
         if not component_type:
-            return None
+            # A vector spelled in its target family (``int3.xy`` is ``int2``).
+            return swizzle_access_type(object_type, len(member))
         if len(member) == 1:
             return component_type
         return _vector_type_name(component_type, len(member))
@@ -1056,6 +1359,8 @@ def _function_call_result_type(generator, expr):
     if func_name is None:
         return None
     func_name = str(func_name)
+    if generic_calls_read_by(generator, expr):
+        return generic_call_result_type_name(generator, expr, generic_function_call_key)
 
     if "::" in func_name:
         type_param, method = func_name.split("::", 1)
@@ -1066,6 +1371,14 @@ def _function_call_result_type(generator, expr):
 
     if func_name in {"vec2", "vec3", "vec4", "mat2", "mat3", "mat4"}:
         return func_name
+    if func_name == "buffer_load" and len(args) == 2:
+        buffer_base, buffer_args = generic_type_parts(
+            generator.type_name_string(
+                _fallback_expression_result_type(generator, args[0])
+            )
+        )
+        if buffer_base in TYPED_BUFFER_TYPE_NAMES and len(buffer_args) == 1:
+            return buffer_args[0]
     if func_name in {"float2", "float3", "float4"}:
         return func_name
 
@@ -1249,6 +1562,14 @@ def _safe_call_argument_type_name(generator, expr):
         call_argument_type_name = getattr(generator, "call_argument_type_name")
     except AttributeError:
         call_argument_type_name = None
+    generic_calls = generic_calls_read_by(generator, expr)
+    if generic_calls:
+        actual_type = _safe_generator_argument_type_name(
+            generator, call_argument_type_name, expr
+        )
+        return generic_call_argument_type_name(
+            generator, generic_calls, fallback_type, actual_type
+        )
     if call_argument_type_name is not None:
         try:
             actual_type = call_argument_type_name(expr)
@@ -1265,11 +1586,93 @@ def _safe_call_argument_type_name(generator, expr):
     return generator.type_name_string(_safe_expression_result_type(generator, expr))
 
 
+def _safe_generator_argument_type_name(generator, call_argument_type_name, expr):
+    if call_argument_type_name is not None:
+        try:
+            return generator.type_name_string(call_argument_type_name(expr))
+        except (AttributeError, TypeError, ValueError):
+            return None
+    return generator.type_name_string(_safe_expression_result_type(generator, expr))
+
+
+_ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
+
+
+def _base_type_name(name):
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    while text.endswith(("*", "&")):
+        text = text[:-1].strip()
+    text = _ARRAY_SUFFIXES.sub("", text).strip()
+    if "<" in text:
+        text = generic_type_parts(text)[0].strip()
+    if "::" in text:
+        text = text.rsplit("::", 1)[-1].strip()
+    return text
+
+
+def collect_program_block_names(ast):
+    """Constant-buffer and buffer block names declared in ``ast``."""
+    if ast is None:
+        return frozenset()
+    names = set()
+
+    def add_name(name):
+        if isinstance(name, str) and name:
+            names.add(name)
+
+    for cbuffer in getattr(ast, "cbuffers", None) or []:
+        add_name(getattr(cbuffer, "name", None))
+    for buf in getattr(ast, "buffers", None) or []:
+        add_name(getattr(buf, "name", None))
+    for stage in (getattr(ast, "stages", None) or {}).values():
+        for cbuffer in getattr(stage, "local_cbuffers", None) or []:
+            add_name(getattr(cbuffer, "name", None))
+        for buf in getattr(stage, "buffers", None) or []:
+            add_name(getattr(buf, "name", None))
+    for node in list(getattr(ast, "global_variables", None) or []) + list(
+        getattr(ast, "structs", None) or []
+    ):
+        if isinstance(node, BufferNode):
+            add_name(getattr(node, "name", None))
+    return frozenset(names)
+
+
+def _is_known_type_name(generator, name):
+    base_name = _base_type_name(name)
+    if not base_name:
+        return False
+    if base_name in BUILTIN_TYPE_NAMES:
+        return True
+    if base_name in (
+        getattr(generator, "declared_type_names", None) or ()
+    ) and base_name not in (
+        getattr(generator, "generic_program_block_names", None) or ()
+    ):
+        return True
+    if base_name in (
+        getattr(generator, "current_generic_function_substitutions", None) or {}
+    ):
+        return True
+    if base_name in (getattr(generator, "current_generic_function_params", None) or ()):
+        return True
+    return False
+
+
 def _type_argument_name(generator, expr):
     if isinstance(expr, str):
-        return expr
+        if _fallback_expression_result_type(generator, IdentifierNode(expr)):
+            return None
+        return expr if _is_known_type_name(generator, expr) else None
     if isinstance(expr, IdentifierNode):
-        return expr.name
+        # A variable in scope is a value, not a type argument: ``inc(w, w)`` must not read ``w`` as ``T``.
+        if _fallback_expression_result_type(generator, expr):
+            return None
+        return expr.name if _is_known_type_name(generator, expr.name) else None
+    if isinstance(expr, ExpressionNode):
+        # A call, member, element, literal or operator is a value too, as ``sel(w, w)`` in ``sel(sel(w, w), w)``.
+        return None
     return generator.type_name_string(expr)
 
 

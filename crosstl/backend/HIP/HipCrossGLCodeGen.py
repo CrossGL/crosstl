@@ -3,6 +3,31 @@
 import hashlib
 import re
 
+from crosstl.translator.refusals import HipSourceRefusal
+
+from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ...translator.integer_literals import (
+    IntegerLiteralError,
+    crossgl_legacy_octal,
+    integer_literal_parts,
+)
+from ..assignment_operands import grouped_operand
+from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.directed_rounding import refuse_directed_rounding
+from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
+from ..CUDA.local_memory_spaces import crossgl_zero_value
+from ..CUDA.reference_parameters import ReferenceParameters
+from ..import_refusals import HipImportRefused, ImportRefusalMixin
+from ..namespace_constants import is_c_family_namespace_constant
+from ..no_contraction import (
+    PRECISE_FUNCTION_ATTRIBUTE,
+    function_requires_no_contraction,
+)
+from ..thread_hierarchy import (
+    global_invocation_axis,
+    kernel_workgroup_size_attribute,
+    normalize_threadgroup_size_option,
+)
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -39,10 +64,30 @@ class HipRecordSemanticError(ValueError):
         )
 
 
-class HipToCrossGLConverter:
-    """Serialize HIP backend AST nodes back into CrossGL source."""
+class HipSurfaceByteOffsetError(TranslationDiagnostic):
+    """A HIP surface call whose x byte offset cannot be shown to be a multiple of the element size.
+
+    HIP surface functions take x as a byte offset while CrossGL ``imageLoad``/``imageStore``
+    take a texel coordinate, so the frontend must divide the offset by the element size. When
+    the offset cannot be proven to be a multiple of that size, passing it through unchanged
+    would silently address the wrong texel, so the call is refused instead.
+    """
+
+    code = CODE_PREFIX + "hip-surface-byte-offset-unproven"
+
+
+class HipToCrossGLConverter(ImportRefusalMixin):
+    """Serialize HIP backend AST nodes back into CrossGL source.
+
+    A HIP construct with no faithful CrossGL form is refused with :class:`HipImportRefused`; no CrossGL program is
+    returned while a refusal is pending.
+    """
+
+    IMPORT_REFUSAL_TYPE = HipImportRefused
 
     SOURCE_LANGUAGE_NAME = "HIP"
+    # Whether a file-scope FP_CONTRACT OFF pragma is in effect (crosstl/backend/no_contraction.py).
+    fp_contract_file_scope_off = False
     ERASE_CONCRETE_TYPE_ALIASES = True
     RECORD_SEMANTIC_ERROR = HipRecordSemanticError
 
@@ -129,6 +174,26 @@ class HipToCrossGLConverter:
         "float1": "f32",
         "double1": "f64",
     }
+    HIP_SURFACE_VECTOR_COMPONENTS = ("x", "y", "z", "w")
+    HIP_SURFACE_SCALAR_TYPES = frozenset(
+        {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "longlong",
+            "ulonglong",
+            "half",
+            "__half",
+            "float",
+            "double",
+            "bool",
+        }
+    )
     CROSSL_SCALAR_TYPES = {
         "bool",
         "f16",
@@ -305,7 +370,8 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
+    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
@@ -497,7 +563,9 @@ class HipToCrossGLConverter:
         }
     )
 
-    def __init__(self):
+    def __init__(self, threadgroup_size=None):
+        # The host picks a HIP kernel's block size at launch time; this option names it.
+        self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
         self.identifier_name_scopes = [{}]
@@ -521,7 +589,10 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
+        self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
+        self.global_resource_bindings = {}
+        self.global_resource_binding_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
         self.function_local_record_declaration_types = {}
@@ -536,10 +607,18 @@ class HipToCrossGLConverter:
         self.union_active_member_scopes = [{}]
         self.union_object_identity_scopes = [{}]
         self.union_indirect_object_scopes = [set()]
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
+        self.function_body_depth = 0
 
     def generate(self, ast_node):
+        """Render ``ast_node`` as CrossGL, or raise :class:`HipImportRefused` listing every construct it cannot carry."""
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -569,11 +648,40 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.global_resource_binding_count = 0
+        self.namespace_constant_names = set()
+        self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.prepare_global_resource_bindings(ast_node)
+        self.reference_parameters = ReferenceParameters(ast_node)
+        self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
         self.visit(ast_node)
+        self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
+
+    def prepare_global_resource_bindings(self, ast_node):
+        self.global_resource_bindings = {}
+        for statement in getattr(ast_node, "statements", []) or []:
+            if self.is_global_resource_declaration(statement):
+                self.global_resource_bindings[id(statement)] = len(
+                    self.global_resource_bindings
+                )
+        self.global_resource_binding_count = len(self.global_resource_bindings)
+
+    def is_global_resource_declaration(self, statement):
+        """Whether a top-level declaration imports as a resource with a binding."""
+        return isinstance(statement, VariableNode) and "__constant__" in set(
+            getattr(statement, "qualifiers", []) or []
+        )
+
+    def global_resource_binding_for(self, node):
+        binding = self.global_resource_bindings.get(id(node))
+        if binding is None:
+            binding = self.global_resource_binding_count
+            self.global_resource_binding_count += 1
+        return binding
 
     def reset_function_local_record_materializations(self):
         self.function_local_record_definitions = {}
@@ -835,8 +943,8 @@ class HipToCrossGLConverter:
             body = integer_literal.group("body").replace("'", "")
             suffix = integer_literal.group("suffix").lower()
             if "u" in suffix:
-                return f"{body}u"
-            return body
+                return crossgl_legacy_octal(f"{body}u")
+            return crossgl_legacy_octal(body)
 
         if "'" in value and self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
             return value.replace("'", "")
@@ -1591,13 +1699,13 @@ class HipToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
 
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char.isalnum() or char == "_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
@@ -1605,7 +1713,13 @@ class HipToCrossGLConverter:
             elif not parts or parts[-1] != "_":
                 parts.append("_")
 
-        sanitized = "".join(parts).strip("_") or "anonymous"
+        raw_name = str(name)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+            # A plain identifier keeps its underscores, so the declaration and
+            # every use of the type agree, as in the CUDA importer.
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
@@ -5066,7 +5180,11 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, VariableNode):
-                self.visit(stmt)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
             elif isinstance(stmt, TypeAliasNode):
                 self.visit(stmt)
@@ -5142,10 +5260,21 @@ class HipToCrossGLConverter:
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
                     self.register_variable_type(param_name, param_type)
-                    params.append(f"{param_type} {output_name}")
+                    if getattr(self, "reference_parameters", None) is None:
+                        self.reference_parameters = ReferenceParameters(None)
+                    mode = self.reference_parameters.mode(node, index)
+                    params.append(
+                        f"{mode} {param_type} {output_name}"
+                        if mode
+                        else f"{param_type} {output_name}"
+                    )
 
             param_str = ", ".join(params)
             function_name = self.format_function_declaration_name(node.name)
+            if function_requires_no_contraction(
+                node, file_scope_off=self.fp_contract_file_scope_off
+            ):
+                self.emit(PRECISE_FUNCTION_ATTRIBUTE)
             self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
@@ -5159,12 +5288,14 @@ class HipToCrossGLConverter:
                     self.register_cooperative_group_parameter(param)
             if hasattr(node, "body") and node.body:
                 try:
+                    self.function_body_depth += 1
                     if isinstance(node.body, list):
                         for stmt in node.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(node.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5200,10 +5331,19 @@ class HipToCrossGLConverter:
                 self.emit(f"// HIP AMDGPU flat work group size: ({bounds})")
 
         self.emit("@compute")
+        if function_requires_no_contraction(
+            kernel, file_scope_off=self.fp_contract_file_scope_off
+        ):
+            self.emit(PRECISE_FUNCTION_ATTRIBUTE)
         self.emit("@stage_entry")
-        self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
+        self.emit(
+            kernel_workgroup_size_attribute(self.threadgroup_size, whole_groups=True)
+        )
 
         params = []
+        buffer_params = (
+            {}
+        )  # index in params -> (context, element type) of a buffer parameter
         self.push_resource_object_hint_scope(
             self.collect_resource_object_type_hints(
                 kernel, self.collect_declared_variable_names(kernel)
@@ -5246,8 +5386,12 @@ class HipToCrossGLConverter:
                             if self.is_readonly_pointer_type(raw_type)
                             else "read_write"
                         )
+                        buffer_params[len(params)] = (
+                            f"HIP kernel {kernel.name} parameter {param_name}",
+                            element_type,
+                        )
                         params.append(
-                            f"@group(0) @binding({len(params)}) "
+                            f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                             f"var<storage, {access}> "
                             f"{output_name}: array<{element_type}>"
                         )
@@ -5260,7 +5404,7 @@ class HipToCrossGLConverter:
                         self.register_variable_type(param_name, param_type)
                         if self.is_crossgl_scalar_type(param_type):
                             params.append(
-                                f"@group(0) @binding({len(params)}) "
+                                f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                                 f"var<uniform> {output_name}: {param_type}"
                             )
                         else:
@@ -5269,7 +5413,10 @@ class HipToCrossGLConverter:
             kernel_name = self.format_function_declaration_name(kernel.name)
             self.emit(f"fn {kernel_name}(")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
             for i, param in enumerate(params):
+                if layouts is not None and i in buffer_params:
+                    layouts.buffer(*buffer_params[i], len(self.output))
                 if i == len(params) - 1:
                     self.emit(f"{param}")
                 else:
@@ -5288,12 +5435,14 @@ class HipToCrossGLConverter:
                         self.register_unique_ptr_parameter(param)
                         self.register_cooperative_group_parameter(param)
                 try:
+                    self.function_body_depth += 1
                     if isinstance(kernel.body, list):
                         for stmt in kernel.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(kernel.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5327,7 +5476,7 @@ class HipToCrossGLConverter:
             and output_name in self.record_definitions
             and self.record_definitions[output_name] is None
         ):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"Conflicting HIP nested record output name '{output_name}'"
             )
         self.record_name_stack.append(qualified_name or "anonymous")
@@ -5356,7 +5505,7 @@ class HipToCrossGLConverter:
             and "static" not in set(getattr(member, "qualifiers", []) or [])
         ]
         if len(storage_names) != len(set(storage_names)):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"HIP inherited record '{qualified_name or output_name}' has "
                 "colliding storage member names"
             )
@@ -5413,6 +5562,13 @@ class HipToCrossGLConverter:
 
             self.emit(f"struct {materialized.name} {{")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
+            if layouts is not None:
+                layouts.struct(
+                    materialized.name,
+                    getattr(node, "attributes", None),
+                    getattr(node, "is_union", False),
+                )
             for member in materialized.members:
                 if not isinstance(member, VariableNode) or "static" in set(
                     getattr(member, "qualifiers", []) or []
@@ -5425,6 +5581,11 @@ class HipToCrossGLConverter:
                         getattr(member, "vtype", "int")
                     )
                 )
+                if layouts is not None:
+                    # HIP stores a three-component vector member at its scalar alignment; see buffer_layout_import.
+                    layouts.member(
+                        materialized.name, member_type, member.name, len(self.output)
+                    )
                 self.emit(f"{member_type} {member.name};")
             self.indent_level -= 1
             self.emit("};")
@@ -5436,7 +5597,7 @@ class HipToCrossGLConverter:
         visiting = set(visiting or ())
         marker = id(node)
         if marker in visiting:
-            raise ValueError("HIP record inheritance cycle is unsupported")
+            raise HipSourceRefusal("HIP record inheritance cycle is unsupported")
         visiting.add(marker)
         aliases = []
         members = []
@@ -5451,12 +5612,12 @@ class HipToCrossGLConverter:
                 base_name = str(base)
                 is_virtual = False
             if is_virtual:
-                raise ValueError(
+                raise HipSourceRefusal(
                     f"HIP virtual record inheritance is unsupported: {base_name}"
                 )
             base_node = self.resolve_record_base_definition(node, base_name)
             if base_node is None:
-                raise ValueError(
+                raise HipSourceRefusal(
                     f"HIP record '{getattr(node, 'name', '')}' has unresolved "
                     f"base '{base_name}'"
                 )
@@ -5652,7 +5813,7 @@ class HipToCrossGLConverter:
                 member_value = getattr(member, "value", None)
             if member_value is None:
                 if next_value is None:
-                    raise ValueError(
+                    raise HipSourceRefusal(
                         f"HIP enum '{owner_name}' has an implicit value after an "
                         "unsupported initializer"
                     )
@@ -5662,7 +5823,7 @@ class HipToCrossGLConverter:
                     member_value, local_values
                 )
                 if value is None:
-                    raise ValueError(
+                    raise HipSourceRefusal(
                         f"HIP enum '{owner_name}' initializer for '{member_name}' "
                         "cannot be represented exactly"
                     )
@@ -5764,7 +5925,7 @@ class HipToCrossGLConverter:
                     ),
                     "qualified member access",
                 )
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"HIP static record constant '{name}' cannot be represented exactly"
             )
         if (
@@ -5774,7 +5935,7 @@ class HipToCrossGLConverter:
             return None
         resolving = set(resolving or ())
         if lookup_name in resolving:
-            raise ValueError(f"recursive HIP enum value alias: {lookup_name}")
+            raise HipSourceRefusal(f"recursive HIP enum value alias: {lookup_name}")
         resolving.add(lookup_name)
         value = self.enum_value_aliases[lookup_name]
         nested = self.resolve_enum_value_alias(value, resolving)
@@ -5812,7 +5973,7 @@ class HipToCrossGLConverter:
     ):
         normalized = " ".join(str(raw_type).split())
         if not self.nested_record_type_matches(normalized, prefix):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"nested record declarator '{normalized}' does not match '{prefix}'"
             )
         return nested_name + normalized[len(prefix) :]
@@ -5894,8 +6055,8 @@ class HipToCrossGLConverter:
                     f"{output_name} maps to a tiled partition of the current workgroup"
                 )
             else:
-                self.emit(
-                    f"// cooperative_groups {group_kind} for {output_name} not directly supported in CrossGL"
+                self.refuse_import(
+                    f"HIP cooperative_groups {group_kind} '{output_name}': CrossGL has no group of this kind"
                 )
             return
 
@@ -5919,15 +6080,34 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
+            if (
+                not (hasattr(node, "value") and node.value)
+                and self.function_body_depth > 0
+                and "static" in qualifiers
+            ):
+                # A function-scope static __constant__ local has static
+                # storage, so without an initializer every element is zero,
+                # and device code cannot write constant memory. Emit it as a
+                # function-scope constant of zeros: it must neither take a
+                # resource binding nor be read uninitialized by a later
+                # backend. A block-scope extern declaration names a
+                # namespace-scope variable the host may have written, so it
+                # is not one.
+                self.emit(
+                    f"let {output_name}: {var_type} = "
+                    f"{crossgl_zero_value(var_type)};"
+                )
+                return
+            binding = self.global_resource_binding_for(node)
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: "
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                     f"{var_type} = {value};"
                 )
             else:
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};"
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
                 )
             return
 
@@ -5954,9 +6134,23 @@ class HipToCrossGLConverter:
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(raw_name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)
@@ -6027,14 +6221,17 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
+        binding = self.global_resource_binding_for(node)
         if node.value is not None:
             value = self.visit(node.value)
             self.emit(
-                f"@group(0) @binding(0) var<uniform> {output_name}: "
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                 f"{var_type} = {value};"
             )
         else:
-            self.emit(f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};")
+            self.emit(
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
+            )
 
     def visit_HipErrorHandlingNode(self, node):
         error_type = self.visit(node.error_type)
@@ -6188,7 +6385,7 @@ class HipToCrossGLConverter:
             if self.is_concrete_crossgl_alias_type(resolved):
                 return resolved
             current = resolved
-        raise ValueError(f"recursive HIP type alias: {type_name}")
+        raise HipSourceRefusal(f"recursive HIP type alias: {type_name}")
 
     def resolve_record_member_type_alias(self, type_name):
         if not isinstance(type_name, str):
@@ -6320,8 +6517,11 @@ class HipToCrossGLConverter:
 
     def visit_BinaryOpNode(self, node):
         self.validate_record_operator_operands(node.op, (node.left, node.right))
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+        axis = global_invocation_axis(node)
+        if axis is not None:
+            return f"gl_GlobalInvocationID.{axis}"
+        left = grouped_operand(self, node.left)
+        right = grouped_operand(self, node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
@@ -6332,7 +6532,7 @@ class HipToCrossGLConverter:
         if node.op == "&" or mutates_operand:
             operand = self.visit_lvalue_expression(node.operand)
         else:
-            operand = self.visit(node.operand)
+            operand = grouped_operand(self, node.operand)
         if mutates_operand:
             self.clear_lvalue_metadata_source(node.operand)
         if isinstance(node.op, str) and node.op.endswith("_POST"):
@@ -6601,7 +6801,7 @@ class HipToCrossGLConverter:
                     changed = True
             if not changed:
                 return text
-        raise ValueError(f"recursive HIP record type alias: {type_name}")
+        raise HipSourceRefusal(f"recursive HIP record type alias: {type_name}")
 
     def record_member_layout_issue(self, owner, member):
         if not isinstance(member, VariableNode) or "static" in set(
@@ -6721,7 +6921,7 @@ class HipToCrossGLConverter:
                 owner, template_args[0], resolving
             )
 
-        type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+        type_name = self.canonical_cpp_scalar_type(type_name)
         qualified_enum_name = (
             f"{self.record_display_name(owner)}::{type_name}" if owner else type_name
         )
@@ -7310,15 +7510,7 @@ class HipToCrossGLConverter:
                 raw_parameter_type = self.parameter_type(parameter)
                 target = self.record_definition_from_type(raw_parameter_type)
                 source = self.infer_record_expression_definition(argument)
-                if source is not None and self.is_nonconst_record_reference_type(
-                    raw_parameter_type, target
-                ):
-                    issues.append(
-                        (
-                            "non-const record reference parameter writeback",
-                            target,
-                        )
-                    )
+                # Record reference parameters import as inout or by value (ReferenceParameters).
                 for definition in (source, target):
                     issue = self.record_layout_issue(definition)
                     if issue is not None:
@@ -7412,7 +7604,7 @@ class HipToCrossGLConverter:
             type_name = self.strip_elaborated_record_type_keyword(
                 self.strip_type_qualifiers(type_name)
             ).strip()
-            type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+            type_name = self.canonical_cpp_scalar_type(type_name)
 
         byte_count = self.HIP_FIXED_SCALAR_REPRESENTATION_BYTES.get(type_name)
         return str(byte_count) if byte_count is not None else None
@@ -7725,6 +7917,12 @@ class HipToCrossGLConverter:
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"
+        if (
+            self.is_simple_identifier(func_name)
+            and func_name in self.record_definitions
+        ):
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_hip_type_to_crossgl(func_name)}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -7752,6 +7950,12 @@ class HipToCrossGLConverter:
         if dim3_constructor is not None:
             return dim3_constructor
 
+        alias_constructor = self.format_concrete_alias_constructor_call(
+            func_name, args_str
+        )
+        if alias_constructor is not None:
+            return alias_constructor
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         if (
@@ -7762,6 +7966,20 @@ class HipToCrossGLConverter:
         ):
             crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_concrete_alias_constructor_call(self, func_name, args_str):
+        """Write ``real(x)`` through an erased alias as a call of the aliased type.
+
+        Concrete aliases are erased from the CrossGL program (each declaration
+        names the aliased type instead), so a functional cast through the alias
+        must name that type too or it calls an undeclared function (#3309).
+        """
+        if not isinstance(func_name, str) or not self.is_simple_identifier(func_name):
+            return None
+        resolved = self.resolve_concrete_type_alias(func_name)
+        if resolved == func_name:
+            return None
+        return f"{resolved}({args_str})"
 
     def format_std_numeric_limits_call(self, function_name, args):
         parsed = self.parse_cpp_template_static_member(function_name)
@@ -7821,6 +8039,7 @@ class HipToCrossGLConverter:
         return last_scope
 
     def format_hip_intrinsic_call(self, function_name, args):
+        refuse_directed_rounding(function_name)
         fp16_intrinsic = self.format_hip_fp16_intrinsic_call(function_name, args)
         if fp16_intrinsic is not None:
             return fp16_intrinsic
@@ -7858,10 +8077,9 @@ class HipToCrossGLConverter:
         if function_name not in {"clock", "clock64", "wall_clock64"}:
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* HIP device timer {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP device timer {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            "0",
         )
 
     def format_hip_load_cache_intrinsic_call(
@@ -7887,10 +8105,10 @@ class HipToCrossGLConverter:
         ):
             return self.visit(raw_args[0].operand)
 
-        args_text = ", ".join(formatted_args)
-        return (
-            f"(/* hip load cache intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
+            "address",
+            "0",
         )
 
     def format_hip_warp_intrinsic_call(self, function_name, args):
@@ -8010,10 +8228,9 @@ class HipToCrossGLConverter:
         return f"({predicate} != 0)"
 
     def format_unsupported_hip_warp_intrinsic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* hip warp intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP warp intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
+            "0",
         )
 
     def format_cooperative_group_call(self, node):
@@ -8082,9 +8299,8 @@ class HipToCrossGLConverter:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name, "vec3<u32>(0, 0, 0)"
             )
-        return (
-            f"// cooperative_groups {group_kind}.{member_name} "
-            "not directly supported in CrossGL"
+        return self.refuse_import(
+            f"HIP cooperative_groups {group_kind}.{member_name} has no CrossGL form"
         )
 
     def format_cooperative_group_tile_shuffle(
@@ -8132,9 +8348,9 @@ class HipToCrossGLConverter:
     def format_unsupported_cooperative_group_expression(
         self, group_kind, member, fallback="0"
     ):
-        return (
-            f"(/* cooperative_groups {group_kind}.{member} "
-            f"not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"HIP cooperative_groups {group_kind}.{member} has no CrossGL form",
+            fallback,
         )
 
     def cooperative_group_declaration_metadata(self, node):
@@ -8549,10 +8765,10 @@ class HipToCrossGLConverter:
         }:
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* HIP block-wide sync vote {function_name} predicate: {args_text} "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"HIP block-wide sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
+            "reduces a predicate",
+            "0",
         )
 
     def format_vector_component_access(self, expression, component):
@@ -8608,7 +8824,9 @@ class HipToCrossGLConverter:
                 "surfCubemapread": 3,
                 "surfCubemapLayeredread": 4,
             }[base_name]
-            return self.format_hip_surface_read(base_name, args, dimensions, value_type)
+            return self.format_hip_surface_read(
+                base_name, args, dimensions, value_type, raw_args
+            )
 
         if base_name in {
             "surf1Dwrite",
@@ -8634,6 +8852,7 @@ class HipToCrossGLConverter:
                 dimensions,
                 value_type,
                 value_is_pointer=base_name == "surfCubemapLayeredwrite",
+                raw_args=raw_args,
             )
 
         return None
@@ -8863,12 +9082,11 @@ class HipToCrossGLConverter:
         return f"texelFetch({texture_name}, {coordinate}, 0)"
 
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
-        return (
-            f"(/* hip {kind}.{member} not directly supported in CrossGL */ "
-            f"{fallback})"
-        )
+        return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)
 
-    def format_hip_surface_read(self, function_name, args, dimensions, value_type):
+    def format_hip_surface_read(
+        self, function_name, args, dimensions, value_type, raw_args=None
+    ):
         if not args:
             return None
 
@@ -8895,8 +9113,13 @@ class HipToCrossGLConverter:
                 return diagnostic
             return None
 
+        if output_target is not None and value_type is None and raw_args:
+            dest_node = raw_args[0]
+            if isinstance(dest_node, UnaryOpNode) and dest_node.op == "&":
+                value_type = self.infer_hip_surface_value_type(dest_node.operand)
+
         coord_args = self.format_hip_surface_coordinate_args(
-            args, coord_start, dimensions, value_type
+            args, coord_start, dimensions, value_type, raw_args, function_name
         )
         if self.has_hip_surface_coordinate_shape_mismatch(coord_args):
             diagnostic = self.format_hip_surface_coordinate_shape_diagnostic(
@@ -8919,6 +9142,7 @@ class HipToCrossGLConverter:
         dimensions,
         value_type,
         value_is_pointer=False,
+        raw_args=None,
     ):
         if len(args) < dimensions + 2:
             if len(args) > 2:
@@ -8929,9 +9153,15 @@ class HipToCrossGLConverter:
         value = args[0]
         if value_is_pointer:
             value = self.strip_surface_output_target(value)
+        raw_value = raw_args[0] if raw_args else None
+        if value_is_pointer and isinstance(raw_value, UnaryOpNode):
+            if raw_value.op == "&":
+                raw_value = raw_value.operand
+        if value_type is None and raw_value is not None:
+            value_type = self.infer_hip_surface_value_type(raw_value)
         surface_name = args[1]
         coord_args = self.format_hip_surface_coordinate_args(
-            args, 2, dimensions, value_type
+            args, 2, dimensions, value_type, raw_args, function_name
         )
         if self.has_hip_surface_coordinate_shape_mismatch(coord_args):
             return self.format_hip_surface_coordinate_shape_diagnostic(
@@ -8941,9 +9171,32 @@ class HipToCrossGLConverter:
         return f"imageStore({surface_name}, {coord}, {value})"
 
     def format_hip_surface_coordinate_args(
-        self, args, coord_start, dimensions, value_type
+        self,
+        args,
+        coord_start,
+        dimensions,
+        value_type,
+        raw_args=None,
+        function_name=None,
     ):
-        coord_args = [self.strip_surface_byte_offset(args[coord_start], value_type)]
+        raw_offset = (
+            raw_args[coord_start]
+            if raw_args is not None and len(raw_args) > coord_start
+            else None
+        )
+        # A vector-typed x coordinate is a shape mismatch, not a byte offset: leave
+        # it unscaled so the shape check below reports it instead of refusing it
+        # as an unprovable multiple of the element size.
+        x_rank = self.infer_texture_coordinate_rank(args[coord_start], raw_offset)
+        if x_rank is not None and x_rank != 1:
+            coord_args = [args[coord_start]]
+            coord_args.extend(args[coord_start + 1 : coord_start + dimensions])
+            return coord_args
+        coord_args = [
+            self.scale_hip_surface_byte_offset(
+                raw_offset, value_type, function_name or "surf"
+            )
+        ]
         coord_args.extend(args[coord_start + 1 : coord_start + dimensions])
         return coord_args
 
@@ -9003,27 +9256,345 @@ class HipToCrossGLConverter:
             return text[1:].strip()
         return text
 
-    def strip_surface_byte_offset(self, expression, value_type):
-        text = str(expression).strip()
-        if text.startswith("(") and text.endswith(")"):
-            text = text[1:-1].strip()
+    def scale_hip_surface_byte_offset(self, raw_offset, value_type, function_name):
+        """Scale a HIP surface x byte offset down to a texel coordinate.
 
-        if value_type:
-            suffix = f" * sizeof({value_type})"
-            if text.endswith(suffix):
-                return text[: -len(suffix)].strip()
+        HIP surface functions take x as a byte offset while CrossGL
+        ``imageLoad``/``imageStore`` take a texel coordinate, so the offset is divided by
+        the element size. The quotient is folded when the offset is provably a multiple of
+        the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
+        else is refused: passing an unscaled byte offset through would silently address
+        the wrong texel.
+        """
+        offset_text = self.visit(raw_offset) if raw_offset is not None else "?"
+        if value_type is None:
+            raise HipSurfaceByteOffsetError(
+                f"{function_name} cannot scale its x byte offset {offset_text}: "
+                "the element type is unknown, so the offset cannot be shown to be "
+                "a multiple of the element size"
+            )
+        byte_size = self.hip_surface_value_type_size(value_type)
+        divided = self.divide_hip_surface_byte_offset(raw_offset, byte_size, value_type)
+        if divided is None:
+            if byte_size is None:
+                raise HipSurfaceByteOffsetError(
+                    f"{function_name} cannot scale its x byte offset {offset_text}: "
+                    f"element type {value_type!r} has no known size, so the offset "
+                    "cannot be shown to be a multiple of the element size; write the "
+                    f"offset with sizeof({value_type}), for example "
+                    f"x * sizeof({value_type})"
+                )
+            raise HipSurfaceByteOffsetError(
+                f"{function_name} x byte offset {offset_text} is not provably a multiple "
+                f"of sizeof({value_type}) ({byte_size} bytes); write the offset as a "
+                f"multiple of the element size, for example x * sizeof({value_type})"
+            )
+        return divided[0]
 
-        marker = " * sizeof("
-        if marker in text and text.endswith(")"):
-            return text.split(marker, 1)[0].strip()
+    def divide_hip_surface_byte_offset(self, node, byte_size, value_type):
+        """Divide a HIP surface x byte offset by the element size, structurally.
 
-        value_size = self.hip_surface_value_type_size(value_type)
-        if value_size is not None:
-            normalized = self.strip_surface_constant_byte_stride(text, value_size)
-            if normalized is not None:
-                return normalized
+        Returns ``(text, precedence)`` with the texel coordinate, or ``None`` when the
+        offset cannot be shown to be a multiple of the element size. ``precedence`` is
+        ``"atom"`` for a single operand, ``"mul"`` for a product and ``"add"`` for a sum
+        or difference, so an embedding operator knows when to group the result. Every
+        operand is kept as written: terms are never combined or dropped, so a call or an
+        increment inside the offset still evaluates exactly once.
+        """
+        if node is None:
+            return None
+        if isinstance(node, str):
+            literal = self.parse_hip_surface_integer_literal(node)
+            if literal is None:
+                return None
+            return self.divide_hip_surface_constant(literal, byte_size)
+        if isinstance(node, CastNode):
+            return self.divide_hip_surface_byte_offset(
+                node.expression, byte_size, value_type
+            )
+        if isinstance(node, UnaryOpNode):
+            if node.op not in {"-", "+"}:
+                return None
+            inner = self.divide_hip_surface_byte_offset(
+                node.operand, byte_size, value_type
+            )
+            if inner is None:
+                return None
+            text, precedence = inner
+            if node.op == "+":
+                return (text, precedence)
+            grouped = f"({text})" if precedence != "atom" else text
+            return (f"(-{grouped})", "atom")
+        if isinstance(node, FunctionCallNode):
+            if node.name != "sizeof" or len(node.args) != 1:
+                return None
+            return self.divide_hip_surface_sizeof(node.args[0], byte_size, value_type)
+        if isinstance(node, BinaryOpNode):
+            if node.op == "*":
+                return self.divide_hip_surface_product(node, byte_size, value_type)
+            if node.op in {"+", "-"}:
+                left = self.divide_hip_surface_byte_offset(
+                    node.left, byte_size, value_type
+                )
+                right = self.divide_hip_surface_byte_offset(
+                    node.right, byte_size, value_type
+                )
+                if left is None or right is None:
+                    return None
+                left_text, _ = left
+                right_text, right_precedence = right
+                if node.op == "-":
+                    if right_precedence == "add":
+                        right_text = f"({right_text})"
+                    return (f"{left_text} - {right_text}", "add")
+                return (f"{left_text} + {right_text}", "add")
+            return None
+        return None
 
-        return expression
+    def divide_hip_surface_constant(self, value, byte_size):
+        """Divide a constant byte count by the element size, or return None."""
+        if byte_size is None or value % byte_size != 0:
+            return None
+        return (str(value // byte_size), "atom")
+
+    def divide_hip_surface_sizeof(self, arg, byte_size, value_type):
+        """Divide a ``sizeof`` byte count by the element size, or return None."""
+        if not isinstance(arg, str):
+            return None
+        if value_type is not None and self.strip_type_qualifiers(
+            arg
+        ) == self.strip_type_qualifiers(value_type):
+            return ("1", "atom")
+        size = self.hip_surface_value_type_size(arg)
+        if size is None:
+            return None
+        return self.divide_hip_surface_constant(size, byte_size)
+
+    def divide_hip_surface_product(self, node, byte_size, value_type):
+        """Divide a product by the element size, or return None.
+
+        One side must be a byte factor: an integer literal, or ``sizeof`` of the
+        element type (one element size, whatever its byte count) or of a type with a
+        known size. The other side is kept as written, so calls and increments
+        inside it still evaluate exactly once.
+        """
+        left = self.hip_surface_byte_factor(node.left, value_type)
+        right = self.hip_surface_byte_factor(node.right, value_type)
+        if left is not None and right is not None:
+            if left[0] == "size" and right[0] == "size":
+                if byte_size is None:
+                    return None
+                return (str(byte_size), "atom")
+            if left[0] == "size":
+                return (str(right[1]), "atom")
+            if right[0] == "size":
+                return (str(left[1]), "atom")
+            return self.divide_hip_surface_constant(left[1] * right[1], byte_size)
+        if left is not None:
+            return self.divide_hip_surface_product_factor(left, node.right, byte_size)
+        if right is not None:
+            return self.divide_hip_surface_product_factor(right, node.left, byte_size)
+        return None
+
+    def divide_hip_surface_product_factor(self, factor, other, byte_size):
+        """Divide ``other * factor`` by the element size, or return None."""
+        other_text = grouped_operand(self, other)
+        if factor[0] == "size":
+            return (other_text, "atom")
+        count = factor[1]
+        if byte_size is None or count % byte_size != 0:
+            return None
+        quotient = count // byte_size
+        if quotient == 1:
+            return (other_text, "atom")
+        return (f"{other_text} * {quotient}", "mul")
+
+    def hip_surface_byte_factor(self, node, value_type):
+        """Classify a product operand as a byte factor.
+
+        Returns ``("bytes", count)`` for an integer literal or a ``sizeof`` with a
+        known size, ``("size",)`` for ``sizeof`` of the element type, and ``None``
+        for anything else.
+        """
+        if isinstance(node, str):
+            literal = self.parse_hip_surface_integer_literal(node)
+            if literal is not None:
+                return ("bytes", literal)
+            return None
+        if isinstance(node, CastNode):
+            return self.hip_surface_byte_factor(node.expression, value_type)
+        if (
+            isinstance(node, FunctionCallNode)
+            and node.name == "sizeof"
+            and len(node.args) == 1
+            and isinstance(node.args[0], str)
+        ):
+            if value_type is not None and self.strip_type_qualifiers(
+                node.args[0]
+            ) == self.strip_type_qualifiers(value_type):
+                return ("size",)
+            size = self.hip_surface_value_type_size(node.args[0])
+            if size is not None:
+                return ("bytes", size)
+            return None
+        return None
+
+    def parse_hip_surface_integer_literal(self, text):
+        """Parse a HIP integer literal to an int, or return None when it is not one."""
+        spelling = str(text).replace("'", "")
+        try:
+            digits, _type = integer_literal_parts(spelling, legacy_octal=True)
+        except IntegerLiteralError:
+            return None
+        try:
+            return int(digits, 0)
+        except ValueError:
+            return None
+
+    def infer_hip_surface_value_type(self, expression):
+        """Element type of a ``surf*write`` value or a pointer-read destination, including member and array accesses."""
+        value_type = self.hip_surface_expression_type(expression)
+        return self.hip_surface_element_type(value_type)
+
+    def hip_surface_expression_type(self, expression):
+        """HIP type of a value expression, or None when it cannot be inferred."""
+        if isinstance(expression, str):
+            return self.hip_surface_normalize_type(
+                self.lookup_variable_type(expression)
+            )
+        if isinstance(expression, CastNode):
+            return self.strip_type_qualifiers(expression.target_type)
+        if isinstance(expression, ArrayAccessNode):
+            array_type = self.hip_surface_expression_type(expression.array)
+            return self.hip_surface_element_type(array_type)
+        if isinstance(expression, MemberAccessNode):
+            return self.hip_surface_member_type(expression)
+        if isinstance(expression, UnaryOpNode) and expression.op == "*":
+            operand_type = self.hip_surface_expression_type(expression.operand)
+            return self.hip_surface_element_type(operand_type)
+        if isinstance(expression, FunctionCallNode) and isinstance(
+            expression.name, str
+        ):
+            name = expression.name
+            if name.startswith("::"):
+                name = name[2:]
+            if name.startswith("make_"):
+                return name[len("make_") :]
+            if (
+                name in self.VECTOR_TYPE_MAPPING
+                or name in self.VECTOR1_TYPE_MAPPING
+                or name in self.HIP_SURFACE_SCALAR_TYPES
+            ):
+                return name
+            return None
+        return None
+
+    def hip_surface_member_type(self, expression):
+        """Type of a member access, from the struct definition or a vector component."""
+        object_type = self.hip_surface_expression_type(expression.object)
+        named_type = self.hip_surface_named_type(object_type)
+        if named_type is None:
+            return None
+        definition = self.record_definition_from_type(named_type)
+        if definition is not None:
+            for member in getattr(definition, "members", []) or []:
+                if (
+                    isinstance(member, VariableNode)
+                    and member.name == expression.member
+                ):
+                    return self.strip_type_qualifiers(member.vtype)
+            return None
+        return self.hip_surface_vector_component_scalar_type(
+            named_type, expression.member
+        )
+
+    def hip_surface_named_type(self, type_name):
+        """Strip qualifiers, aliases, pointers and array suffixes to a plain type name."""
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(self.resolve_type_alias(type_name))
+        type_name = type_name.replace("*", "").split("[", 1)[0].strip()
+        for prefix in ("struct ", "union "):
+            if type_name.startswith(prefix):
+                type_name = type_name[len(prefix) :].strip()
+        return type_name or None
+
+    def hip_surface_vector_component_scalar_type(self, base_type, member):
+        """Scalar type of a single-component access such as ``float4.x``."""
+        scalars = {
+            "char": "char",
+            "uchar": "unsigned char",
+            "short": "short",
+            "ushort": "unsigned short",
+            "int": "int",
+            "uint": "unsigned int",
+            "long": "long",
+            "ulong": "unsigned long",
+            "longlong": "long long",
+            "ulonglong": "unsigned long long",
+            "half": "half",
+            "__half": "half",
+            "float": "float",
+            "double": "double",
+        }
+        match = re.fullmatch(r"([A-Za-z_]+)(\d)", base_type)
+        if match is None:
+            return None
+        scalar = scalars.get(match.group(1))
+        if scalar is None:
+            return None
+        dimension = int(match.group(2))
+        if member not in self.HIP_SURFACE_VECTOR_COMPONENTS[:dimension]:
+            return None
+        return scalar
+
+    def hip_surface_element_type(self, type_name):
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(self.resolve_type_alias(type_name))
+        if self.has_array_suffix(type_name):
+            return self.hip_surface_normalize_type(type_name.split("[", 1)[0].strip())
+        if "*" in type_name:
+            return self.hip_surface_normalize_type(type_name.replace("*", "").strip())
+        base, template_args = self.parse_cpp_template(type_name)
+        if base in {"array", "ptr"} and template_args:
+            return self.hip_surface_normalize_type(template_args[0])
+        return self.hip_surface_normalize_type(type_name)
+
+    def hip_surface_normalize_type(self, type_name):
+        """Map a CrossGL type spelling back to the HIP spelling it came from.
+
+        Variable types are registered in their CrossGL spelling (``f32``,
+        ``vec4<f32>``, ``array<f32>``), while struct members, casts and template
+        arguments keep the HIP spelling (``float``, ``float4``, ``float*``). The
+        surface helpers compare and size HIP spellings, so a CrossGL spelling is
+        translated back; anything else is returned unchanged.
+        """
+        if not type_name:
+            return type_name
+        text = self.strip_type_qualifiers(type_name).strip()
+        crossgl_scalars = {
+            "bool": "bool",
+            "i8": "char",
+            "u8": "uchar",
+            "i16": "short",
+            "u16": "ushort",
+            "i32": "int",
+            "u32": "uint",
+            "i64": "long long",
+            "u64": "unsigned long long",
+            "f16": "half",
+            "f32": "float",
+            "f64": "double",
+        }
+        if text in crossgl_scalars:
+            return crossgl_scalars[text]
+        vector = re.fullmatch(r"vec([1-4])<([A-Za-z0-9]+)>", text)
+        if vector is not None:
+            scalar = crossgl_scalars.get(vector.group(2))
+            if scalar is not None:
+                return f"{scalar}{vector.group(1)}"
+        return text
 
     def hip_surface_value_type_size(self, value_type):
         if not value_type:
@@ -9035,7 +9606,7 @@ class HipToCrossGLConverter:
 
         vector_match = re.fullmatch(
             r"(?:make_)?(char|uchar|short|ushort|int|uint|long|ulong|"
-            r"longlong|ulonglong|float|double)([1-4])",
+            r"longlong|ulonglong|half|__half|float|double)([1-4])",
             text,
         )
         if vector_match:
@@ -9051,47 +9622,46 @@ class HipToCrossGLConverter:
                 "ulong": 8,
                 "longlong": 8,
                 "ulonglong": 8,
+                "half": 2,
+                "__half": 2,
                 "float": 4,
                 "double": 8,
             }.get(scalar_type)
             return scalar_size * int(count) if scalar_size is not None else None
 
         return {
+            "bool": 1,
             "char": 1,
             "signed char": 1,
             "unsigned char": 1,
+            "uchar": 1,
             "int8_t": 1,
             "uint8_t": 1,
             "short": 2,
             "unsigned short": 2,
+            "ushort": 2,
             "int16_t": 2,
             "uint16_t": 2,
+            "half": 2,
+            "__half": 2,
             "int": 4,
+            "signed int": 4,
             "unsigned int": 4,
+            "uint": 4,
             "float": 4,
             "int32_t": 4,
             "uint32_t": 4,
             "long": 8,
             "unsigned long": 8,
+            "ulong": 8,
             "long long": 8,
             "unsigned long long": 8,
+            "longlong": 8,
+            "ulonglong": 8,
             "double": 8,
             "int64_t": 8,
             "uint64_t": 8,
         }.get(text)
-
-    def strip_surface_constant_byte_stride(self, text, value_size):
-        patterns = (
-            (rf"^(.+?)\s*\*\s*{value_size}$", 1),
-            (rf"^{value_size}\s*\*\s*(.+)$", 1),
-        )
-        for pattern, group in patterns:
-            match = re.fullmatch(pattern, text)
-            if match:
-                coordinate = match.group(group).strip()
-                if coordinate:
-                    return self.strip_wrapping_parentheses(coordinate)
-        return None
 
     def format_vector_constructor(self, vector_name, args, element_type="f32"):
         if vector_name == "vec1":
@@ -9168,11 +9738,14 @@ class HipToCrossGLConverter:
 
         crossgl_func = self.convert_hip_builtin_function(operation)
         expression = f"{crossgl_func}({args_str})"
-        if scope is not None:
-            return (
-                f"(/* hip {scope}-scope atomic {node.operation} lowered to "
-                f"{crossgl_func}; scope not preserved */ {expression})"
+        if scope == "system":
+            return self.refuse_import(
+                f"HIP {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
+                "atomic for the host and peer devices",
+                expression,
             )
+        # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
+        # thread on the device, which includes the block.
         return expression
 
     def is_get_method_call(self, node):
@@ -9213,9 +9786,10 @@ class HipToCrossGLConverter:
             args = ", ".join(self.visit(arg) for arg in node.args)
             placement = ", ".join(self.visit(arg) for arg in placement_args)
             fallback = self.visit(placement_args[0]) if placement_args else "nullptr"
-            return (
-                f"(/* HIP placement new: new({placement}) {target_type}({args}) "
-                f"not directly supported in CrossGL */ {fallback})"
+            return self.refuse_import(
+                f"HIP placement new({placement}) {target_type}({args}): CrossGL has no object construction "
+                "in place",
+                fallback,
             )
 
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
@@ -9228,10 +9802,8 @@ class HipToCrossGLConverter:
 
     def visit_DeleteNode(self, node):
         target = self.visit(node.expression)
-        if node.is_array:
-            self.emit(f"// delete array: {target}")
-        else:
-            self.emit(f"// delete: {target}")
+        form = "delete[]" if node.is_array else "delete"
+        self.refuse_import(f"HIP {form} {target}: CrossGL has no device heap")
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
@@ -9245,7 +9817,8 @@ class HipToCrossGLConverter:
                 return
         if self.indent_level == 0:
             alias_type = self.normalize_top_level_type_alias(alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        self.emit(f"typedef {alias_type} {self.sanitize_identifier_name(node.name)};")
 
     def normalize_top_level_type_alias(self, alias_type):
         """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
@@ -9507,25 +10080,35 @@ class HipToCrossGLConverter:
             self.emit("workgroupBarrier();")
         elif node.sync_type == "hipDeviceSynchronize":
             self.emit("// HIP device synchronize")
+        elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
+            # __syncwarp over the whole warp waits for every lane and orders their memory accesses, as
+            # subgroupBarrier does for the subgroup.
+            self.emit("subgroupBarrier();")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
+            self.refuse_import(
+                f"HIP __syncwarp({args}): CrossGL has no barrier over a subset of the subgroup"
+            )
         else:
-            self.emit(f"// {node.sync_type}();")
+            self.refuse_import(f"HIP {node.sync_type}() has no CrossGL form")
+
+    def is_full_warp_mask(self, args):
+        """Whether ``__syncwarp`` arguments name every lane: none, or an all-ones 32- or 64-bit literal mask."""
+        if not args:
+            return True
+        if len(args) != 1:
+            return False
+        value = self.visit(args[0]).strip().rstrip("uUlL")
+        try:
+            return int(value, 0) in (0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF)
+        except ValueError:
+            return False
 
     def visit_HipAsmNode(self, node):
         volatility = " volatile" if node.is_volatile else ""
-        self.emit(f"// HIP inline assembly{volatility}: {node.template}")
-        if node.outputs:
-            self.emit(
-                f"// HIP inline assembly outputs: {self.format_hip_asm_operands(node.outputs)}"
-            )
-        if node.inputs:
-            self.emit(
-                f"// HIP inline assembly inputs: {self.format_hip_asm_operands(node.inputs)}"
-            )
-        if node.clobbers:
-            self.emit(f"// HIP inline assembly clobbers: {', '.join(node.clobbers)}")
+        self.refuse_import(
+            f"HIP inline asm{volatility}({node.template}): CrossGL has no inline assembly"
+        )
 
     def format_hip_asm_operands(self, operands):
         formatted = []
@@ -9555,7 +10138,8 @@ class HipToCrossGLConverter:
             "warpSize": "32",
         }
 
-        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
+        # The parser builds this node only for the five built-ins builtin_map covers, flat ones included.
+        base_name = builtin_map[node.builtin_name]
         if hasattr(node, "component") and node.component:
             return f"{base_name}.{node.component}"
         else:
@@ -9578,6 +10162,22 @@ class HipToCrossGLConverter:
 
     def visit_ContinueNode(self, node):
         self.emit("continue;")
+
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
 
     def visit_IfNode(self, node):
         self.validate_record_scalar_context(node.condition, "if condition")
@@ -9732,9 +10332,9 @@ class HipToCrossGLConverter:
 
     def visit_TernaryOpNode(self, node):
         self.validate_record_scalar_context(node.condition, "ternary condition")
-        condition = self.visit(node.condition)
-        true_expr = self.visit(node.true_expr)
-        false_expr = self.visit(node.false_expr)
+        condition = grouped_operand(self, node.condition)
+        true_expr = grouped_operand(self, node.true_expr)
+        false_expr = grouped_operand(self, node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):
@@ -9828,7 +10428,7 @@ class HipToCrossGLConverter:
             hip_type = self.resolve_type_alias(hip_type)
         hip_type = self.strip_elaborated_record_type_keyword(hip_type)
         hip_type = self.resolve_namespace_alias_name(hip_type)
-        hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
+        hip_type = self.canonical_cpp_scalar_type(hip_type)
         matrix_type = self.convert_native_matrix_helper_name_to_crossgl(hip_type)
         if matrix_type is not None:
             return matrix_type
@@ -9931,7 +10531,22 @@ class HipToCrossGLConverter:
         if self.is_decltype_type_name(hip_type):
             return "auto"
 
-        return type_mapping.get(hip_type, hip_type)
+        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(hip_type)
+        if hip_type in type_mapping:
+            return type_mapping[hip_type]
+        # A type the program declares, or a HIP built-in type carried into the IR as a plain name; each generator
+        # maps the built-ins it knows and refuses the rest (written_type_names).
+        return hip_type
+
+    def canonical_cpp_scalar_type(self, type_name):
+        """``type_name`` with a namespace-qualified ``<cstdint>`` spelling (``std::uint32_t``, ``hip::std::size_t``)
+        replaced by its plain spelling; any other name is already plain and is returned unchanged.
+        """
+        if type_name in self.CPP_SCALAR_TYPE_ALIASES:
+            return self.CPP_SCALAR_TYPE_ALIASES[type_name]
+        return type_name
 
     def is_decltype_type_name(self, type_name):
         return isinstance(type_name, str) and type_name.strip().startswith("decltype(")
@@ -10321,7 +10936,10 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         if getattr(node, "name", None):
             self.enum_underlying_types[node.name] = underlying or "int"

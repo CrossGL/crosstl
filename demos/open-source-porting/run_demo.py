@@ -521,6 +521,14 @@ def _normalize_json_paths(value: object) -> object:
     return value
 
 
+def _refresh_hint(case_name: str) -> str:
+    return (
+        "If the translator change is intended, refresh the references with "
+        f"`python demos/open-source-porting/run_demo.py --update --case {case_name}` "
+        "and commit them with the change."
+    )
+
+
 def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> None:
     expected = _artifact_files(case_dir / OUTPUT_DIR_NAME, targets)
     actual = _artifact_files(work_dir / OUTPUT_DIR_NAME, targets)
@@ -529,7 +537,7 @@ def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> No
     if missing or extra:
         raise SystemExit(
             f"{case_dir.name}: artifact set mismatch; "
-            f"missing={missing}, extra={extra}"
+            f"missing={missing}, extra={extra}. {_refresh_hint(case_dir.name)}"
         )
     changed = [
         relative
@@ -541,6 +549,7 @@ def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> No
         raise SystemExit(
             f"{case_dir.name}: generated artifacts differ from references: "
             + ", ".join(str(path) for path in changed)
+            + f". {_refresh_hint(case_dir.name)}"
         )
 
 

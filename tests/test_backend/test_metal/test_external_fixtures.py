@@ -394,6 +394,10 @@ EXTERNAL_FIXTURES = [
             #include <metal_stdlib>
             using namespace metal;
 
+            typedef enum AAPLRenderTargetIndices {
+                AAPLRenderTargetColor = 0,
+            } AAPLRenderTargetIndices;
+
             typedef struct {
                 float4 position [[position]];
             } ColorInOut;
@@ -470,7 +474,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "image2D dst @texture(0) @writeonly",
-            "sampler2DMS src @texture(1)",
+            "texture2DMS src @texture(1)",
             "imageStore(dst, pos, texelFetch(src, pos, 0));",
         ],
         "source": (
@@ -535,7 +539,7 @@ EXTERNAL_FIXTURES = [
         ),
         "roundtrip": True,
         "contains": [
-            "alignas(8) struct AtomicVisibilityBuffer",
+            "@metal_alignas(8)\n    struct AtomicVisibilityBuffer",
             "atomicAdd(dst.count, src.count);",
         ],
         "source": (
@@ -891,9 +895,9 @@ EXTERNAL_FIXTURES = [
         "source_path": "examples/extensions/axpby/axpby.metal",
         "roundtrip": True,
         "contains": [
-            "StructuredBuffer<T> x @buffer(0)",
-            "RWStructuredBuffer<T> out_ @buffer(2)",
-            "buffer_store(out_, index, T(alpha) * buffer_load(x, index) + T(beta) * buffer_load(y, index));",
+            "StructuredBuffer<float> x @buffer(0)",
+            "RWStructuredBuffer<float> out_ @buffer(2)",
+            "buffer_store(out_, index, float(alpha) * buffer_load(x, index) + float(beta) * buffer_load(y, index));",
         ],
         "not_contains": ["static_cast", "device const"],
         "source": (
@@ -911,6 +915,18 @@ EXTERNAL_FIXTURES = [
                 out[index] = static_cast<T>(alpha) * x[index]
                     + static_cast<T>(beta) * y[index];
             }
+        """
+        ),
+        "instantiation": (
+            """
+            template [[host_name("axpby_contiguous_float32")]] [[kernel]]
+            void axpby_contiguous<float>(
+                device const float* x [[buffer(0)]],
+                device const float* y [[buffer(1)]],
+                device float* out [[buffer(2)]],
+                constant const float& alpha [[buffer(3)]],
+                constant const float& beta [[buffer(4)]],
+                uint index [[thread_position_in_grid]]);
         """
         ),
     },
@@ -1526,6 +1542,19 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
+        "instantiation": (
+            """
+            template [[host_name("searchsorted_float_long")]] kernel void
+            searchsorted<float, long>(
+                constant float* data_in [[buffer(0)]],
+                device long* data_out [[buffer(2)]],
+                constant int64_t& numel_in [[buffer(5)]],
+                uint2 tgid [[threadgroup_position_in_grid]],
+                uint2 tid2 [[thread_position_in_threadgroup]],
+                uint2 tptg [[threads_per_threadgroup]],
+                uint2 tgpg [[threadgroups_per_grid]]);
+        """
+        ),
     },
     {
         "name": "pytorch_pooling_templated_braced_constructor_return",
@@ -1702,7 +1731,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "typedef matrix<bfloat,4,4> bfloat4x4;",
             "typedef matrix<bfloat,2,4> bfloat2x4;",
-            "void kernel_memset(constant ggml_metal_kargs_memset& args",
+            "void kernel_memset_i32(constant ggml_metal_kargs_memset& args",
         ],
         "source": (
             """
@@ -1719,6 +1748,12 @@ EXTERNAL_FIXTURES = [
                     uint tpig[[thread_position_in_grid]]) {
                 dst[tpig] = args.val;
             }
+        """
+        ),
+        "instantiation": (
+            """
+            typedef decltype(kernel_memset<int>) kernel_memset_t;
+            template [[host_name("kernel_memset_i32")]] kernel kernel_memset_t kernel_memset<int>;
         """
         ),
     },
@@ -1847,15 +1882,18 @@ EXTERNAL_FIXTURES = [
         "source_path": (
             "ggml/src/ggml-metal/ggml-metal.metal, " "kernel_mul_mv_ext_q4_f32_impl"
         ),
-        "roundtrip": False,
-        "contains": ["[0 ... r1ptg-1] = 0.0f"],
+        # The GNU range designator resolves to one element per index once the extent is a constant; the
+        # importer refuses it in a template whose extent is a parameter (test_array_designators.py).
+        "roundtrip": True,
+        "contains": ["float[r1ptg] sumf = {0.0f, 0.0f, 0.0f, 0.0f};"],
+        "not_contains": ["..."],
         "source": (
             """
             #include <metal_stdlib>
             using namespace metal;
 
-            template<short r1ptg>
             void init_sums() {
+                constexpr short r1ptg = 4;
                 float sumf[r1ptg] = { [ 0 ... r1ptg - 1 ] = 0.0f };
             }
         """
@@ -1888,7 +1926,7 @@ EXTERNAL_FIXTURES = [
         "source_path": "backends/imgui_impl_metal.mm",
         "roundtrip": True,
         "contains": [
-            "u8vec4 color @TANGENT;",
+            "u8vec4 color @location(2);",
             "out_.color = vec4(in_.color) / vec4(255.0);",
             "f16vec4 texColor = texture(texture_, textureSampler, in_.texCoords);",
         ],

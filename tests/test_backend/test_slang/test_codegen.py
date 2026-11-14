@@ -1,9 +1,11 @@
+import re
 from typing import List
 
 import pytest
 
 import crosstl.translator as cgl_translator
 from crosstl import translate
+from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.translator.ast import ShaderStage
 
@@ -17,6 +19,42 @@ def generate_code(ast_node):
     """
     codegen = SlangCrossGLCodeGen.SlangToCrossGLConverter()
     return codegen.generate(ast_node)
+
+
+@pytest.mark.parametrize("semantic", ["SV_PointSize", "sv_pointsize"])
+@pytest.mark.parametrize(
+    "backend,builtin",
+    [
+        ("cgl", "@ gl_PointSize"),
+        ("opengl", "gl_PointSize"),
+        ("metal", "[[point_size]]"),
+    ],
+)
+def test_point_size_import_survives_cross_target_translation(
+    tmp_path, semantic, backend, builtin
+):
+    source = tmp_path / "point_size.slang"
+    source.write_text(
+        f"""
+        struct VertexInput {{ float4 position : POSITION; }};
+        struct VertexOutput {{
+            float4 position : SV_Position;
+            float size : {semantic};
+        }};
+        [shader("vertex")]
+        VertexOutput main(VertexInput input) {{
+            VertexOutput output;
+            output.position = input.position;
+            output.size = 2.0;
+            return output;
+        }}
+        """,
+        encoding="utf-8",
+    )
+    output = translate(str(source), backend=backend)
+    assert builtin in output
+    assert "SV_PointSize" not in output
+    assert "sv_pointsize" not in output
 
 
 def tokenize_code(code: str) -> List:
@@ -200,7 +238,60 @@ def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
         in generated_code
     )
     assert "uvec3 dispatchThreadId @ gl_GlobalInvocationID" in generated_code
-    assert "gStatsRayCountTotal[dispatchThreadId.xy] = totalRays;" in generated_code
+    assert (
+        "imageStore(gStatsRayCountTotal, dispatchThreadId.xy, "
+        "uvec4(totalRays, 0u, 0u, 1u));" in generated_code
+    )
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "crossgl_attribute", "directx_attribute"),
+    [
+        ("[WaveSize(32)]", "@ WaveSize(32)", "[WaveSize(32)]"),
+        ("[WaveSize(16, 64)]", "@ WaveSize(16, 64)", "[WaveSize(16, 64)]"),
+        ("[WaveSize(16, 64, 32)]", "@ WaveSize(16, 64, 32)", "[WaveSize(16, 64, 32)]"),
+    ],
+)
+def test_wave_size_attribute_is_carried_to_crossgl_entry_point(
+    tmp_path, attribute, crossgl_attribute, directx_attribute
+):
+    code = f"""
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    {attribute}
+    [numthreads(64, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {{ outp[id.x] = WaveActiveSum(id.x); }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert crossgl_attribute in generated_code
+    assert (
+        "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    cgl_translator.parse(generated_code)
+
+    source = tmp_path / "ws.slang"
+    source.write_text(code)
+    directx = translate(str(source), backend="directx")
+    assert directx_attribute in directx
+    assert "[numthreads(64, 1, 1)]" in directx
+
+
+def test_wave_size_attribute_after_numthreads_is_carried():
+    code = """
+    RWStructuredBuffer<uint> outp;
+    [numthreads(64, 1, 1)]
+    [WaveSize(32)]
+    void main(uint3 id : SV_DispatchThreadID) { outp[id.x] = WaveActiveSum(id.x); }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@ WaveSize(32)" in generated_code
+    assert "compute {" in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -280,7 +371,6 @@ def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
     # tests/bugs/static-const-without-default-value.slang
     code = """
     static const int globalVar;
-    extern static const int externVar;
     static const int initializedVar = 42;
     const int nonStaticVar;
     static int nonConstVar;
@@ -296,7 +386,6 @@ def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
     generated_code = generate_code(ast)
 
     assert "static const int globalVar;" in generated_code
-    assert "extern static const int externVar;" in generated_code
     assert "static const int initializedVar = 42;" in generated_code
     assert "int nonStaticVar;" in generated_code
     assert "static int nonConstVar;" in generated_code
@@ -685,8 +774,8 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 position @ Out_Position;" in generated_code
-    assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
+    assert "vec4 position @ gl_Position;" in generated_code
+    assert "vec4 fragmentMain(VertexOutput input) @ gl_FragColor" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
     cgl_translator.parse(generated_code)
@@ -837,7 +926,7 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint vertexId @ gl_VertexID" in generated_code
+    assert "uint vertexId @ gl_RelativeVertexID" in generated_code
     assert "uint instanceId @ gl_InstanceID" in generated_code
     assert "bool frontFace @ gl_FrontFacing" in generated_code
     assert "uint sampleIndex @ gl_SampleID" in generated_code
@@ -966,10 +1055,10 @@ def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variant
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ Out_Color8" in generated_code
-    assert "float depthMain() @ Out_Depth" in generated_code
-    assert "out float depth @ Out_Depth" in generated_code
-    assert "out vec4 color @ Out_Color9" in generated_code
+    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ gl_FragData[8]" in generated_code
+    assert "float depthMain() @ gl_FragDepth" in generated_code
+    assert "out float depth @ gl_FragDepth" in generated_code
+    assert "out vec4 color @ gl_FragData[9]" in generated_code
     assert "@ SV_TARGET8" not in generated_code
     assert "@ SV_TARGET9" not in generated_code
     assert "@ SV_DEPTHGREATEREQUAL" not in generated_code
@@ -1007,7 +1096,7 @@ def test_raster_system_semantics_codegen_canonicalizes_layer_viewport_and_distan
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint view @ gl_ViewID;" in generated_code
+    assert "uint view @ gl_ViewIndex;" in generated_code
     assert "uint layer @ gl_Layer;" in generated_code
     assert "uint viewport @ gl_ViewportIndex;" in generated_code
     assert "float clip @ gl_ClipDistance;" in generated_code
@@ -1039,9 +1128,9 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
+    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated_code
     assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
     cgl_translator.parse(generated_code)
 
@@ -1092,7 +1181,7 @@ def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_sh
     generated_code = generate_code(ast)
 
     assert (
-        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ Out_Color0)"
+        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ gl_FragData[0])"
         in generated_code
     )
     cgl_translator.parse(generated_code)
@@ -1117,7 +1206,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ Out_Position)"
+        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
@@ -1811,16 +1900,16 @@ def test_attributed_subscript_set_accessor_from_upstream_bug_sample_codegen():
     }
     """
 
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    ast = parse_code(tokenize_code(code))
 
-    assert "struct Test" in generated_code
-    assert "RWStructuredBuffer<int> val;" in generated_code
-    assert "Test test;" in generated_code
-    assert "test[0, 0] = 1;" in generated_code
-    assert "nonmutating" not in generated_code
-    cgl_translator.parse(generated_code)
+    # The __subscript was dropped, so ``test[0, 0] = 1`` indexed a structure; the import is refused instead.
+    with pytest.raises(
+        SlangImportRefused,
+        match=re.escape(
+            "the __subscript of Slang structure 'Test' has no CrossGL form"
+        ),
+    ):
+        generate_code(ast)
 
 
 def test_logical_not_codegen():
@@ -2448,11 +2537,12 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
 
     assert "ComputePush p @push_constant;" in generated_code
     assert (
-        "image2D test_namespace_textureTable[] @set(0) @binding(0);" in generated_code
+        "image2D test_namespace_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
     )
     assert (
-        "test_namespace_textureTable[p.image_id][pixel_i.xy] = "
-        "vec4(0, 1, 0, 0);" in generated_code
+        "imageStore(test_namespace_textureTable[p.image_id], pixel_i.xy, "
+        "vec4(0, 1, 0, 0));" in generated_code
     )
     assert "test_namespace.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
@@ -2478,8 +2568,14 @@ def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample()
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D ns1_ns2_textureTable[] @set(0) @binding(0);" in generated_code
-    assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
+    assert (
+        "image2D ns1_ns2_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
+    )
+    assert (
+        "imageStore(ns1_ns2_textureTable[0], pixel_i.xy, vec4(0, 1, 0, 0));"
+        in generated_code
+    )
     assert "ns1.ns2.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -2543,7 +2639,7 @@ def test_parameter_attribute_codegen_from_cuda_format_docs_reparses():
     generated_code = generate_code(ast)
 
     assert "vec2 getValue(image2D t)" in generated_code
-    assert "return t[ivec2(0, 0)];" in generated_code
+    assert "return imageLoad(t, ivec2(0, 0)).xy;" in generated_code
     assert "[format" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -2994,128 +3090,108 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
-def test_gradient_texture_status_overloads_drop_unsupported_extras_codegen():
+def test_gradient_texture_lod_clamp_overloads_keep_the_clamp():
+    # Source: https://shader-slang.org/stdlib-reference/types/0texture-01/samplegrad-06
+    code = """
+    Texture2D<float4> colorMap;
+    TextureCube<float4> skyMap;
+    SamplerState linearSampler;
+
+    float4 main(float2 uv, float3 direction, float2 dx, float2 dy,
+                float3 cubeDx, float3 cubeDy, int2 offset, float lodClamp) {
+        float4 color = colorMap.SampleGrad(
+            linearSampler, uv, dx, dy, offset, lodClamp);
+        float4 sky = skyMap.SampleGrad(
+            linearSampler, direction, cubeDx, cubeDy, lodClamp);
+        return color + sky;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "textureGradOffsetClamp(colorMap, linearSampler, uv, dx, dy, offset, lodClamp)"
+        in generated_code
+    )
+    assert (
+        "textureGradClamp(skyMap, linearSampler, direction, cubeDx, cubeDy, lodClamp)"
+        in generated_code
+    )
+    assert "unsupported" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize(
+    "call, dropped",
+    [
+        (
+            "colorMap.SampleGrad(linearSampler, uv, dx, dy, offset, lodClamp, status)",
+            "SampleGrad: CrossGL has no operand for status output",
+        ),
+        (
+            "skyMap.SampleGrad(linearSampler, direction, cubeDx, cubeDy, lodClamp, status)",
+            "SampleGrad: CrossGL has no operand for status output",
+        ),
+        (
+            "float4(shadowMap.SampleCmpGrad(cmpSampler, uv, depth, dx, dy, offset, status))",
+            "SampleCmpGrad: CrossGL has no operand for status output",
+        ),
+    ],
+)
+def test_gradient_texture_status_overloads_are_refused(call, dropped):
     # Sources:
     # https://shader-slang.org/stdlib-reference/types/0texture-01/samplegrad-06
     # https://shader-slang.org/stdlib-reference/types/0texture-01/samplecmpgrad-069
-    code = """
+    # Dropping the status output left the variable it writes unassigned.
+    code = f"""
     Texture2D<float4> colorMap;
+    TextureCube<float4> skyMap;
     Texture2D<float> shadowMap;
     SamplerState linearSampler;
     SamplerComparisonState cmpSampler;
 
-    float4 main(float2 uv, float depth, float2 dx, float2 dy,
-                int2 offset, float lodClamp) {
-        uint colorStatus;
-        uint shadowStatus;
-        float4 color = colorMap.SampleGrad(
-            linearSampler, uv, dx, dy, offset, lodClamp, colorStatus);
-        float shadow = shadowMap.SampleCmpGrad(
-            cmpSampler, uv, depth, dx, dy, offset, shadowStatus);
-        return color + float4(shadow);
-    }
+    float4 main(float2 uv, float3 direction, float depth, float2 dx, float2 dy,
+                float3 cubeDx, float3 cubeDy, int2 offset, float lodClamp) {{
+        uint status;
+        return {call};
+    }}
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-
-    assert (
-        "unsupported Slang texture overload extras for SampleGrad: "
-        "dropped LOD clamp, status output"
-    ) in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpGrad: "
-        "dropped status output"
-    ) in generated_code
-    assert (
-        "vec4 color = /* unsupported Slang texture overload extras for SampleGrad: "
-        "dropped LOD clamp, status output */ textureGradOffset("
-        "colorMap, linearSampler, uv, dx, dy, offset);" in generated_code
-    )
-    assert (
-        "float shadow = /* unsupported Slang texture overload extras for "
-        "SampleCmpGrad: dropped status output */ textureCompareGradOffset("
-        "shadowMap, cmpSampler, uv, depth, dx, dy, offset);" in generated_code
-    )
-    assert (
-        "textureGradOffset(colorMap, linearSampler, uv, dx, dy, offset, lodClamp"
-        not in generated_code
-    )
-    assert (
-        "textureCompareGradOffset("
-        "shadowMap, cmpSampler, uv, depth, dx, dy, offset, shadowStatus"
-        not in generated_code
-    )
-    assert ".SampleGrad(" not in generated_code
-    assert ".SampleCmpGrad(" not in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(SlangImportRefused, match=re.escape(dropped)):
+        generate_code(parse_code(tokenize_code(code)))
 
 
-def test_texture_compare_bias_method_call_codegen_from_hlsl_overloads():
-    code = """
+@pytest.mark.parametrize(
+    "call, dropped",
+    [
+        ("shadowMap.SampleCmpBias(cmpSampler, uv, depth, bias)", "LOD bias"),
+        (
+            "shadowArray.SampleCmpBias(cmpSampler, uvLayer, depth, bias, offset, 0.0, status)",
+            "LOD bias, LOD clamp, status output",
+        ),
+        (
+            "cubeShadow.SampleCmpBias(cmpSampler, direction, depth, bias, 0.0, status)",
+            "LOD bias, LOD clamp, status output",
+        ),
+    ],
+)
+def test_texture_compare_bias_method_calls_are_refused(call, dropped):
+    # CrossGL's textureCompare operations take no LOD bias, so a biased comparison would sample another level.
+    code = f"""
     Texture2D<float> shadowMap;
     Texture2DArray<float> shadowArray;
     TextureCube<float> cubeShadow;
     SamplerComparisonState cmpSampler;
 
-    float4 main(
-        float2 uv,
-        float3 uvLayer,
-        float3 direction,
-        float depth,
-        float bias,
-        int2 offset
-    ) {
+    float4 main(float2 uv, float3 uvLayer, float3 direction, float depth,
+                float bias, int2 offset) {{
         uint status;
-        float sampled = shadowMap.SampleCmpBias(cmpSampler, uv, depth, bias);
-        float offsetSampled = shadowArray.SampleCmpBias(
-            cmpSampler,
-            uvLayer,
-            depth,
-            bias,
-            offset,
-            0.0,
-            status
-        );
-        float cubeSampled = cubeShadow.SampleCmpBias(
-            cmpSampler,
-            direction,
-            depth,
-            bias,
-            0.0,
-            status
-        );
-        return float4(sampled + offsetSampled + cubeSampled);
-    }
+        return float4({call});
+    }}
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-
-    assert "sampler2D shadowMap;" in generated_code
-    assert "sampler2DArray shadowArray;" in generated_code
-    assert "samplerCube cubeShadow;" in generated_code
-    assert "sampler cmpSampler;" in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpBias: "
-        "dropped LOD bias"
-    ) in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpBias: "
-        "dropped LOD bias, LOD clamp, status output"
-    ) in generated_code
-    assert "textureCompare(shadowMap, cmpSampler, uv, depth)" in generated_code
-    assert (
-        "textureCompareOffset(shadowArray, cmpSampler, uvLayer, depth, offset)"
-        in generated_code
-    )
-    assert "textureCompare(cubeShadow, cmpSampler, direction, depth)" in generated_code
-    assert ".SampleCmpBias(" not in generated_code
-    assert "textureCompare(shadowMap, cmpSampler, uv, depth, bias)" not in (
-        generated_code
-    )
-    assert "textureCompareOffset(cubeShadow" not in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(
+        SlangImportRefused,
+        match=re.escape(f"SampleCmpBias: CrossGL has no operand for {dropped}"),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_texture_gather_cmp_method_call_codegen_from_core_module_docs():
@@ -3360,21 +3436,25 @@ def test_const_static_globals_codegen_canonicalizes_for_crossgl_reparse():
     cgl_translator.parse(generated_code)
 
 
-def test_extern_static_const_globals_codegen_from_link_time_constant_tests():
-    # Source: shader-slang/slang link-time constant tests.
-    code = """
-    extern static const bool turnOnFeature;
-    extern static const float constValue;
-    extern static const uint numthread = 0;
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        # shader-slang/slang link-time constant tests.
+        "extern static const bool turnOnFeature;",
+        "extern static const float constValue;",
+        "extern static const uint numthread = 0;",
+        # shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+        # tests/bugs/static-const-without-default-value.slang
+        "extern static const int externVar;",
+    ],
+)
+def test_extern_static_const_link_time_constants_are_refused(declaration):
+    # Another module supplies the value when the program is linked. Before, CrossGL dropped
+    # the ``extern`` and kept an ordinary constant with the default or a zero value.
+    ast = parse_code(tokenize_code(declaration))
 
-    assert "extern static const bool turnOnFeature;" in generated_code
-    assert "extern static const float constValue;" in generated_code
-    assert "extern static const uint numthread = 0;" in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(SlangImportRefused, match="link-time constant"):
+        generate_code(ast)
 
 
 def test_initializer_list_declaration_codegen():
@@ -3456,7 +3536,11 @@ def test_local_matrix_constructor_declaration_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "mat4 model = mat4(1.0);" in generated_code
+    # Slang's one-scalar matrix constructor fills every element, as HLSL's does.
+    assert (
+        "mat4 model = mat4(vec4(1.0), vec4(1.0), vec4(1.0), vec4(1.0));"
+        in generated_code
+    )
 
 
 def test_generic_vector_and_matrix_type_codegen_from_language_reference():
@@ -3480,7 +3564,11 @@ def test_generic_vector_and_matrix_type_codegen_from_language_reference():
 
     assert "vec3 normal;" in generated_code
     assert "mat4 transform;" in generated_code
-    assert "mat4 model = mat4(1.0);" in generated_code
+    # Slang's one-scalar matrix constructor fills every element, as HLSL's does.
+    assert (
+        "mat4 model = mat4(vec4(1.0), vec4(1.0), vec4(1.0), vec4(1.0));"
+        in generated_code
+    )
     assert "ivec4 indices = ivec4(1, 2, 3, 4);" in generated_code
     assert "uvec2 packed = uvec2(0, 1);" in generated_code
     assert "bvec3 mask = bvec3(true, false, true);" in generated_code
@@ -3844,6 +3932,72 @@ def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
+    # Slang accepts the HLSL barrier intrinsics; they must lower to the same
+    # CrossGL barriers the HLSL importer emits instead of passing through.
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        GroupMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+        DeviceMemoryBarrier();
+        AllMemoryBarrier();
+        DeviceMemoryBarrierWithGroupSync();
+        AllMemoryBarrierWithGroupSync();
+        if (id.x == 0u) {
+            hlsl::DeviceMemoryBarrierWithGroupSync();
+        }
+        outp[id.x] = 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+    barrier_lines = [line for line in lines if "arrier" in line]
+
+    assert barrier_lines == [
+        "workgroupBarrier();",
+        "memoryBarrierShared();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "workgroupBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+    ]
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
+    code = """
+    void AllMemoryBarrierWithGroupSync() {}
+    void GroupMemoryBarrier() {}
+
+    void main() {
+        AllMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "allMemoryBarrier" not in generated_code
+    assert "workgroupBarrier" not in generated_code
+    assert "memoryBarrierShared" not in generated_code
+
+
 def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
     # Source: Slang core module reference for sincos.
     # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html
@@ -3867,6 +4021,55 @@ def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignment
     assert "        s = sin(c);" in generated_code
     assert "        c = cos(c);" in generated_code
     assert "sincos(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_vector_types_map_to_uint_like_the_hlsl_importer():
+    # CrossGL has no int8_t4_packed/uint8_t4_packed; the HLSL importer maps
+    # both to uint, and pack_s8/pack_u8 return uint in CrossGL.
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        uint i = id.x;
+        int4 a0 = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+        int8_t4_packed r = pack_s8(a0);
+        uint8_t4_packed u = (uint8_t4_packed)outp[i];
+        outp[i] = (uint)r + (uint)u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int8_t4_packed" not in generated_code
+    assert "uint r = pack_s8(a0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_structured_buffer_elements_map_to_uint():
+    # A structured buffer of int8_t4_packed/uint8_t4_packed is a structured
+    # buffer of uint in CrossGL, as in the HLSL importer.
+    code = """
+    StructuredBuffer<uint8_t4_packed> pin;
+    RWStructuredBuffer<int8_t4_packed> pout;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        pout[id.x] = pin[id.x];
+        outp[id.x] = pin[id.x];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "StructuredBuffer<uint> pin;" in generated_code
+    assert "RWStructuredBuffer<uint> pout;" in generated_code
+    assert "int8_t4_packed" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -3901,6 +4104,48 @@ def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests()
     assert "fwidth_fine" not in generated_code
     assert "fwidth_coarse" not in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_bit_manipulation_intrinsics_lower_to_crossgl_builtins_and_round_trip():
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint2> outp;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID)
+    {
+        uint i = id.x;
+        int2 a0 = int2(iin[i], iin[i + 1u]);
+        uint2 c = countbits(a0);
+        uint2 hi = firstbithigh(a0);
+        uint2 lo = firstbitlow(a0);
+        int2 rev = reversebits(a0);
+        uint qualified = hlsl::countbits(i) + hlsl::firstbithigh(i) + hlsl::firstbitlow(i) + hlsl::reversebits(i);
+        outp[i] = c + hi + lo + uint2(rev) + uint2(qualified, qualified);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uvec2 c = bitCount(a0);" in generated_code
+    assert "uvec2 hi = findMSB(a0);" in generated_code
+    assert "uvec2 lo = findLSB(a0);" in generated_code
+    assert "ivec2 rev = bitfieldReverse(a0);" in generated_code
+    assert (
+        "bitCount(i) + findMSB(i) + findLSB(i) + bitfieldReverse(i)" in generated_code
+    )
+    for slang_name in ("countbits(", "firstbithigh(", "firstbitlow(", "reversebits("):
+        assert slang_name not in generated_code
+
+    ast = cgl_translator.parse(generated_code)
+    from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+
+    round_tripped = SlangCodeGen().generate(ast)
+    assert "countbits(a0)" in round_tripped
+    assert "firstbithigh(a0)" in round_tripped
+    assert "firstbitlow(a0)" in round_tripped
+    assert "reversebits(a0)" in round_tripped
 
 
 def test_standalone_function_call_statement_codegen():
@@ -4114,6 +4359,100 @@ def test_c_style_user_type_identifier_cast_codegen_reparse_from_enum_sample():
     cgl_translator.parse(generated_code)
 
 
+def test_c_style_array_type_cast_codegen_reparse():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float a[3] = (float[3])0;
+        float4 v[2] = (float4[2])0;
+        a[1] = outp[tid.x];
+        outp[tid.x] = a[0] + a[1] + v[1].x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float a[3] = float[3](0);" in generated_code
+    assert "vec4 v[2] = vec4[2](0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize(
+    ("cast", "expected"),
+    [
+        ("(float[3])0.0", "float[3](0.0)"),
+        ("(float[3])0.0f", "float[3](0.0)"),
+        ("(uint[3])0u", "uint[3](0u)"),
+        ("(int[N])0", "int[N](0)"),
+    ],
+)
+def test_c_style_array_type_cast_of_a_zero_literal_codegen(cast, expected):
+    code = f"""
+    static const int N = 3;
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {{
+        let a = {cast};
+        outp[tid.x] = float(a[2]);
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert expected in generated_code
+
+
+@pytest.mark.parametrize(
+    "cast",
+    [
+        # Slang fills only the first element from a scalar, HLSL every element.
+        "(float[3])2.0",
+        "(float[3])x",
+        "(float[3])values",
+        "(float[3])(x - x)",
+        "(float[2][3])0",
+    ],
+)
+def test_c_style_array_type_cast_of_another_operand_is_refused(cast):
+    code = f"""
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {{
+        float x = outp[tid.x];
+        float values[3] = {{ 1.0, 2.0, 3.0 }};
+        let a = {cast};
+        outp[tid.x] = a[0];
+    }}
+    """
+
+    with pytest.raises(SlangImportRefused, match="cast to the array type"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_parenthesized_index_expression_is_not_an_array_cast():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float values[2] = { 1.0, 2.0 };
+        outp[tid.x] = (values[1]) - 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "outp[tid.x] = values[1] - 1.0;" in generated_code
+
+
 def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     code = """
     RWStructuredBuffer<int> outputBuffer;
@@ -4132,7 +4471,7 @@ def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "ret = int(imageLoad(texHandle, ivec2(0, 0)).x);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Load(" not in generated_code
@@ -4156,7 +4495,7 @@ def test_rwtexture_store_codegen_from_slang_stdlib_texture_store_docs():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "imageStore(texHandle, pixel, color);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Store(" not in generated_code
@@ -4178,7 +4517,10 @@ def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 color = vec4((dstTexture[p] - val).xyz, 1.0);" in generated_code
+    assert (
+        "vec4 color = vec4((imageLoad(dstTexture, p) - val).xyz, 1.0);"
+        in generated_code
+    )
     assert "dstTexture[p] - val.xyz" not in generated_code
 
 
@@ -4273,6 +4615,36 @@ def test_generic_prefix_struct_and_bitfield_codegen_from_official_tests_reparse(
     assert "foo : 8" not in generated_code
     assert "bar : 24" not in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_groupshared_globals_preserved_in_crossgl(tmp_path):
+    """Slang groupshared globals must survive import to CrossGL (issue #2638)."""
+    code = """
+    RWStructuredBuffer<float> outp;
+    groupshared float s;
+    groupshared float a[4];
+    [shader("compute")]
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        s = 1.0;
+        a[id.x] = 2.0;
+        outp[id.x] = s + a[0];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "groupshared float s;" in generated_code
+    assert "groupshared float a[4];" in generated_code
+    cgl_translator.parse(generated_code)
+
+    # Public translate API (same path as the issue reproducer).
+    source = tmp_path / "gs.slang"
+    source.write_text(code)
+    via_api = translate(str(source), backend="cgl")
+    assert "groupshared float s;" in via_api
+    assert "groupshared float a[4];" in via_api
 
 
 if __name__ == "__main__":

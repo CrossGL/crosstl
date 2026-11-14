@@ -699,13 +699,13 @@ def test_counter_writes_outside_a_shadowing_scope_are_rejected(body, stride_targ
 
 
 def test_fixed_stride_execution_is_required_in_existing_ci_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

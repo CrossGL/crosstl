@@ -19,6 +19,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.test_translator.metal_contract import operator_implementations
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -38,7 +39,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6"
+    "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7"
 )
 
 
@@ -245,10 +246,10 @@ def test_current_mlx_binary_scalar_metal_contract_is_complete_and_classified():
         "hostInterfaceStatus": "ready",
         "hostResourceCountPerArtifact": 3,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 243029,
+        "generatedSizeBytesTotal": 243181,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "ss_ArcTan2bfloat16", "sizeBytes": 6661},
+            "maximum": {"entryPoint": "ss_ArcTan2bfloat16", "sizeBytes": 6667},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
@@ -432,11 +433,9 @@ def _translate_binary_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_BINARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,

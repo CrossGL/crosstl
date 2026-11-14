@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp-negative-controls",
+  "description": "Faults injected by the portable runtime (CROSSTL_COMPUTESHARP_FAULT) and the upstream test methods that must fail under each fault. Every discovered case of every listed method must execute and fail; a pass, a skip or a missing case fails the control. The same cases must pass in the unfaulted run.",
+  "controls": [
+    {
+      "fault": "omit-dispatch",
+      "purpose": "Dispatches are recorded in the evidence but never reach the device, so outputs keep their initial contents.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+        "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D",
+        "ComputeSharp.Tests.ShadersTests.ContouredLayers"
+      ]
+    },
+    {
+      "fault": "swap-bindings",
+      "purpose": "The first two resources of the same kind and format exchange their target slots.",
+      "methods": [
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadOnlyBuffer",
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+        "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+      ]
+    },
+    {
+      "fault": "perturb-constants",
+      "purpose": "The first user constant (or the dispatch width when there is none) changes before the dispatch.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+        "ComputeSharp.Tests.ShaderMembersTests.BoolInstanceFields"
+      ]
+    },
+    {
+      "fault": "perturb-unorm-scales",
+      "purpose": "Every UNORM store scale buffer holds one level per channel, so translated stores to UNORM textures write only 0 or 1.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_DispatchAsPixelShader",
+        "ComputeSharp.Tests.ComputeContextTests.Transition_ReadWriteTexture2D_Normalized",
+        "ComputeSharp.Tests.Texture2DTests.SampleFromSourceTexture_ComputeShader"
+      ]
+    },
+    {
+      "fault": "corrupt-readback",
+      "purpose": "The first byte of every buffer and texture readback is altered on the host.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+        "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+      ]
+    },
+    {
+      "fault": "corrupt-guard",
+      "purpose": "After each dispatch the device writes four bytes just past the visible region of the first writable buffer, as an out-of-bounds store would.",
+      "messagePattern": "Buffer guard violation",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+        "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+        "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer"
+      ]
+    }
+  ]
+}

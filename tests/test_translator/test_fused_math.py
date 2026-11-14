@@ -189,13 +189,13 @@ def test_fma_oracle_rounding_boundaries(a, b, c, expected):
 
 @pytest.mark.parametrize("job", ["mlx-metal-porting", "portable-host"])
 def test_ci_requires_native_fma_on_all_three_platforms(job):
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, job, "Validate binary32 arithmetic"
     )
     assert_native_step_prerequisites(step, job=job)

@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping, NoReturn, Sequence
 
 from .artifact_contracts import RESOURCE_STORAGE_PREFIX, artifact_contract_headers
+from .refusals import MetadataContractError
 
 MAX_RESOURCE_STORAGE_HEADER_BYTES = 65536
 BINARY16_STORAGE = {
@@ -19,27 +20,34 @@ def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"Duplicate resource storage key {key!r}.")
+            raise MetadataContractError(f"Duplicate resource storage key {key!r}.")
         result[key] = value
     return result
 
 
 def _reject_constant(value: str) -> NoReturn:
-    raise ValueError(f"Non-finite resource storage value {value!r}.")
+    raise MetadataContractError(f"Non-finite resource storage value {value!r}.")
 
 
 def _validated_resources(value: Any) -> dict[str, dict[str, str]]:
-    if not isinstance(value, Mapping) or not 1 <= len(value) <= 256:
-        raise ValueError("Resource storage requires between 1 and 256 resources.")
+    # The header byte limit bounds the record count: one record takes at least 66
+    # bytes, so no separate count limit is needed. A module with many entry points,
+    # such as a library of template instantiations, can declare hundreds of records.
+    if not isinstance(value, Mapping) or not value:
+        raise MetadataContractError("Resource storage requires at least one resource.")
     result = {}
     for name, encoding in value.items():
         if (
             not isinstance(name, str)
             or re.fullmatch(r"[A-Za-z_]\w*", name, re.ASCII) is None
         ):
-            raise ValueError("Resource storage names must be source identifiers.")
+            raise MetadataContractError(
+                "Resource storage names must be source identifiers."
+            )
         if not isinstance(encoding, Mapping) or dict(encoding) != BINARY16_STORAGE:
-            raise ValueError(f"Unsupported logical storage encoding for {name!r}.")
+            raise MetadataContractError(
+                f"Unsupported logical storage encoding for {name!r}."
+            )
         result[name] = dict(encoding)
     return result
 
@@ -51,7 +59,7 @@ def resource_storage_header(resources: Mapping[str, Mapping[str, str]]) -> str:
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     )
     if len(header.encode("utf-8")) > MAX_RESOURCE_STORAGE_HEADER_BYTES:
-        raise ValueError("Resource storage header exceeds the byte limit.")
+        raise MetadataContractError("Resource storage header exceeds the byte limit.")
     return header + "\n"
 
 
@@ -61,7 +69,7 @@ def parse_resource_storage_header(source: str) -> dict[str, dict[str, str]]:
     if first_line is None:
         return {}
     if len(first_line.encode("utf-8")) > MAX_RESOURCE_STORAGE_HEADER_BYTES:
-        raise ValueError("Resource storage header exceeds the byte limit.")
+        raise MetadataContractError("Resource storage header exceeds the byte limit.")
     try:
         payload = json.loads(
             first_line[len(RESOURCE_STORAGE_PREFIX) :],
@@ -69,14 +77,14 @@ def parse_resource_storage_header(source: str) -> dict[str, dict[str, str]]:
             parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError) as exc:
-        raise ValueError(f"Invalid resource storage JSON: {exc}") from exc
+        raise MetadataContractError(f"Invalid resource storage JSON: {exc}") from exc
     if (
         not isinstance(payload, dict)
         or set(payload) != {"schemaVersion", "resources"}
         or type(payload["schemaVersion"]) is not int
         or payload["schemaVersion"] != 1
     ):
-        raise ValueError("Unsupported resource storage header schema.")
+        raise MetadataContractError("Unsupported resource storage header schema.")
     return _validated_resources(payload["resources"])
 
 
@@ -106,7 +114,7 @@ def encoded_storage_dtype(
             )
         )
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "Binary16 bit storage requires a logical float16 buffer with native "
             "DirectX uint16 structured or constant storage."
         )
@@ -121,11 +129,15 @@ def apply_resource_storage(
     for name, encoding in contracts.items():
         matches = [resource for resource in resources if resource.get("name") == name]
         if len(matches) != 1:
-            raise ValueError(f"Resource storage name {name!r} is missing or ambiguous.")
+            raise MetadataContractError(
+                f"Resource storage name {name!r} is missing or ambiguous."
+            )
         resource = matches[0]
         layout = resource.get("scalarLayout")
         if not isinstance(layout, Mapping):
-            raise ValueError(f"Resource storage for {name!r} has no concrete layout.")
+            raise MetadataContractError(
+                f"Resource storage for {name!r} has no concrete layout."
+            )
         encoded = {**layout, "storageEncoding": dict(encoding)}
         encoded_storage_dtype(
             encoded,

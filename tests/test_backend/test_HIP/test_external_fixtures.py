@@ -1,3 +1,6 @@
+import pytest
+
+from crosstl.backend.CUDA.directed_rounding import DirectedRoundingUnsupportedError
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
@@ -19,7 +22,12 @@ from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import (
+    hip_import_partial_output,
+    hip_partial_output,
+)
 
 EXTERNAL_FIXTURE_SOURCES = {
     "rocm_examples": {
@@ -160,6 +168,13 @@ def assert_crossgl_reparses(source):
     return ast, crossgl
 
 
+def refused_crossgl_from_hip(source):
+    """The HIP AST, the CrossGL rendered around the refused constructs, and the refusal message."""
+    ast = parse_hip_source(source)
+    crossgl, message = hip_import_partial_output(HipToCrossGLConverter().generate, ast)
+    return ast, crossgl, message
+
+
 def generate_hip_from_crossgl(source):
     crossgl_ast = CrossGLParser(CrossGLLexer(source).tokens).parse()
     return HipCodeGen().generate(crossgl_ast)
@@ -218,7 +233,12 @@ shader MatrixConstructorComputeShader {
 
 
 def assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
-    hip_code = generate_hip_from_crossgl(source)
+    return assert_hip_reverse_codegen_prunes_generated_matrix_helpers(
+        generate_hip_from_crossgl(source)
+    )
+
+
+def assert_hip_reverse_codegen_prunes_generated_matrix_helpers(hip_code):
     assert "struct float2x2" in hip_code
 
     _, crossgl = generate_crossgl_from_hip(hip_code)
@@ -230,12 +250,17 @@ def assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
     return crossgl
 
 
-def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_hip_helpers():
+def test_compiler_manual_sampler_fixture_refuses_hip_depth_compare_and_prunes_helpers():
     # Reduced from CrossGL-Compiler/tests/fixtures/
-    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
-    crossgl = assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(
-        COMPILER_MANUAL_SAMPLER_FIXTURE
-    )
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl. A HIP texture object has no
+    # depth comparison, so the program is refused; its partial output still round-trips.
+    program = CrossGLParser(
+        CrossGLLexer(COMPILER_MANUAL_SAMPLER_FIXTURE).tokens
+    ).parse()
+    hip_code, refusal = hip_partial_output(HipCodeGen().generate, program)
+    assert "HIP shadow resource call: textureCompare on sampler2DShadow" in refusal
+
+    crossgl = assert_hip_reverse_codegen_prunes_generated_matrix_helpers(hip_code)
 
     assert len(crossgl) < 2_000
     assert "textureCompareLodManual(" in crossgl
@@ -252,7 +277,7 @@ def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_hip_helpers(
     assert (
         "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
     )
-    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var flattened: mat2 = mat2(1.0f, 2.0f, 3.0f, 4.0f);" in crossgl
     assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
 
 
@@ -461,10 +486,7 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     assert set(global_var.qualifiers) == {"__device__"}
     assert global_array.vtype == "float[device_array_size]"
     assert "var global_array: array<f32, device_array_size>;" in crossgl
-    assert (
-        "var tid: u32 = ((gl_WorkGroupSize.x * gl_WorkGroupID.x) + "
-        "gl_LocalInvocationID.x);"
-    ) in crossgl
+    assert "var tid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "in_[tid] + global" in crossgl
     assert (
         "// HIP get symbol address: output: d_global, symbol: HIP_SYMBOL(global)"
@@ -564,19 +586,19 @@ def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     reduce_sum = ast.statements[0]
-
     assert reduce_sum.params[0]["type"] == "thread_group"
     assert (
         "u32 reduce_sum(cooperative_groups_thread_group g, ptr<u32> x, u32 val)"
         in crossgl
     )
-    assert (
-        "cooperative_groups thread_group.thread_rank not directly supported" in crossgl
-    )
-    assert "cooperative_groups thread_group.size not directly supported" in crossgl
-    assert "cooperative_groups thread_group.sync not directly supported" in crossgl
+    # The group behind a thread_group parameter is not known: its barrier was dropped, racing the reduction.
+    for member in ("thread_rank", "size", "sync"):
+        assert (
+            f"HIP cooperative_groups thread_group.{member} has no CrossGL form"
+            in message
+        )
     assert (
         "cooperative_groups thread_block thread_block_group maps to the current "
         "workgroup"
@@ -778,7 +800,7 @@ extern "C" __global__ void saxpy_kernel()
     assert 'extern "C" __global__ void saxpy_kernel' in declaration.value.elements[0]
     assert 'R"(' not in crossgl
     assert ')"' not in crossgl
-    assert "var saxpy_kernel: auto = " in crossgl
+    assert "const auto saxpy_kernel = " in crossgl
     assert 'extern \\"C\\" __global__ void saxpy_kernel' in crossgl
     assert "HIPRTC create program: output: prog, source: saxpy_kernel" in crossgl
     assert 'name: "saxpy_kernel.cu"' in crossgl
@@ -1112,7 +1134,7 @@ def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     asm_stmt = ast.statements[0].body[2]
     launch = ast.statements[1].body[0]
 
@@ -1124,8 +1146,11 @@ def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     assert asm_stmt.inputs[0].constraint == '"v"'
     assert asm_stmt.inputs[0].expression.array == "in"
     assert isinstance(launch, KernelLaunchNode)
-    assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in crossgl
-    assert '// HIP inline assembly outputs: "=v"(out[((x * width) + y)])' in crossgl
+    assert (
+        'HIP inline asm volatile("v_mov_b32_e32 %0, %1"): CrossGL has no inline assembly'
+        in message
+    )
+    assert "v_mov_b32" not in crossgl
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<vec3<u32>((width / 8), "
         "(width / 8), 1), vec3<u32>(8, 8, 1), 0, hipStreamDefault>>>()" in crossgl
@@ -1152,7 +1177,11 @@ def test_external_rocm_reduction_nested_template_static_for_crossgl_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl = generate_crossgl_from_hip(source)
+    # A template metaprogram called with a templated lambda has no CrossGL form, so the body is refused rather
+    # than read as empty.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
 
     static_for = ast.statements[0].body[1]
     assert isinstance(static_for, FunctionCallNode)
@@ -1195,7 +1224,7 @@ def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse()
 
     _, crossgl = assert_crossgl_reparses(source)
 
-    assert "var fully_allocate_lds: u32 = ((64u * 1024u) / 8);" in crossgl
+    assert "const u32 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
     assert "64ul" not in crossgl
     assert "1024ul" not in crossgl
 
@@ -1288,20 +1317,17 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     body = ast.statements[0].body
-
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
     assert isinstance(body[1], AtomicOperationNode)
     assert body[1].operation == "atomicOr_system"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    assert "hip system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
-    assert "hip system-scope atomic atomicOr_system lowered to atomicOr" in crossgl
-    assert (
-        "hip system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
-    ) in crossgl
+    # A device-scoped atomic is not atomic for the host and peer devices.
+    for name in ("atomicAdd_system", "atomicOr_system", "atomicCAS_system"):
+        assert f"HIP {name}: CrossGL atomics are device-scoped" in message
     assert "atomicAdd(bins[gl_LocalInvocationID.x], 1u)" in crossgl
     assert "atomicOr(flags, old)" in crossgl
     assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
@@ -1914,14 +1940,13 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl, message = refused_crossgl_from_hip(source)
     kernel = ast.statements[0]
-
     assert kernel.params[1]["name"] == "in"
     assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
-    assert "hip warp intrinsic __shfl(val, ((y * width) + x))" in crossgl
-    assert "hip warp intrinsic __shfl_sync" in crossgl
+    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" in message
+    assert "HIP warp intrinsic __shfl_sync" in message
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
         "0, hipStreamDefault>>>()"
@@ -2408,14 +2433,16 @@ def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
     # as __fdividef, rounded arithmetic aliases, and __saturatef.
+    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) have no CrossGL
+    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float normalized_weight(float weight, float normalizer, float bias) {
         float scaled = __fdividef(weight, normalizer);
         float rounded = __fdiv_rn(weight, normalizer);
-        float adjusted = __fadd_rd(scaled, bias);
-        float centered = __fsub_rz(adjusted, rounded);
-        float product = __fmul_ru(centered, __fadd_rn(weight, bias));
-        float reciprocal = __frcp_rn(__fadd_rz(normalizer, 1.0f));
+        float adjusted = __fadd_rn(scaled, bias);
+        float centered = __fsub_rn(adjusted, rounded);
+        float product = __fmul_rn(centered, __fadd_rn(weight, bias));
+        float reciprocal = __frcp_rn(__fadd_rn(normalizer, 1.0f));
         return __saturatef(__fmul_rn(product, reciprocal));
     }
     """
@@ -2425,9 +2452,9 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
 
     assert body[0].value.name == "__fdividef"
     assert body[1].value.name == "__fdiv_rn"
-    assert body[2].value.name == "__fadd_rd"
-    assert body[3].value.name == "__fsub_rz"
-    assert body[4].value.name == "__fmul_ru"
+    assert body[2].value.name == "__fadd_rn"
+    assert body[3].value.name == "__fsub_rn"
+    assert body[4].value.name == "__fmul_rn"
     assert body[5].value.name == "__frcp_rn"
     assert body[6].value.name == "__saturatef"
     assert "var scaled: f32 = (weight / normalizer);" in crossgl
@@ -2440,16 +2467,24 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     for raw_name in (
         "__fdividef",
         "__fdiv_rn",
-        "__fadd_rd",
         "__fadd_rn",
-        "__fadd_rz",
-        "__fsub_rz",
-        "__fmul_ru",
+        "__fsub_rn",
         "__fmul_rn",
         "__frcp_rn",
         "__saturatef",
     ):
         assert raw_name not in crossgl
+
+    for directed in (
+        "__fadd_rd(a, b)",
+        "__fsub_rz(a, b)",
+        "__fmul_ru(a, b)",
+        "__fadd_rz(a, b)",
+    ):
+        with pytest.raises(DirectedRoundingUnsupportedError):
+            assert_crossgl_reparses(
+                f"__device__ float f(float a, float b) {{ return {directed}; }}"
+            )
 
 
 def test_external_hip_fp16_scalar_conversion_codegen_reparse():

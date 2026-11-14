@@ -1,0 +1,18 @@
+#version 450
+// frexp, ldexp and modf (GLSL 4.60 section 8.3) on normal values and zero; every result is exact.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { float a[]; };
+layout(std430, binding = 1) buffer Outp { uint o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    float x = a[i];
+    int e;
+    float significand = frexp(x, e);
+    float whole;
+    float fraction = modf(x, whole);
+    o[5u * i] = floatBitsToUint(significand);
+    o[5u * i + 1u] = uint(e);
+    o[5u * i + 2u] = floatBitsToUint(ldexp(x, int(i % 41u) - 20));
+    o[5u * i + 3u] = floatBitsToUint(fraction);
+    o[5u * i + 4u] = floatBitsToUint(whole);
+}

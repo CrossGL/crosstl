@@ -494,3 +494,35 @@ def test_dxc_api_callback_exceptions_fail_closed(monkeypatch):
         == -2147467259
     )
     assert handler.errors == ["invalid include path"] and result.value is None
+
+
+def test_dxc_smoke_commands_size_a_host_sized_entry_for_the_check_only(tmp_path):
+    from crosstl.project.directx_toolchain import (
+        dxc_compiler_arguments_for_source,
+        dxc_host_workgroup_size_check_arguments,
+    )
+
+    source = (
+        "#if !defined(CROSSGL_WORKGROUP_SIZE_X) || !defined(CROSSGL_WORKGROUP_SIZE_Y) || "
+        '!defined(CROSSGL_WORKGROUP_SIZE_Z)\n#error "size"\n#endif\n'
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]\n"
+        "void CSMain() {}\n"
+    )
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text(source, encoding="utf-8")
+    defines = [
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_X=1",
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_Y=1",
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_Z=1",
+    ]
+    assert list(dxc_host_workgroup_size_check_arguments(source)) == defines
+    # Runtime compilation dispatches the artifact, so it gets no placeholder size.
+    assert dxc_compiler_arguments_for_source(source) == ()
+    assert dxc_host_workgroup_size_check_arguments("[numthreads(4, 1, 1)]") == ()
+    (command,) = pipeline._directx_dxc_smoke_commands("dxc", shader)
+    start = command.index("-D")
+    assert command[start : start + len(defines)] == defines
+    assert command[command.index("-E") + 1] == "CSMain"

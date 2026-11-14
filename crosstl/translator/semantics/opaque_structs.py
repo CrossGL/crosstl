@@ -71,12 +71,12 @@ def _type_name(node):
 
 
 def _split(type_node):
-    """``(element type, array sizes in index order)``: ``T a[2][3]`` is ``ArrayType(ArrayType(T, 2), 3)``."""
+    """``(element type, array sizes in index order)``: ``T a[2][3]`` is ``ArrayType(ArrayType(T, 3), 2)``."""
     sizes = []
     while isinstance(type_node, A.ArrayType):
         sizes.append(type_node.size)
         type_node = type_node.element_type
-    return type_node, sizes[::-1]
+    return type_node, sizes
 
 
 def _copy(size):

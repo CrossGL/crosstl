@@ -9,12 +9,15 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.HIP.HipCrossGLCodeGen import (
     HipRecordSemanticError,
+    HipSurfaceByteOffsetError,
     HipToCrossGLConverter,
 )
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import hip_import_partial_output
 
 ROCM_BIT_EXTRACT_HIP = """
 #include <hip/hip_runtime.h>
@@ -137,18 +140,10 @@ class TestHipCodeGen:
         assert "kernel void scale(" in result
         assert "const device float* input [[buffer(0)]]" in result
         assert "device float* output [[buffer(1)]]" in result
-        assert (
-            "uint3 thread_position_in_threadgroup " "[[thread_position_in_threadgroup]]"
-        ) in result
-        assert (
-            "uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]"
-            in result
-        )
-        assert "uint3 threads_per_threadgroup [[threads_per_threadgroup]]" in result
-        assert (
-            "uint i = threadgroup_position_in_grid.x * "
-            "threads_per_threadgroup.x + thread_position_in_threadgroup.x;"
-        ) in result
+        # The grid index imports as gl_GlobalInvocationID, which needs no block size.
+        assert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in result
+        assert "uint i = thread_position_in_grid.x;" in result
+        assert "threads_per_threadgroup" not in result
         assert "output[i] = input[i] * 2.0;" in result
         assert "int main(" not in result
         assert "[[compute]]" not in result
@@ -170,12 +165,8 @@ class TestHipCodeGen:
 
         assert "RWStructuredBuffer<float> a : register(u0);" in result
         assert "StructuredBuffer<float> b : register(t1);" in result
-        assert (
-            "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
-            "uint3 groupID : SV_GroupID)"
-        ) in result
-        assert "int global_idx = (groupThreadID.x +" in result
-        assert "(groupID.x * uint3(1, 1, 1).x));" in result
+        assert "void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)" in result
+        assert "int global_idx = dispatchThreadID.x;" in result
         assert "a[global_idx] += b[global_idx];" in result
         assert "float a[] : group" not in result
         assert "float b[] : group" not in result
@@ -201,9 +192,9 @@ class TestHipCodeGen:
         assert "OpDecorate" in result and "Binding 0" in result
         assert "OpDecorate" in result and "Binding 1" in result
         assert "OpMemberDecorate" in result and "NonWritable" in result
-        assert "BuiltIn WorkgroupId" in result
-        assert "BuiltIn LocalInvocationId" in result
-        assert "BuiltIn WorkgroupSize" in result
+        assert "BuiltIn GlobalInvocationId" in result
+        assert "BuiltIn WorkgroupId" not in result
+        assert "BuiltIn WorkgroupSize" not in result
         assert "OpAccessChain" in result
         assert "OpFMul" in result
         assert "OpStore" in result
@@ -375,7 +366,9 @@ class TestHipCodeGen:
 
         assert "ptr<T> make_unique(Args args)" in result
         assert "Args ... args" not in result
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        # CrossGL has no new-expressions or pack expansions; the body is refused rather than read as empty.
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_basic_kernel_conversion(self):
         code = """
@@ -410,6 +403,96 @@ class TestHipCodeGen:
         assert "__constant__" not in result
         assert "__managed__" not in result
         assert "__shared__" not in result
+
+    def test_constant_memory_globals_use_distinct_crossgl_bindings(self):
+        code = """
+        #include <hip/hip_runtime.h>
+        __constant__ float scale[4];
+        __constant__ float bias[4];
+        extern "C" __global__ void k(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] * scale[i % 4] + bias[i % 4];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>;" in result
+        assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>;" in result
+        assert "@group(0) @binding(2) var<storage, read_write> values: array<f32>" in (
+            result
+        )
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_constant_memory_declared_after_kernel_counts_before_parameters(self):
+        code = """
+        #include <hip/hip_runtime.h>
+        __constant__ float scale[4];
+        extern "C" __global__ void first(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] * scale[i % 4];
+        }
+        __constant__ float bias[4];
+        extern "C" __global__ void second(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] + bias[i % 4] + scale[0];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>;" in result
+        assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>;" in result
+        assert (
+            result.count(
+                "@group(0) @binding(2) var<storage, read_write> values: array<f32>"
+            )
+            == 2
+        )
+        assert result.count("@group(0) @binding(1)") == 1
+        assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_static_constant_local_without_initializer_is_zero_initialized(self):
+        code = """
+        extern "C" __global__ void first(float* out) {
+            static __constant__ float local_table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = local_table[i % 4];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "let local_table: array<f32, 4> = {0.0, 0.0, 0.0, 0.0};" in result
+        assert "var<uniform> local_table" not in result
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+
+    def test_hip_block_scope_extern_constant_is_not_zero_initialized(self):
+        # The extern declaration names the namespace-scope table, which the host
+        # writes with hipMemcpyToSymbol, so its values are not zeros.
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = table[i % 4];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "let table" not in result
+        assert "{0.0, 0.0, 0.0, 0.0}" not in result
 
     def test_official_amd_aligned_struct_attribute_conversion(self):
         code = """
@@ -623,12 +706,14 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipToCrossGLConverter()
-        result = codegen.generate(ast)
+        result, message = hip_import_partial_output(codegen.generate, ast)
 
-        assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in result
-        assert '// HIP inline assembly outputs: [dst] "=v"(out[0])' in result
-        assert '// HIP inline assembly inputs: [src] "v"(in)' in result
-        assert '// HIP inline assembly clobbers: "memory"' in result
+        # Inline GCN assembly is opaque to every other target, so it is refused rather than dropped.
+        assert (
+            'HIP inline asm volatile("v_mov_b32_e32 %0, %1"): CrossGL has no inline assembly'
+            in message
+        )
+        assert "v_mov_b32" not in result
         assert "HipAsmNode" not in result
 
     def test_dynamic_shared_memory_codegen_marks_launch_sized_storage(self):
@@ -1455,20 +1540,13 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert (
-            "var local_cycles: i32 = (/* HIP device timer clock() "
-            "not directly supported in CrossGL */ 0);"
-        ) in result
-        assert (
-            "var cycles: u64 = (/* HIP device timer clock64() "
-            "not directly supported in CrossGL */ 0);"
-        ) in result
-        assert (
-            "var wall: u64 = (/* HIP device timer wall_clock64() "
-            "not directly supported in CrossGL */ 0);"
-        ) in result
+        assert "HIP device timer clock()" in message
+        assert "HIP device timer clock64()" in message
+        assert "HIP device timer wall_clock64()" in message
         assert "clock();" not in result
         assert "clock64();" not in result
         assert "wall_clock64();" not in result
@@ -1508,11 +1586,17 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert "// __syncwarp(mask) not directly supported in CrossGL" in result
-        assert "// __syncwarp() not directly supported in CrossGL" in result
-        assert "Warp sync not directly supported in CrossGL" not in result
+        # The full warp is the subgroup; a mask that may name fewer lanes has no CrossGL barrier.
+        assert "subgroupBarrier();" in result
+        assert (
+            "HIP __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
+            in message
+        )
+        assert "__syncwarp" not in result
         assert "None" not in result
 
     def test_rocm_docs_syncthreads_vote_intrinsics_emit_reparseable_diagnostic(self):
@@ -1532,23 +1616,13 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert (
-            "var count: i32 = (/* HIP block-wide sync vote "
-            "__syncthreads_count predicate: (idx < n) not directly supported "
-            "in CrossGL */ 0);"
-        ) in result
-        assert (
-            "var all_set: i32 = (/* HIP block-wide sync vote "
-            "__syncthreads_and predicate: (idx < n) not directly supported "
-            "in CrossGL */ 0);"
-        ) in result
-        assert (
-            "var any_set: i32 = (/* HIP block-wide sync vote "
-            "__syncthreads_or predicate: (idx < n) not directly supported "
-            "in CrossGL */ 0);"
-        ) in result
+        # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
+        for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
+            assert f"HIP block-wide sync vote {name}((idx < n))" in message
         assert "__syncthreads_count((idx < n))" not in result
         assert "__syncthreads_and((idx < n))" not in result
         assert "__syncthreads_or((idx < n))" not in result
@@ -1615,12 +1689,11 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert (
-            "/* hip load cache intrinsic __ldg((input + idx)) not directly "
-            "supported in CrossGL */ 0"
-        ) in result
+        assert "HIP load cache intrinsic __ldg((input + idx))" in message
         assert "__ldg(input + idx)" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
@@ -1636,12 +1709,11 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert (
-            "/* hip load cache intrinsic __ldcg((input + idx)) not directly "
-            "supported in CrossGL */ 0"
-        ) in result
+        assert "HIP load cache intrinsic __ldcg((input + idx))" in message
         assert "__ldcg(input + idx)" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
@@ -1661,22 +1733,15 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "(WaveActiveAllTrue((pred != 0)) ? 1 : 0)" in result
         assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "/* hip warp intrinsic __activemask() not directly supported in "
-            "CrossGL */ 0"
-        ) in result
-        assert (
-            "/* hip warp intrinsic __ballot_sync(0xffffffffffffffff, pred) "
-            "not directly supported in CrossGL */ 0"
-        ) in result
-        assert (
-            "/* hip warp intrinsic __shfl_xor_sync(mask, value, lane) not "
-            "directly supported in CrossGL */ 0"
-        ) in result
+        assert "HIP warp intrinsic __activemask()" in message
+        assert "HIP warp intrinsic __ballot_sync(0xffffffffffffffff, pred)" in message
+        assert "HIP warp intrinsic __shfl_xor_sync(mask, value, lane)" in message
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
         assert "::__all_sync" not in result
         assert "__activemask();" not in result
@@ -1862,25 +1927,14 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
-        assert (
-            "// cooperative_groups grid_group for grid not directly supported in CrossGL"
-            in result
-        )
-        assert (
-            "// cooperative_groups grid_group.sync not directly supported in CrossGL"
-            in result
-        )
-        assert (
-            "// cooperative_groups coalesced_group for group not directly supported in CrossGL"
-            in result
-        )
-        assert (
-            "var rank: u32 = (/* cooperative_groups "
-            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
-            in result
-        )
+        assert "HIP cooperative_groups grid_group 'grid'" in message
+        assert "HIP cooperative_groups grid_group.sync" in message
+        assert "HIP cooperative_groups coalesced_group 'group'" in message
+        assert "HIP cooperative_groups coalesced_group.thread_rank" in message
         assert "cooperative_groups::this_grid" not in result
         assert "cooperative_groups::coalesced_threads" not in result
         assert "None" not in result
@@ -2248,6 +2302,66 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int3") == "vec3<i32>"
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
 
+    def test_namespace_scope_constants_import_as_crossgl_constants(self, tmp_path):
+        # A kernel reads namespace-scope constexpr and const constants directly,
+        # so they import as CrossGL constants rather than mutable globals (#3328).
+        code = """
+        #include <hip/hip_runtime.h>
+        constexpr int N = 3;
+        constexpr float S = N * 0.5f;
+        const int M = 2;
+        const char* NAME = "probe";
+        int counter = 0;
+        __constant__ float C = 4.0f;
+        extern "C" __global__ void k(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            const int local = 1;
+            values[i] = values[i] * S + (float)N + (float)M + C + local;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "const i32 N = 3;" in result
+        assert "const f32 S = (N * 0.5f);" in result
+        assert "const i32 M = 2;" in result
+        # Pointers, mutable globals, __constant__ memory and locals keep their lowering.
+        assert "var NAME: ptr<i8>" in result
+        assert "var counter: i32 = 0;" in result
+        assert "var<uniform> C: f32 = 4.0f;" in result
+        assert "var local: i32 = 1;" in result
+
+        source_path = tmp_path / "constants.hip"
+        source_path.write_text(code)
+        output = translate(str(source_path), backend="hip", format_output=False)
+        assert "const int N = 3;" in output
+        assert "const int M = 2;" in output
+
+    def test_namespace_scope_const_with_dynamic_initializer_stays_variable(self):
+        # A const whose initializer calls a function or reads a variable is set
+        # when the program starts, so it imports as a variable, not a constant.
+        code = """
+        #include <hip/hip_runtime.h>
+        constexpr int N = 4;
+        float scale = 2.0f;
+        const dim3 BLOCK(16, 16, 1);
+        const unsigned int CELLS = BLOCK.x * BLOCK.y;
+        const float2 STEP = make_float2(1.0f / N, -0.5f);
+        const float FROM_VARIABLE = scale;
+        const float ROOT = sqrtf(2.0f);
+        __device__ float twice(float x) { return 2.0f * x; }
+        const float CALLED = twice(1.5f);
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "const vec3<u32> BLOCK = vec3<u32>(16, 16, 1);" in result
+        assert "const u32 CELLS = (BLOCK.x * BLOCK.y);" in result
+        assert "const vec2<f32> STEP = vec2<f32>((1.0f / N), (-0.5f));" in result
+        assert "var FROM_VARIABLE: f32 = scale;" in result
+        assert "var ROOT: f32 = sqrt(2.0f);" in result
+        assert "var CALLED: f32 = twice(1.5f);" in result
+
     def test_cuda_samples_style_const_dim3_constructor_global_conversion(self):
         code = """
         const dim3 windowSize(512, 512);
@@ -2263,10 +2377,10 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512, 1);" in result
-        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert "const vec3<u32> windowSize = vec3<u32>(512, 512, 1);" in result
+        assert "const vec3<u32> windowBlockSize = vec3<u32>(16, 16, 1);" in result
         assert (
-            "var windowGridSize: vec3<u32> = "
+            "const vec3<u32> windowGridSize = "
             "vec3<u32>((windowSize.x / windowBlockSize.x), "
             "(windowSize.y / windowBlockSize.y), 1);"
         ) in result
@@ -2611,6 +2725,194 @@ class TestHipCodeGen:
         assert "surf1Dwrite" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_surface_byte_offset_scaled_and_folded(self):
+        # #4197: HIP surface x is a byte offset; CrossGL takes a texel coordinate.
+        code = """
+        struct P { float4 c; };
+        extern "C" __global__ void probe(float* outp, hipSurfaceObject_t img, int x, int y) {
+            P p;
+            surf2Dread(&p.c, img, x * 16, y);
+            surf2Dwrite(p.c, img, x * 16, y);
+            float a;
+            surf2Dread(&a, img, x * 4 + 4, y);
+            outp[0] = p.c.x + a;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "p.c = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "imageStore(img, vec2<i32>(x, y), p.c);" in result
+        assert "a = imageLoad(img, vec2<i32>(x + 1, y));" in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_hip_surface_byte_offset_folding_variants(self):
+        # #4197: the offset is divided structurally, keeping every operand as
+        # written, so any integer expression that is a multiple of the element
+        # size divides, and calls and increments still evaluate exactly once.
+        code = """
+        __device__ int bump(int v) { return v + 1; }
+        extern "C" __global__ void probe(hipSurfaceObject_t img, int x, int y, int2 pixel) {
+            int off;
+            float a = surf2Dread<float>(img, x * sizeof(float), y);
+            float b = surf2Dread<float>(img, 4 * x + 8, y);
+            float c = surf2Dread<float>(img, (x + 1) * 4, y);
+            float d = surf2Dread<float>(img, 8, y);
+            float e = surf2Dread<float>(img, x * 8 - 4, y);
+            float4 f = surf2Dread<float4>(img, pixel.x * sizeof(float4), y);
+            float g = surf2Dread<float>(img, x * 0x4, y);
+            float h = surf2Dread<float4>(img, (blockIdx.x * blockDim.x + threadIdx.x) * sizeof(float4), y);
+            float i = surf2Dread<float4>(img, (x + y) * 16, y);
+            float j = surf2Dread<float4>(img, x * y * 16, y);
+            float k = surf2Dread<float>(img, -x * 4, y);
+            float l = surf2Dread<float>(img, (int)(x * 4), y);
+            float s = surf2Dread<float>(img, bump(x) * 16 - bump(x) * 16, y);
+            float t = surf2Dread<float4>(img, (off = x) * 32, y);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var a: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var b: f32 = imageLoad(img, vec2<i32>(x + 2, y));" in result
+        assert "var c: f32 = imageLoad(img, vec2<i32>((x + 1), y));" in result
+        assert "var d: f32 = imageLoad(img, vec2<i32>(2, y));" in result
+        assert "var e: f32 = imageLoad(img, vec2<i32>(x * 2 - 1, y));" in result
+        assert "var f: vec4<f32> = imageLoad(img, vec2<i32>(pixel.x, y));" in result
+        assert "var g: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert (
+            "var h: f32 = imageLoad(img, vec2<i32>(gl_GlobalInvocationID.x, y));"
+            in result
+        )
+        assert "var i: f32 = imageLoad(img, vec2<i32>((x + y), y));" in result
+        assert "var j: f32 = imageLoad(img, vec2<i32>((x * y), y));" in result
+        assert "var k: f32 = imageLoad(img, vec2<i32>((-x), y));" in result
+        assert "var l: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert (
+            "var s: f32 = imageLoad(img, vec2<i32>(bump(x) * 4 - bump(x) * 4, y));"
+            in result
+        )
+        assert "var t: f32 = imageLoad(img, vec2<i32>((off = x) * 2, y));" in result
+
+    def test_hip_surface_byte_offset_template_sizeof(self):
+        # #4197: `x * sizeof(T)` is a multiple of the element size whatever `T` is.
+        code = """
+        template <typename T> __device__ T load(hipSurfaceObject_t img, int x, int y) { return surf2Dread<T>(img, x * sizeof(T), y); }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "return imageLoad(img, vec2<i32>(x, y));" in result
+
+    def test_hip_surface_write_value_type_from_member_and_array(self):
+        # #4197: the write element type comes from the value, including member
+        # and array accesses.
+        code = """
+        struct P { float4 c; float v; };
+        struct Box { P p; };
+        extern "C" __global__ void probe(float* arr, hipSurfaceObject_t img, int x, int y, P p, Box box, float4 v) {
+            surf2Dwrite(arr[3], img, x * 4, y);
+            surf2Dwrite(p.v, img, x * 4, y);
+            surf2Dwrite(box.p.c, img, x * 16, y);
+            surf2Dwrite(v.x, img, x * 4, y);
+            surf2Dwrite(make_uchar4(1, 2, 3, 4), img, x * 4, y);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "imageStore(img, vec2<i32>(x, y), arr[3]);" in result
+        assert "imageStore(img, vec2<i32>(x, y), p.v);" in result
+        assert "imageStore(img, vec2<i32>(x, y), box.p.c);" in result
+        assert "imageStore(img, vec2<i32>(x, y), v.x);" in result
+        assert "imageStore(img, vec2<i32>(x, y), vec4<u8>(1, 2, 3, 4));" in result
+        assert "surf2Dwrite" not in result
+
+    def test_hip_surface_byte_offset_unproven_is_refused(self):
+        # #4197: an offset that cannot be shown to be a multiple of the element
+        # size is refused instead of being passed through as a texel coordinate.
+        cases = [
+            # Coefficient is not a multiple of the 4-byte element size.
+            (
+                "float a = surf2Dread<float>(img, x * 3, y);",
+                "not provably a multiple",
+            ),
+            # A bare variable cannot be shown to be a multiple.
+            (
+                "float a = surf2Dread<float>(img, x, y);",
+                "not provably a multiple",
+            ),
+            # The constant term is not a multiple of the element size.
+            (
+                "float a = surf2Dread<float>(img, x * 4 + 2, y);",
+                "not provably a multiple",
+            ),
+            # sizeof(float) is not a multiple of the 16-byte float4 element.
+            (
+                "float4 a = surf2Dread<float4>(img, x * sizeof(float), y);",
+                "not provably a multiple",
+            ),
+            # A value read without a template argument has no known element type.
+            (
+                "float a = surf2Dread(img, x * 4, y);",
+                "the element type is unknown",
+            ),
+            # The write value type cannot be inferred, so no element size is known.
+            (
+                "surf2Dwrite(someCall(), img, x * 16, y);",
+                "the element type is unknown",
+            ),
+        ]
+        for statement, pattern in cases:
+            code = f"""
+            extern "C" __global__ void probe(hipSurfaceObject_t img, int x, int y) {{
+                {statement}
+            }}
+            """
+            lexer = HipLexer(code)
+            tokens = lexer.tokenize()
+            parser = HipParser(tokens)
+            ast = parser.parse()
+
+            with pytest.raises(HipSurfaceByteOffsetError, match=pattern) as error:
+                HipToCrossGLConverter().generate(ast)
+            assert (
+                error.value.code == "project.translate.hip-surface-byte-offset-unproven"
+            )
+
+        # A constant offset of a template element type cannot be shown to be a
+        # multiple of its unknown size.
+        code = """
+        template <typename T> __device__ T load(hipSurfaceObject_t img, int x, int y) { return surf2Dread<T>(img, 16, y); }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        with pytest.raises(
+            HipSurfaceByteOffsetError, match="has no known size"
+        ) as error:
+            HipToCrossGLConverter().generate(ast)
+        assert error.value.code == "project.translate.hip-surface-byte-offset-unproven"
+
     def test_hip_texture_gather_helpers_convert(self):
         code = """
         void gatherOps(
@@ -2646,7 +2948,9 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "sampler2D tex" in result
         assert "sampler2D objectTex" in result
@@ -2662,11 +2966,7 @@ class TestHipCodeGen:
             "var gatheredObject: vec4<f32> = textureGather("
             "objectTex, vec2<f32>(uv.x, uv.y), 1);" in result
         )
-        assert (
-            "var sparseGather: vec4<f32> = "
-            "(/* hip texture.tex2Dgather sparse residency not directly "
-            "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));" in result
-        )
+        assert "HIP texture.tex2Dgather sparse residency" in message
         assert "tex2Dgather<float4>(" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
@@ -2717,7 +3017,9 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "sampler1D lineTex" in result
         assert "sampler2D tex" in result
@@ -2732,11 +3034,7 @@ class TestHipCodeGen:
             ("sparseVolume", "tex3D"),
             ("sparseLayer", "tex2DLayered"),
         ):
-            assert (
-                f"var {name}: vec4<f32> = "
-                f"(/* hip texture.{helper} sparse residency not directly "
-                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
-            ) in result
+            assert f"HIP texture.{helper} sparse residency" in message
             assert f"{helper}<float4>(" not in result
 
     def test_hip_sparse_texture_layered_cube_helpers_emit_diagnostics(self):
@@ -2852,7 +3150,9 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "sampler1DArray lineLayerTex" in result
         assert "sampler3D volumeTex" in result
@@ -2871,11 +3171,7 @@ class TestHipCodeGen:
             ("sparseCubeLayerLod", "texCubemapLayeredLod"),
             ("sparseCubeLayerGrad", "texCubemapLayeredGrad"),
         ):
-            assert (
-                f"var {name}: vec4<f32> = "
-                f"(/* hip texture.{helper} sparse residency not directly "
-                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
-            ) in result
+            assert f"HIP texture.{helper} sparse residency" in message
             assert f"{helper}<float4>(" not in result
 
     def test_hip_texture_scalar_coordinates_emit_rank_diagnostics(self):
@@ -2934,7 +3230,9 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "sampler1DArray lineLayerTex" in result
         assert "sampler2DArray layerTex" in result
@@ -2946,11 +3244,7 @@ class TestHipCodeGen:
             ("badCube", "texCubemap"),
             ("badCubeLayerLod", "texCubemapLayeredLod"),
         ):
-            assert (
-                f"var {name}: vec4<f32> = "
-                f"(/* hip texture.{helper} coordinate rank mismatch not directly "
-                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
-            ) in result
+            assert f"HIP texture.{helper} coordinate rank mismatch" in message
 
         assert "texture(lineLayerTex, x)" not in result
         assert "textureGrad(layerTex, uv, dPdx, dPdy)" not in result
@@ -3051,7 +3345,9 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
 
         assert "image1DArray lineLayerSurface" in result
         assert "image2DArray layerSurface" in result
@@ -3062,23 +3358,11 @@ class TestHipCodeGen:
             ("badCubeVector", "surfCubemapread"),
             ("badCubeLayerVector", "surfCubemapLayeredread"),
         ):
-            assert (
-                f"var {name}: vec4<f32> = "
-                f"(/* hip surface.{helper} coordinate shape mismatch not directly "
-                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
-            ) in result
+            assert f"HIP surface.{helper} coordinate shape mismatch" in message
 
-        assert (
-            "badLayerByPointer = "
-            "(/* hip surface.surf2DLayeredread coordinate shape mismatch "
-            "not directly supported in CrossGL */ "
-            "vec4<f32>(0.0, 0.0, 0.0, 0.0));"
-        ) in result
+        assert "HIP surface.surf2DLayeredread coordinate shape mismatch" in message
         for helper in ("surf2DLayeredwrite", "surfCubemapLayeredwrite"):
-            assert (
-                f"(/* hip surface.{helper} coordinate shape mismatch not directly "
-                "supported in CrossGL */ 0);"
-            ) in result
+            assert f"HIP surface.{helper} coordinate shape mismatch" in message
 
         assert "imageLoad(cubeSurface, vec3<i32>(pixel, face" not in result
         assert (
@@ -16564,7 +16848,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(array<f32> h) {" in result
+        assert "void prepare(inout array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
         assert "u32 count(array<f32> h) {" in result
         assert "return h.size();" in result
@@ -16859,15 +17143,16 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipToCrossGLConverter()
-        result = codegen.generate(ast)
+        result, message = hip_import_partial_output(codegen.generate, ast)
 
         assert "var h: ptr<f32> = new_array<f32>(n);" in result
         assert "var q: ptr<i32> = new<i32>();" in result
         assert "var p: ptr<f32> = new<f32>(1.0f);" in result
         assert "h[0] = 1.0f;" in result
-        assert "// delete array: h" in result
-        assert "// delete: q" in result
-        assert "array<delete>" not in result
+        # A deallocation is refused rather than dropped.
+        assert "HIP delete[] h: CrossGL has no device heap" in message
+        assert "HIP delete q: CrossGL has no device heap" in message
+        assert "delete" not in result
 
     def test_public_rocprim_placement_new_conversion_reparse(self):
         # Upstream: ROCm/rocPRIM
@@ -16884,12 +17169,9 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipToCrossGLConverter()
-        result = codegen.generate(ast)
+        result, message = hip_import_partial_output(codegen.generate, ast)
 
-        assert (
-            "return (*(/* HIP placement new: new(ptr) i32(value) not directly "
-            "supported in CrossGL */ ptr));"
-        ) in result
+        assert "HIP placement new(ptr) i32(value)" in message
         assert "new<i32>" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
@@ -17340,7 +17622,7 @@ class TestHipCodeGen:
         assert "unsigned int* flags" in result
         assert "unsigned int n" in result
         assert "float scale" in result
-        assert "unsigned int tid = ((blockIdx.x * blockDim.x) + threadIdx.x);" in result
+        assert "unsigned int tid = (blockIdx.x * blockDim.x + threadIdx.x);" in result
         assert "float value = (in_[tid] * scale);" in result
         assert "flags[tid] = (tid & 255u);" in result
         assert not re.search(r"\b(?:f32|u32)\b", result)
@@ -17591,7 +17873,8 @@ class TestHipCodeGen:
 
         assert "var mask: u32 = 0xffu;" in result
         assert "var bits: u32 = 0b1010u;" in result
-        assert "var oct: u32 = 0777u;" in result
+        # 0777u is octal in C++; CrossGL spells octal 0o777u.
+        assert "var oct: u32 = 0o777u;" in result
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
         assert "var hex: f32 = 0x1.0p-14f;" in result
@@ -17740,12 +18023,10 @@ class TestHipCodeGen:
 
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        # CrossGL cannot compute a type with std::conditional_t; the body is refused rather than read as empty.
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-        assert (
-            "typedef std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
-            "InDataType, WeiDataType> ComputeType;"
-        ) in result
         assert "if ((s.log_level_ > 0)) {" in result
 
     def test_public_rocm_top_level_conditional_member_alias_codegen_reparse(self):
@@ -18825,6 +19106,32 @@ class TestHipCodeGen:
         assert "values[1].bits = 2u;" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_union_shadowed_in_a_nested_block_tracks_its_own_active_member(self):
+        # The nested block keeps its scope, so each union object has its own active member.
+        code = """
+        union Bits { int value; unsigned bits; };
+        __global__ void probe(int* output) {
+            Bits value;
+            value.value = 1;
+            {
+                Bits value;
+                value.bits = 2u;
+                output[0] = int(value.bits);
+            }
+            output[1] = value.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        compact = " ".join(result.split())
+        assert (
+            "{ var value: Bits; value.bits = 2u; output[0] = i32(value.bits); } "
+            "output[1] = value.value;"
+        ) in compact
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_dynamic_union_array_object_fails_closed(self):
         code = """
         union Bits { int value; unsigned bits; };
@@ -18891,14 +19198,6 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "output[0]=read(value); }",
                 "union function argument active storage",
-            ),
-            (
-                "union-flattened-shadow",
-                "union Bits { int value; unsigned bits; }; "
-                "__global__ void probe(int* output) { Bits value; value.value=1; "
-                "{ Bits value; value.bits=2u; output[0]=int(value.bits); } "
-                "output[1]=value.value; }",
-                "union lexical shadowing with flattened scope",
             ),
             (
                 "union-copy",
@@ -18995,18 +19294,7 @@ class TestHipCodeGen:
                     "State state{input[0]}; increment(state,input[1]); "
                     "output[0]=state.value;",
                 ),
-                "non-const record reference",
-            ),
-            (
-                "two-reference-parameters",
-                hip_record_probe_source(
-                    "struct State { int value; };",
-                    "void step(State& first, State& second) "
-                    "{ first.value+=1; second.value+=first.value; }",
-                    "State state{input[0]}; step(state,state); "
-                    "output[0]=state.value;",
-                ),
-                "non-const record reference",
+                None,
             ),
             (
                 "reference-return",
@@ -19027,7 +19315,7 @@ class TestHipCodeGen:
                     "Outer state{{input[0]}}; increment(state.inner,input[1]); "
                     "output[0]=state.inner.value;",
                 ),
-                "non-const record reference",
+                None,
             ),
             (
                 "polymorphic-resource",
@@ -19273,7 +19561,7 @@ class TestHipCodeGen:
                     "State state{input[0]}; increment(state,input[1]); "
                     "output[0]=state.value;",
                 ),
-                "non-const record reference",
+                None,
             ),
             (
                 "using-reference-return",

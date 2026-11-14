@@ -40,9 +40,9 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_
 from demos.integrations.mlx.tests.kernels.test_current_unary_fma import (
     _run_current_unary,
 )
+from tests import workflow_text
 from tests.test_translator import test_metal_precise_log as logarithm
 from tests.test_translator.test_metal_precise_trig import _bits, _float
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_LOGARITHMS"
@@ -242,13 +242,13 @@ def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
 def test_ci_requires_complex_logarithm_source_comparison():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
     checkout = (
-        ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+        workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
         .split("      - name: Checkout current MLX kernel tree\n", 1)[1]
         .split("      - name:", 1)[0]
     )
     assert "sparse-checkout set mlx/backend/metal/kernels python/tests" in checkout
     step = (
-        ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+        workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
         .split("      - name: Validate pinned unary roots and logarithms\n", 1)[1]
         .split("      - name:", 1)[0]
     )

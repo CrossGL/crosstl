@@ -236,7 +236,8 @@ def test_float_compare_exchange_executes_natively(tmp_path, case):
 
 @pytest.mark.parametrize("case", CASES)
 def test_float_compare_exchange_opengl_preserves_index_contract(tmp_path, case):
-    report = _report(tmp_path, _source(case), "opengl")
+    # The host dispatches the kernel with 32 threads per threadgroup.
+    report = _report(tmp_path, _source(case), "opengl", workgroup_size=(32, 1, 1))
     if case == "aggregate":
         assert report["summary"]["failedCount"] == 1
         assert all(

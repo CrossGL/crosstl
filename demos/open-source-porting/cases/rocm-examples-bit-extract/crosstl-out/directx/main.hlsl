@@ -10,8 +10,8 @@ cbuffer CrossGLDispatchInfo : register(b3) {
 };
 // Compute Shader
 [numthreads(1, 1, 1)]
-void CSMain(uint3 groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID) {
-    uint offset = ((groupID.x * uint3(1, 1, 1).x) + groupThreadID.x);
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
+    uint offset = dispatchThreadID.x;
     uint stride = (uint3(1, 1, 1).x * crossglNumWorkGroups.x);
     for (uint i = offset; (i < size); i += stride) {
         d_output[i] = ((d_input[i] >> 8) & 15u);

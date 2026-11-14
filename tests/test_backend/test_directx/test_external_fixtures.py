@@ -8,7 +8,9 @@ import pytest
 from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 
 
@@ -21,6 +23,8 @@ class ExternalFixture:
     code: str
     contains: tuple[str, ...]
     absent: tuple[str, ...] = ()
+    # The CrossGL parser refuses the output, which names something CrossGL cannot declare.
+    crossgl_refused: bool = False
 
     @property
     def source_url(self):
@@ -142,7 +146,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "sampler2D g_texture;",
+            "texture2D g_texture;",
             "sampler g_sampler;",
             "vec2 uv @ TexCoord;",
             "return texture(g_texture, g_sampler, input.uv);",
@@ -168,8 +172,8 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "@ RootSignature(Present_RootSig)",
-            "sampler2D ColorTex;",
-            "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0);",
+            "texture2D ColorTex;",
+            "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0).xyz;",
         ),
     ),
     ExternalFixture(
@@ -193,7 +197,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vertex {",
-            "uint VertID @ gl_VertexID",
+            "uint VertID @ gl_RelativeVertexID",
             "out vec4 Pos @ gl_Position",
             "Tex = vec2(uvec2(VertID, VertID << 1) & 2);",
         ),
@@ -262,9 +266,10 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "geometry {",
-            "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
-            "buffer_append(stream, points[0]);",
+            "void gs_main(GSOut points[2], inout PointStream<GSOut> stream) @ stage_entry",
+            "stream.Append(points[0]);",
         ),
+        absent=("buffer_append",),
     ),
     ExternalFixture(
         name="directx_sdk_subd11_patch_constant_payload_interface",
@@ -319,7 +324,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "out vec3 tangent[4] @ Tangent;",
             "out vec2 uv[4] @ TexCoord;",
-            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const outputPatch patch) @ stage_entry",
+            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const OutputPatch<HSOut, 16> patch) @ stage_entry",
         ),
     ),
     ExternalFixture(
@@ -571,7 +576,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "samplerCube cube;",
+            "textureCube cube;",
             "w = uint(textureSize(cube, 0).x);",
             "float lod = textureQueryLod(cube, g_sam, vec3(uv, 1)).x;",
         ),
@@ -643,9 +648,10 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "enum Number {",
-            "static Number a = Second;",
+            # An unscoped enumerator is read through its enumeration, which CrossGL declares it in.
+            "static Number a = Number::Second;",
             "@ numthreads(1, 1, 1)",
-            "static Number e = Fourth;",
+            "static Number e = Number::Fourth;",
             "d = Number::Third;",
         ),
     ),
@@ -672,7 +678,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "type symmetry_t = LuminairePlanesSymmetry;",
+            "typedef LuminairePlanesSymmetry symmetry_t;",
             "symmetry_t symmetry;",
             "const uint i0 = symmetry == symmetry_t::ISOTROPIC ? 0u : 1u;",
         ),
@@ -729,7 +735,9 @@ EXTERNAL_FIXTURES = [
         contains=(
             "static const uint PSInput_Val = 3;",
             "uint PSMain(PSInput input) @ gl_FragData[0]",
-            "return input.Func();",
+            "return PSInput_Func(input);",
+            "uint PSInput_Func(in PSInput __this) {",
+            "return PSInput_Val;",
         ),
     ),
     ExternalFixture(
@@ -788,7 +796,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vec4 vecret(mat2 pmat @ M, vec4 pvec @ V) @ gl_FragColor",
-            "return pmat , pvec;",
+            "return (pmat, pvec);",
             "mat2 matret(mat2 pmat @ M, vec4 pvec @ V)",
         ),
     ),
@@ -823,8 +831,8 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "type uint32_t3 = uvec3;",
-            "type uint16_t3 = u16vec3;",
+            "typedef uvec3 uint32_t3;",
+            "typedef u16vec3 uint16_t3;",
             "@ numthreads(1, 1, 1)",
             "u16vec3 dims = u16vec3(gl_WorkGroupSize());",
         ),
@@ -849,6 +857,9 @@ EXTERNAL_FIXTURES = [
             "target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);",
             "target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);",
         ),
+        # vk::util::ConversionSelector is a template of DXC's inline SPIR-V headers, which the fixture does not
+        # include, so the call names nothing CrossGL can declare.
+        crossgl_refused=True,
     ),
     ExternalFixture(
         name="directx_shader_compiler_layout_qualified_matrix_casts",
@@ -870,9 +881,11 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "mat2 baseMatrix = mat2(input);",
-            "mat2 rowMajorMatrix = mat2(input);",
-            "mat2 columnMajorMatrix = mat2(input);",
+            # A float4 cast to float2x2 lists the rows; CrossGL constructors fill columns.
+            "mat2 baseMatrix = transpose(mat2(input));",
+            "mat2 rowMajorMatrix = transpose(mat2(input));",
+            "mat2 columnMajorMatrix = transpose(mat2(input));",
+            "vec4(baseMatrix[0][0], rowMajorMatrix[1][0], columnMajorMatrix[0][1], baseMatrix[1][1])",
         ),
     ),
     ExternalFixture(
@@ -977,30 +990,6 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
-        name="directx_shader_compiler_block_scope_typedef_linalg_vector",
-        repo=DIRECTX_SHADER_COMPILER_REPO,
-        commit=DIRECTX_SHADER_COMPILER_COMMIT,
-        path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/vectors.hlsl",
-        code=textwrap.dedent("""
-            #include <dx/linalg.h>
-            using namespace dx::linalg;
-
-            ByteAddressBuffer BAB : register(t0);
-
-            [numthreads(4, 4, 4)]
-            void main(uint ID : SV_GroupID) {
-              typedef vector<half, 16> half16;
-              half16 srcF16 = BAB.Load<half16>(128);
-              InterpretedVector<uint, 4, ComponentEnum::F8_E4M3FN> convertedPacked =
-                  Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);
-            }
-        """).strip(),
-        contains=(
-            "half16 srcF16 = buffer_load(BAB, 128);",
-            "convertedPacked = Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);",
-        ),
-    ),
-    ExternalFixture(
         name="directx_shader_compiler_native_16bit_vector_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
@@ -1023,7 +1012,7 @@ EXTERNAL_FIXTURES = [
             "i16vec4 d;",
             "u16vec4 e;",
             "f16vec4 f;",
-            "f16mat2x3 floatMat;",
+            "f16mat3x2 floatMat;",
             "result4 = asuint16(d);",
         ),
     ),
@@ -1041,40 +1030,6 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
-        ),
-    ),
-    ExternalFixture(
-        name="directx_shader_compiler_template_value_path_reparse",
-        repo=DIRECTX_SHADER_COMPILER_REPO,
-        commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
-        path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
-        code=textwrap.dedent("""
-            template<unsigned int M, unsigned int N>
-            struct Ackermann {
-              enum {
-                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
-              };
-            };
-
-            template<unsigned int M> struct Ackermann<M, 0> {
-              enum {
-                value = Ackermann<M - 1, 1>::value
-              };
-            };
-
-            template<> struct Ackermann<0, 0> {
-              enum {
-                value = 1
-              };
-            };
-
-            int main(int a : A) : SV_Target {
-              return Ackermann<3, 4>::value;
-            }
-        """).strip(),
-        contains=(
-            "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
-            "return Ackermann_3_4__value;",
         ),
     ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
@@ -1177,12 +1132,12 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "Buffer<int> intbuf;",
-            "RWBuffer<int2> int2buf;",
-            "int int1 = intbuf[address];",
-            "ivec2 int2 = int2buf[address];",
-            "uvec3 uint3 = uint3buf[address];",
-            "float b = float4buf[address][2];",
+            "isamplerBuffer intbuf;",
+            "iimageBuffer int2buf;",
+            "int int1 = texelFetch(intbuf, address).x;",
+            "ivec2 int2 = imageLoad(int2buf, address).xy;",
+            "uvec3 uint3 = texelFetch(uint3buf, address).xyz;",
+            "float b = imageLoad(float4buf, address)[2];",
         ),
     ),
     ExternalFixture(
@@ -1279,9 +1234,10 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "Buffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
-            "RWBuffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
-            "buf[0] = f;",
+            "samplerBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "return texelFetch(buf, 0).x;",
+            "imageBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "imageStore(buf, 0, vec4(f, 0.0, 0.0, 1.0));",
             "@ numthreads(8, 8, 1)",
             "void main(uvec2 ID @ gl_GlobalInvocationID)",
         ),
@@ -1522,7 +1478,7 @@ EXTERNAL_FIXTURES = [
             "uimage2D AutomaticExposureSpdAtomicCounter;",
             "groupshared uint spdCounter;",
             "spdCounter = imageAtomicAdd(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 1u);",
-            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 0);",
+            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), uvec4(0, 0u, 0u, 1u));",
             "@ numthreads(64, 1, 1)",
         ),
     ),
@@ -1563,7 +1519,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "static const vec4 FullScreenVertsPos[3] = {vec4(-1.0, 1.0, 1.0, 1.0), vec4(3.0, 1.0, 1.0, 1.0), vec4(-1.0, -3.0, 1.0, 1.0)};",
-            "VertexOut FullscreenVS(uint vertexId @ gl_VertexID)",
+            "VertexOut FullscreenVS(uint vertexId @ gl_RelativeVertexID)",
             "outVert.UVOut = FullScreenVertsUVs[vertexId];",
         ),
     ),
@@ -1673,7 +1629,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ register(u1)",
             "image2D output;",
-            "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
+            "imageStore(output, did, vec4(FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1, 0.0, 0.0, 1.0));",
         ),
     ),
     ExternalFixture(
@@ -1756,8 +1712,9 @@ EXTERNAL_FIXTURES = [
         contains=(
             "struct SomeStruct {",
             "void Fun()",
-            "rayQuery RayQ1 = RayQuery<0>();",
-            "Payload.DummyMethod();",
+            "RayQuery<0> RayQ1 = RayQuery<0>();",
+            "void SomeStruct_DummyMethod(in SomeStruct __this) {",
+            "SomeStruct_DummyMethod(Payload);",
         ),
     ),
     ExternalFixture(
@@ -1936,6 +1893,84 @@ def test_parse_external_directx_fixture(fixture):
     assert fixture.source_url.startswith(fixture.repo)
 
 
+# A block-scope alias reaches CrossGL as a ``typedef``, so the 16-lane vector it
+# names must be refused rather than narrowed to ``vec4`` (#3309).
+TEMPLATE_VALUE_PATH_FIXTURE = ExternalFixture(
+    name="directx_shader_compiler_template_value_path_reparse",
+    repo=DIRECTX_SHADER_COMPILER_REPO,
+    commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
+    path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
+    code=textwrap.dedent("""
+            template<unsigned int M, unsigned int N>
+            struct Ackermann {
+              enum {
+                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
+              };
+            };
+
+            template<unsigned int M> struct Ackermann<M, 0> {
+              enum {
+                value = Ackermann<M - 1, 1>::value
+              };
+            };
+
+            template<> struct Ackermann<0, 0> {
+              enum {
+                value = 1
+              };
+            };
+
+            int main(int a : A) : SV_Target {
+              return Ackermann<3, 4>::value;
+            }
+        """).strip(),
+    contains=(
+        "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
+        "return Ackermann_3_4__value;",
+    ),
+)
+
+
+LONG_VECTOR_TYPEDEF_FIXTURE = ExternalFixture(
+    name="directx_shader_compiler_block_scope_typedef_linalg_vector",
+    repo=DIRECTX_SHADER_COMPILER_REPO,
+    commit=DIRECTX_SHADER_COMPILER_COMMIT,
+    path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/vectors.hlsl",
+    code=textwrap.dedent("""
+        #include <dx/linalg.h>
+        using namespace dx::linalg;
+
+        ByteAddressBuffer BAB : register(t0);
+
+        [numthreads(4, 4, 4)]
+        void main(uint ID : SV_GroupID) {
+          typedef vector<half, 16> half16;
+          half16 srcF16 = BAB.Load<half16>(128);
+          InterpretedVector<uint, 4, ComponentEnum::F8_E4M3FN> convertedPacked =
+              Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);
+        }
+    """).strip(),
+    contains=(),
+)
+
+
+def test_codegen_dxc_block_scope_long_vector_typedef_is_refused():
+    with pytest.raises(
+        DirectXImportRefused, match=r"vector<half, 16> has 16 components"
+    ):
+        generate_crossgl(LONG_VECTOR_TYPEDEF_FIXTURE.code)
+
+
+def test_codegen_dxc_template_value_path_is_refused():
+    # A value template computed through partial and explicit specializations has no CrossGL form; the importer
+    # used to emit the undeclared identifier ``Ackermann_3_4__value``.
+    with pytest.raises(
+        DirectXImportRefused,
+        match=r"HLSL struct 'Ackermann' is a partial specialization",
+    ):
+        generate_crossgl(TEMPLATE_VALUE_PATH_FIXTURE.code)
+
+
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)
 def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
     crossgl = generate_crossgl(fixture.code)
@@ -1944,6 +1979,10 @@ def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
         assert expected in crossgl
     for unexpected in fixture.absent:
         assert unexpected not in crossgl
+    if fixture.crossgl_refused:
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            parse_crossgl(crossgl)
+        return
     assert parse_crossgl(crossgl) is not None
 
 

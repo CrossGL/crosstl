@@ -35,6 +35,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -80,15 +81,15 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
     "directx": {
         32: {
             "sha256": (
-                "2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7"
+                "be13f6dfb2952b8f25e09a1b34d1b41be90eb3396525bf4e5906d7df49890d00"
             ),
-            "sizeBytes": 4655,
+            "sizeBytes": 4654,
         },
         544: {
             "sha256": (
-                "f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c"
+                "6fca11891594a4c1d3cafa70b3ed45b8043af8e2ccfc7b2009ad83ef70065718"
             ),
-            "sizeBytes": 5226,
+            "sizeBytes": 5528,
         },
     },
     "opengl": {
@@ -108,12 +109,12 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
 }
 MLX_SOFTMAX_SOFTWARE_OPENGL_ARTIFACTS = {
     32: {
-        "sha256": "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573",
-        "sizeBytes": 5755,
+        "sha256": "22bde8523e9531e3b71a9be804f7060d2315fb10a385fe7e14a02d97039ebd32",
+        "sizeBytes": 5754,
     },
     544: {
-        "sha256": "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174",
-        "sizeBytes": 7399,
+        "sha256": "cccbddbfb5b99abde9edd333fbac134785c8bd52eac1ad24a0bc68a8acffff61",
+        "sizeBytes": 7398,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER"
@@ -322,11 +323,11 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
                 "algorithm": "sha256",
                 "value": MLX_SOFTMAX_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": expected_identity["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+            check_generated_artifact(
+                artifact,
+                sha256=expected_identity["sha256"],
+                size_bytes=expected_identity["sizeBytes"],
+            )
             assert artifact["dispatchArtifact"]["workgroupSize"] == list(
                 variant.workgroup_size
             )
@@ -341,11 +342,11 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
                     assert "__crossgl_physical_subgroup" not in generated
                 else:
                     assert (
-                        "groupshared uint __crossgl_physical_subgroup_counter;"
+                        "groupshared uint __crossgl_physical_subgroup_leaders[32];"
                         in generated
                     )
                     assert (
-                        "InterlockedAdd(__crossgl_physical_subgroup_counter"
+                        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
                         in generated
                     )
                     assert "uint crossglPhysicalSubgroupID = " in generated
@@ -476,11 +477,11 @@ def _translate_selected_artifact(
         "algorithm": "sha256",
         "value": MLX_SOFTMAX_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_SOFTMAX_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
@@ -489,9 +490,11 @@ def _translate_selected_artifact(
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
     assert materialization["specializationCount"] == 2
+    # The importer discovers the same five reachable specializations with ten
+    # units of dependency-discovery work (measured on the pinned source).
     assert materialization["accounting"] == {
         "reachableSpecializationCount": 5,
-        "dependencyDiscoveryWorkCount": 11,
+        "dependencyDiscoveryWorkCount": 10,
         "prunedCandidateCount": 131,
     }
     assert materialization["specializations"][0]["parameters"] == {

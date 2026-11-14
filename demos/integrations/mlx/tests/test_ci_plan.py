@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from demos.integrations.mlx import smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
     _without_plan_job,
@@ -30,7 +31,10 @@ WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
         ("tools/ensure_metal_toolchain.py", False, True),
         (".github/actions/setup-dxc/action.yml", False, True),
         ("pyproject.toml", False, True),
-        ("requirements-dev.txt", False, True),
+        ("requirements-dev.txt", False, False),
+        ("requirements.txt", False, False),
+        ("setup.cfg", False, False),
+        ("support/features.json", False, False),
         ("demos/integrations/mlx/tests/kernels/test_current_arange.py", True, True),
         ("demos/integrations/mlx/portable_host/runtime.py", True, True),
         (
@@ -342,7 +346,9 @@ def test_result_gate_fails_when_a_job_that_ran_fails(outcome):
     "path",
     [
         "demos/integrations/mlx/ci_plan.py",
+        "demos/integrations/mlx/smoke_canary.py",
         "demos/integrations/mlx/tests/test_ci_plan.py",
+        "demos/integrations/mlx/tests/test_smoke_canary.py",
         "demos/integrations/mlx/README.md",
         "demos/integrations/mlx/portable_host/README.md",
         PLAN_JOB,
@@ -487,3 +493,27 @@ def test_smoke_runs_pinned_integer_and_float_numerics():
     for entry in ("arangeint32", "arangefloat32"):
         assert f"test_current_mlx_arange_native_parity[{entry}]" in step["run"]
     assert "continue-on-error" not in step
+
+
+def test_smoke_runs_the_complete_family_canary():
+    """Translator changes reach main through the smoke tier, so it samples every family."""
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["mlx-smoke"]
+    assert job["env"]["MLX_CORPUS_COMMIT"] == smoke_canary.CORPUS_COMMIT
+    names = [step.get("name") for step in job["steps"]]
+    checkout = job["steps"][names.index("Checkout complete-family MLX kernels")]
+    canary = job["steps"][names.index("Run complete-family canary")]
+    assert names.index("Install pinned Linux DXC") < names.index(canary["name"])
+    assert names.index(canary["name"]) < names.index("Upload smoke diagnostics")
+    assert 'fetch --depth=1 origin "$MLX_CORPUS_COMMIT"' in checkout["run"]
+    assert "sparse-checkout set mlx/backend/metal/kernels" in checkout["run"]
+    directory = "mlx-canary-upstream"
+    assert f"git init {directory}" in checkout["run"]
+    assert canary["env"] == {
+        smoke_canary.ROOT_ENV: f"${{{{ github.workspace }}}}/{directory}"
+    }
+    run = canary["run"]
+    assert run.startswith("set -euo pipefail\n")
+    assert "--timeout-seconds 600" in run
+    assert "python -m demos.integrations.mlx.smoke_canary" in run
+    assert "--junitxml=mlx-smoke-results/canary.xml" in run
+    assert "continue-on-error" not in canary

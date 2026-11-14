@@ -1,0 +1,43 @@
+#version 450
+// Arrays that are values, not variables, passed by value to helper functions (GLSL 4.60 section 6.1.1): global
+// const arrays, a row of a const array of arrays, a const struct member, array constructors, a call result and a
+// local const array. Each helper writes its copy, and the last output reads the constants again afterwards.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { float x[]; } inp;
+layout(std430, binding = 1) writeonly buffer Outp { float o[]; } outp;
+
+struct S { float a[4]; };
+const float W[4] = float[4](1.0, 2.0, 3.0, 4.0);
+const float M[2][2] = float[2][2](float[2](5.0, 6.0), float[2](7.0, 8.0));
+const S CS = S(float[4](9.0, 10.0, 11.0, 12.0));
+
+float dot4(float v[4], float k) {
+    float s = 0.0;
+    for (int j = 0; j < 4; j++) {
+        s += v[j] * (k + float(j));
+    }
+    v[0] = 100.0;
+    return s + v[0];
+}
+
+float pick2(float v[2], uint i) {
+    v[i % 2u] = -1.0;
+    return v[0] * 3.0 + v[1];
+}
+
+float[4] make(float k) { return float[4](k, k + 1.0, k + 2.0, k + 3.0); }
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    float k = inp.x[i];
+    const float L[4] = float[4](13.0, 14.0, 15.0, 16.0);
+    uint b = i * 8u;
+    outp.o[b + 0u] = dot4(W, k);
+    outp.o[b + 1u] = pick2(M[i % 2u], i);
+    outp.o[b + 2u] = dot4(CS.a, k);
+    outp.o[b + 3u] = dot4(float[4](17.0, 18.0, k, 20.0), 1.0);
+    outp.o[b + 4u] = dot4(make(k), 2.0);
+    outp.o[b + 5u] = dot4(L, k);
+    outp.o[b + 6u] = pick2(M[1], i + 1u);
+    outp.o[b + 7u] = W[i % 4u] + M[i % 2u][1] + CS.a[(i + 1u) % 4u] + L[(i + 2u) % 4u];
+}

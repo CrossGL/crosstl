@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _catalog_backends():
     catalog = json.loads(
-        (ROOT / "support" / "backends.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "backends.json").read_text(encoding="utf-8")
     )
     return catalog["backends"]
 

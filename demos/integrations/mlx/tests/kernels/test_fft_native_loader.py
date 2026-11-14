@@ -42,6 +42,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -54,17 +55,17 @@ CURRENT_MLX_FFT_SHA256 = (
 CURRENT_MLX_FFT_SOURCE_SIZE_BYTES = 3436
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
-    "d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9"
+    "902aedcb55894f328185b9332f3ec8d5918ee1ef80201e61f15890eb2746c60f"
 )
-MLX_FFT_GENERATED_SIZE_BYTES = 144151
+MLX_FFT_GENERATED_SIZE_BYTES = 144160
 CURRENT_MLX_FFT_GENERATED_SHA256 = (
-    "33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37"
+    "4e153dfb10563e6530cf7660451317e0e500700a4531ad7d565e1bfbe31ea468"
 )
-CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 175427
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 175436
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
-    "3c39d68f34a60890fca97c2f705cc4e3f9590f0e38b0c895a2074c54d07b5c06"
+    "1b7abf82bf713abc5640208cc0606232b228f683473f603debcb8898954a1f26"
 )
-CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 116561
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 120398
 MLX_FFT_SIZE = 256
 FFT_OUTPUT_GUARDS = [777.25 + index for index in range(8)]
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
@@ -414,11 +415,9 @@ def _build_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": generated_sha256,
-    }
-    assert artifact["generatedSizeBytes"] == generated_size_bytes
+    check_generated_artifact(
+        artifact, sha256=generated_sha256, size_bytes=generated_size_bytes
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "concrete",
         "mode": "concrete-crossgl-variant",
@@ -1015,11 +1014,11 @@ def _build_current_opengl_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
-    }
-    assert artifact["generatedSizeBytes"] == CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES
+    check_generated_artifact(
+        artifact,
+        sha256=CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
+        size_bytes=CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES,
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "deferred",
         "mode": "deferred",

@@ -272,6 +272,10 @@ from crosstl.translator.codegen.image_access_contracts import (
     validate_texture_operation_arity,
 )
 from crosstl.translator.codegen.resource_query import ResourceQueryMixin
+from crosstl.translator.codegen.texture_lod_clamp import (
+    TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES,
+)
 from tests.lowering_refusal_helpers import shared_refusal
 
 
@@ -2047,6 +2051,7 @@ def test_texture_sample_shape_classifiers_match_intrinsic_groups():
         TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
         | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
         | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES
     )
     assert TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES == (
         TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES
@@ -2112,6 +2117,7 @@ def test_texture_compare_shape_classifiers_match_intrinsic_groups():
         | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
         | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
         | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES
     )
     assert TEXTURE_COMPARE_NON_PROJECTED_INTRINSIC_NAMES == (
         TEXTURE_COMPARE_INTRINSIC_NAMES - PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
@@ -2563,7 +2569,13 @@ def test_image_load_result_kind_mismatch_requires_numeric_component_kind():
     assert image_load_result_kind_mismatch(None, "float") is None
     assert image_load_result_kind_mismatch("float", "double") is None
     assert image_load_result_kind_mismatch("float", "float") is None
-    assert image_load_result_kind_mismatch("float", "int") == "float"
+    # GLSL 4.60 section 4.1.10 converts int and uint to float, and int to uint, implicitly.
+    assert image_load_result_kind_mismatch("float", "int") is None
+    assert image_load_result_kind_mismatch("float", "uint") is None
+    assert image_load_result_kind_mismatch("uint", "int") is None
+    assert image_load_result_kind_mismatch("int", "float") == "int"
+    assert image_load_result_kind_mismatch("int", "uint") == "int"
+    assert image_load_result_kind_mismatch("uint", "float") == "uint"
 
 
 def test_image_load_result_shape_mismatch_matches_component_rules():

@@ -1,5 +1,10 @@
+import json
+import shutil
 from unittest import mock
 
+import pytest
+
+import crosstl
 from crosstl.formatter import (
     CodeFormatter,
     ShaderLanguage,
@@ -331,3 +336,69 @@ def test_format_shader_code():
         mock_instance.format_code.assert_called_with(
             "code", ShaderLanguage.HLSL, "output.hlsl"
         )
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_base_style"),
+    [
+        (ShaderLanguage.HLSL, "Microsoft"),
+        (ShaderLanguage.GLSL, "Google"),
+        (ShaderLanguage.METAL, "LLVM"),
+        (ShaderLanguage.SLANG, "Microsoft"),
+        (ShaderLanguage.RUST, "LLVM"),
+        (ShaderLanguage.CUDA, "Google"),
+        (ShaderLanguage.HIP, "Google"),
+    ],
+)
+def test_clang_formatter_disables_include_sorting(
+    monkeypatch, language, expected_base_style
+):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return mock.MagicMock(returncode=0)
+
+    monkeypatch.setattr("crosstl.formatter.subprocess.run", run)
+    formatter = CodeFormatter(clang_format_path="clang-format")
+    formatter.format_code("void main() {}\n", language=language)
+
+    style = json.loads(
+        next(arg[len("-style=") :] for arg in commands[0] if arg.startswith("-style="))
+    )
+    assert style == {
+        "BasedOnStyle": expected_base_style,
+        "SortIncludes": False,
+    }
+
+
+@pytest.mark.parametrize("backend", ["hip", "cuda"])
+def test_formatted_translation_preserves_generated_include_order(tmp_path, backend):
+    if shutil.which("clang-format") is None:
+        pytest.skip("clang-format is not installed")
+
+    probe = tmp_path / "probe.cgl"
+    probe.write_text(
+        """shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+        }
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    unformatted = crosstl.translate(str(probe), backend=backend, format_output=False)
+    formatted = crosstl.translate(str(probe), backend=backend, format_output=True)
+
+    unformatted_includes = [
+        line for line in unformatted.splitlines() if line.startswith("#include ")
+    ]
+    formatted_includes = [
+        line for line in formatted.splitlines() if line.startswith("#include ")
+    ]
+    assert unformatted_includes
+    assert formatted_includes == unformatted_includes

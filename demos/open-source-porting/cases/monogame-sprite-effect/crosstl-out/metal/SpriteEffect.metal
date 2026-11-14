@@ -4,8 +4,8 @@ using namespace metal;
 
 struct VSOutput {
     float4 position [[position]];
-    float4 color [[attribute(0)]];
-    float2 texCoord [[attribute(5)]];
+    float4 color [[user(COLOR0)]];
+    float2 texCoord [[user(TEXCOORD0)]];
 };
 // Constant Buffers
 struct HlslProgramConstants {
@@ -14,7 +14,7 @@ struct HlslProgramConstants {
 // Vertex Shader
 struct SpriteVertexShader_Input {
     float4 position [[attribute(0)]];
-    float4 color [[attribute(1)]];
+    float4 color [[attribute(13)]];
     float2 texCoord [[attribute(5)]];
 };
 
@@ -30,6 +30,6 @@ vertex VSOutput SpriteVertexShader(SpriteVertexShader_Input _crossglInput [[stag
 }
 
 // Fragment Shader
-fragment float4 SpritePixelShader(VSOutput input [[stage_in]], constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]], texture2d<float> Texture [[texture(0)]]) {
-    return Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord) * input.color;
+fragment float4 SpritePixelShader(VSOutput input [[stage_in]], constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]], texture2d<float> Texture [[texture(0)]], sampler TextureSampler [[sampler(0)]]) {
+    return Texture.sample(TextureSampler, input.texCoord) * input.color;
 }

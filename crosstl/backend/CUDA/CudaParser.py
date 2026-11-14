@@ -1,10 +1,13 @@
 """CUDA Parser Implementation"""
 
+from crosstl.translator.refusals import CudaSyntaxError
+
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
     AtomicOperationNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CastNode,
@@ -40,6 +43,7 @@ from .CudaAst import (
     VariableNode,
     WhileNode,
 )
+from .local_memory_spaces import refuse_local_memory_space
 
 
 class CudaParser:
@@ -371,6 +375,7 @@ class CudaParser:
         self.namespace_aliases = {}
         self.struct_names = self.collect_struct_names()
         self.user_function_names = self.collect_user_function_names()
+        self.block_depth = 0
 
     def collect_struct_names(self):
         names = set()
@@ -1125,6 +1130,9 @@ class CudaParser:
         return index
 
     def eat(self, expected_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if expected_type == "EOF" and self.current_token[0] == "EOF":
+            raise CudaSyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -1134,7 +1142,9 @@ class CudaParser:
                 self.current_token = ("EOF", "")
             return token
         else:
-            raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
+            raise CudaSyntaxError(
+                f"Expected {expected_type}, got {self.current_token[0]}"
+            )
 
     def is_function_name_token(self, token=None):
         token = token or self.current_token
@@ -1187,7 +1197,7 @@ class CudaParser:
     def consume_function_name(self):
         if not self.is_function_name_token():
             token_type = self.current_token[0] if self.current_token else "EOF"
-            raise SyntaxError(f"Expected function name, got {token_type}")
+            raise CudaSyntaxError(f"Expected function name, got {token_type}")
 
         if self.current_token == ("IDENTIFIER", "operator"):
             return self.consume_operator_function_name()
@@ -1207,7 +1217,7 @@ class CudaParser:
             self.eat("RPAREN")
             return f"{name}()"
         if self.current_token[0] not in self.OVERLOADABLE_OPERATOR_TOKENS:
-            raise SyntaxError(
+            raise CudaSyntaxError(
                 f"Expected overloaded operator, got {self.current_token[0]}"
             )
 
@@ -1420,12 +1430,14 @@ class CudaParser:
         if self.current_token[0] == "IDENTIFIER":
             alias_name = self.eat("IDENTIFIER")[1]
         if not alias_name:
-            raise SyntaxError("Expected typedef struct alias name")
+            raise CudaSyntaxError("Expected typedef struct alias name")
 
         self.eat("SEMICOLON")
         self.type_aliases.add(alias_name)
         self.struct_names.add(alias_name)
-        return StructNode(alias_name, members, attributes=attributes)
+        return self.mark_union(
+            StructNode(alias_name, members, attributes=attributes), aggregate_type
+        )
 
     def parse_typedef_enum_alias(self):
         self.eat("ENUM")
@@ -1459,7 +1471,7 @@ class CudaParser:
         if self.current_token[0] == "IDENTIFIER":
             alias_name = self.eat("IDENTIFIER")[1]
         if not alias_name:
-            raise SyntaxError("Expected typedef enum alias name")
+            raise CudaSyntaxError("Expected typedef enum alias name")
 
         self.eat("SEMICOLON")
         for name in {tag_name, alias_name}:
@@ -1894,7 +1906,7 @@ class CudaParser:
         self.parse_alignment_attributes()
         self.skip_gnu_attributes()
 
-        self.eat(self.current_token[0])
+        aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
 
         tag_name = None
@@ -1931,7 +1943,11 @@ class CudaParser:
             tag_name = f"{prefix}_{first_name}_layout"
 
         self.struct_names.add(tag_name)
-        nodes = [StructNode(tag_name, members, attributes=attributes)]
+        nodes = [
+            self.mark_union(
+                StructNode(tag_name, members, attributes=attributes), aggregate_type
+            )
+        ]
         for name, array_suffix in declarators:
             vtype = f"{tag_name}{array_suffix}"
             if "__shared__" in qualifiers:
@@ -1952,8 +1968,14 @@ class CudaParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
+    @staticmethod
+    def mark_union(node, aggregate_type):
+        """``node`` with ``is_union`` set when it was declared with ``union``, whose members share storage."""
+        node.is_union = str(aggregate_type) == "union"
+        return node
+
     def parse_struct(self):
-        self.eat(self.current_token[0])
+        aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
         name = self.parse_name_component()
         if self.current_token[0] == "LESS_THAN":
@@ -1961,7 +1983,9 @@ class CudaParser:
         self.struct_names.add(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return StructNode(name, [], attributes=attributes)
+            return self.mark_union(
+                StructNode(name, [], attributes=attributes), aggregate_type
+            )
         if self.current_token[0] == "COLON":
             self.skip_struct_inheritance_clause()
         self.eat("LBRACE")
@@ -1969,7 +1993,9 @@ class CudaParser:
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
-        return StructNode(name, members, attributes=attributes)
+        return self.mark_union(
+            StructNode(name, members, attributes=attributes), aggregate_type
+        )
 
     def skip_struct_inheritance_clause(self):
         self.eat("COLON")
@@ -3054,7 +3080,7 @@ class CudaParser:
         while depth > 0:
             token_type, token_value = self.current_token
             if token_type == "EOF":
-                raise SyntaxError("Unterminated decltype type")
+                raise CudaSyntaxError("Unterminated decltype type")
             if token_type == "LPAREN":
                 depth += 1
                 parts.append(token_value)
@@ -3160,6 +3186,8 @@ class CudaParser:
 
         var = VariableNode(vtype, name, value, qualifiers)
 
+        if self.block_depth > 0:
+            refuse_local_memory_space(qualifiers, name)
         if "__shared__" in qualifiers:
             return self.create_shared_memory_node(vtype, name, qualifiers)
         elif "__constant__" in qualifiers:
@@ -3228,6 +3256,8 @@ class CudaParser:
         self.skip_bitfield_width()
         value = self.parse_variable_initializer(vtype)
 
+        if self.block_depth > 0:
+            refuse_local_memory_space(declarator_qualifiers, name)
         if "__shared__" in declarator_qualifiers:
             return self.create_shared_memory_node(vtype, name, declarator_qualifiers)
         if "__constant__" in declarator_qualifiers:
@@ -3373,17 +3403,27 @@ class CudaParser:
             elif self.current_token[0] != terminator:
                 break
 
+    def parse_scoped_statement(self):
+        """A statement of a block or a ``case``; a nested ``{ ... }`` keeps its own scope as a ``BlockNode``."""
+        if self.current_token[0] == "LBRACE":
+            return BlockNode(self.parse_block())
+        return self.parse_statement()
+
     def parse_block(self):
         self.eat("LBRACE")
         statements = []
 
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            stmt = self.parse_statement()
-            if stmt:
-                if isinstance(stmt, list):
-                    statements.extend(stmt)
-                else:
-                    statements.append(stmt)
+        self.block_depth += 1
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                stmt = self.parse_scoped_statement()
+                if stmt:
+                    if isinstance(stmt, list):
+                        statements.extend(stmt)
+                    else:
+                        statements.append(stmt)
+        finally:
+            self.block_depth -= 1
 
         self.eat("RBRACE")
         return statements
@@ -3700,7 +3740,7 @@ class CudaParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != "RBRACKET":
-                raise SyntaxError(
+                raise CudaSyntaxError(
                     f"Expected COMMA or RBRACKET, got {self.current_token[0]}"
                 )
         self.eat("RBRACKET")
@@ -3960,19 +4000,19 @@ class CudaParser:
                 self.eat("COLON")
                 body = []
                 while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
-                    body.append(self.parse_statement())
+                    body.append(self.parse_scoped_statement())
                 case = CaseNode(value, body)
                 cases.append(case)
                 ordered_cases.append(case)
             elif self.current_token[0] == "DEFAULT":
                 if seen_default:
-                    raise SyntaxError("duplicate default label in switch")
+                    raise CudaSyntaxError("duplicate default label in switch")
                 seen_default = True
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_case = []
                 while self.current_token[0] not in ["CASE", "RBRACE"]:
-                    default_case.append(self.parse_statement())
+                    default_case.append(self.parse_scoped_statement())
                 ordered_cases.append(CaseNode(None, default_case))
             else:
                 self.eat(self.current_token[0])
@@ -4338,7 +4378,7 @@ class CudaParser:
             return member
         if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
             return self.parse_name_component()
-        raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+        raise CudaSyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
 
     def parse_qualified_name_member(self):
         if self.current_token[0] == "TEMPLATE":
@@ -4351,7 +4391,7 @@ class CudaParser:
 
     def parse_name_component(self):
         if self.current_token[0] not in self.NAME_COMPONENT_TOKENS:
-            raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+            raise CudaSyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
 
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -4721,7 +4761,7 @@ class CudaParser:
         elif self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         else:
-            raise SyntaxError(
+            raise CudaSyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
 
@@ -4837,7 +4877,7 @@ class CudaParser:
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
                 elif self.current_token[0] != "RPAREN":
-                    raise SyntaxError(
+                    raise CudaSyntaxError(
                         f"Expected COMMA or RPAREN in lambda parameters, got {self.current_token[0]}"
                     )
             self.eat("RPAREN")
@@ -4900,7 +4940,7 @@ class CudaParser:
         try:
             param_type = self.parse_type()
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError("Expected lambda parameter name")
+                raise CudaSyntaxError("Expected lambda parameter name")
             param_name = self.eat("IDENTIFIER")[1]
             param_type += self.parse_array_suffix()
             self.skip_parameter_default()
@@ -4981,7 +5021,7 @@ class CudaParser:
 
         raw = self.format_lambda_raw_tokens(tokens).strip()
         if not raw:
-            raise SyntaxError("Expected lambda parameter")
+            raise CudaSyntaxError("Expected lambda parameter")
         return raw
 
     def parse_lambda_block_body(self):
@@ -5034,7 +5074,7 @@ class CudaParser:
                 continue
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated lambda block body")
+        raise CudaSyntaxError("Unterminated lambda block body")
 
     def consume_balanced_lambda_tokens(self, open_token, close_token):
         depth = 0
@@ -5050,7 +5090,7 @@ class CudaParser:
                 continue
             self.eat(token_type)
 
-        raise SyntaxError(f"Unterminated lambda {open_token}")
+        raise CudaSyntaxError(f"Unterminated lambda {open_token}")
 
     def format_lambda_raw_tokens(self, tokens):
         text = ""
@@ -5251,11 +5291,13 @@ class CudaParser:
         ):
             return False
 
+        # ``(b) * r``, ``(b) & r``, ``(b) + r`` and ``(b) - r`` are binary operations unless ``b`` names a type.
         if (
             not self.is_identifier_type_name(identifier_name)
             and not saw_declarator_marker
             and operand_index < len(self.tokens)
-            and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
+            and self.tokens[operand_index][0]
+            in {"MULTIPLY", "BITWISE_AND", "PLUS", "MINUS"}
         ):
             return False
 
@@ -5407,4 +5449,9 @@ class CudaParser:
             "xor": "^",
             "xor_eq": "^=",
         }
-        return alternative_operators.get(self.current_token[1], self.current_token[1])
+        value = self.current_token[1]
+        # An ISO C++ alternative token (``and``, ``not_eq``) is spelled as its operator; any other operator token
+        # is already the operator.
+        if value in alternative_operators:
+            return alternative_operators[value]
+        return value

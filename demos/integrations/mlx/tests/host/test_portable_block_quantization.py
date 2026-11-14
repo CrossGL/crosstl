@@ -220,6 +220,7 @@ def test_block_package_recipe_uses_the_pinned_source_and_explicit_profiles(
         assert config.workgroup_size == (group, 1, 1)
         options = config.source_options["metal"]
         assert options["binary32_multiplication_profile"] == "rne-flush"
+        assert options["binary32_comparison_profile"] == "flush-subnormals"
         assert options["binary32_log2_operand_profile"] == "flush-subnormals"
         assert options["binary32_log2_accuracy_profile"] == "portable-finite"
         if target != "metal":
@@ -306,7 +307,7 @@ def test_block_ci_requires_native_execution_in_existing_platform_jobs():
         "opengl",
         "directx",
     }
-    assert job["timeout-minutes"] == 355
+    assert job["timeout-minutes"] == 360
     steps = job["steps"]
     step = next(
         item
@@ -368,6 +369,10 @@ def test_block_toolchains_require_exact_sources_and_nonempty_modules(
     record = json.loads((output / "entry.json").read_text())
     assert record["status"] == ("failed" if fault else "passed")
     assert record["steps"][0]["stdout"] == "output"
+    # The compiler reads a short copy of the verified bytes, never the
+    # deeply nested package path.
+    assert str(output / "entry") in calls[0] and str(source) not in calls[0]
+    assert (output / "entry").read_text() == "void main() {}"
     if target == "metal":
         assert "-Werror" in calls[0] and "-fno-fast-math" in calls[0]
     elif target == "directx":

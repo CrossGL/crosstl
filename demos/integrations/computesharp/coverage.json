@@ -1,0 +1,273 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-contract",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "categories": {
+    "required-gpu": "Portable compute or resource test. It must pass on the original Windows WARP baseline and through the live host adapter on every translated target profile.",
+    "cpu-only": "Host-side test without device execution. It runs with every build and is never counted as translated GPU execution.",
+    "windows-specific": "Direct3D 12, DXGI, DXC/DXIL or COM interop test. It is retained in the original Windows baseline and not executed on translated targets."
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "target": "directx",
+      "os": "windows",
+      "device": "Direct3D 12 WARP adapter",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "optional-hardware"
+      },
+      "capabilities": {
+        "fp64": true,
+        "rw-texture-rgb32": false
+      }
+    },
+    "metal-apple-gpu": {
+      "role": "translated-target",
+      "target": "metal",
+      "os": "macos",
+      "device": "System default Metal device",
+      "execution": "hardware",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "execute"
+      },
+      "capabilities": {
+        "fp64": false,
+        "rw-texture-rgb32": false
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "role": "translated-target",
+      "target": "opengl",
+      "os": "linux",
+      "device": "Mesa llvmpipe through EGL, OpenGL 4.5 core",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "execute"
+      },
+      "capabilities": {
+        "fp64": true,
+        "rw-texture-rgb32": false
+      }
+    }
+  },
+  "deviceRowPolicy": "Translated targets expose one device. The test adapter maps both upstream Device values to it, so every upstream row executes once per target profile and reports the actual device and whether it is hardware or software. The original baseline executes WARP rows; Discrete rows need a hardware adapter and may be inconclusive on hosted runners.",
+  "capabilities": {
+    "fp64": {
+      "description": "Double-precision shader arithmetic. Metal Shading Language has no double type; OpenGL 4.0 core and later provide it (verified at runtime, never assumed).",
+      "gates": [
+        {
+          "method": "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer_DoublePrecision",
+          "runsWhenAvailable": true
+        },
+        {
+          "method": "ComputeSharp.Tests.ShaderRewriterTests.NanAndInfinite",
+          "runsWhenAvailable": true
+        },
+        {
+          "method": "ComputeSharp.Tests.ShaderRewriterTests.DoubleConstantsInShaderConstantFields",
+          "runsWhenAvailable": true
+        },
+        {
+          "method": "ComputeSharp.Tests.BufferTests.Dispatch_Buffer_DoublePrecision_ThrowsExceptionIfUnsupported",
+          "runsWhenAvailable": false
+        },
+        {
+          "method": "ComputeSharp.Tests.BufferTests.Dispatch_TransferBuffer_DoublePrecision_ThrowsExceptionIfUnsupported",
+          "runsWhenAvailable": false
+        }
+      ]
+    },
+    "rw-texture-rgb32": {
+      "description": "Typed read-write textures with three 32-bit channels. DXGI R32G32B32 formats have no typed UAV support, Metal has no three-channel 32-bit pixel formats, and OpenGL image load/store has no three-channel formats. Every other ComputeSharp read-write texture element type is required on every profile.",
+      "gates": [
+        {
+          "method": "ComputeSharp.Tests.ComputeContextTests.Clear_ReadWriteTexture2D",
+          "typeArguments": ["ComputeSharp.Float3", "ComputeSharp.Int3", "ComputeSharp.UInt3"],
+          "runsWhenAvailable": true
+        },
+        {
+          "method": "ComputeSharp.Tests.ComputeContextTests.Clear_ReadWriteTexture3D",
+          "typeArguments": ["ComputeSharp.Float3", "ComputeSharp.Int3", "ComputeSharp.UInt3"],
+          "runsWhenAvailable": true
+        }
+      ]
+    }
+  },
+  "adaptations": {
+    "reflection-services": {
+      "description": "These tests call ReflectionServices.GetShaderInfo, which reflects DXIL bytecode through DXC. Off Windows the adapter reports the generated HLSL source and whether the executed target artifact requires double precision; DXIL statistics are unavailable and throw. Every upstream assertion of these tests is retained.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+        "ComputeSharp.Tests.ShaderRewriterTests.KnownNamedIntrinsic_ConditionalSelect",
+        "ComputeSharp.Tests.ShaderRewriterTests.UnsignedRightShiftOperators",
+        "ComputeSharp.Tests.ShadersTests.ColorfulInfinity",
+        "ComputeSharp.Tests.ShadersTests.ContouredLayers",
+        "ComputeSharp.Tests.ShadersTests.ExtrudedTruchetPattern",
+        "ComputeSharp.Tests.ShadersTests.FourColorGradient",
+        "ComputeSharp.Tests.ShadersTests.FractalTiling",
+        "ComputeSharp.Tests.ShadersTests.HelloWorld",
+        "ComputeSharp.Tests.ShadersTests.MengerJourney",
+        "ComputeSharp.Tests.ShadersTests.Octagrams",
+        "ComputeSharp.Tests.ShadersTests.ProteanClouds",
+        "ComputeSharp.Tests.ShadersTests.PyramidPattern",
+        "ComputeSharp.Tests.ShadersTests.TerracedHills",
+        "ComputeSharp.Tests.ShadersTests.TriangleGridContouring",
+        "ComputeSharp.Tests.ShadersTests.TwoTiledTruchet"
+      ]
+    },
+    "image-codec": {
+      "description": "The original runtime decodes and encodes images with WIC (Windows COM). Off Windows the adapter uses the ImageSharp version already pinned by the upstream test project. Texture allocation, upload, copies and readback still execute on the target device.",
+      "classes": ["ComputeSharp.Tests.ImagingTests"]
+    }
+  },
+  "classes": {
+    "ComputeSharp.Tests.BufferTests": {
+      "category": "required-gpu",
+      "reason": "Buffer allocation, transfers, range copies, disposal guards and buffer dispatches."
+    },
+    "ComputeSharp.Tests.ComputeContextTests": {
+      "category": "required-gpu",
+      "reason": "Batched and asynchronous dispatch ordering, barriers, clears, fills and resource state transitions."
+    },
+    "ComputeSharp.Tests.DispatchTests": {
+      "category": "required-gpu",
+      "reason": "Dispatch dimensions, thread/group/grid identifiers and group-shared memory."
+    },
+    "ComputeSharp.Tests.GlobalUsingDirectivesTests": {
+      "category": "cpu-only",
+      "reason": "Compares C# type aliases produced by the global using generator; no device."
+    },
+    "ComputeSharp.Tests.HlslPrimitiveTests": {
+      "category": "cpu-only",
+      "reason": "Host-side HLSL matrix primitive conversions; no device."
+    },
+    "ComputeSharp.Tests.IPixelShaderTests": {
+      "category": "required-gpu",
+      "reason": "Dispatches a pixel-style compute shader over a texture."
+    },
+    "ComputeSharp.Tests.ImageProcessingTests": {
+      "category": "required-gpu",
+      "reason": "Multi-dispatch Gaussian and bokeh blur image processing compared with reference images."
+    },
+    "ComputeSharp.Tests.ImagingTests": {
+      "category": "required-gpu",
+      "reason": "Texture upload and readback of decoded images in Rgba32, Bgra32 and R8 formats, including transfer textures and argument guards."
+    },
+    "ComputeSharp.Tests.InitializationTests": {
+      "category": "required-gpu",
+      "reason": "Default device availability and a dispatch on every enumerated or queried device."
+    },
+    "ComputeSharp.Tests.InteropServicesTests": {
+      "category": "windows-specific",
+      "reason": "Retrieves ID3D12Device and ID3D12Resource COM pointers and compares DXGI adapter LUIDs."
+    },
+    "ComputeSharp.Tests.PixelTypeTests": {
+      "category": "cpu-only",
+      "reason": "Host-side packed pixel conversions; no device."
+    },
+    "ComputeSharp.Tests.ResourceDimensionsTests": {
+      "category": "required-gpu",
+      "reason": "Buffer and texture dimension queries inside shaders."
+    },
+    "ComputeSharp.Tests.ShaderCompilerTests": {
+      "category": "windows-specific",
+      "reason": "Reflects the DXIL produced by DXC through ReflectionServices; these shaders are never dispatched."
+    },
+    "ComputeSharp.Tests.ShaderMembersTests": {
+      "category": "required-gpu",
+      "reason": "Static constants, globals and boolean fields in dispatched shaders."
+    },
+    "ComputeSharp.Tests.ShaderRewriterTests": {
+      "category": "required-gpu",
+      "reason": "Numerical checks of rewritten operators, conversions, intrinsics, matrices and interlocked operations."
+    },
+    "ComputeSharp.Tests.ShadersTests": {
+      "category": "required-gpu",
+      "reason": "Compute and pixel-style shaders rendered into textures and compared with reference images."
+    },
+    "ComputeSharp.Tests.Texture1DTests": {
+      "category": "required-gpu",
+      "reason": "1D texture allocation, typed and normalized formats, transfers, views and dispatches."
+    },
+    "ComputeSharp.Tests.Texture2DTests": {
+      "category": "required-gpu",
+      "reason": "2D texture allocation, typed and normalized formats, transfers, views, sampling and dispatches."
+    },
+    "ComputeSharp.Tests.Texture3DTests": {
+      "category": "required-gpu",
+      "reason": "3D texture allocation, typed and normalized formats, transfers, views and dispatches."
+    },
+    "ComputeSharp.Tests.ThreadGroupSizeTests": {
+      "category": "cpu-only",
+      "reason": "Reads generated thread-group descriptor constants; no device."
+    },
+    "ComputeSharp.Tests.TransferBufferTests": {
+      "category": "required-gpu",
+      "reason": "Upload and readback buffer allocation and copies."
+    },
+    "ComputeSharp.Tests.TransferTexture1DTests": {
+      "category": "required-gpu",
+      "reason": "Upload and readback 1D texture allocation and copies."
+    },
+    "ComputeSharp.Tests.TransferTexture2DTests": {
+      "category": "required-gpu",
+      "reason": "Upload and readback 2D texture allocation and copies."
+    },
+    "ComputeSharp.Tests.TransferTexture3DTests": {
+      "category": "required-gpu",
+      "reason": "Upload and readback 3D texture allocation and copies."
+    },
+    "ComputeSharp.Tests.UserDefinedTypeConstructorTests": {
+      "category": "required-gpu",
+      "reason": "User-defined struct constructors in dispatched shaders."
+    },
+    "ExternalNamespace.ShaderCompilerTestsInExternalNamespace": {
+      "category": "windows-specific",
+      "reason": "Reflects the DXIL of a shader declared outside the ComputeSharp namespace through DXC."
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.ComputeContextTests.DefaultContext_Dispose_ThrowsException": {
+      "category": "cpu-only",
+      "reason": "Disposing default(ComputeContext) throws before any device is used."
+    },
+    "ComputeSharp.Tests.ComputeContextTests.DefaultContext_DisposeAsync_ThrowsException": {
+      "category": "cpu-only",
+      "reason": "Asynchronously disposing default(ComputeContext) throws before any device is used."
+    },
+    "ComputeSharp.Tests.ComputeContextTests.DefaultContext_For_ThrowsException": {
+      "category": "cpu-only",
+      "reason": "Dispatching through default(ComputeContext) throws before any device is used."
+    },
+    "ComputeSharp.Tests.ComputeContextTests.DefaultContext_GetGraphicsDevice_ThrowsException": {
+      "category": "cpu-only",
+      "reason": "Reading the device of default(ComputeContext) throws; no device."
+    },
+    "ComputeSharp.Tests.InitializationTests.DeviceInfo": {
+      "category": "windows-specific",
+      "reason": "Asserts the DXGI adapter LUID and the D3D12 wave lane metadata behind ComputeUnits and WavefrontSize."
+    },
+    "ComputeSharp.Tests.ShaderRewriterTests.CompileExplicitEntryPointMethodComputeShader": {
+      "category": "windows-specific",
+      "reason": "Only reflects DXC output through ReflectionServices; no dispatch."
+    },
+    "ComputeSharp.Tests.ShaderRewriterTests.CompileExplicitEntryPointMethodPixelShader": {
+      "category": "windows-specific",
+      "reason": "Only reflects DXC output through ReflectionServices; no dispatch."
+    },
+    "ComputeSharp.Tests.ShaderRewriterTests.KnownNamedIntrinsic_AndOr": {
+      "category": "windows-specific",
+      "reason": "Only reflects DXC output through ReflectionServices; no dispatch."
+    }
+  },
+  "history": [
+    {
+      "date": "2026-10-17",
+      "change": "Initial freeze of the 40dbe40 inventory before translator or runtime fixes. Capability gates follow the outcomes of the first complete original Windows WARP run."
+    }
+  ]
+}

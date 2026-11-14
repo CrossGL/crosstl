@@ -25,7 +25,7 @@ from demos.integrations.mlx.tests.kernels.test_current_scan import (
 from demos.integrations.mlx.tests.kernels.test_current_scan import (
     scan_package as scan_package,
 )
-from tools import ci_coverage
+from tests import workflow_text
 
 EXTREMA = tuple(
     (operation, dtype) for operation in ("min", "max") for dtype in ("float32", "int32")
@@ -108,8 +108,8 @@ def test_complete_extrema_scan_executes_natively(
 
 def test_ci_requires_extrema_scan_execution_on_each_native_platform():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
-    step = ci_coverage.workflow_step_section(job, "Validate pinned extrema scans")
+    job = workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
+    step = workflow_text.workflow_step_section(job, "Validate pinned extrema scans")
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     for platform, target in (
@@ -127,7 +127,7 @@ def test_ci_requires_extrema_scan_execution_on_each_native_platform():
             ("xdist_group", (f"extrema-width-{width}",))
         ]
     assert "--basetemp=" in step and "--junitxml=" in step
-    upload = ci_coverage.workflow_step_section(job, "Upload extrema scan evidence")
+    upload = workflow_text.workflow_step_section(job, "Upload extrema scan evidence")
     assert "if: always()" in upload and "if-no-files-found: error" in upload
     assert "path: mlx-extrema-scan-results" in upload
     assert "include-hidden-files: true" in upload

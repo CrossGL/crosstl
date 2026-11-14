@@ -31,6 +31,7 @@ from demos.integrations.mlx.tests.kernels.test_copy_complete_metal_roundtrip imp
     _expected_materializations,
     _expected_specialization_count,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 REQUIRE_COPY_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_COPY_DIRECTX_TRANSLATION"
 COPY_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_COPY_DIRECTX_SHARD_INDEX"
@@ -46,10 +47,10 @@ COPY_DIRECTX_CONTRACT_PATH = (
     / "copy.directx-translation.json"
 )
 COPY_DIRECTX_CONTRACT_SHA256 = (
-    "5cca4b13412af0802c8ebace0ff003d6babff105fb07e0131eff88b6ec5e7c8a"
+    "126a418c5745015131000e1a594f0667e563df85446027530aefaf5caf101008"
 )
 COPY_DIRECTX_CONTRACT_SIZE_BYTES = 876806
-COPY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 5852576
+COPY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 6021332
 COPY_DIRECTX_GENERATED_SIZE_MINIMUM = ("s_copybool_bool_", 1513)
 COPY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn2_copyint64float16", 5833)
 CONTRACT_RESOURCE_ABI_FIELDS = (
@@ -575,11 +576,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_COPY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "CSMain",

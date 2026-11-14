@@ -181,7 +181,9 @@ def _check(actual, expected):
     return 0
 
 
-def _run_native(tmp_path, source, inputs, expected):
+def _run_native(
+    tmp_path, source, inputs, expected, *, metal_compile_flags=("-fno-fast-math",)
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native binary grouping")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
@@ -200,7 +202,7 @@ def _run_native(tmp_path, source, inputs, expected):
             expected,
             metal_entry="grouping",
             check_outputs=_check,
-            metal_compile_flags=("-fno-fast-math",),
+            metal_compile_flags=metal_compile_flags,
             directx_compile_flags=("-Gis",),
         )
     (tmp_path / "evidence.json").write_text(
@@ -259,6 +261,144 @@ def test_mixed_bitwise_grouping_retains_conversion_order(tmp_path, operator, hig
     _run_native(tmp_path, _mixed_bitwise_source(operator), [1, 0xFFFFFFFF, 0], expected)
 
 
+# Groupings C++ precedence already implies but clang's -Wall rejects under
+# -Werror (-Wlogical-op-parentheses, -Wbitwise-op-parentheses, -Wparentheses),
+# and a conditional condition, which `?:`'s right associativity regroups.
+WARNED_GROUPINGS = (
+    ("bool", "bool", "a || (b && c)"),
+    ("bool", "bool", "(a && b) || c"),
+    ("int", "int", "a | (b & c)"),
+    ("int", "int", "(a & b) | c"),
+    ("int", "int", "a | (b ^ c)"),
+    ("int", "int", "(a ^ b) | c"),
+    ("int", "int", "a ^ (b & c)"),
+    ("int", "int", "(a & b) ^ c"),
+    ("int", "bool", "(a == b) & c"),
+    ("int", "bool", "c | (a < b)"),
+    ("int", "bool", "(a != b) ^ c"),
+    ("int", "int", "(a ? b : 0) ? 5 : 6"),
+)
+
+
+@pytest.mark.parametrize("operand,result,expression", WARNED_GROUPINGS)
+def test_metal_target_keeps_groupings_clang_warns_about(operand, result, expression):
+    third = "bool" if result == "bool" and operand != result else operand
+    source = f"""shader Grouped {{
+        {result} grouped({operand} a, {operand} b, {third} c) {{
+            return {expression};
+        }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(source))
+    assert f"return {expression};" in generated
+
+
+def test_metal_target_omits_redundant_logical_and_arithmetic_parentheses():
+    source = """shader Grouped {
+        bool logical(bool a, bool b, bool c) { return (a || b) || (c && a); }
+        int arithmetic(int a, int b, int c) { return (a * b) + (c << 1); }
+        int nested(int a, int b, int c) { return a ? (b ? 7 : 8) : (c ? 9 : 10); }
+    }"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(source))
+    assert "return a || b || (c && a);" in generated
+    assert "return a * b + (c << 1);" in generated
+    assert "return a ? b ? 7 : 8 : c ? 9 : 10;" in generated
+
+
+LOGICAL_CASES = (
+    (0, 0, 0),
+    (1, 0, 4),
+    (2, 3, 4),
+    (0, 3, 4),
+    (1, 5, 0),
+    (2, 0, 0),
+    (0xFFFFFFFF, 0x0F0F0F0F, 0x00FF00FF),
+    (0, 7, 4),
+)
+MASK = 0xFFFFFFFF
+LOGICAL_EXPRESSIONS = (
+    ("(x ? y : 0u) ? 5u : 6u", lambda x, y, z: 5 if (y if x else 0) else 6),
+    ("x ? (y ? 7u : 8u) : 9u", lambda x, y, z: (7 if y else 8) if x else 9),
+    (
+        "(x > 1u || (y == 3u && z == 4u)) ? 1u : 0u",
+        lambda x, y, z: int(x > 1 or (y == 3 and z == 4)),
+    ),
+    (
+        "((x > 1u || y == 3u) && z == 4u) ? 1u : 0u",
+        lambda x, y, z: int((x > 1 or y == 3) and z == 4),
+    ),
+    ("(x ^ y) | (y & z)", lambda x, y, z: (x ^ y) | (y & z)),
+    ("x ^ (y & z)", lambda x, y, z: x ^ (y & z)),
+    ("(x | y) & z", lambda x, y, z: (x | y) & z),
+    ("uint((x == y) | (z != 0u))", lambda x, y, z: int(x == y or z != 0)),
+    ("(x + y) << (z & 3u)", lambda x, y, z: ((x + y) << (z & 3)) & MASK),
+)
+
+
+def _logical_source():
+    count = len(LOGICAL_EXPRESSIONS)
+    statements = "\n".join(
+        f"    results[{count}u * i + {index}u] = {expression};"
+        for index, (expression, _) in enumerate(LOGICAL_EXPRESSIONS)
+    )
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void grouping(device const uint* values [[buffer(0)]],
+                     device uint* results [[buffer(1)]],
+                     uint i [[thread_position_in_grid]]) {{
+    if (i >= {len(LOGICAL_CASES)}u) return;
+    uint x = values[3u * i];
+    uint y = values[3u * i + 1u];
+    uint z = values[3u * i + 2u];
+{statements}
+}}
+"""
+
+
+def _logical_inputs_and_expected():
+    inputs = [word for case in LOGICAL_CASES for word in case]
+    expected = [
+        evaluate(*case) & MASK
+        for case in LOGICAL_CASES
+        for _, evaluate in LOGICAL_EXPRESSIONS
+    ]
+    return inputs, expected + GUARD
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_logical_and_bitwise_grouping_compiles_warning_clean(tmp_path, target):
+    _source_text, generated = _translate_saved(tmp_path, _logical_source(), target)
+    if target == "metal":
+        assert "(x ? y : 0u) ? 5u : 6u" in generated
+        assert "x > 1u || (y == 3u && z == 4u)" in generated
+        assert "(x ^ y) | (y & z)" in generated
+    _compile(
+        generated,
+        target,
+        tmp_path,
+        metal_compile_flags=("-fno-fast-math", "-Wall", "-Wextra"),
+    )
+
+
+def test_logical_and_bitwise_grouping_executes_natively(tmp_path):
+    inputs, expected = _logical_inputs_and_expected()
+    _run_native(
+        tmp_path,
+        _logical_source(),
+        inputs,
+        expected,
+        metal_compile_flags=("-fno-fast-math", "-Wall", "-Wextra"),
+    )
+
+
+def test_logical_oracle_distinguishes_regrouped_conditions():
+    _inputs, expected = _logical_inputs_and_expected()
+    count = len(LOGICAL_EXPRESSIONS)
+    # x=1, y=0: the regrouped `x ? y : (0 ? 5 : 6)` would yield 0.
+    assert expected[count * 1] == 6
+    # x=2, z=0: `(x > 1 || y == 3) && z == 4` would yield 0.
+    assert expected[count * 5 + 2] == 1 and expected[count * 5 + 3] == 0
+
+
 def test_grouping_oracle_distinguishes_associations():
     assert _expected(CASES[0])[:2] == (0x3F800000, 0)
     assert _expected(CASES[1])[2:] == (0x3F800000, 0x3F7FFFFF)
@@ -287,5 +427,5 @@ def test_ci_requires_binary_grouping_without_an_additional_runner():
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_binary_grouping.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 360" in step
     assert "pytest -q -n auto" in step

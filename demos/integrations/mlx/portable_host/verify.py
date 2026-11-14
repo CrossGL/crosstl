@@ -80,6 +80,26 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_logical_xor",
     "test_ops.TestOps.test_isclose",
     "test_ops.TestOps.test_allclose",
+    "test_ops.TestOps.test_reciprocal",
+    "test_ops.TestOps.test_degrees",
+    "test_ops.TestOps.test_radians",
+    "test_ops.TestOps.test_stack",
+    "test_ops.TestOps.test_kron",
+    "test_ops.TestOps.test_stop_gradient",
+    # These evaluate shapes, views and operand validation on the translated
+    # device without launching a kernel.
+    "test_ops.TestOps.test_squeeze_expand",
+    "test_ops.TestOps.test_flatten",
+    "test_ops.TestOps.test_move_swap_axes",
+    "test_ops.TestOps.test_broadcast_arrays",
+    "test_ops.TestOps.test_broadcast_shapes",
+    "test_ops.TestOps.test_issubdtype",
+    "test_ops.TestOps.test_integer_index_protocol",
+    "test_ops.TestOps.test_split_invalid_num_splits",
+    "test_ops.TestOps.test_along_axis_invalid_axis",
+    "test_ops.TestOps.test_cross_invalid_axis",
+    "test_ops.TestOps.test_out_of_bounds_axis_raises_index_error",
+    "test_ops.TestOps.test_squeeze_expand_invalid_axes",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -106,17 +126,16 @@ NEGATIVE_CHECKS = {
     "full-dtype": (
         "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
     ),
-    "full-grid-limit": "65535 groups per axis",
     "full-allocation": "exceeds its allocation",
 }
 REDUCTION_NEGATIVE_CHECKS = {
     "reduce-dtype": "matching float32/int32/uint32",
     "reduce-large-allocation": "storage does not match",
-    "reduce-row-limit": "row and column reductions support at most 65535",
+    "reduce-row-limit": "row reductions support at most 65535",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "No translated reduction variant",
     "reduce-row": "Small-row dispatch requires the pinned MLX source root",
-    "reduce-column": "small-column and long-column reduction plans",
+    "reduce-column": "Small column dispatch requires the pinned MLX source root",
 }
 
 
@@ -202,8 +221,6 @@ def worker(args):
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
                 value = mx.full((3, 5), mx.array(1, dtype=mx.int16))
-            elif args.worker == "full-grid-limit":
-                value = mx.ones((131072,), dtype=mx.float32)
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)
@@ -271,7 +288,7 @@ def worker(args):
     copies = copy_workloads.run(mx, np)
     binary = binary_workloads.run(mx, np)
     save(output / "binary-readbacks.json", binary)
-    binary_workloads.validate(binary)
+    binary_workloads.validate(binary, cpu=args.worker == "cpu")
     casts = cast_workloads.run(mx, np)
     save(output / "cast-readbacks.json", casts)
     cast_workloads.validate(casts)
@@ -358,7 +375,7 @@ def verify_results(result, *, cpu=False):
     unary_workloads.validate(result.get("unary"), cpu=cpu)
     view_workloads.validate(result.get("views"))
     copy_workloads.validate(result.get("copies"))
-    binary_workloads.validate(result.get("binary"))
+    binary_workloads.validate(result.get("binary"), cpu=cpu)
     cast_workloads.validate(result.get("casts"))
     full_workloads.validate(result.get("full"))
     boolean_workloads.validate(result.get("booleans"))

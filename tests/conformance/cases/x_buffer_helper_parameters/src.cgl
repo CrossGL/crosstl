@@ -1,0 +1,28 @@
+// Helpers that take storage buffers as `buffer T name[]` parameters read and write the buffer their caller passes.
+shader BufferHelperParameters {
+    int load(readonly buffer int src[], uint i) {
+        return src[i] * 2 + 5;
+    }
+
+    void store(buffer int dst[], uint i, int v) {
+        dst[i] = v;
+    }
+
+    void bump(buffer int dst[], uint i, int by) {
+        dst[i] = dst[i] + by;
+    }
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        readonly buffer int inp[] @binding(0);
+        buffer int outp[] @binding(1);
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            store(outp, i * 2u, load(inp, i));
+            store(outp, i * 2u + 1u, inp[i]);
+            bump(outp, i * 2u + 1u, 7);
+        }
+    }
+}

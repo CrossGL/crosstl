@@ -7,7 +7,7 @@ struct VertexInput {
     float3 inColor [[attribute(1)]];
 };
 struct VertexOutput {
-    float3 outFragColor [[attribute(0)]];
+    float3 outFragColor [[user(locn0)]];
     float4 gl_Position [[position]];
 };
 // Vertex Shader

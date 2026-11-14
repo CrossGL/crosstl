@@ -72,7 +72,9 @@ def worker(args):
         try:
             mx.eval(
                 mx.random.split(
-                    mx.random.key(42), 65536 if args.worker == "over-limit" else 3
+                    # 65537 word pairs is prime, so no exact portable group fits.
+                    mx.random.key(42),
+                    65537 if args.worker == "over-limit" else 3,
                 )
             )
         except (ValueError, RuntimeError) as error:

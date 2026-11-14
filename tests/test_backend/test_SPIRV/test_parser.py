@@ -29,6 +29,7 @@ from crosstl.backend.SPIRV.VulkanAst import (
     WhileNode,
 )
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
+from crosstl.backend.SPIRV.workgroup_size_import import WorkgroupDimension
 
 
 def parse_code(tokens: List):
@@ -958,12 +959,12 @@ OpDecorate %size BuiltIn WorkgroupSize
 %fn = OpTypeFunction %void
 %uint = OpTypeInt 32 0
 %v3uint = OpTypeVector %uint 3
-%arr = OpTypeArray %uint %total
-%Block = OpTypeStruct %arr
 %width = OpSpecConstant %uint 8
 %height = OpSpecConstant %uint 4
 %one = OpConstant %uint 1
 %total = OpSpecConstantOp %uint IAdd %width %height
+%arr = OpTypeArray %uint %total
+%Block = OpTypeStruct %arr
 %size = OpSpecConstantComposite %v3uint %width %height %one
 %main = OpFunction %void None %fn
 %label = OpLabel
@@ -2140,11 +2141,12 @@ def test_glslang_private_global_variables_parse():
     assert isinstance(output_layout, LayoutNode)
     assert output_layout.variable_name == "outColor"
     assert isinstance(private_color, VariableNode)
-    assert private_color.vtype == "vec4"
+    # Private storage is per invocation: CrossGL's static module-scope variable.
+    assert private_color.vtype == "static vec4"
     assert private_color.name == "privateColor"
     assert isinstance(private_weight, AssignmentNode)
     assert isinstance(private_weight.left, VariableNode)
-    assert private_weight.left.vtype == "float"
+    assert private_weight.left.vtype == "static float"
     assert private_weight.left.name == "privateWeight"
     assert private_weight.right == "1.0"
 
@@ -2331,7 +2333,6 @@ def test_spirv_assembly_specialization_constant_composite_and_op_parse():
         if isinstance(layout, LayoutNode)
     }
     total = layouts["WORKGROUP_TOTAL"]
-    workgroup_size = layouts["gl_WorkGroupSize"]
 
     assert ast.spirv_assembly is True
     assert ast.spirv_spec_constant_ids == [
@@ -2355,17 +2356,14 @@ def test_spirv_assembly_specialization_constant_composite_and_op_parse():
     assert total.declaration.right.op == "+"
     assert total.declaration.right.right == "WORKGROUP_HEIGHT"
 
-    assert workgroup_size.layout_type == "CONST"
-    assert workgroup_size.qualifiers == [("builtin", "WorkgroupSize")]
-    assert workgroup_size.spirv_decorations == [("BuiltIn", ["WorkgroupSize"])]
-    assert workgroup_size.declaration.left.vtype == "const uvec3"
-    assert isinstance(workgroup_size.declaration.right, FunctionCallNode)
-    assert workgroup_size.declaration.right.name == "uvec3"
-    assert workgroup_size.declaration.right.args == [
-        "WORKGROUP_WIDTH",
-        "WORKGROUP_HEIGHT",
-        "1",
-    ]
+    # The specialized WorkgroupSize composite is the gl_WorkGroupSize built-in, not a declared constant, and it
+    # sizes the entry point in place of LocalSize 1 1 1.
+    assert "gl_WorkGroupSize" not in layouts
+    assert ast.functions[0].spirv_workgroup_size == (
+        WorkgroupDimension("8", "0"),
+        WorkgroupDimension("4", "1"),
+        WorkgroupDimension("1"),
+    )
 
 
 def test_glslang_web_comp_barrier_instructions_parse():
@@ -2374,14 +2372,14 @@ def test_glslang_web_comp_barrier_instructions_parse():
     body = ast.functions[0].body
 
     assert ast.spirv_assembly is True
+    # glslang's barrier(), memoryBarrier() and groupMemoryBarrier() (scopes 2/1/2, semantics 264/3400/3400)
+    # import as the CrossGL barriers that cover them.
     assert [stmt.name for stmt in body[:3]] == [
-        "spirvControlBarrier",
-        "spirvMemoryBarrier",
-        "spirvMemoryBarrier",
+        "workgroupBarrier",
+        "memoryBarrier",
+        "groupMemoryBarrier",
     ]
-    assert body[0].args == ["2", "2", "264"]
-    assert body[1].args == ["1", "3400"]
-    assert body[2].args == ["2", "3400"]
+    assert all(stmt.args == [] for stmt in body[:3])
     assert isinstance(body[3], ReturnNode)
 
 
@@ -2400,21 +2398,35 @@ def test_numeric_glsl_std450_extinst_imports_parse_to_builtin():
 def test_glsl_std450_struct_extinst_imports_parse_to_builtins():
     tokens = tokenize_code(SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY)
     ast = parse_code(tokens)
-    assignment = ast.functions[0].body[0]
+    body = ast.functions[0].body
 
+    # Each struct becomes its member-1 local, declared first, and a local holding the call that writes it.
     assert ast.spirv_assembly is True
+    for out_declaration, call_declaration, function, out_name, result_name in (
+        (body[0], body[1], "modf", "modf_parts_whole", "modf_parts_fract"),
+        (
+            body[2],
+            body[3],
+            "frexp",
+            "frexp_parts_exponent",
+            "frexp_parts_significand",
+        ),
+    ):
+        assert isinstance(out_declaration, VariableNode)
+        assert out_declaration.name == out_name
+        assert isinstance(call_declaration, AssignmentNode)
+        assert call_declaration.left.name == result_name
+        assert isinstance(call_declaration.right, FunctionCallNode)
+        assert call_declaration.right.name == function
+        assert [arg.name for arg in call_declaration.right.args] == [
+            "inputValue",
+            out_name,
+        ]
+    assignment = body[4]
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, BinaryOpNode)
-    assert isinstance(assignment.right.left, MemberAccessNode)
-    assert isinstance(assignment.right.left.object, FunctionCallNode)
-    assert assignment.right.left.object.name == "modf"
-    assert assignment.right.left.object.args[0].name == "inputValue"
-    assert assignment.right.left.member == "fractional"
-    assert isinstance(assignment.right.right, MemberAccessNode)
-    assert isinstance(assignment.right.right.object, FunctionCallNode)
-    assert assignment.right.right.object.name == "frexp"
-    assert assignment.right.right.object.args[0].name == "inputValue"
-    assert assignment.right.right.member == "significand"
+    assert assignment.right.left.name == "modf_parts_fract"
+    assert assignment.right.right.name == "frexp_parts_significand"
 
 
 def test_spirv_subgroup_broadcast_and_reduce_parse():
@@ -2456,7 +2468,8 @@ def test_spirv_assembly_uniform_constant_resources_parse():
 
     assert ast.spirv_assembly is True
     assert ast.spirv_types["%img"]["kind"] == "image"
-    assert ast.spirv_types["%img"]["name"] == "sampler2D"
+    # A bare OpTypeImage is Vulkan GLSL's separate texture2D; only the OpTypeSampledImage is a sampler2D.
+    assert ast.spirv_types["%img"]["name"] == "texture2D"
     assert ast.spirv_types["%sampled"]["kind"] == "sampled_image"
     assert ast.spirv_types["%sampled"]["name"] == "sampler2D"
     assert ast.spirv_types["%sampler"]["name"] == "sampler"
@@ -2502,13 +2515,12 @@ def test_spirv_descriptor_indexing_nonuniform_parse():
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, FunctionCallNode)
     assert assignment.right.name == "textureLod"
+    # The separate image and sampler OpSampledImage combines lead the lookup, as CrossGL spells it.
+    assert len(assignment.right.args) == 4
+    assert isinstance(assignment.right.args[1], VariableNode)
+    assert assignment.right.args[1].name == "linearSampler"
 
-    sampled_texture = assignment.right.args[0]
-    assert isinstance(sampled_texture, FunctionCallNode)
-    assert sampled_texture.name == "sampler2D"
-    assert len(sampled_texture.args) == 2
-
-    indexed_texture = sampled_texture.args[0]
+    indexed_texture = assignment.right.args[0]
     assert isinstance(indexed_texture, ArrayAccessNode)
     assert isinstance(indexed_texture.index, FunctionCallNode)
     assert indexed_texture.index.name == "nonuniformEXT"
@@ -2525,7 +2537,7 @@ def test_spirv_implicit_lod_min_lod_offset_parse():
     assert ast.spirv_constants["%min_lod"] == "0.5"
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, FunctionCallNode)
-    assert assignment.right.name == "spirvTextureOffsetMinLod"
+    assert assignment.right.name == "textureOffsetClamp"
     assert len(assignment.right.args) == 4
     assert isinstance(assignment.right.args[0], VariableNode)
     assert assignment.right.args[0].name == "colorTex"
@@ -2891,7 +2903,7 @@ def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_parse():
         "NonSemantic.DebugPrintf"
     )
     assert isinstance(call, FunctionCallNode)
-    assert call.name == "debugPrintfEXT"
+    assert call.name == "printf"
     assert call.args[0] == '"unsigned == %u"'
     assert isinstance(call.args[1], VariableNode)
     assert call.args[1].name == "foo"

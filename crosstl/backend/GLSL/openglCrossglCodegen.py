@@ -3,7 +3,21 @@
 import re
 
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
+from crosstl.translator.codegen.texture_lod_clamp import (
+    TextureLodClampUnsupportedError,
+)
+from crosstl.translator.integer_literals import crossgl_legacy_octal
+from crosstl.translator.refusals import OpenGLSourceRefusal
 
+from ..switch_clauses import ordered_switch_clauses
+from .aggregate_equality import lower_aggregate_equality
+from .block_member_names import (
+    function_variable_names,
+    instance_block_member_names,
+    rename_shadowing_locals,
+)
+from .import_exact_lookups import crossgl_operator, declared_name, folded_operator
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -31,6 +45,11 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .scoped_atomics import import_scoped_atomic_call
+from .shadow_textures import retype_shadow_textures
+from .sparse_textures import import_sparse_texture_call
+from .subgroup_import import import_subgroup_call
+from .unsupported_types import refuse_unsupported_glsl_types
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -38,6 +57,7 @@ except ImportError:
     CROSSGL_KEYWORDS = {}
 
 CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
+ARRAY_VARIABLE_KEY_PREFIX = "[]"
 SHORT_INTEGER_LITERAL_SUFFIX_RE = re.compile(
     r"^(?P<body>(?:0[xX][0-9a-fA-F]+|\d+))(?P<suffix>[uU][sS]|[sS])$"
 )
@@ -98,6 +118,7 @@ class GLSLToCrossGLConverter:
         "perviewnv": "perview",
     }
     VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES = {
+        "devicecoherent": "devicecoherent",
         "workgroupcoherent": "workgroupcoherent",
         "subgroupcoherent": "subgroupcoherent",
         "queuefamilycoherent": "queuefamilycoherent",
@@ -172,38 +193,41 @@ class GLSLToCrossGLConverter:
         "ray_callable",
     }
     RAY_QUERY_SIMPLE_METHODS = {
-        "rayQueryInitializeEXT": "Initialize",
+        # TraceRayInline with the seven rayQueryInitializeEXT operands in place
+        # of DXR's RayDesc.
+        "rayQueryInitializeEXT": "TraceRayInline",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
-        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
-        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGenerateIntersectionEXT": "CommitProceduralPrimitiveHit",
+        "rayQueryConfirmIntersectionEXT": "CommitNonOpaqueTriangleHit",
         "rayQueryGetRayTMinEXT": "RayTMin",
         "rayQueryGetRayFlagsEXT": "RayFlags",
         "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
         "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
-        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
     }
     RAY_QUERY_COMMITTED_METHODS = {
-        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedStatus"),
         "rayQueryGetIntersectionPrimitiveIndexEXT": (
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
         ),
+        # CrossGL follows HLSL: InstanceIndex is the instance's position in the
+        # top-level structure, InstanceID its application-defined custom index.
         "rayQueryGetIntersectionInstanceIdEXT": (
-            "CandidateInstanceID",
-            "CommittedInstanceID",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
         ),
         "rayQueryGetIntersectionGeometryIndexEXT": (
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
         ),
         "rayQueryGetIntersectionInstanceCustomIndexEXT": (
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
         ),
         "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
         ),
         "rayQueryGetIntersectionObjectRayOriginEXT": (
             "CandidateObjectRayOrigin",
@@ -213,7 +237,7 @@ class GLSLToCrossGLConverter:
             "CandidateObjectRayDirection",
             "CommittedObjectRayDirection",
         ),
-        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionTEXT": ("CandidateTriangleRayT", "CommittedRayT"),
         "rayQueryGetIntersectionBarycentricsEXT": (
             "CandidateTriangleBarycentrics",
             "CommittedTriangleBarycentrics",
@@ -235,10 +259,6 @@ class GLSLToCrossGLConverter:
             "CommittedWorldToObject",
         ),
     }
-    RAY_QUERY_TRANSFORM_FUNCTIONS = {
-        "rayQueryGetIntersectionObjectToWorldEXT",
-        "rayQueryGetIntersectionWorldToObjectEXT",
-    }
     SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
         "texture": "textureCompare",
         "textureLod": "textureCompareLod",
@@ -254,6 +274,18 @@ class GLSLToCrossGLConverter:
         "textureGrad": 4,
         "textureGradOffset": 5,
         "textureOffset": 3,
+    }
+    # GL_ARB_sparse_texture_clamp functions: (CrossGL operation, its depth-compare form, operands between the
+    # coordinate and the clamp). The clamp precedes an optional bias, as in CrossGL.
+    ARB_LOD_CLAMP_FUNCTIONS = {
+        "textureClampARB": ("textureClamp", "textureCompareClamp", 0),
+        "textureOffsetClampARB": ("textureOffsetClamp", "textureCompareOffsetClamp", 1),
+        "textureGradClampARB": ("textureGradClamp", "textureCompareGradClamp", 2),
+        "textureGradOffsetClampARB": (
+            "textureGradOffsetClamp",
+            "textureCompareGradOffsetClamp",
+            3,
+        ),
     }
     LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
         "shadow2D": "textureCompare",
@@ -328,6 +360,7 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "debugPrintfEXT": "printf",
             "traceRayEXT": "TraceRay",
             "reportIntersectionEXT": "ReportHit",
             "executeCallableEXT": "CallShader",
@@ -422,9 +455,16 @@ class GLSLToCrossGLConverter:
         self.texture_function_operations.update(
             {name: operation for name, (_, operation) in legacy_texture_aliases.items()}
         )
-        self.legacy_texture_function_names = {
-            name: canonical for name, (canonical, _) in legacy_texture_aliases.items()
+        # The CrossGL function of every texture function: a legacy GLSL name becomes the core function it aliases,
+        # and CrossGL spells every core texture function the way GLSL does.
+        self.texture_function_names = {
+            name: name
+            for name in self.texture_function_operations
+            if name not in legacy_texture_aliases
         }
+        self.texture_function_names.update(
+            {name: canonical for name, (canonical, _) in legacy_texture_aliases.items()}
+        )
         self.image_function_operations = {
             "imageLoad": "load",
             "imageStore": "store",
@@ -493,8 +533,9 @@ class GLSLToCrossGLConverter:
             "Texture2DMS": "sampler2DMS",
             "Texture2DMSArray": "sampler2DMSArray",
             "sampler": "sampler",
+            "samplerShadow": "comparison_sampler",
             "SamplerState": "sampler",
-            "SamplerComparisonState": "sampler",
+            "SamplerComparisonState": "comparison_sampler",
             "sampler1D": "sampler1D",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
@@ -511,6 +552,10 @@ class GLSLToCrossGLConverter:
             "sampler2DRect": "sampler2DRect",
             "sampler2DRectShadow": "sampler2DRectShadow",
             "samplerBuffer": "samplerBuffer",
+            # Vulkan GLSL texel buffers take no sampler; CrossGL spells them samplerBuffer.
+            "textureBuffer": "samplerBuffer",
+            "itextureBuffer": "isamplerBuffer",
+            "utextureBuffer": "usamplerBuffer",
             "sampler2DMS": "sampler2DMS",
             "sampler2DMSArray": "sampler2DMSArray",
             "isampler1D": "isampler1D",
@@ -606,38 +651,6 @@ class GLSLToCrossGLConverter:
             "void": "void",
         }
 
-        # Map of GLSL operators to CrossGL operators
-        self.operator_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "GREATER_THAN": ">",
-            "LESS_THAN": "<",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "LOGICAL_AND": "&&",
-            "LOGICAL_XOR": "!=",
-            "LOGICAL_OR": "||",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "MOD": "%",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "BITWISE_XOR": "^",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_AND": "&=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_XOR": "^=",
-            "^^": "!=",
-        }
-
         # Shader-specific info
         self.uniform_vars = []
         self.inputs = []
@@ -646,6 +659,8 @@ class GLSLToCrossGLConverter:
         self.structs_by_name = {}
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
+        self.structured_element_references = set()
+        self.user_function_reference_parameters = {}
         self.converted_ssbo_struct_names = set()
         self.anonymous_ssbo_block_instances = {}
         self.anonymous_ssbo_block_structs = []
@@ -654,10 +669,10 @@ class GLSLToCrossGLConverter:
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
+        self.glsl_function_return_types = {}
         self.struct_type_renames = {}
 
     def indent(self):
@@ -732,7 +747,7 @@ class GLSLToCrossGLConverter:
             existing_value = self.layout_conflict_value(target_layout[existing_key])
             new_value = self.layout_conflict_value(value)
             if existing_value != new_value:
-                raise ValueError(
+                raise OpenGLSourceRefusal(
                     "Conflicting GLSL builtin redeclaration for "
                     f"'{target.name}': layout {existing_key}={existing_value} "
                     f"differs from {key}={new_value}"
@@ -749,7 +764,7 @@ class GLSLToCrossGLConverter:
     def validate_builtin_stage_io_array_metadata(self, target, source):
         for attr_name in ("is_array", "array_size", "array_sizes"):
             if getattr(target, attr_name, None) != getattr(source, attr_name, None):
-                raise ValueError(
+                raise OpenGLSourceRefusal(
                     "Conflicting GLSL builtin redeclaration for "
                     f"'{target.name}': {attr_name} "
                     f"{getattr(target, attr_name, None)} differs from "
@@ -758,18 +773,18 @@ class GLSLToCrossGLConverter:
 
     def merge_builtin_stage_io_redeclaration(self, target, source):
         if getattr(target, "vtype", None) != getattr(source, "vtype", None):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': type {target.vtype} differs from {source.vtype}"
             )
         if self.stage_io_direction(target) != self.stage_io_direction(source):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': direction {self.stage_io_direction(target)} "
                 f"differs from {self.stage_io_direction(source)}"
             )
         if getattr(target, "semantic", None) != getattr(source, "semantic", None):
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "Conflicting GLSL builtin redeclaration for "
                 f"'{target.name}': semantic {getattr(target, 'semantic', None)} "
                 f"differs from {getattr(source, 'semantic', None)}"
@@ -798,12 +813,17 @@ class GLSLToCrossGLConverter:
         if not type_name:
             return False
         name = str(self.convert_type(type_name))
-        return name == "accelerationStructureEXT" or name.startswith(
+        return name in {
+            "accelerationStructureEXT",
+            "comparison_sampler",
+        } or name.startswith(
             (
                 "__sampler",
                 "StructuredBuffer",
                 "RWStructuredBuffer",
                 "texture",
+                "itexture",
+                "utexture",
                 "subpassInput",
                 "isubpassInput",
                 "usubpassInput",
@@ -826,7 +846,7 @@ class GLSLToCrossGLConverter:
         if name in self.texture_function_operations:
             return {
                 "name": name,
-                "function": self.legacy_texture_function_names.get(name, name),
+                "function": self.texture_function_names[name],
                 "resource": "texture",
                 "operation": self.texture_function_operations[name],
             }
@@ -852,6 +872,12 @@ class GLSLToCrossGLConverter:
         vtype = getattr(var, "vtype", None)
         if name and vtype:
             self.variable_type_scopes[-1][name] = vtype
+            # An array's element type is its vtype; the "[]" key records the array itself for expression typing.
+            array_key = ARRAY_VARIABLE_KEY_PREFIX + name
+            if getattr(var, "is_array", False) or getattr(var, "array_sizes", None):
+                self.variable_type_scopes[-1][array_key] = True
+            else:
+                self.variable_type_scopes[-1].pop(array_key, None)
 
     def register_parameter_type(self, param):
         if isinstance(param, VariableNode):
@@ -868,12 +894,28 @@ class GLSLToCrossGLConverter:
                 return scope[name]
         return None
 
+    def lookup_variable_is_array(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return bool(scope.get(ARRAY_VARIABLE_KEY_PREFIX + name))
+        return False
+
     def expression_resource_type(self, expr):
         if isinstance(expr, VariableNode):
             return self.lookup_variable_type(expr.name)
         if isinstance(expr, ArrayAccessNode):
             return self.expression_resource_type(expr.array)
+        if self.combined_sampler_constructor_parts(expr) is not None:
+            # Vulkan GLSL ``sampler2DShadow(t, s)``: the constructor names the sampled type.
+            return self.function_call_name(expr)
         return None
+
+    def texture_operand_expressions(self, expr):
+        """CrossGL operands of a sampled texture: ``t``, or ``t, s`` for a Vulkan GLSL ``samplerX(t, s)``."""
+        parts = self.combined_sampler_constructor_parts(expr)
+        if parts is None:
+            return [self.generate_expression(expr)]
+        return [self.generate_expression(part) for part in parts]
 
     def expression_is_shadow_sampler(self, expr):
         return self.expression_shadow_sampler_type(expr) is not None
@@ -906,7 +948,8 @@ class GLSLToCrossGLConverter:
         if sampler_type in self.SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES:
             if name == "texture" and len(args) == 3:
                 return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], [
-                    self.generate_expression(arg) for arg in args
+                    *self.texture_operand_expressions(args[0]),
+                    *[self.generate_expression(arg) for arg in args[1:]],
                 ]
             return None
 
@@ -920,12 +963,51 @@ class GLSLToCrossGLConverter:
             args[1], sampler_type
         )
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             coord_expr,
             compare_expr,
             *[self.generate_expression(arg) for arg in args[2:]],
         ]
         return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], call_args
+
+    def texture_lod_clamp_call(self, name, args):
+        """CrossGL for a GL_ARB_sparse_texture_clamp call; shadow samplers split the reference out of ``P``."""
+        sample_name, compare_name, operands = self.ARB_LOD_CLAMP_FUNCTIONS[name]
+        rendered = [self.generate_expression(arg) for arg in args]
+        if args:
+            # A Vulkan GLSL ``samplerX(t, s)`` operand becomes the ``t, s`` pair.
+            rendered[0] = ", ".join(self.texture_operand_expressions(args[0]))
+        sampler_type = self.expression_shadow_sampler_type(args[0]) if args else None
+        if sampler_type is None:
+            return f"{sample_name}({', '.join(rendered)})"
+        if sampler_type in self.SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES:
+            if name == "textureClampARB" and len(args) == 4:
+                return f"{compare_name}({', '.join(rendered)})"
+            raise TextureLodClampUnsupportedError(
+                "cgl",
+                name,
+                f"GL_ARB_sparse_texture_clamp has no {name} overload for {sampler_type} with "
+                f"{len(args)} arguments",
+            )
+        if sampler_type not in self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES:
+            raise TextureLodClampUnsupportedError(
+                "cgl", name, f"the shadow sampler type {sampler_type} is not supported"
+            )
+        if len(args) != 3 + operands:
+            raise TextureLodClampUnsupportedError(
+                "cgl",
+                name,
+                (
+                    "a depth compare takes no LOD bias in CrossGL"
+                    if len(args) == 4 + operands
+                    else f"{name} on {sampler_type} takes {3 + operands} arguments, got {len(args)}"
+                ),
+            )
+        coord_expr, compare_expr = self.shadow_texture_compare_coord_ref(
+            args[1], sampler_type
+        )
+        call_args = [rendered[0], coord_expr, compare_expr, *rendered[2:]]
+        return f"{compare_name}({', '.join(call_args)})"
 
     def legacy_shadow_texture_compare_call(self, name, args):
         compare_name = self.LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS.get(name)
@@ -944,7 +1026,7 @@ class GLSLToCrossGLConverter:
             args[1], sampler_type
         )
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             coord_expr,
             compare_expr,
         ]
@@ -964,7 +1046,7 @@ class GLSLToCrossGLConverter:
 
         projected_coord, compare_ref = self.shadow_projected_texture_coord_ref(args[1])
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             projected_coord,
             compare_ref,
         ]
@@ -1099,7 +1181,7 @@ class GLSLToCrossGLConverter:
         return renames
 
     def format_function_name(self, name):
-        return self.function_name_renames.get(name, name)
+        return declared_name(self.function_name_renames, name)
 
     def _is_image_resource_type(self, type_name):
         if not type_name:
@@ -1171,7 +1253,7 @@ class GLSLToCrossGLConverter:
 
     def validate_shader_record_layout(self, var):
         if self.ssbo_binding(var) is not None:
-            raise ValueError(
+            raise OpenGLSourceRefusal(
                 "GLSL shaderRecordEXT buffer blocks cannot declare binding layout "
                 "qualifiers"
             )
@@ -1189,6 +1271,13 @@ class GLSLToCrossGLConverter:
                 return None
             member = members[0]
             if not getattr(member, "is_array", False):
+                return None
+            # Only a block whose sole member is one runtime-sized dimension is an
+            # element buffer.  A sized member ('float d[4]') is a fixed array that
+            # whole-array reads and '.length()' observe, and 'float d[][4]' has
+            # 'float[4]' elements; both keep the block form.
+            array_sizes = getattr(member, "array_sizes", None)
+            if array_sizes is not None and list(array_sizes) != [None]:
                 return None
             return member
 
@@ -1226,6 +1315,17 @@ class GLSLToCrossGLConverter:
         }
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
+        self.structured_element_references = set()
+        self.user_function_reference_parameters = {
+            (function.name, len(function.params or [])): frozenset(
+                position
+                for position, param in enumerate(function.params or [])
+                if isinstance(param, VariableNode)
+                and {"out", "inout"} & set(self.stage_io_direction(param))
+            )
+            for function in getattr(node, "functions", []) or []
+            if getattr(function, "name", None)
+        }
         self.converted_ssbo_struct_names = set()
         self.anonymous_ssbo_block_instances = {}
         self.anonymous_ssbo_block_structs = []
@@ -1290,6 +1390,8 @@ class GLSLToCrossGLConverter:
                 name = getattr(item, "name", None)
                 if name:
                     names.add(name)
+        # A local or parameter of the same name would shadow the instance inside its function.
+        names.update(function_variable_names(node))
         return names
 
     def is_anonymous_ssbo_struct(self, struct):
@@ -1302,14 +1404,9 @@ class GLSLToCrossGLConverter:
         if getattr(struct, "interface_instance_name", None):
             return False
         layout = getattr(struct, "interface_layout", None) or {}
-        if "buffer_reference" in {str(key).lower() for key in layout}:
-            return False
-        return any(
-            self.is_runtime_array_member(member)
-            for member in getattr(struct, "members", []) or getattr(
-                struct, "fields", []
-            )
-        )
+        # A block without an instance name puts its members in global scope, but they stay members of a buffer
+        # (GLSL 4.60 section 4.3.9); declared as plain globals they became private or uniform variables.
+        return "buffer_reference" not in {str(key).lower() for key in layout}
 
     def is_runtime_array_member(self, member):
         array_sizes = getattr(member, "array_sizes", None)
@@ -1378,8 +1475,11 @@ class GLSLToCrossGLConverter:
         instance_name = self.anonymous_ssbo_block_instances[struct.name]
         code = f"{layout} {qualifier_prefix}buffer {block_name} {{\n"
         self.increase_indent()
+        block_qualifiers = {qualifier.lower() for qualifier in qualifiers}
         for member in getattr(struct, "members", []) or getattr(struct, "fields", []):
-            code += self.indent() + self.anonymous_ssbo_member_declaration(member)
+            code += self.indent() + self.anonymous_ssbo_member_declaration(
+                member, block_qualifiers
+            )
         self.decrease_indent()
         code += self.indent_str + f"}} {instance_name};"
         return code
@@ -1406,11 +1506,16 @@ class GLSLToCrossGLConverter:
 
         return f"layout({', '.join(parts)})"
 
-    def anonymous_ssbo_member_declaration(self, member):
+    def anonymous_ssbo_member_declaration(self, member, block_qualifiers=frozenset()):
         var_type = self.convert_type(getattr(member, "vtype", ""))
         var_name = getattr(member, "name", "")
         attributes = self.interface_member_layout_attribute_suffix(member)
-        attributes += self.vulkan_memory_model_qualifier_attribute_suffix(member)
+        # The parser copies the block's qualifiers onto each member; the block header already carries them.
+        attributes += "".join(
+            f" {attribute}"
+            for attribute in self.vulkan_memory_model_qualifier_attributes(member)
+            if attribute[1:] not in block_qualifiers
+        )
         return f"{var_type} {var_name}{self.array_suffix(member)}{attributes};\n"
 
     def structured_buffer_declaration(self, var):
@@ -1421,47 +1526,26 @@ class GLSLToCrossGLConverter:
         return (
             f"{self.structured_buffer_type(var, member)} {var.name}{array_suffix}"
             f"{self.ssbo_binding_attribute_suffix(var)}"
+            f"{self.structured_buffer_memory_attribute_suffix(var)}"
         )
 
+    def structured_buffer_memory_attribute_suffix(self, var):
+        """Carry the block's memory qualifiers onto its element-buffer form.
+
+        ``StructuredBuffer`` already says ``readonly``; every other qualifier
+        becomes the attribute the block form writes, so it reaches the target.
+        """
+        qualifiers = self._qualifier_set(var)
+        attributes = [
+            f"@{qualifier}"
+            for qualifier in ("coherent", "volatile", "restrict", "writeonly")
+            if qualifier in qualifiers
+        ]
+        attributes.extend(self.vulkan_memory_model_qualifier_attributes(var))
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return set(SUPPORTED_IMAGE_FORMATS)
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
@@ -1542,10 +1626,6 @@ class GLSLToCrossGLConverter:
             for qualifier, attribute in self.STORAGE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers
         ]
-
-    def is_task_payload_shared_variable(self, var):
-        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
-        return "taskpayloadsharedext" in qualifiers
 
     def is_buffer_reference_forward_declaration(self, var):
         if not isinstance(var, VariableNode):
@@ -1798,6 +1878,27 @@ class GLSLToCrossGLConverter:
                 emitted.append(mapped)
         return " ".join(emitted)
 
+    # Qualifiers that do not give a global a storage class (GLSL 4.60 sections 4.5-4.7, 4.8 and 4.10).
+    _NON_STORAGE_QUALIFIERS = frozenset(
+        {"highp", "mediump", "lowp", "precise", "invariant"}
+    )
+
+    def private_global_prefix(self, var):
+        """``static`` for a global without a storage qualifier, which GLSL makes private to each invocation.
+
+        GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
+        is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
+        uniform, so the private one carries ``static``, the CrossGL storage class for per-invocation globals.
+        """
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", None) or []}
+        if qualifiers - self._NON_STORAGE_QUALIFIERS:
+            return ""
+        if getattr(var, "is_const", False):
+            return ""
+        if self._is_resource_type(self.variable_declaration_type(var)):
+            return ""
+        return "static "
+
     def interface_qualifier_prefix(self, var):
         qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
         emitted = []
@@ -1843,7 +1944,7 @@ class GLSLToCrossGLConverter:
             operand = self.evaluate_integer_layout_constant(value.operand)
             if operand is None:
                 return None
-            operator = self.operator_map.get(value.op, value.op)
+            operator = folded_operator(value.op)
             if operator == "+":
                 return operand
             if operator == "-":
@@ -1856,7 +1957,7 @@ class GLSLToCrossGLConverter:
             right = self.evaluate_integer_layout_constant(value.right)
             if left is None or right is None:
                 return None
-            operator = self.operator_map.get(value.op, value.op)
+            operator = folded_operator(value.op)
             if operator == "+":
                 return left + right
             if operator == "-":
@@ -1953,6 +2054,11 @@ class GLSLToCrossGLConverter:
         )
 
     def is_descriptor_set_uniform_block_struct(self, struct):
+        """Whether ``struct`` is a uniform block, which becomes a CrossGL ``cbuffer`` of its own.
+
+        A uniform block is a host interface of its own: its block name, binding and member layout are what the host
+        matches (GLSL 4.60 sections 4.3.9 and 4.4.5), so it keeps them whether or not it names a descriptor set.
+        """
         if not getattr(struct, "interface_block", False):
             return False
         if self.has_push_constant_layout(struct):
@@ -1961,10 +2067,7 @@ class GLSLToCrossGLConverter:
             str(qualifier).lower()
             for qualifier in getattr(struct, "interface_qualifiers", []) or []
         }
-        layout = getattr(struct, "interface_layout", None) or {}
-        return "uniform" in qualifiers and (
-            self.layout_has_key(layout, "set") or getattr(struct, "hlsl_cbuffer", False)
-        )
+        return "uniform" in qualifiers or getattr(struct, "hlsl_cbuffer", False)
 
     def is_arrayed_descriptor_set_uniform_block_struct(self, struct):
         return self.is_descriptor_set_uniform_block_struct(struct) and getattr(
@@ -2033,6 +2136,18 @@ class GLSLToCrossGLConverter:
         )
         return output_names
 
+    def uniform_block_instance_names(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+        for uniform in uniforms or []:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+        return instance_names
+
     def unique_cbuffer_member_name(self, block_name, field_name):
         safe_block_name = re.sub(r"\W+", "_", str(block_name or "Block")).strip("_")
         safe_block_name = safe_block_name or "Block"
@@ -2052,18 +2167,7 @@ class GLSLToCrossGLConverter:
         if not field_names:
             return
 
-        block_struct = self.structs_by_name.get(block_name)
-        instance_names = set()
-        if block_struct is not None:
-            instance_name = getattr(block_struct, "interface_instance_name", None)
-            if instance_name:
-                instance_names.add(str(instance_name).split("[", 1)[0])
-
-        for uniform in uniforms:
-            if getattr(uniform, "vtype", None) == block_name:
-                instance_names.add(str(uniform.name).split("[", 1)[0])
-
-        for instance_name in instance_names:
+        for instance_name in self.uniform_block_instance_names(block_name, uniforms):
             if instance_name:
                 self.flattened_uniform_block_instances[instance_name] = field_names
                 renames = {
@@ -2080,13 +2184,21 @@ class GLSLToCrossGLConverter:
             block_name, uniforms, fields
         )
 
-        result = f"cbuffer {block_name} @push_constant {{\n"
+        layout = self.uniform_block_layout(block_name, uniforms)
+        # Push constants use std430 unless the block names std140 or scalar (GL_KHR_vulkan_glsl).
+        buffer_layout = next(
+            (
+                name
+                for name in ("std140", "scalar")
+                if self.layout_has_key(layout, name)
+            ),
+            "std430",
+        )
+        result = (
+            f"cbuffer {block_name} @push_constant @buffer_layout({buffer_layout}) {{\n"
+        )
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
@@ -2108,21 +2220,26 @@ class GLSLToCrossGLConverter:
             or getattr(var, "interface_block", None)
         )
         if not (
-            self.layout_has_key(layout, "set")
-            or getattr(block_struct, "hlsl_cbuffer", False)
+            self.is_descriptor_set_uniform_block_struct(block_struct)
             or (self.layout_has_key(layout, "binding") and not is_interface_block)
         ):
             return None
         return block_name
 
     def generate_arrayed_descriptor_set_uniform_block(self, var):
+        """``uniform B { ... } name[N];`` as ``ConstantBuffer<B> name[N]``: ``N`` uniform buffers, one per element.
+
+        An array of uniform blocks is an array of block instances, each backed by a buffer of its own (GLSL 4.60
+        section 4.3.9), which a Vulkan binding holds as ``N`` descriptors. A ``uniform B name[N]`` would declare one
+        buffer holding an array of ``B``.
+        """
         block_name = self.uniform_block_name(var)
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, [var]
-        )
+        ) + self.uniform_block_buffer_layout_suffix(block_name, [var])
         var_type = self.convert_type(block_name)
         array_suffix = self.array_suffix(var)
-        return f"uniform {var_type} {var.name}{array_suffix}{attributes};\n"
+        return f"ConstantBuffer<{var_type}> {var.name}{array_suffix}{attributes};\n"
 
     def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
         layout = self.uniform_block_layout(block_name, uniforms)
@@ -2131,6 +2248,28 @@ class GLSLToCrossGLConverter:
             value = self.layout_value(layout, name)
             self.append_concrete_descriptor_attribute(attributes, name, value)
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def uniform_block_buffer_layout_suffix(self, block_name, uniforms):
+        """The ``@buffer_layout`` of a uniform block: the memory layout the host writes it with.
+
+        Uniform blocks use std140 unless they name ``std430`` or ``scalar`` (GLSL 4.60 section 4.4.5). ``shared`` and
+        ``packed`` leave the offsets to the implementation, which the host must query; std140 is the layout every
+        implementation accepts for them, so they are kept as std140 too. A block written in HLSL ``cbuffer`` syntax
+        keeps the default HLSL packing of the generators, and a struct-typed loose uniform has no byte layout.
+        """
+        block_struct = self.structs_by_name.get(block_name)
+        if (
+            block_struct is None
+            or not getattr(block_struct, "interface_block", False)
+            or getattr(block_struct, "hlsl_cbuffer", False)
+        ):
+            # A struct-typed loose uniform is set through the API, not as buffer bytes.
+            return ""
+        layout = self.uniform_block_layout(block_name, uniforms)
+        for name in ("std430", "scalar"):
+            if self.layout_has_key(layout, name):
+                return f" @buffer_layout({name})"
+        return " @buffer_layout(std140)"
 
     def descriptor_set_uniform_block_output_name(self, block_name, uniforms):
         block_struct = self.structs_by_name.get(block_name)
@@ -2153,19 +2292,43 @@ class GLSLToCrossGLConverter:
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, uniforms
         )
+        attributes += self.uniform_block_buffer_layout_suffix(block_name, uniforms)
         output_name = self.descriptor_set_uniform_block_output_name(
             block_name, uniforms
         )
         result = f"cbuffer {output_name}{attributes} {{\n"
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
+
+    def uniform_block_member_lines(self, fields, output_names, uniforms):
+        """The members of a uniform or push-constant block, with their layout and memory qualifiers.
+
+        Member layout qualifiers (``row_major``, ``offset``, ``align``) set the bytes the host writes (GLSL 4.60
+        section 4.4.5), so they stay on the member. Memory qualifiers of the block's instance apply to every member.
+        """
+        instance_attributes = []
+        for uniform in uniforms or []:
+            if getattr(uniform, "interface_block", None) and uniform not in fields:
+                for attribute in self.vulkan_memory_model_qualifier_attributes(uniform):
+                    if attribute not in instance_attributes:
+                        instance_attributes.append(attribute)
+        lines = ""
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = output_names.get(getattr(field, "name", ""), "")
+            array_suffix = self.array_suffix(field)
+            suffix = self.interface_member_layout_attribute_suffix(field)
+            attributes = list(instance_attributes)
+            for attribute in self.vulkan_memory_model_qualifier_attributes(field):
+                if attribute not in attributes:
+                    attributes.append(attribute)
+            if attributes:
+                suffix += " " + " ".join(attributes)
+            lines += self.indent() + f"{var_type} {var_name}{array_suffix}{suffix};\n"
+        return lines
 
     def interface_block_attribute_prefix(self, node):
         if not self.is_graphics_interface_block_struct(node):
@@ -2407,18 +2570,16 @@ class GLSLToCrossGLConverter:
             self.shader_type = previous_shader_type
 
     def generate_shader(self, node):
+        refuse_unsupported_glsl_types(node)
+        retype_shadow_textures(node)
         self.uniform_vars = []
         self.inputs = []
         self.outputs = []
         self.local_vars = []
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
+        rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = {
-            var.name
-            for var in getattr(node, "global_variables", []) or []
-            if self.is_task_payload_shared_variable(var)
-        }
         self.function_name_renames = self.collect_function_name_renames(
             getattr(node, "functions", []) or []
         )
@@ -2430,6 +2591,12 @@ class GLSLToCrossGLConverter:
             for function in getattr(node, "functions", []) or []
             if getattr(function, "name", None)
         }
+        self.glsl_function_return_types = {}
+        for function in getattr(node, "functions", []) or []:
+            if getattr(function, "name", None):
+                self.glsl_function_return_types.setdefault(function.name, set()).add(
+                    str(getattr(function, "return_type", "") or "").strip()
+                )
         self.prepare_structured_buffers(node)
         node.io_variables = self.deduplicate_builtin_stage_io_variables(
             getattr(node, "io_variables", []) or []
@@ -2723,7 +2890,10 @@ class GLSLToCrossGLConverter:
                 result += self.indent_str + ssbo_block_decl + ";\n"
                 continue
             result += (
-                self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
+                self.indent_str
+                + self.private_global_prefix(global_var)
+                + self.generate_variable_declaration(global_var)
+                + ";\n"
             )
         if getattr(node, "global_variables", []):
             result += "\n"
@@ -2868,8 +3038,28 @@ class GLSLToCrossGLConverter:
                 ):
                     result += self.indent() + statement + "\n"
             else:
-                for statement in self.generate_statement_sequence(main_function.body):
-                    result += self.indent() + statement + "\n"
+                # GLSL's void main() may leave early with `return;`; the entry now returns its outputs.
+                self.entry_bare_return_value = None
+                if self.shader_type == "vertex":
+                    self.entry_bare_return_value = "output"
+                elif (
+                    self.shader_type == "fragment"
+                    and self.outputs
+                    and not fragment_uses_direct_outputs
+                    and not self.is_fragment_explicit_entry_return(main_function)
+                ):
+                    self.entry_bare_return_value = self.outputs[0].name
+                # The entry's locals get a scope of their own, as other functions' do, so that a local that
+                # shadows a member of an anonymous buffer block is not read as that member.
+                self.push_variable_type_scope()
+                try:
+                    for statement in self.generate_statement_sequence(
+                        main_function.body
+                    ):
+                        result += self.indent() + statement + "\n"
+                finally:
+                    self.pop_variable_type_scope()
+                    self.entry_bare_return_value = None
 
                 if self.shader_type in ("vertex",) and not any(
                     isinstance(stmt, ReturnNode) for stmt in main_function.body
@@ -3049,11 +3239,30 @@ class GLSLToCrossGLConverter:
                 array_before_attributes=True,
                 memory_qualifier_prefix=False,
             )
+            if self.is_implicit_value_array_parameter(param):
+                declaration = f"in {declaration}"
             default_value = getattr(param, "default_value", None)
             if default_value is not None:
                 declaration += f" = {self.generate_expression(default_value)}"
             return declaration
         return None
+
+    def is_implicit_value_array_parameter(self, param):
+        """Return whether an array parameter is passed by value without saying so.
+
+        GLSL copies every parameter without ``out`` or ``inout`` into the
+        callee, so a write to such an array changes only the callee's copy.
+        CrossGL leaves an unqualified array parameter's mutation mode open, so
+        the importer states the GLSL contract with an explicit ``in``, as the
+        HLSL importer does. Arrays of samplers, images and other opaque types
+        cannot be written and keep their declaration.
+        """
+        if not getattr(param, "array_sizes", None):
+            return False
+        if self._is_resource_type(self.variable_declaration_type(param)):
+            return False
+        qualifiers = self._qualifier_set(param)
+        return not qualifiers & {"in", "out", "inout"}
 
     def generate_function(self, node):
         """Render one GLSL function node as a CrossGL function block."""
@@ -3111,57 +3320,9 @@ class GLSLToCrossGLConverter:
         )
 
     def generate_statement_sequence(self, statements):
-        generated = []
-        index = 0
-        while index < len(statements):
-            folded = self.generate_task_payload_dispatch_statement(statements, index)
-            if folded is not None:
-                generated.append(folded)
-                index += 2
-                continue
-            generated.append(self.generate_statement(statements[index]))
-            index += 1
-        return generated
-
-    def generate_task_payload_dispatch_statement(self, statements, index):
-        if self.shader_type not in {"task", "amplification", "object"}:
-            return None
-        if index + 1 >= len(statements):
-            return None
-
-        assignment = statements[index]
-        dispatch = statements[index + 1]
-        payload_expr = self.task_payload_assignment_expression(assignment)
-        if payload_expr is None:
-            return None
-        if not self.is_emit_mesh_tasks_call(dispatch):
-            return None
-
-        dispatch_args = [
-            self.generate_expression(arg) for arg in getattr(dispatch, "args", [])[:3]
-        ]
-        payload = self.generate_expression(payload_expr)
-        return f"DispatchMesh({', '.join(dispatch_args + [payload])});"
-
-    def task_payload_assignment_expression(self, statement):
-        if not isinstance(statement, AssignmentNode):
-            return None
-        if getattr(statement, "operator", "=") != "=":
-            return None
-        if not self.task_payload_shared_names:
-            return None
-
-        target = self.expression_base_name(getattr(statement, "left", None))
-        if target not in self.task_payload_shared_names:
-            return None
-        return getattr(statement, "right", None)
-
-    def is_emit_mesh_tasks_call(self, statement):
-        if not isinstance(statement, FunctionCallNode):
-            return False
-        if len(getattr(statement, "args", []) or []) != 3:
-            return False
-        return self.function_call_name(statement) == "EmitMeshTasksEXT"
+        # A task shader's payload stores stay stores and EmitMeshTasksEXT stays a three-argument DispatchMesh:
+        # semantics.glsl_mesh_stages passes the taskPayloadSharedEXT variable itself for HLSL and Metal.
+        return [self.generate_statement(statement) for statement in statements]
 
     def function_call_name(self, node):
         name = getattr(node, "name", None)
@@ -3189,8 +3350,11 @@ class GLSLToCrossGLConverter:
             ray_control = self.ray_control_statement(node)
             if ray_control is not None:
                 return ray_control + ";"
+            # GLSL starts a local's scope after its initializer (GLSL 4.60 section 4.2.2): the initializer
+            # reads outer names, so the local is registered once the declaration is rendered.
+            declaration = self.generate_variable_declaration(node)
             self.register_variable_type(node)
-            return self.generate_variable_declaration(node) + ";"
+            return declaration + ";"
         elif isinstance(node, StructNode):
             return self.generate_struct(node)
         elif isinstance(node, FunctionCallNode):
@@ -3484,8 +3648,16 @@ class GLSLToCrossGLConverter:
 
     def generate_return(self, node):
         if node.value is None:
-            return "return"
+            value = getattr(self, "entry_bare_return_value", None)
+            return f"return {value}" if value else "return"
         return f"return {self.generate_expression(node.value)}"
+
+    def generate_operand(self, node):
+        """Render an operand, keeping an assignment operand as one group."""
+        expression = self.generate_expression(node)
+        if isinstance(node, AssignmentNode):
+            return f"({expression})"
+        return expression
 
     def generate_expression(self, node):
         """Render an OpenGL backend expression node as CrossGL syntax."""
@@ -3513,18 +3685,27 @@ class GLSLToCrossGLConverter:
                 return ssbo_member
             return node.name
         elif isinstance(node, BinaryOpNode):
-            left = self.generate_expression(node.left)
-            right = self.generate_expression(node.right)
-            operator = self.operator_map.get(node.op, node.op)
+            operator = crossgl_operator(node.op)
             if operator == ",":
+                # Assignment binds tighter than the comma operator.
+                left = self.generate_expression(node.left)
+                right = self.generate_expression(node.right)
                 return f"({left}, {right})"
+            left = self.generate_operand(node.left)
+            right = self.generate_operand(node.right)
+            equality = lower_aggregate_equality(self, node, left, right)
+            if equality is not None:
+                return equality
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
-            operand = self.generate_expression(node.operand)
-            operator = self.operator_map.get(node.op, node.op)
+            if node.op in {"++", "--"}:
+                self.mark_structured_element_reference(node.operand)
+            operand = self.generate_operand(node.operand)
+            operator = crossgl_operator(node.op)
             return f"({operator}{operand})"
         elif isinstance(node, PostfixOpNode):
-            operand = self.generate_expression(node.operand)
+            self.mark_structured_element_reference(node.operand)
+            operand = self.generate_operand(node.operand)
             return f"({operand}{node.op})"
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
@@ -3535,9 +3716,9 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, ArrayAccessNode):
             return self.generate_array_access(node)
         elif isinstance(node, TernaryOpNode):
-            condition = self.generate_expression(node.condition)
-            true_expr = self.generate_expression(node.true_expr)
-            false_expr = self.generate_expression(node.false_expr)
+            condition = self.generate_operand(node.condition)
+            true_expr = self.generate_operand(node.true_expr)
+            false_expr = self.generate_operand(node.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(node, VectorConstructorNode):
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
@@ -3563,15 +3744,15 @@ class GLSLToCrossGLConverter:
         if long_integer_match:
             suffix = long_integer_match.group("suffix")
             if "u" in suffix.lower():
-                return f"{long_integer_match.group('body')}u"
-            return long_integer_match.group("body")
+                return crossgl_legacy_octal(f"{long_integer_match.group('body')}u")
+            return crossgl_legacy_octal(long_integer_match.group("body"))
         match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if not match:
-            return text
+            return crossgl_legacy_octal(text)
         suffix = match.group("suffix")
         if suffix[0].lower() == "u":
-            return f"{match.group('body')}u"
-        return match.group("body")
+            return crossgl_legacy_octal(f"{match.group('body')}u")
+        return crossgl_legacy_octal(match.group("body"))
 
     def generate_function_call(self, node):
         structured_length = self.structured_buffer_length_call(node)
@@ -3583,10 +3764,26 @@ class GLSLToCrossGLConverter:
             name = self.generate_member_access(name)
         elif isinstance(name, VariableNode):
             name = name.name
+        self.mark_structured_reference_arguments(name, node.args)
 
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
             return ray_query_call
+
+        subgroup_call = import_subgroup_call(self, name, node.args)
+        if subgroup_call is not None:
+            return subgroup_call
+
+        sparse_call = import_sparse_texture_call(self, name, node.args)
+        if sparse_call is not None:
+            return sparse_call
+
+        scoped_atomic_call = import_scoped_atomic_call(self, name, node.args)
+        if scoped_atomic_call is not None:
+            return scoped_atomic_call
+
+        if name in self.ARB_LOD_CLAMP_FUNCTIONS:
+            return self.texture_lod_clamp_call(name, node.args)
 
         legacy_shadow_texture_call = self.legacy_shadow_texture_compare_call(
             name, node.args
@@ -3669,6 +3866,10 @@ class GLSLToCrossGLConverter:
         return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
+        if name == "rayQueryGetIntersectionCandidateAABBOpaqueEXT" and len(args) == 1:
+            # CrossGL follows DXR, which asks whether the candidate is non-opaque.
+            query = self.generate_expression(args[0])
+            return f"(!{query}.CandidateProceduralPrimitiveNonOpaque())"
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:
             query = self.generate_expression(args[0])
             method = self.RAY_QUERY_SIMPLE_METHODS[name]
@@ -3713,14 +3914,14 @@ class GLSLToCrossGLConverter:
         if flattened_member is not None:
             return flattened_member
 
+        self.mark_structured_element_reference(node.object, through_access=False)
         object_name = ""
         if isinstance(node.object, VariableNode):
+            # Geometry and tessellation inputs stay module-scope declarations, as
+            # in the variable path above, so their member reads keep the name.
             if self.shader_type in (
                 "vertex",
                 "fragment",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
             ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
             elif self.shader_type in ("vertex",) and any(
@@ -3728,7 +3929,12 @@ class GLSLToCrossGLConverter:
             ):
                 object_name = f"output.{node.object.name}"
             else:
-                object_name = node.object.name
+                # A member of an anonymous buffer block ('data.length()')
+                # names the block instance's member, as in the variable path.
+                object_name = (
+                    self.anonymous_ssbo_member_reference(node.object.name)
+                    or node.object.name
+                )
         else:
             object_name = self.generate_expression(node.object)
             if isinstance(node.object, ArrayAccessNode) and node.member == "length":
@@ -3747,24 +3953,85 @@ class GLSLToCrossGLConverter:
         return self.generate_function_call(node.object)
 
     def flattened_uniform_block_member(self, node):
-        instance_name = self.expression_base_name(getattr(node, "object", None))
-        if instance_name is None:
+        # Only ``instance.member`` names a block member: in ``instance.m[1].z`` the
+        # ``.z`` is a swizzle of ``m[1]``, even when the block also has a member ``z``.
+        instance = getattr(node, "object", None)
+        if isinstance(instance, VariableNode):
+            instance_name = instance.name
+        elif isinstance(instance, str):
+            instance_name = instance
+        else:
             return None
         fields = self.flattened_uniform_block_instances.get(instance_name)
         if fields is None or node.member not in fields:
             return None
         renames = self.flattened_uniform_block_member_renames.get(instance_name, {})
-        return renames.get(node.member, node.member)
+        return declared_name(renames, node.member)
 
     def generate_array_access(self, node):
         structured_access = self.structured_buffer_access_parts(node)
         if structured_access is not None:
             buffer_expr, index_expr = structured_access
+            if id(node) in self.structured_element_references:
+                return f"{buffer_expr}[{index_expr}]"
             return f"buffer_load({buffer_expr}, {index_expr})"
 
+        self.mark_structured_element_reference(node.array, through_access=False)
         array = self.generate_postfix_base_expression(node.array)
         index = self.generate_expression(node.index)
         return f"{array}[{index}]"
+
+    # GLSL 4.60 section 8.11: the first argument of these is the memory they update.
+    ATOMIC_MEMORY_FUNCTIONS = frozenset(
+        {
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
+        }
+    )
+
+    def is_structured_buffer_access(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return False
+        array_expr = node.array
+        if isinstance(array_expr, VariableNode):
+            return array_expr.name in self.structured_buffer_names
+        if isinstance(array_expr, MemberAccessNode):
+            base_name = self.block_instance_name(array_expr.object)
+            return bool(base_name) and (
+                (base_name, array_expr.member)
+                in self.structured_buffer_instance_members
+            )
+        return False
+
+    def mark_structured_element_reference(self, node, *, through_access=True):
+        """Write the structured-buffer element ``node`` names, or is a component of, as ``buffer[index]``.
+
+        A converted storage block's element reads as ``buffer_load(buffer, index)``, a value. Where the
+        element is storage (an assignment target, an increment's operand, an atomic's memory, an ``out`` or
+        ``inout`` argument, the base of a component access), CrossGL's ``buffer[index]`` names it.
+        """
+        while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+            if self.is_structured_buffer_access(node):
+                self.structured_element_references.add(id(node))
+                return
+            if not through_access:
+                return
+            node = node.array if isinstance(node, ArrayAccessNode) else node.object
+
+    def mark_structured_reference_arguments(self, name, args):
+        args = list(args or [])
+        if name in self.ATOMIC_MEMORY_FUNCTIONS and args:
+            self.mark_structured_element_reference(args[0])
+        for position in self.user_function_reference_parameters.get(
+            (name, len(args)), ()
+        ):
+            self.mark_structured_element_reference(args[position])
 
     def generate_postfix_base_expression(self, node):
         expression = self.generate_expression(node)
@@ -3786,7 +4053,7 @@ class GLSLToCrossGLConverter:
             return array_expr.name, index
 
         if isinstance(array_expr, MemberAccessNode):
-            base_name = self.expression_base_name(array_expr.object)
+            base_name = self.block_instance_name(array_expr.object)
             if (
                 base_name
                 and (base_name, array_expr.member)
@@ -3812,7 +4079,7 @@ class GLSLToCrossGLConverter:
         ):
             return target.name
         if isinstance(target, MemberAccessNode):
-            base_name = self.expression_base_name(target.object)
+            base_name = self.block_instance_name(target.object)
             if (
                 base_name
                 and (base_name, target.member)
@@ -3827,6 +4094,20 @@ class GLSLToCrossGLConverter:
             index = self.generate_expression(node.index)
             return f"{array}[{index}]"
         return self.generate_expression(node)
+
+    def block_instance_name(self, node):
+        """The name of a block instance (``buf`` or an element ``bufs[i]``), else ``None``.
+
+        In ``buf.items[3].data`` the ``data`` is a member of a struct element,
+        not of the block, even when the block also has a member ``data``.
+        """
+        while isinstance(node, ArrayAccessNode):
+            node = node.array
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        return None
 
     def expression_base_name(self, node):
         if isinstance(node, str):
@@ -3876,20 +4157,8 @@ class GLSLToCrossGLConverter:
         return mapped_base
 
     def variable_declaration_type(self, node):
-        var_type = self.convert_type(node.vtype)
-        if var_type == "mat4x3" and self.is_ray_query_transform_call(
-            getattr(node, "value", None)
-        ):
-            return "mat3x4"
-        return var_type
-
-    def is_ray_query_transform_call(self, node):
-        if not isinstance(node, FunctionCallNode):
-            return False
-        name = node.name
-        if isinstance(name, VariableNode):
-            name = name.name
-        return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
+        # GLSL and CrossGL share the matCxR spelling (C columns, R rows).
+        return self.convert_type(node.vtype)
 
     def generate_variable_declaration(
         self,
@@ -3963,20 +4232,16 @@ class GLSLToCrossGLConverter:
         expression = self.generate_expression(node.expression)
         result = f"switch ({expression}) {{\n"
 
-        for case in node.cases:
-            case_value = self.generate_expression(case.value)
-            result += self.indent() + f"case {case_value}:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value)}"
+            )
+            result += self.indent() + f"{label}:\n"
 
             self.increase_indent()
-            for statement in case.statements:
-                result += self.indent() + self.generate_statement(statement) + "\n"
-            self.decrease_indent()
-
-        if node.default:
-            result += self.indent() + "default:\n"
-
-            self.increase_indent()
-            for statement in node.default:
+            for statement in statements:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 

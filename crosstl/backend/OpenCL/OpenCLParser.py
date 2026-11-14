@@ -13,6 +13,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.translator.refusals import OpenCLSyntaxError
 
 from .OpenCLAst import (
     OpenCLBlockLiteralNode,
@@ -26,6 +27,7 @@ from .OpenCLLexer import OpenCLLexer
 class OpenCLParser(HipParser):
     """Parse OpenCL C tokens into the OpenCL backend AST."""
 
+    syntax_error = OpenCLSyntaxError
     MEMBER_NAME_TOKENS = {*HipParser.MEMBER_NAME_TOKENS, "TYPENAME"}
     DECLARATOR_NAME_TOKENS = {
         *HipParser.DECLARATOR_NAME_TOKENS,
@@ -225,6 +227,13 @@ class OpenCLParser(HipParser):
         "RBRACE",
         "SEMICOLON",
     }
+
+    def __init__(self, tokens):
+        super().__init__(tokens)
+        self.opencl_type_alias_targets = {}
+
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        """Keep OpenCL ``__constant`` locals: it names an address space, so ``__constant float *p`` is a valid local."""
 
     def parse(self):
         previous_recursion_limit = sys.getrecursionlimit()
@@ -549,9 +558,11 @@ class OpenCLParser(HipParser):
         self.parse_type_attribute_prefixes()
         type_name = super().parse_type()
 
-        if "pipe" in str(type_name).split() and self.is_current_token_type_start():
-            element_type = super().parse_type()
-            type_name = f"{type_name} {element_type}".strip()
+        if "pipe" in str(type_name).split():
+            self.skip_newlines()
+            if self.is_current_token_type_start():
+                element_type = super().parse_type()
+                type_name = f"{type_name} {element_type}".strip()
 
         return type_name
 
@@ -569,6 +580,7 @@ class OpenCLParser(HipParser):
             for token in self.tokens[original_index:index]
             if token.type != "NEWLINE"
         }
+        index = self.skip_newlines_at_pos(index)
         if (
             "pipe" in consumed_values
             and index < len(self.tokens)
@@ -638,26 +650,54 @@ class OpenCLParser(HipParser):
             return index
         return None
 
+    def parse_declaration_qualifiers(self):
+        qualifiers = []
+
+        while True:
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                qualifiers.append(self.current_token.value)
+                self.advance()
+                continue
+            next_index = self.skip_newlines_at_pos(self.pos)
+            if (
+                next_index != self.pos
+                and next_index < len(self.tokens)
+                and self.tokens[next_index].type in self.DECLARATION_QUALIFIER_TOKENS
+            ):
+                self.skip_newlines()
+                continue
+            break
+
+        return qualifiers
+
     def parse_variable_declaration_type(self, qualifiers, attributes=None):
         attributes = attributes if attributes is not None else []
         saved_pos = self.pos
         saved_token = self.current_token
         type_prefixes = []
+        interleaved_qualifiers = []
         saw_integral_sign = False
 
         self.skip_newlines()
         self.skip_cpp_attributes()
         parsed_attributes = self.parse_type_attribute_prefixes()
 
-        while self.match(*self.TYPE_QUALIFIER_TOKENS):
-            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
-                saw_integral_sign = True
-            type_prefixes.append(self.current_token.value)
+        while self.match(
+            *self.TYPE_QUALIFIER_TOKENS,
+            *self.DECLARATION_QUALIFIER_TOKENS,
+        ):
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                interleaved_qualifiers.append(self.current_token.value)
+            else:
+                if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                    saw_integral_sign = True
+                type_prefixes.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes.extend(self.parse_type_attribute_prefixes())
 
-        self.skip_cpp_attributes()
-        interleaved_qualifiers = self.parse_declaration_qualifiers()
+        interleaved_qualifiers.extend(self.parse_declaration_qualifiers())
         if type_prefixes or interleaved_qualifiers:
             qualifiers.extend(interleaved_qualifiers)
             self.skip_newlines()
@@ -824,6 +864,7 @@ class OpenCLParser(HipParser):
         alias_type += self.parse_array_suffix()
         self.skip_declarator_attribute_suffixes()
         self.type_aliases.add(name)
+        self.opencl_type_alias_targets[name] = alias_type
         return TypeAliasNode(alias_type, name)
 
     def parse_typedef_alias(self):
@@ -1318,6 +1359,10 @@ class OpenCLParser(HipParser):
             return False
         if self.is_opencl_vector_type_name(parts[0]):
             return True
+        if self.is_opencl_vector_type_name(
+            self.resolve_opencl_alias_to_vector_type(parts[0])
+        ):
+            return True
         return self.is_probable_identifier_type_name(
             parts[0]
         ) and self.has_top_level_comma_in_group_at_pos(type_end + 1)
@@ -1340,7 +1385,19 @@ class OpenCLParser(HipParser):
         ]
         if len(parts) == 1 and self.is_opencl_vector_type_name(parts[0]):
             return parts[0]
+        if len(parts) == 1:
+            resolved = self.resolve_opencl_alias_to_vector_type(parts[0])
+            if self.is_opencl_vector_type_name(resolved):
+                return resolved
         return type_name
+
+    def resolve_opencl_alias_to_vector_type(self, type_name):
+        seen = set()
+        current = str(type_name).strip()
+        while current in self.opencl_type_alias_targets and current not in seen:
+            seen.add(current)
+            current = self.opencl_type_alias_targets[current].strip()
+        return current
 
     def has_top_level_comma_in_group_at_pos(self, index):
         if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":

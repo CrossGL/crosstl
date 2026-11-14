@@ -49,7 +49,8 @@ def _generated_hlsl():
     return """
 RWStructuredBuffer<uint> out_ : register(u0);
 
-[numthreads(1, 1, 1)]
+[numthreads(64, 1, 1)]
+[WaveSize(32)]
 void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
     uint64_t out_index = index_dispatchThreadID.x;
     int writes_per_reduce = 4;
@@ -176,7 +177,7 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     int64_t ws_offset = index.x;
     int row = 0;
     int in_vec_size_w = 4;
-    int64_t wl_offset = 0;
+    int64_t wl_offset = int64_t((ws_offset + (row * in_vec_size_w)));
     uint x_idx = index.x;
     int64_t x_shape_offset = 0;
     int64_t x_strides_offset = 0;
@@ -197,7 +198,7 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     uint logical_x_offset = {index_helper_call};
     output[0] = qdot_float_16_2(
         w,
-        int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
+        int64_t(((w_offset * 4) + wl_offset)),
         x_thread,
         0,
         1.0,
@@ -296,10 +297,66 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
                     "value": artifact_hash,
                 },
                 "generatedSizeBytes": artifact_path.stat().st_size,
+                "execution": _quantize_execution(module),
+            }
+        ],
+        "project": {
+            "workgroupSize": None,
+            "workgroupSizeRules": {module.MLX_QUANTIZED_SOURCE: ["64", "1", "1"]},
+            "workgroupSizeRuleCount": 1,
+            "subgroupWidthRules": {module.MLX_QUANTIZED_SOURCE: "32"},
+            "subgroupWidthRuleCount": 1,
+        },
+    }
+    return payload, artifact_path
+
+
+def _quantize_execution(module):
+    source = module.MLX_QUANTIZED_SOURCE
+    entry_point = module.MLX_QUANTIZED_ENTRY_POINT
+    workgroup_path = f'project.workgroup_size_rules["{source}"]'
+    subgroup_path = f'project.subgroup_width_rules["{source}"]'
+    identity = {"algorithm": "sha256", "value": "0" * 64}
+    return {
+        "sourceEntryPoints": [entry_point],
+        "provenance": {"kind": "materialized-template-rule", "path": workgroup_path},
+        "subgroupWidthProvenance": {
+            "kind": "materialized-template-rule",
+            "path": subgroup_path,
+        },
+        "subgroupWidthEnforcement": {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
+        },
+        "identity": identity,
+        "entryPoints": [
+            {
+                "sourceEntryPoint": entry_point,
+                "materializedEntryPoint": entry_point,
+                "targetEntryPoint": "CSMain",
+                "workgroupSize": [64, 1, 1],
+                "rule": {
+                    "components": ["64", "1", "1"],
+                    "sourcePattern": source,
+                    "path": workgroup_path,
+                },
+                "subgroupWidth": 32,
+                "subgroupWidthRule": {
+                    "expression": "32",
+                    "sourcePattern": source,
+                    "path": subgroup_path,
+                },
+                "materialization": {
+                    "name": "affine_quantize",
+                    "hostName": entry_point,
+                    "materializedName": entry_point,
+                },
+                "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+                "identity": identity,
             }
         ],
     }
-    return payload, artifact_path
 
 
 def test_quantized_directx_proof_pins_revision_source_header_and_entry():
@@ -313,6 +370,8 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     )
     assert module.MLX_QUANTIZED_GATHER_WORKGROUP_SIZE == (32, 2, 1)
     assert module.MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH == 32
+    assert module.MLX_QUANTIZED_WORKGROUP_SIZE == (64, 1, 1)
+    assert module.MLX_QUANTIZED_SUBGROUP_WIDTH == 32
     assert set(module.ENTRY_CONTRACTS) == {
         module.MLX_QUANTIZED_ENTRY_POINT,
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
@@ -320,15 +379,15 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.GENERATED_ARTIFACTS == {
         module.MLX_QUANTIZED_ENTRY_POINT: {
             "sha256": (
-                "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0"
+                "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b"
             ),
-            "sizeBytes": 5704,
+            "sizeBytes": 6239,
         },
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT: {
             "sha256": (
-                "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be"
+                "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f"
             ),
-            "sizeBytes": 17865,
+            "sizeBytes": 18355,
         },
     }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
@@ -566,6 +625,12 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
         "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": [64, 1, 1],
+            "subgroupWidth": 32,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
         "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
@@ -579,7 +644,7 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
     }
     assert compiler == {
         "entryPoint": "CSMain",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compilerArguments": [],
         "targetProfiles": ["directx-12"],
         "warningsAsErrors": True,
@@ -664,9 +729,13 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
         ("[WaveSize(32)]", "", "32-lane"),
         ("& 255u", "& 65535u", "unpack"),
         (
-            "int64_t((((w_offset * 4) + "
-            "(ws_offset + (row * in_vec_size_w))) + wl_offset))",
+            "int64_t(((w_offset * 4) + wl_offset))",
             "int64_t(wl_offset)",
+            "compose",
+        ),
+        (
+            "int64_t((ws_offset + (row * in_vec_size_w)));",
+            "int64_t(ws_offset);",
             "compose",
         ),
         (
@@ -737,6 +806,16 @@ def test_quantized_gather_directx_generated_contract_rejects_semantic_drift(
             "source uint8 storage conversion",
         ),
         (_generated_hlsl().replace("CSMain", "OtherMain"), "CSMain"),
+        (
+            _generated_hlsl().replace(
+                "[numthreads(64, 1, 1)]", "[numthreads(1, 1, 1)]"
+            ),
+            "workgroup and 32-lane wave size",
+        ),
+        (
+            _generated_hlsl().replace("[WaveSize(32)]", ""),
+            "workgroup and 32-lane wave size",
+        ),
         (_generated_hlsl() + "\nuint16_t native_width_marker;\n", "native 16-bit"),
     ],
 )
@@ -803,7 +882,7 @@ def test_quantized_directx_fake_dxc_uses_derived_profile_and_flags(
         "C:/tools/dxc.exe",
         "-WX",
         "-T",
-        "cs_6_0",
+        "cs_6_6",
         "-E",
         "CSMain",
         str(artifact_path),
@@ -964,6 +1043,7 @@ def test_quantized_directx_run_fails_closed_on_generated_identity_drift(
 
     monkeypatch.setattr(module, "_translate_report", translate_report)
     monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "strict")
 
     with pytest.raises(
         module.MlxQuantizedDirectXProofError,
@@ -973,6 +1053,63 @@ def test_quantized_directx_run_fails_closed_on_generated_identity_drift(
             mlx_root,
             work_dir,
             require_directx_toolchain=False,
+        )
+
+
+def test_quantized_directx_run_reports_generated_identity_drift(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = _load_proof()
+    mlx_root = _synthetic_checkout(module, tmp_path, monkeypatch)
+    work_dir = mlx_root / "proof"
+
+    def translate_report(_config, *, report_path):
+        payload, _artifact_path = _translated_payload(module, mlx_root, work_dir)
+        module._write_json(report_path, payload)
+        return payload
+
+    monkeypatch.setattr(module, "_translate_report", translate_report)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "report")
+    generated = _generated_hlsl().encode("utf-8")
+    pinned = module.GENERATED_ARTIFACTS[module.MLX_QUANTIZED_ENTRY_POINT]
+
+    summary = module.run_proof(mlx_root, work_dir, require_directx_toolchain=False)
+
+    assert summary["status"] == "passed"
+    drift = [
+        json.loads(line.removeprefix("MLX-PIN-DRIFT "))
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("MLX-PIN-DRIFT ")
+    ]
+    assert drift == [
+        {
+            "subject": f"{module.MLX_QUANTIZED_ENTRY_POINT}.hlsl",
+            "field": "generatedHash",
+            "expected": pinned["sha256"],
+            "actual": hashlib.sha256(generated).hexdigest(),
+        },
+        {
+            "subject": f"{module.MLX_QUANTIZED_ENTRY_POINT}.hlsl",
+            "field": "generatedSizeBytes",
+            "expected": pinned["sizeBytes"],
+            "actual": len(generated),
+        },
+    ]
+
+
+def test_quantized_directx_pin_mode_must_be_known(monkeypatch):
+    module = _load_proof()
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "lenient")
+    artifact = {
+        "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+        "generatedSizeBytes": 1,
+    }
+    with pytest.raises(module.MlxQuantizedDirectXProofError, match="strict or report"):
+        module._check_generated_artifact_pin(
+            artifact, entry_point=module.MLX_QUANTIZED_ENTRY_POINT
         )
 
 
@@ -1021,6 +1158,8 @@ def test_quantized_directx_run_writes_deterministic_compile_only_summary(
             "maxTemplateSpecializations": 128,
             "maxTemplateMaterializationWork": 4096,
         },
+        "workgroupSize": [64, 1, 1],
+        "subgroupWidth": 32,
     }
     assert summary["scope"]["runtime"] == {
         "executionAttempted": False,

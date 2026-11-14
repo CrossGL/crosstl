@@ -1,22 +1,19 @@
-import configparser
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
+import crosstl
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
-    "tools/ci_coverage.py",
     "tools/compile_artifact_bundle.py",
     "tools/ensure_metal_toolchain.py",
     "tools/refresh_artifact_contract.py",
     "tools/pytest_failure_summary.py",
-    "tools/support_matrix.py",
-    "tools/support_signals.py",
-    "tools/support_ci_summary.py",
-    "tools/sync_pr_issue_links.py",
-    "tools/sync_support_issues.py",
 ]
 
 
@@ -320,7 +317,7 @@ def test_crosstl_module_cli_help_surface(args, expected_stdout):
         assert text in result.stdout
 
 
-def test_support_tools_expose_cli_help():
+def test_tools_expose_cli_help():
     for tool in TOOLS:
         result = subprocess.run(
             [sys.executable, tool, "--help"],
@@ -333,7 +330,7 @@ def test_support_tools_expose_cli_help():
         assert "usage:" in result.stdout
 
 
-def test_support_tools_keep_main_entrypoint():
+def test_tools_keep_main_entrypoint():
     for tool in TOOLS:
         text = (ROOT / tool).read_text(encoding="utf-8")
 
@@ -342,7 +339,7 @@ def test_support_tools_keep_main_entrypoint():
         assert "sys.exit(main())" in text
 
 
-def test_pre_commit_config_keeps_repo_wide_formatters_and_safe_support_checks():
+def test_pre_commit_config_keeps_repo_wide_formatters():
     text = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
 
     assert "end-of-file-fixer" in text
@@ -351,29 +348,18 @@ def test_pre_commit_config_keeps_repo_wide_formatters_and_safe_support_checks():
     assert "ruff critical Python checks" in text
     assert "https://github.com/asottile/pyupgrade" in text
     assert "https://github.com/PyCQA/isort" in text
-    assert "python tools/support_matrix.py check" in text
-    assert "python tools/support_signals.py extract" in text
-    assert "python tools/support_signals.py check" not in text
-    assert "python tools/support_signals.py update" not in text
-    assert "python tools/support_matrix.py update" not in text
     assert "stages: [manual]" in text
 
 
-def test_pull_request_template_mentions_support_traceability_marker():
-    text = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(encoding="utf-8")
-
-    assert "Support issue traceability: no issue closed" in text
-
-
 def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
+    # pre-commit only reads tracked files, so .gitignore covers it too.
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    config = configparser.ConfigParser()
-    config.read(ROOT / "setup.cfg", encoding="utf-8")
+    pytest_options = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["pytest"]["ini_options"]
 
     assert "worktrees/" in gitignore
-    assert "worktrees/" in pre_commit
-    assert "worktrees" in config["tool:pytest"]["norecursedirs"].split()
+    assert "worktrees" in pytest_options["norecursedirs"]
 
 
 def test_public_docs_reference_project_porting_workflow():
@@ -388,7 +374,7 @@ def test_public_docs_reference_project_porting_workflow():
         assert "validate-project" in text
         assert "inspect-report" in text
         assert "--format text" in text
-        assert "project-porting" in text
+        assert "porting-guide" in text
 
 
 def test_public_docs_use_root_package_cli_entrypoint():
@@ -397,19 +383,51 @@ def test_public_docs_use_root_package_cli_entrypoint():
         "docs/source/quickstart.rst": (
             (ROOT / "docs" / "source" / "quickstart.rst").read_text(encoding="utf-8")
         ),
+        "docs/source/porting-guide.rst": (
+            (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
+        ),
         "docs/source/project-porting.rst": (
             (ROOT / "docs" / "source" / "project-porting.rst").read_text(
                 encoding="utf-8"
             )
-        ),
-        "support/README.md": (
-            (ROOT / "support" / "README.md").read_text(encoding="utf-8")
         ),
     }
 
     for path, text in docs.items():
         assert "python -m crosstl._crosstl" not in text, path
         assert "python -m crosstl " in text, path
+
+
+def test_readme_quickstart_kernel_translates_to_the_backends_it_names(tmp_path):
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = readme.split("\n## Quickstart\n", 1)[1].split("\n## ", 1)[0]
+    kernel = re.search(r"```glsl\n(.*?)```", quickstart, re.DOTALL).group(1)
+    backends = re.findall(r'saxpy\.cgl"?,? (?:backend="|--backend )(\w+)', quickstart)
+    source = tmp_path / "saxpy.cgl"
+    source.write_text(kernel, encoding="utf-8")
+
+    assert backends
+    for backend in backends:
+        assert crosstl.translate(str(source), backend=backend).strip(), backend
+
+
+def test_readme_language_table_matches_the_registered_backends_and_sources():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    rows = re.findall(
+        r"^\| ([^|]+?) \|\s*`?(\w*)`?\s*\| ([a-z ]+) \| ([a-z ]+) \|$",
+        readme,
+        re.MULTILINE,
+    )
+    outputs = {backend for _, backend, output, _ in rows if output != "not offered"}
+    # A row without a backend name is input only; its source key is the language.
+    inputs = {
+        backend or language.split()[0].lower()
+        for language, backend, _, source in rows
+        if source != "not offered"
+    }
+
+    assert outputs == set(crosstl.supported_backends())
+    assert inputs == set(crosstl.supported_sources()) - {"cgl"}
 
 
 def test_public_api_docs_include_project_api():
@@ -421,9 +439,7 @@ def test_public_api_docs_include_project_api():
 
 
 def test_project_porting_guide_references_python_project_api():
-    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
-        encoding="utf-8"
-    )
+    guide = (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
 
     assert (
         "from crosstl.project import inspect_project_report, translate_project" in guide
@@ -433,9 +449,7 @@ def test_project_porting_guide_references_python_project_api():
 
 
 def test_project_porting_guide_documents_dispatch_artifact_generation():
-    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
-        encoding="utf-8"
-    )
+    guide = (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
     normalized_guide = " ".join(guide.split())
 
     for field in (

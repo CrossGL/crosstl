@@ -226,6 +226,13 @@ def test_fallback_markers_and_entry_points():
     assert checks.count_entries("kernel void add(device float* a) {}", "metal") == 1
     assert (
         checks.count_entries(
+            "[[object, max_total_threads_per_threadgroup(1)]] void object_main() {}",
+            "metal",
+        )
+        == 1
+    )
+    assert (
+        checks.count_entries(
             '[shader("vertex")]\nfloat4 VSMain() : SV_Position', "hlsl"
         )
         == 2
@@ -250,11 +257,86 @@ def test_hlsl_entry_discovery():
     )
 
 
+def test_glsl_environment_checks_ray_and_mesh_stages_with_vulkan_rules():
+    # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V generation; every other stage keeps the
+    # OpenGL rules.
+    assert checks.glsl_environment(["ray_generation"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["ray_closest_hit", "ray_any_hit"]) == [
+        "--target-env",
+        "vulkan1.2",
+    ]
+    assert checks.glsl_environment(["mesh"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["task"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["fragment"]) == []
+    assert checks.glsl_environment(["mesh", "fragment"]) == []
+
+
+def test_glsl_specialization_macros_are_defined_after_version(tmp_path):
+    artifact = tmp_path / "unit.glsl"
+    text = (
+        "// record\n#version 450 core\n"
+        "/* CrossGL specialization metadata: name=has_map; constant_id=0;\n"
+        " * required_override=true; encoding_default=false;\n"
+        " * source_macro=CROSSGL_SPECIALIZE_has_map */\n"
+        "void main() {}\n"
+    )
+    artifact.write_text(text)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    source = Path(checks.glsl_specialized_source(artifact, text, scratch))
+    assert source.read_text().splitlines()[1:4] == [
+        "#version 450 core",
+        "#define CROSSGL_SPECIALIZE_has_map false",
+        "#line 3",
+    ]
+    plain = "#version 450 core\nvoid main() {}\n"
+    assert checks.glsl_specialized_source(artifact, plain, scratch) == artifact
+
+
+def test_glsl_host_workgroup_size_macros_get_the_encoded_default(tmp_path):
+    artifact = tmp_path / "unit.glsl"
+    text = (
+        "#version 450 core\n"
+        "#elif defined(CROSSGL_WORKGROUP_SIZE_X) && \\\n"
+        "    defined(CROSSGL_WORKGROUP_SIZE_Y) && defined(CROSSGL_WORKGROUP_SIZE_Z)\n"
+        "void main() {}\n"
+    )
+    artifact.write_text(text)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    source = Path(checks.glsl_specialized_source(artifact, text, scratch))
+    assert source.read_text().splitlines()[1:5] == [
+        "#define CROSSGL_WORKGROUP_SIZE_X 1",
+        "#define CROSSGL_WORKGROUP_SIZE_Y 1",
+        "#define CROSSGL_WORKGROUP_SIZE_Z 1",
+        "#line 2",
+    ]
+
+
+def test_essl_artifacts_must_declare_glsl_es_300(tmp_path):
+    desktop = tmp_path / "desktop.essl.glsl"
+    desktop.write_text("#version 450\nvoid main() {}\n")
+    result = checks.check_essl(desktop, ["vertex"])
+    assert result["verdict"] == "rejected"
+    assert "#version 300 es" in result["log"]
+
+    es = tmp_path / "es.essl.glsl"
+    es.write_text("#version 300 es\nvoid main() { gl_Position = vec4(0.0); }\n")
+    if checks.tool("glslangValidator").available:
+        assert checks.check_essl(es, ["vertex"])["verdict"] == "accepted"
+
+
 def test_spirv_environment_follows_module_version():
     assert checks.spirv_environment("; SPIR-V\n; Version: 1.0\n") == "vulkan1.1"
     assert checks.spirv_environment("; Version: 1.5\n") == "vulkan1.2"
     assert checks.spirv_environment("; Version: 1.6\n") == "vulkan1.3"
     assert checks.spirv_environment("OpCapability Shader\n") == "vulkan1.1"
+
+
+def test_spirv_features_enable_local_size_id_only_where_declared():
+    declared = "OpExecutionModeId %2 LocalSizeId %7 %8 %9\n"
+    assert checks.spirv_features(declared) == ["--allow-localsizeid"]
+    assert checks.spirv_features("OpExecutionMode %2 LocalSize 1 1 1\n") == []
 
 
 def _records(outcomes):
@@ -349,6 +431,18 @@ def test_committed_budgets_and_scoreboards_match_the_manifest():
         board = json.loads(path.read_text())
         assert board["manifestSHA256"] == manifest.manifest_digest(), path.name
         run.decode(board["cells"], data)
+
+
+def test_every_corpus_workflow_leg_has_a_committed_scoreboard():
+    # corpus.yml names each leg's scoreboard ci-<system>-<machine>: its Linux leg runs on an x86_64 Ubuntu runner and
+    # its Metal leg on an arm64 macOS runner. A leg without a committed scoreboard fails before it compares any cell.
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "corpus.yml"
+    ).read_text()
+    assert "ci-{platform.system()}-{platform.machine()}" in workflow
+    assert '"os": "ubuntu-24.04"' in workflow and '"os": "xcode-27"' in workflow
+    for profile in ("ci-linux-x86_64", "ci-darwin-arm64"):
+        assert (run.SCOREBOARDS / f"{profile}.json").is_file(), profile
 
 
 def test_worker_translates_and_times_one_unit(tmp_path):

@@ -10,10 +10,16 @@ import pytest
 from crosstl import translate
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.codegen.hlsl_half_storage import DirectXHalfStorageError
+from crosstl.translator.codegen.hlsl_half_storage import (
+    DirectXHalfStorageError,
+    HLSLHalfStorage,
+)
 from crosstl.translator.resource_storage import (
     BINARY16_STORAGE,
     parse_resource_storage_header,
+)
+from crosstl.translator.semantics.structured_layouts import (
+    StructuredLayoutUnsupportedError,
 )
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_codegen.test_directx_codegen import (
@@ -34,7 +40,12 @@ REQUIRE_ENV = "CROSTL_REQUIRE_HALF_BUFFER_RUNTIME"
 def _translate(root, source):
     path = root / "storage.metal"
     path.write_text(source, encoding="utf-8")
-    return translate(str(path), backend="directx", format_output=False)
+    return translate(
+        str(path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
+    )
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -95,7 +106,6 @@ STRUCTURES = {
     ),
     "array": "struct Cell { half values[2]; uint marker; };",
     "vector": "struct Cell { half2 value; uint marker; };",
-    "mixed": "struct Cell { half value; bool enabled; uint marker; };",
     "collision": (
         "struct __crossgl_half_storage_Cell { uint value; }; struct Cell { half first; half second; };"
     ),
@@ -121,12 +131,53 @@ def test_storage_structures_do_not_change_local_member_types(tmp_path, case):
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
+def test_storage_structure_with_a_one_byte_bool_keeps_the_metal_layout(tmp_path):
+    # MSL stores bool in one byte, so Cell is 8 bytes on Metal (half at 0, bool at 2, uint at 4); an HLSL
+    # structured buffer stores bool in four, which would make it 12 bytes and move marker to byte 8.
+    source = _source("structure").replace(
+        "struct Cell { half first; half second; };",
+        "struct Cell { half value; bool enabled; uint marker; };",
+    )
+    with pytest.raises(
+        StructuredLayoutUnsupportedError,
+        match="laid out differently by MSL and HLSL structured buffers",
+    ):
+        _translate(tmp_path, source)
+
+
 @pytest.mark.parametrize("scalar", ["float", "ushort", "uint", "int"])
 def test_non_half_buffers_do_not_get_storage_codecs(tmp_path, scalar):
     generated = _translate(tmp_path, _source("direct").replace("half", scalar))
     assert parse_resource_storage_header(generated) == {}
     assert "__crossgl_half_storage_" not in generated
     assert "asfloat16(" not in generated
+
+
+def _many_kernel_source(count):
+    # One distinct binary16 buffer per entry point, as in a library of template instantiations.
+    return "#include <metal_stdlib>\nusing namespace metal;\n" + "".join(
+        f"kernel void scale{index}(device half* values{index} [[buffer(0)]], "
+        "uint i [[thread_position_in_grid]]) "
+        f"{{ values{index}[i] = values{index}[i] * half(2.0f); }}\n"
+        for index in range(count)
+    )
+
+
+def test_storage_contract_records_every_buffer_of_a_many_kernel_module(tmp_path):
+    generated = _translate(tmp_path, _many_kernel_source(300))
+    assert parse_resource_storage_header(generated) == {
+        f"values{index}": BINARY16_STORAGE for index in range(300)
+    }
+
+
+def test_storage_contract_over_the_header_limit_is_a_typed_refusal():
+    storage = HLSLHalfStorage(generator=None)
+    storage.resources = {
+        f"values_{index:04}_" + "x" * 64: dict(BINARY16_STORAGE) for index in range(600)
+    }
+    with pytest.raises(DirectXHalfStorageError, match="600 buffers") as caught:
+        storage.header()
+    assert caught.value.reason == "resource-storage-contract-limit"
 
 
 UPDATE_CASES = {
@@ -176,9 +227,9 @@ def test_half_storage_updates_execute_with_logical_results(tmp_path, case):
 
 
 def test_half_lowering_controls_are_required_on_windows():
-    from tools import ci_coverage
+    from tests import workflow_text
 
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         Path(".github/workflows/demo-project-testing.yml").read_text(),
         "Validate indexed DirectX gather and resource aggregates",
     )

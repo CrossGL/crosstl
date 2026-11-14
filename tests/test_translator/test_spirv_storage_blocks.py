@@ -114,10 +114,14 @@ def test_metal_translates_blocks_without_length_queries(tmp_path):
     check_natively(tmp_path, "metal", translate(WRAP, "metal"))
 
 
-def spirv_like(body, declaration="RWStructuredBuffer<Block> v @set(0) @binding(0);"):
+def spirv_like(
+    body,
+    declaration="RWStructuredBuffer<Block> v @set(0) @binding(0);",
+    members="uint head; int a[];",
+):
     return parse(f"""
         shader S {{
-            struct Block {{ uint head; int a[]; }};
+            struct Block {{ {members} }};
             {declaration}
             compute {{
                 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
@@ -133,13 +137,22 @@ def test_other_uses_leave_the_variable_unchanged():
     assert program.global_variables[0].var_type.name == "RWStructuredBuffer"
 
 
-def test_only_spirv_sources_are_rewritten():
+@pytest.mark.parametrize("source", ["vulkan", "cgl", "opengl"])
+def test_runtime_array_blocks_are_rewritten_for_every_source(source):
+    # A struct ending in a runtime array has no element count, so the buffer can only hold one block.
     program = spirv_like("v[0].head = 0u;")
-    assert not normalize_spirv_storage_blocks(program, "opengl", "directx")
-    assert normalize_spirv_storage_blocks(program, "vulkan", "directx")
+    assert normalize_spirv_storage_blocks(program, source, "directx")
     variable = program.global_variables[0]
     assert variable.var_type.name == "Block"
     assert [a.name for a in variable.attributes][0] == "glsl_buffer_block"
+
+
+def test_only_spirv_sources_rewrite_fixed_size_blocks():
+    program = spirv_like("v[0].head = 0u;", members="uint head; int a[2];")
+    assert not normalize_spirv_storage_blocks(program, "opengl", "directx")
+    assert program.global_variables[0].var_type.name == "RWStructuredBuffer"
+    assert normalize_spirv_storage_blocks(program, "vulkan", "directx")
+    assert program.global_variables[0].var_type.name == "Block"
 
 
 def test_array_length_of_anything_else_is_refused():

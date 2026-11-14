@@ -27,10 +27,14 @@ ENTRIES = {
     for dtype in ("float32", "int32", "uint32")
 }
 ENTRIES.update({"all_reduce_andbool_": "bool_", "all_reduce_orbool_": "bool_"})
+# Extrema select an input element, so 16-bit float results need no rounding.
 BFLOAT_ENTRIES = {
     f"all_reduce_{operation}bfloat16": "bfloat16" for operation in ("min", "max")
 }
-ALL_ENTRIES = {**ENTRIES, **BFLOAT_ENTRIES}
+HALF_ENTRIES = {
+    f"all_reduce_{operation}float16": "float16" for operation in ("min", "max")
+}
+ALL_ENTRIES = {**ENTRIES, **BFLOAT_ENTRIES, **HALF_ENTRIES}
 INIT_ENTRIES = {
     f"init_reduce_{operation}{dtype}": dtype
     for operation in ("sum", "prod")
@@ -60,18 +64,34 @@ COLUMN_ENTRIES = {
     for dimension in (1, 2, 5)
     for entry, dtype in ENTRIES.items()
 }
+# The 16-bit float sums over one axis that quantized.cpp's split-K products
+# run over 32 or more partitions: the looped pass, and above 256 partitions
+# of fewer than 32,768 outputs the two-pass reduction. reduce.metal
+# accumulates them in the element type, so each addition rounds. Column
+# packages translate them on request; a column package without named entries
+# holds COLUMN_ENTRIES alone.
+PARTITION_SUM_ENTRIES = {
+    f"col_reduce_{mode}_1_32_32_reduce_sum{dtype}": dtype
+    for mode in ("looped", "2pass")
+    for dtype in ("float16", "bfloat16")
+}
 ENTRY_GROUPS = {
     "all": ENTRIES,
     "bfloat": BFLOAT_ENTRIES,
+    "half": HALF_ENTRIES,
     "row": ROW_ENTRIES,
-    "column": COLUMN_ENTRIES,
+    "column": {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES},
     "init": INIT_ENTRIES,
 }
+DEFAULT_ENTRIES = {"column": COLUMN_ENTRIES}
+# Families whose whole-array or row entries the on-demand cache translates.
+ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row"})
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
 FAMILY_WIDTHS = {
     "all": WIDTHS,
     "bfloat": WIDTHS,
+    "half": WIDTHS,
     "row": ROW_WIDTHS,
     "column": (256,),
     "init": (1,),
@@ -107,7 +127,7 @@ def load_index(directory, target):
         from demos.integrations.mlx.portable_host.reduction_cache import SOURCE_SHA256
 
         if (
-            family not in {"all", "bfloat", "row"}
+            family not in ON_DEMAND_FAMILIES
             or index.get("revision") != COMMIT
             or index.get("sourceHash") != SOURCE_SHA256
             or "descriptors" in index
@@ -156,14 +176,14 @@ def build_packages(
         raise ValueError("Reduction translation jobs must be a positive integer")
     if not isinstance(family, str) or family not in ENTRY_GROUPS:
         raise ValueError("Unknown reduction package family")
-    if type(on_demand) is not bool or (
-        on_demand and family not in {"all", "bfloat", "row"}
-    ):
+    if type(on_demand) is not bool or (on_demand and family not in ON_DEMAND_FAMILIES):
         raise ValueError("On-demand packages require whole-array or row reductions")
     supported = ENTRY_GROUPS[family]
     allowed_widths = FAMILY_WIDTHS[family]
     widths = tuple(allowed_widths if widths is None else widths)
-    entries = tuple(supported if entries is None else entries)
+    entries = tuple(
+        DEFAULT_ENTRIES.get(family, supported) if entries is None else entries
+    )
     if (
         not widths
         or len(set(widths)) != len(widths)
@@ -235,7 +255,7 @@ def build_packages(
             )
         if target == "directx" and family != "init":
             options += 'relative_wave_shuffle_out_of_range = "self"\n'
-        if family in {"all", "bfloat"} and target == "opengl":
+        if family in {"all", "bfloat", "half"} and target == "opengl":
             # A static package serves every count, so the rebased input offset
             # has no interval proof. reduction_layout.validate bounds it and
             # each read by MAX_ELEMENTS before dispatch; --on-demand packages

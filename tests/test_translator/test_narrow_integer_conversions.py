@@ -137,6 +137,19 @@ DISCARDED_UPDATE_CASES = {
         "{ short value = 7; value++; total += uint(value); } } output[0] = total;",
         [24],
     ),
+    "element": (
+        "short values[3] = {short(1), short(2), short(32767)}; uint index = 1; "
+        "values[index] += 5; values[index - 1] |= short(8); values[2]++; "
+        "output[0] = uint(values[0]); output[1] = uint(values[1]); "
+        "output[2] = uint(int(values[2]) + 40000);",
+        [9, 7, 7232],
+    ),
+    "field-element": (
+        "Masks masks; for (int i = 0; i < 2; ++i) { masks.bits[i] = 0; "
+        "for (int b = 0; b < 3; ++b) { masks.bits[i] |= short(((i + b) & 1) << b); } } "
+        "output[0] = uint(masks.bits[0]); output[1] = uint(masks.bits[1]);",
+        [2, 5],
+    ),
 }
 
 
@@ -145,6 +158,7 @@ def _discarded_update_case(root, case):
     source = (
         "#include <metal_stdlib>\nusing namespace metal;\n"
         "struct Counter { short value; };\n"
+        "struct Masks { short bits[2]; };\n"
         "short take(thread short& value) { return value++; }\n"
         "uint promote(short value) { return uint(value); }\n"
         "kernel void update_result(device uint* output [[buffer(0)]]) {\n"

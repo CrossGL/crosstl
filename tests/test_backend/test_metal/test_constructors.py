@@ -772,6 +772,7 @@ def test_pointer_reinterpret_cast_does_not_invoke_constructor():
       template <typename T>
       fp8_like(T value) { bits = uint8_t(value); }
       uint8_t bits;
+      operator float() const thread { return float(bits); }
     };
 
     float decode(uint8_t value) {
@@ -782,7 +783,8 @@ def test_pointer_reinterpret_cast_does_not_invoke_constructor():
     _preprocessed, generated = convert(source)
 
     assert "crosstl_ctor_fp8_like" not in generated
-    assert "(*(thread fp8_like*)(&value))" in generated
+    # The reinterpreted value reaches the conversion operator unchanged.
+    assert "fp8_like__operator_float((*(thread fp8_like*)(&value)))" in generated
     assert_crossgl_parses(generated)
 
 

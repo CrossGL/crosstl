@@ -4,6 +4,7 @@ import math
 
 from demos.integrations.mlx.portable_host import bfloat_storage
 from demos.integrations.mlx.portable_host.binary_workloads import LAYOUTS, operands
+from demos.integrations.mlx.portable_host.cast_workloads import contiguous_span
 from demos.integrations.mlx.portable_host.half_arithmetic_workloads import OPERATIONS
 from demos.integrations.mlx.portable_host.packages import (
     BFLOAT_CAST_ENTRIES,
@@ -111,6 +112,10 @@ def sequence(case, a, b):
     sources = (a,) if casts or absolute else (a, b)
     if absolute and case["layout"] in {"transpose", "broadcast"}:
         return [entry]
+    # Casts run in place over the contiguous span MLX's layout marks.
+    span = contiguous_span(a) if casts else None
+    if span is not None:
+        return [entry] * math.ceil(span / 65535)
     return [copy for value in sources if not value.flags.c_contiguous] + [
         entry
     ] * math.ceil(a.size / 65535)
@@ -192,7 +197,13 @@ def validate(records, trace, *, native):
         if not result_events:
             continue
         stored = expected
-        if case["entry"] == "v_Absbfloat16bfloat16":
+        # Absolute values and casts run in place over a contiguous span and
+        # write it in memory order.
+        if case["entry"] == "v_Absbfloat16bfloat16" or (
+            case["entry"] in BFLOAT_CAST_ENTRIES
+            and not a.flags.c_contiguous
+            and contiguous_span(a) is not None
+        ):
             if case["layout"] == "transpose":
                 stored = expected.T
             elif case["layout"] == "broadcast":

@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 project = "CrossGL Translator"
 author = "CrossGL"
 copyright = "2026, CrossGL"
-release = "3.4.0"
+release = "3.7.0"
 
 extensions = [
     "myst_parser",
@@ -23,13 +23,6 @@ extensions = [
     "sphinx_copybutton",
 ]
 
-try:
-    import breathe  # noqa: F401
-except Exception:
-    breathe = None
-else:
-    extensions.append("breathe")
-
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -38,7 +31,7 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_typehints = "description"
-autodoc_mock_imports = ["gast", "jinja2", "numpy"]
+autodoc_mock_imports = ["gast", "numpy"]
 suppress_warnings = ["sphinx_autodoc_typehints.forward_reference"]
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
@@ -46,11 +39,6 @@ napoleon_numpy_docstring = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
 }
-
-breathe_projects = {
-    "crossgl-translator": str(ROOT / "docs" / "doxygen" / "build" / "xml"),
-}
-breathe_default_project = "crossgl-translator"
 
 html_theme = "furo"
 html_title = "CrossGL Translator"

@@ -75,6 +75,50 @@ def test_empty_standard_array_does_not_change_c_style_extent():
     assert isinstance(node, ArrayType) and node.size.value == 0
 
 
+@pytest.mark.parametrize(
+    "element,expected",
+    (
+        ("packed_float3", "packed_float3"),
+        ("float3", "packed_float3"),
+        ("metal::half2", "packed_half2"),
+    ),
+)
+def test_packed_member_keeps_zero_extent_standard_array(tmp_path, element, expected):
+    import crosstl
+
+    path = tmp_path / "packed.metal"
+    path.write_text(
+        f"""#include <metal_stdlib>
+using namespace metal;
+struct Payload {{ uint head; metal::array<packed_float3, 0> empty; uint tail; }};
+struct Wide {{ uint head; array<{element}, 0> empty; uint tail; }};
+kernel void k(device Payload* p [[buffer(0)]], device Wide* w [[buffer(1)]],
+              uint tid [[thread_position_in_grid]]) {{
+    p[tid].tail = p[tid].head + p[tid].empty.size();
+    w[tid].tail = w[tid].head + w[tid].empty.size();
+}}
+""",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(str(path), backend="metal")
+    assert "array<packed_float3, 0> empty;" in code
+    if element.startswith("packed_"):
+        assert code.count(f"array<{expected}, 0> empty;") == 2
+
+
+def test_packed_storage_splits_nested_standard_array_templates():
+    from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+
+    parts = MetalCodeGen.metal_array_template_parts
+    assert parts("array<packed_float3, 0>") == ("array<", "packed_float3", "0")
+    assert parts("metal::array<array<float3, 2>, 3>") == (
+        "metal::array<",
+        "array<float3, 2>",
+        "3",
+    )
+    assert parts("float3") is None and parts("packed_float3[2]") is None
+
+
 @pytest.mark.parametrize("label", ("row_major", "column_major"))
 def test_generic_value_labels_are_not_consumed_as_qualifiers(label):
     from crosstl.translator.ast import NamedType

@@ -368,11 +368,11 @@ def test_direct_cast_views_do_not_bypass_escape_checks(body, reason):
 
 
 def test_private_vector_view_native_gate():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert "test_private_vector_views.py" in step

@@ -36,3 +36,11 @@ Slang overlaps with the DirectX backend, but it has its own syntax surface and
 helper generation. Keep Slang-specific resource helper names and type mappings
 inside ``SlangCodeGen``. Promote a helper to shared code only when DirectX,
 GLSL, or another backend needs exactly the same behavior.
+
+A CrossGL storage buffer, ``buffer T* name``, is declared at the interface as
+``RWStructuredBuffer<T> name`` (``StructuredBuffer<T>`` when it is declared
+``readonly``), with the binding and register the other backends give it, and
+``*name`` reads ``name[0]``. Slang has no pointer to bound memory: a global
+pointer becomes an implicit shader parameter holding one buffer-device address,
+which a host cannot bind as a storage buffer on any ``slangc`` target. An
+interface block instance, ``buffer BlockName name``, keeps its block lowering.

@@ -1,10 +1,11 @@
+#pragma cgl_rules(udiv_zero, wrap)
 shader main {
     struct PSInput {
         vec4 position @ gl_Position;
         vec2 uv @ TexCoord;
     }
     @ register(t0)
-    sampler2D g_texture;
+    texture2D g_texture;
     @ register(s0)
     sampler g_sampler;
     // vertex Shader

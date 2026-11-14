@@ -5,6 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from crosstl.translator.codegen.hlsl_specialization_macros import (
+    HLSL_SPECIALIZATION_MACRO_RE,
+)
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 from .interface import hlsl_reflected_strides
 from .process import CommandResult, require_artifact, run
 from .toolchains import tool
@@ -20,13 +27,33 @@ ENVIRONMENTS = ("vulkan1.1", "vulkan1.2", "vulkan1.3")
 NATIVE_16_BIT = re.compile(r"\b(?:float16_t|int16_t|uint16_t)(?:[1-4](?:x[1-4])?)?\b")
 
 
+# A thread-group size the source's host chooses reads three macros that the host defines when it compiles the shader
+# (crosstl/translator/codegen/hlsl_host_workgroup_size.py); the check gives them the size of one invocation, as the
+# GLSL check does (corpus/checks.py).
+HOST_WORKGROUP_SIZE_DEFAULT = "1"
+# A specialization constant without a default reads its value from a macro the host defines
+# (crosstl/translator/codegen/hlsl_specialization_macros.py) and casts it to the constant's scalar type. The check
+# defines each macro as 0, the zero of that type, which is the value the GLSL check encodes (corpus/checks.py) and the
+# default a SPIR-V module is validated under.
+HLSL_SPECIALIZATION_DEFAULT = "0"
+
+
 def hlsl_arguments(path):
     """The DXC arguments an HLSL artifact needs beyond its profile and entry point."""
     try:
         text = Path(path).read_text(errors="replace")
     except OSError:
         return []
-    return ["-enable-16bit-types"] if NATIVE_16_BIT.search(text) else []
+    arguments = ["-enable-16bit-types"] if NATIVE_16_BIT.search(text) else []
+    if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        for macro in HOST_WORKGROUP_SIZE_MACROS:
+            arguments += ["-D", f"{macro}={HOST_WORKGROUP_SIZE_DEFAULT}"]
+    specialization_macros = sorted(
+        {match["macro"] for match in HLSL_SPECIALIZATION_MACRO_RE.finditer(text)}
+    )
+    for macro in specialization_macros:
+        arguments += ["-D", f"{macro}={HLSL_SPECIALIZATION_DEFAULT}"]
+    return arguments
 
 
 def _missing(name):
@@ -126,6 +153,30 @@ def validate(
     ]
     if results[0].status == "accepted":
         results.append(
-            run([*tool("spirv-val").command, "--target-env", environment, output])
+            run(
+                [
+                    *tool("spirv-val").command,
+                    "--target-env",
+                    environment,
+                    *spirv_layout_flags(path),
+                    output,
+                ]
+            )
         )
     return results, {}
+
+
+def spirv_layout_flags(path):
+    """``spirv-val`` flags for the block layouts a module declares it relies on.
+
+    A module whose blocks need the scalar block layout says so with ``OpSourceExtension
+    "GL_EXT_scalar_block_layout"``, as glslang does; the host then enables ``scalarBlockLayout``. Any other module
+    is checked against Vulkan's default layout rules.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    if 'OpSourceExtension "GL_EXT_scalar_block_layout"' in text:
+        return ["--scalar-block-layout"]
+    return []

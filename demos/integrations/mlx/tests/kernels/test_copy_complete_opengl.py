@@ -32,6 +32,7 @@ from demos.integrations.mlx.tests.kernels.test_copy_complete_metal_roundtrip imp
     _expected_materializations,
     _expected_specialization_count,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 REQUIRE_COPY_OPENGL_ENV = "CROSTL_REQUIRE_MLX_COPY_OPENGL_TRANSLATION"
 COPY_OPENGL_SHARD_INDEX_ENV = "CROSTL_MLX_COPY_OPENGL_SHARD_INDEX"
@@ -47,11 +48,11 @@ COPY_OPENGL_CONTRACT_PATH = (
     / "copy.opengl-translation.json"
 )
 COPY_OPENGL_CONTRACT_SHA256 = (
-    "50787328f9328fbe79bd7cfb23829c34c07984ac56ec459d98f33bda7d3a0e1c"
+    "bce06b3adc8005d4caceb26c111f83e1c2358925aefdd6b186f0f76fc99d9312"
 )
 COPY_OPENGL_CONTRACT_SIZE_BYTES = 875148
-COPY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 6053732
-COPY_OPENGL_GENERATED_SIZE_MINIMUM = ("s_copybool_bool_", 1585)
+COPY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 6151805
+COPY_OPENGL_GENERATED_SIZE_MINIMUM = ("s_copybool_bool_", 1629)
 COPY_OPENGL_GENERATED_SIZE_MAXIMUM = (
     "gn4large_copyuint64bfloat16",
     4688,
@@ -477,11 +478,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_COPY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "main",

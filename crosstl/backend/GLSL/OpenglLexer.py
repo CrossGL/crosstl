@@ -3,6 +3,9 @@
 import re
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import OpenGLSyntaxError
+
+from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import GLSLPreprocessor
 
 # Tokens to skip entirely
@@ -269,7 +272,8 @@ class GLSLLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
-        self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self._token_dispatch = ordered_pattern_dispatch(TOKENS)
+        self._token_patterns = self._token_dispatch.patterns
         self.code = code
         self._length = len(code)
 
@@ -290,7 +294,7 @@ class GLSLLexer:
                 if self.code.find("*/", pos + 2) == -1:
                     line_num = self.code[:pos].count("\n") + 1
                     col_num = pos - self.code.rfind("\n", 0, pos)
-                    raise SyntaxError(
+                    raise OpenGLSyntaxError(
                         f"Unterminated block comment at line {line_num}, column {col_num}"
                     )
             token = self._next_token(pos)
@@ -298,7 +302,7 @@ class GLSLLexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Illegal character '{self.code[pos]}' at line {line_num}, column {col_num}\n"
                     f"Context: ...{context}..."
                 )
@@ -317,7 +321,9 @@ class GLSLLexer:
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
         """Match the next token at ``pos`` and return its end offset."""
-        for token_type, pattern in self._token_patterns:
+        # Only patterns that can begin with this character are tried, in table
+        # order, so the first matching pattern is the one the full table picks.
+        for token_type, pattern in self._token_dispatch.candidates(self.code[pos]):
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)

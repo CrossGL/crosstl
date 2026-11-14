@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 563,
+        "endLine": 60,
+        "endOffset": 1384,
         "file": "crosstl-out/directx/spv.pushConstant.hlsl",
-        "length": 563,
+        "length": 1384,
         "line": 1,
         "offset": 0
       },

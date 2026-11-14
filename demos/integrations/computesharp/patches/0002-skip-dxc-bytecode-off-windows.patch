@@ -1,0 +1,26 @@
+diff --git a/src/ComputeSharp.SourceGeneration.Hlsl/SyntaxProcessors/HlslBytecodeSyntaxProcessor.cs b/src/ComputeSharp.SourceGeneration.Hlsl/SyntaxProcessors/HlslBytecodeSyntaxProcessor.cs
+index f530496..af700b7 100644
+--- a/src/ComputeSharp.SourceGeneration.Hlsl/SyntaxProcessors/HlslBytecodeSyntaxProcessor.cs
++++ b/src/ComputeSharp.SourceGeneration.Hlsl/SyntaxProcessors/HlslBytecodeSyntaxProcessor.cs
+@@ -2,6 +2,7 @@ using System;
+ using System.Collections.Immutable;
+ using System.ComponentModel;
+ using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
+ using System.Threading;
+ using ComputeSharp.SourceGeneration.Extensions;
+ using ComputeSharp.SourceGeneration.Helpers;
+@@ -49,6 +50,13 @@ internal static partial class HlslBytecodeSyntaxProcessor
+                 return HlslBytecodeInfo.Missing.Instance;
+             }
+ 
++            // The embedded DXC libraries only load on Windows. Other hosts keep the generated HLSL
++            // source and descriptor metadata, and leave the precompiled bytecode empty.
++            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
++            {
++                return HlslBytecodeInfo.Missing.Instance;
++            }
++
+             try
+             {
+                 token.ThrowIfCancellationRequested();

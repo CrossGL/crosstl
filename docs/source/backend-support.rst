@@ -3,7 +3,27 @@ Backend Support
 
 CrossGL Translator keeps source imports and target code generators in separate
 registries. A language can be available as an input source, an output target,
-or both.
+or both. The tables below list what is registered; they do not say how much of
+each language translates correctly.
+
+Measured coverage
+-----------------
+
+CI measures that on every push to ``main`` and nightly. Each feature in a
+pinned upstream feature list gets a generated probe, CrossTL translates it, and
+the language's reference compiler or validator checks the result. Compute
+probes also run, on the GPU or on Mesa's software drivers, where the
+translation must compute what the native probe computes: Metal, GLSL and
+SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
+reference compilers produce. A translation must also keep the built-ins and
+decorations, such as ``flat`` or the subgroup size, that the feature needs
+in the SPIR-V its compiler produces, or in the AIR for Metal.
+`COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
+lists the score and every gap for each language and direction, and each row
+with gaps has an open issue labelled ``coverage``.
+
+.. image:: https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg
+   :alt: CrossTL coverage per language and direction
 
 Built-in targets
 ----------------
@@ -87,53 +107,50 @@ Built-in targets
 Built-in sources
 ----------------
 
+Every source below except CrossGL has a reverse generator that emits CrossGL,
+so its programs can be translated through CrossGL to the targets above.
+
 .. list-table::
    :header-rows: 1
 
    * - Source
      - Registry name
      - Extensions
-     - Reverse CrossGL generation
    * - CrossGL
      - ``cgl``
      - ``.cgl``
-     - Native source format
    * - DirectX / HLSL
      - ``directx``
-     - ``.hlsl``
-     - Yes
+     - ``.hlsl``, ``.hlsli``, ``.fx``, ``.fxh``
    * - OpenGL / GLSL
      - ``opengl``
-     - ``.glsl``
-     - Yes
+     - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
+       ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
+       ``.rgen``
    * - Metal
      - ``metal``
-     - ``.metal``
-     - Yes
+     - ``.metal``, ``.msl``
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``.spvasm``
-     - Yes
    * - CUDA
      - ``cuda``
      - ``.cu``, ``.cuh``, ``.cuda``
-     - Yes
    * - HIP
      - ``hip``
      - ``.hip``
-     - Yes
+   * - OpenCL C
+     - ``opencl``
+     - ``.cl``, ``.opencl``
    * - Mojo
      - ``mojo``
      - ``.mojo``
-     - Yes
    * - Rust
      - ``rust``
      - ``.rs``, ``.rust``
-     - Yes
    * - Slang
      - ``slang``
-     - ``.slang``
-     - Yes
+     - ``.slang``, ``.slangh``
 
 Target-only sources
 -------------------

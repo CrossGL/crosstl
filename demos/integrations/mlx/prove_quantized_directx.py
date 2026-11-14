@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -30,6 +31,12 @@ MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
 MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH = 32
+# affine_quantize reduces each quantization group with simd_min/simd_max, so
+# its result depends on the dispatch shape. MLX's quantize_impl launches up to
+# maxTotalThreadsPerThreadgroup threads per group; any multiple of the 32-lane
+# SIMD-group keeps every quantization group inside one SIMD-group.
+MLX_QUANTIZED_WORKGROUP_SIZE = (64, 1, 1)
+MLX_QUANTIZED_SUBGROUP_WIDTH = 32
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -55,6 +62,8 @@ ENTRY_CONTRACTS = {
         "concreteSpecializationCount": CONCRETE_SPECIALIZATION_COUNT,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "quantize",
+        "workgroupSize": MLX_QUANTIZED_WORKGROUP_SIZE,
+        "subgroupWidth": MLX_QUANTIZED_SUBGROUP_WIDTH,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
@@ -69,12 +78,12 @@ ENTRY_CONTRACTS = {
 }
 GENERATED_ARTIFACTS = {
     MLX_QUANTIZED_ENTRY_POINT: {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "sizeBytes": 5704,
+        "sha256": "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b",
+        "sizeBytes": 6239,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "sizeBytes": 17865,
+        "sha256": "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f",
+        "sizeBytes": 18355,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
@@ -107,6 +116,12 @@ _STATIC_ASSERT_RE = re.compile(r"\bstatic_assert\s*\(")
 _COMPUTE_ENTRY_RE = re.compile(
     r"\[\s*numthreads\s*\([^\]]+\)\s*\]\s*"
     r"(?:\[\s*WaveSize\s*\([^\]]+\)\s*\]\s*)?"
+    r"void\s+CSMain\s*\(",
+    flags=re.MULTILINE,
+)
+_QUANTIZE_EXECUTION_ENTRY_RE = re.compile(
+    r"\[\s*numthreads\s*\(\s*64\s*,\s*1\s*,\s*1\s*\)\s*\]\s*"
+    r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]\s*"
     r"void\s+CSMain\s*\(",
     flags=re.MULTILINE,
 )
@@ -173,6 +188,51 @@ class MlxQuantizedDirectXProofError(RuntimeError):
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise MlxQuantizedDirectXProofError(message)
+
+
+def _check_generated_artifact_pin(
+    artifact: Mapping[str, Any], *, entry_point: str
+) -> None:
+    """Check the reviewed bytes of ``entry_point``'s HLSL under ``CROSSTL_MLX_PIN_MODE``.
+
+    The artifact must always carry a SHA-256 hash and a size. Strict mode, the
+    default, fails when either differs from its pin. Report mode, which merge-queue,
+    push and nightly runs set, prints one ``MLX-PIN-DRIFT`` line per changed value
+    for ``refresh_pins`` and lets compilation and the remaining checks go on.
+    """
+
+    mode = os.environ.get("CROSSTL_MLX_PIN_MODE", "").strip() or "strict"
+    _require(
+        mode in {"strict", "report"},
+        f"CROSSTL_MLX_PIN_MODE must be strict or report, not {mode!r}",
+    )
+    generated_hash = artifact.get("generatedHash")
+    _require(
+        isinstance(generated_hash, Mapping)
+        and generated_hash.get("algorithm") == "sha256"
+        and isinstance(generated_hash.get("value"), str)
+        and isinstance(artifact.get("generatedSizeBytes"), int),
+        f"generated DirectX artifact identity is missing for {entry_point}",
+    )
+    expected = GENERATED_ARTIFACTS[entry_point]
+    for field, actual, pinned in (
+        ("generatedHash", generated_hash["value"], expected["sha256"]),
+        ("generatedSizeBytes", artifact["generatedSizeBytes"], expected["sizeBytes"]),
+    ):
+        if actual == pinned:
+            continue
+        _require(
+            mode == "report",
+            f"generated DirectX artifact identity changed for {entry_point}: "
+            f"pinned {field} changed from {pinned!r} to {actual!r}",
+        )
+        record = {
+            "subject": f"{entry_point}.hlsl",
+            "field": field,
+            "expected": pinned,
+            "actual": actual,
+        }
+        print("MLX-PIN-DRIFT " + json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -608,6 +668,10 @@ def _translated_artifact(
 
 def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
     _require(
+        len(_QUANTIZE_EXECUTION_ENTRY_RE.findall(generated)) == 1,
+        "the quantize entry must fix its workgroup and 32-lane wave size",
+    )
+    _require(
         len(_PACKED_OUTPUT_DECLARATION_RE.findall(generated)) == 1,
         "the bits=2 packed output specialization must retain its uint32 type",
     )
@@ -616,6 +680,12 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
         "the bits=2 packed output must retain its source uint8 storage conversion",
     )
     return {
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": list(MLX_QUANTIZED_WORKGROUP_SIZE),
+            "subgroupWidth": MLX_QUANTIZED_SUBGROUP_WIDTH,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
         "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
@@ -625,7 +695,7 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
             "generatedValueType": "uint",
             "conversion": "uint8-mask",
             "generatedStore": PACKED_OUTPUT_STORE,
-        }
+        },
     }
 
 
@@ -650,10 +720,10 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
     )
     byte_read = "w[uint(((w_offset + i)) / 4)]"
     lane_shift = "uint((((w_offset + i)) % 4) * 8)"
-    call_offset = (
-        "int64_t((((w_offset * 4) + "
-        "(ws_offset + (row * in_vec_size_w))) + wl_offset))"
-    )
+    # ``wl = ws + row * in_vec_size_w`` keeps its byte offset from the uint8 view
+    # of ``w`` in ``wl_offset``; the call adds the view's root, ``w_offset`` words.
+    local_offset = "int64_t wl_offset = int64_t((ws_offset + (row * in_vec_size_w)));"
+    call_offset = "int64_t(((w_offset * 4) + wl_offset))"
     _require(
         load_signature in normalized_generated, "the 16-element load helper changed"
     )
@@ -671,7 +741,7 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
         "the qdot helper must unpack each uint8 weight from its 32-bit backing word",
     )
     _require(
-        call_offset in generated,
+        generated.count(local_offset) == 1 and call_offset in generated,
         "the qdot call must compose root, byte-view, row, and local offsets",
     )
     _require(
@@ -923,15 +993,7 @@ def run_proof(
         work_dir=resolved_work_dir,
         entry_point=entry_point,
     )
-    expected_artifact = GENERATED_ARTIFACTS[entry_point]
-    _require(
-        artifact["generatedHash"] == {
-            "algorithm": "sha256",
-            "value": expected_artifact["sha256"],
-        }
-        and artifact["generatedSizeBytes"] == expected_artifact["sizeBytes"],
-        f"generated DirectX artifact identity changed for {entry_point}",
-    )
+    _check_generated_artifact_pin(artifact, entry_point=entry_point)
     generated_checks, compiler_contract = _validate_generated_hlsl(
         artifact_path, entry_point=entry_point
     )

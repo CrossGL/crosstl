@@ -269,13 +269,13 @@ kernel void divide_control(const device uint* values [[buffer(0)]],
 
 
 def test_ci_requires_native_division_without_new_runners():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate binary32 arithmetic"
     )
     assert_native_step_prerequisites(step, job="portable-host")

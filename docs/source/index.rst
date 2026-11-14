@@ -10,19 +10,15 @@ systems-language targets.
    :caption: Guides
 
    quickstart
-   architecture
    translation-pipeline
-   project-porting
+   porting-guide
    artifact-contract-refresh
    lexer
    ast
    codegen-utilities
    backend-support
-   support-matrix
    backends/index
-   examples
    extending
-   doxygen
    adr/index
 
 .. toctree::

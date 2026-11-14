@@ -3,6 +3,8 @@
 import re
 from typing import Dict, List, Optional
 
+from crosstl.translator.refusals import HipSyntaxError
+
 from .preprocessor import HipPreprocessor
 
 
@@ -311,7 +313,7 @@ class HipLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise HipSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

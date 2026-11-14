@@ -1,8 +1,4 @@
 #version 330
-in vec3 fragPosition;
-in vec2 fragTexCoord;
-in vec4 fragColor;
-in vec3 fragNormal;
 struct Light {
     int enabled;
     int type;
@@ -11,6 +7,10 @@ struct Light {
     vec4 color;
 };
 
+in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec4 fragColor;
+in vec3 fragNormal;
 uniform sampler2D texture0;
 // Constant Buffers
 layout(std140) uniform Uniforms {

@@ -1,66 +1,214 @@
 # Changelog
 
-All notable changes to CrossTL are documented in this file.
+Notable changes to CrossTL for people who install and use it, newest first. Internal refactors, test and CI changes are left out; the commit history has them. Entries for newer changes wait in `changelog.d/` until the next release is prepared.
 
 ## [Unreleased]
+
+### Fixed
+
+- CUDA and HIP output write `reflect`, `refract` and `faceforward` as generated helpers that follow GLSL 4.60 section 8.5, such as `cgl_float3_reflect` for `vec3` and `cgl_reflect_float` for `float`, for float, double and half scalars and float, double and `f16vec2` vectors, including calls nested in each other. Operands no helper covers, such as integer vectors or mixed vector sizes, are refused with a typed CUDA or HIP lowering diagnostic. They used to copy the calls into the output, which nvcc and hipcc rejected as undeclared identifiers, because neither toolkit declares these functions (#4473).
+- An empty brace list whose destination is a scalar is that scalar's zero outside a declaration as well: assigned (`x = {};`), returned (`return {};` from a function returning `float`), or a member or element of a brace list (`S s = {{}, 1.0};`, `float a[2] = {{}, 1.0};`), as `float one = {};` already was. HLSL output used to copy the braces, which DXC rejects (`expected expression`), or refuse the program with `DirectXAggregateInitializerError`; WGSL output wrote `array()` (naga: `type can't be inferred`); and GLSL output refused it with `OpenGLAggregateInitializerError` (#3751).
+- WGSL output writes HLSL's `f32tof16` and `f16tof32` with `pack2x16float` and `unpack2x16float`: `f32tof16(x)` becomes `pack2x16float(vec2<f32>(x, 0.0))`, which keeps the half in the low 16 bits, and `f16tof32(h)` becomes `unpack2x16float(h).x`, with helpers for vectors. It used to copy both calls into the output, which naga rejects (`no definition in scope for identifier: f32tof16`) (#4407).
+- SPIR-V output counts the `length()` of a buffer view with an offset from the offset on, as GLSL output does: `data + 2` passed to a `buffer float*` or `StructuredBuffer<float>` parameter, or held in a local or a chain of locals, gives the buffer's `OpArrayLength` less the offset, as a signed `int`. It used to apply `OpArrayLength` to the element pointer, which spirv-val rejects (`The Structure's type in OpArrayLength must be a pointer to an OpTypeStruct`). The `length()` of a reinterpreted view, or of an array member of a buffer element, is refused with `BufferLengthUnsupportedError` (`project.translate.spirv-buffer-length-unsupported`) (#3757).
+- HIP output writes CrossGL's `clockRealtimeEXT()` as `wall_clock64()`, HIP's constant-rate device clock. It used to copy the call into the output, where hipcc rejected the undeclared identifier (#4414).
+- CUDA, HIP and GLSL output write the other shader clock built-ins as well: `clockARB()`, `clock2x32ARB()` and `clockRealtime2x32EXT()`, and in CUDA output `clockRealtimeEXT()`. CUDA output reads `clock64()` for the ARB clocks and the PTX `%globaltimer` register for the realtime clocks, HIP output reads `clock64()` for the ARB clocks, and the `2x32` forms return the counter as a `uint2` (low word first) that takes part in `uvec2` arithmetic. GLSL output requests `GL_ARB_shader_clock` or `GL_EXT_shader_realtime_clock` for the clocks it uses. CUDA and HIP output used to copy these calls unchanged, which nvcc and hipcc rejected as undeclared identifiers, and glslang rejected the GLSL with `required extension not requested` (#4427).
+- SPIR-V output lowers the four shader clock built-ins to `OpReadClockKHR` with the `ShaderClockKHR` capability and `SPV_KHR_shader_clock`, at `Subgroup` scope for the ARB clocks and `Device` scope for the realtime clocks, as glslang does; the `2x32` forms give a `uvec2`. It used to raise `SPIRVBuiltinLoweringError` (`Cannot lower call to 'clockRealtimeEXT' to SPIR-V`). Slang, Rust and Mojo output have no counter to read and used to copy the calls unchanged; they now refuse them with `SlangLoweringRefused`, `RustLoweringRefused` and `MojoLoweringRefused` (#4427).
+- A shader-scope constant or constant-buffer member passed as the first argument of a generic overload call, as in `sel(K, x)` or `sel(offset, offset)`, is a value argument. It had been read as the overload's type argument, so Metal, HLSL, Slang, CUDA and HIP output declared `K sel_K_overload0(K a)`, which their compilers reject, and GLSL, SPIR-V and WGSL output refused the program. A leading name now counts as a type argument only when it is not a local or parameter and names a built-in type, a declared structure, enumeration or type alias, or a generic parameter in scope; `cbuffer` and `buffer` block names are values (#3761).
+- HLSL output declares a 1D shadow texture, which HLSL input imports from a `Texture1D` or `Texture1DArray` used only with `SampleCmp`, `SampleCmpLevel`, `SampleCmpLevelZero` or `SampleCmpGrad`, as `Texture1D` or `Texture1DArray` again. The round trip used to fail with `ValueError: DirectX texture operation 'textureCompare' requires a declared texture or image resource argument` (#2639, #2640, #2641).
+- GLSL output declares a 1D shadow texture as `sampler1DShadow` or `sampler1DArrayShadow` and writes `texture`, `textureLod`, `textureGrad` and their `Offset` forms with the reference in the coordinate, as GLSL 4.60 section 8.9.2 defines them: `vec3(u, 0.0, Dref)` for `sampler1DShadow` (the second component is unused) and `vec3(u, layer, Dref)` for `sampler1DArrayShadow`. The same program used to fail with `ValueError: OpenGL texture operation 'textureCompare' requires a declared texture or image resource argument`. Metal has no one-dimensional depth texture, so it now refuses such a texture with `UnsupportedMetalFeatureError` naming the type instead of the same untyped `ValueError` (#4428).
+- GLSL output counts the `length()` of a reinterpreted buffer view, such as `(uint16_t*)words` or `(float*)(words + 2)` held in a local, written inline or passed to a helper, in the view's elements: `words.length() * 2` for a `uint16_t` view of `uint` words, less the view's byte and element offsets. It used to call `.length()` on one element read from the buffer, which glslang rejects (`'length' : does not operate on this type`). A view whose element layout is unknown is refused with `OpenGLStoragePointerError` (#3758).
+- HLSL and WGSL output lower a 2D shadow texture sampled through an explicit `comparison_sampler` with `texture`, `textureLod` or `textureOffset` to the depth comparison calls: `SampleCmp`, `SampleCmpLevelZero` or `SampleCmpLevel` in HLSL, and `textureSampleCompare` or `textureSampleCompareLevel` in WGSL. Outside the WGSL fragment stage, and for a literal zero LOD, WGSL uses `textureSampleCompareLevel`, since `textureSampleCompare` needs fragment derivatives. WGSL output used to refuse these calls with `WGSLComparisonSamplerUnsupportedError`, and it still refuses cube and array shadow textures and a LOD other than literal 0 with that error (#4416).
+
+---
+
+## [3.7.0] - 2026-11-13
+
+The [full 3.7.0 notes](https://github.com/CrossGL/crosstl/blob/8283636516c5a1b66c43bcf6c384c7ee5e0610fd/CHANGELOG.md#370---2026-11-13) describe each of the release's 117 changes.
+
+### Breaking Changes
+
+- Every target refuses a function body that reads or writes a name it never declares, with `UndeclaredIdentifierError`, and a call to a function that neither the program nor any language CrossTL reads declares, with `UndeclaredFunctionError`. Both used to be copied into the output.
+- GLSL, HLSL and Metal output refuse what they have no spelling for instead of writing it unchanged, such as built-in types and functions of other languages and, in GLSL output, members, semantics and functions nothing declares. GLSL, SPIR-V, HLSL and Metal output refuse an HLSL system value they do not know.
+- A storage image format CrossGL does not know is refused with `UnsupportedImageFormatError`.
+- Metal and Slang output refuse a constant-buffer member that `@offset` or `@align` places where their declaration would not, with `MemberPlacementError`, and HLSL and GLSL output refuse such placements in the structure of a `ConstantBuffer<T>` that declares no layout. HLSL input refuses a `[[vk::push_constant]]` struct whose DXC layout CrossGL cannot record.
+- A helper's `buffer T name[]` parameter takes the form of the buffer its caller passes, and one whose elements have no common stride across std430, HLSL structured buffers and MSL is refused with `StorageBufferParameterUnsupportedError`. HLSL, GLSL, SPIR-V and Slang output used to write an unsized array parameter that their compilers reject.
+- The CrossGL output of a Metal, GLSL, HLSL or SPIR-V import starts with `#pragma cgl_rules(...)`, which names the semantic rules of the source language, so the saved CrossGL translates the same as the source.
+
+### Added
+
+- HLSL input translates function and struct templates, including template value parameters, to CrossGL generics, and resolves namespaces by C++ lookup rules.
+- CrossGL generic functions take value parameters, as in `generic<T, N>` called as `scale<float, 3>(x)`, and generic structures such as `Box<float>` translate to SPIR-V as well as the other targets.
+- Storage images take the packed formats `rgb10_a2`, `rgb10_a2ui` and `r11f_g11f_b10f`.
+- Metal input keeps a declaration-only function template that explicit specializations complete.
+
+### Improved
+
+- The Metal importer reads more template-heavy MSL, including member templates selected by a library tag, default template arguments of deduced calls and body-local aliases of dependent types.
+- More MLX kernels translate to DirectX and OpenGL. OpenGL output proves index bounds from the comparisons that guard a read, and DirectX and OpenGL output write through 32-bit storage word views.
+- Translating large programs to HLSL is faster, with unchanged output.
+
+### Fixed
+
+- 97 fixes, mainly to Metal, Slang, HLSL, SPIR-V and GLSL output and to Metal and HLSL input. Many concern the layout of constant buffers, push-constant blocks and storage buffers, arrays and `inout` arguments passed to functions, matrix order, memory qualifiers, and tessellation and workgroup sizes.
+
+---
+
+## [3.6.0] - 2026-11-08
+
+The [full 3.6.0 notes](https://github.com/CrossGL/crosstl/blob/v3.6.0/CHANGELOG.md#360---2026-11-08) describe each of the release's 238 changes.
+
+### Breaking Changes
+
+- Output refuses a specialization constant it cannot keep specializable, where it used to freeze the constant at its default value.
+- The CrossGL parser refuses a token it cannot place, and a malformed `generic<...>` declaration, with a `SyntaxError` that names the construct. It used to skip them.
+- The Metal, HLSL and Vulkan GLSL importers refuse a statement or expression they cannot import (`MetalImportRefused`, `DirectXImportRefused`, `SpirvStatementUnsupportedError`) instead of writing a comment in its place.
+- `static_assert` is checked for every target: a false condition is refused with `StaticAssertionFailedError`, and one the translator cannot evaluate with `StaticAssertionUnresolvedError`.
+- HLSL and Slang input import `SV_VertexID` as `gl_RelativeVertexID`, which leaves out the base vertex as Direct3D does. GLSL, SPIR-V and Metal output read it as `gl_VertexIndex - gl_BaseVertex`.
+- HLSL output refuses `volatile` and system-coherent resources, and a call that passes two private pointer views of one local array when either is writable. SPIR-V output refuses `coherent(system)` and `coherent(host)`.
+
+### Added
+
+- A compute, mesh or task entry whose threadgroup size the host chooses at dispatch time, such as a Metal kernel that reads `threads_per_threadgroup`, translates to SPIR-V, GLSL, WGSL, HLSL and Slang. The size comes from specialization constants or WGSL overrides, or from `CROSSGL_WORKGROUP_SIZE_X`, `_Y` and `_Z` macros that the host defines when it compiles the shader.
+- HLSL output reads a specialization constant without a default from a `CROSSGL_SPECIALIZE_<name>` macro.
+- `@explicit_specialization(primary, types)` replaces the body of a generic function for the given type arguments.
+- GLSL and Metal output lower HLSL `ByteAddressBuffer` and `RWByteAddressBuffer`, including signed `InterlockedMin` and `InterlockedMax`.
+- SPIR-V output lowers `atomicLoad` and `atomicStore`, and the GLSL importer reads `GL_KHR_memory_scope_semantics` atomics.
+- Geometry stages that write several vertex streams translate between GLSL, HLSL and SPIR-V.
+- `local_size_x_id`, `local_size_y_id` and `local_size_z_id` make a workgroup dimension a specialization constant on SPIR-V, GLSL, Slang and WGSL output.
+- Cooperative matrices gain `cooperative_matrix_diagonal(value)` and independent component types for a multiply-accumulate, and Metal `simdgroup_matrix` kernels that do not use `thread_elements()` lower to GLSL and HLSL.
+- The HLSL, Metal, CUDA, HIP, OpenCL and Slang preprocessors define `__COUNTER__`, `__INCLUDE_LEVEL__`, `__BASE_FILE__` and, except for HLSL, `__FILE_NAME__`.
+
+### Improved
+
+- The Metal importer reads more of the template-heavy MSL in MLX, PyTorch and ggml kernels, including constrained templates, `enable_if` overload selection, `decltype` return types and type traits in constraints.
+- Importing and translating large Metal sources is faster.
+- WGSL output passes array elements, structure members, vector components and module-scope variables to `inout` and `out` parameters through temporaries.
+- Slang output lowers the wave shuffle functions that Metal's `simd_shuffle_*` functions import as.
+- Refusals that depend only on a program's entry stages or workgroup sizes are reported earlier.
+
+### Fixed
+
+- 184 fixes, mainly to Metal input and to WGSL, Metal, GLSL and HLSL output.
+
+---
+
+## [3.5.0] - 2026-10-30
+
+The [full 3.5.0 notes](https://github.com/CrossGL/crosstl/blob/v3.5.0/CHANGELOG.md#350---2026-10-30) describe each of the release's 291 changes.
+
+### Breaking Changes
+
+- Vertex inputs and varyings take their location from one rule on GLSL, SPIR-V, WGSL and Metal: an explicit location, then the classic semantic table (`POSITION` 0, `TEXCOORD0` 5, `COLOR0` 13 and so on), then the first free location. Host vertex layouts written for the old numbers need updating.
+- A storage buffer without `@buffer_layout` holds its elements at std430 offsets on Metal and HLSL, as on the other targets. `buffer T name[]` declares one storage buffer of `T` for every `T`, structures included.
+- Metal output samples a combined sampler, such as GLSL `sampler2D`, through a `sampler <texture>Sampler [[sampler(n)]]` argument that the host must bind. It used to sample through a fixed inline sampler.
+- CrossGL refuses non-square `floatNxM` and `doubleNxM` spellings (`AmbiguousMatrixSpellingError`), undeclared type names, and `gl_` attributes that name no built-in or are used where GLSL does not declare them. `(a, b)` is the C comma operator. `sizeof` folds to a constant on Metal, HLSL and GLSL and is refused for operands it cannot size.
+- CUDA and HIP output refuse a construct they cannot lower with `CudaLoweringRefused` or `HipLoweringRefused`. They used to write a comment and a placeholder value in its place.
+- Target limits are refused with typed errors: derivatives in compute, mesh, task and ray generation stages on Metal, 64-bit integers, doubles and bfloat16 on WGSL, constant buffers over 64 KiB on HLSL, and `WaveSize`, mesh, amplification and ray-tracing stages on the `dx10` and `dx11` profiles.
+- Importers refuse constructs they cannot translate faithfully: Metal `sinpi` and its family, ray-tracing functions, indirect command buffers and rasterization rate maps, GLSL `tensorARM` uniforms, sampler feedback textures and OpenCL C device-side enqueue events.
+- Mojo output declares constants with `comptime` instead of `alias`, and refuses a vector where a scalar is expected.
+
+### Added
+
+- `crosstl doctor` lists, for each backend, the validation tools CrossTL looks for and which of them are on `PATH`.
+- GLSL mesh and task shaders (`GL_EXT_mesh_shader`) translate to HLSL and Metal, and Metal `[[mesh]]` and `[[object]]` functions import as mesh and task stages.
+- CrossGL structures may declare member functions, and CrossGL, GLSL, HLSL, Slang and CUDA input accept a structure declared in a function body.
+- Sparse texture residency queries translate to GLSL, Metal, HLSL and SPIR-V, and the GLSL importer reads `GL_ARB_sparse_texture2` and `GL_ARB_sparse_texture_clamp`.
+- `gl_InstanceIndex` translates to OpenGL, OpenGL ES, HLSL and SPIR-V. Metal `constexpr sampler` state translates to OpenGL through host sampler objects.
+- `metal_sizeof(x)` measures a type with Metal's layout rules. The SPIR-V importer reads subpass inputs.
+- GLSL output reads a specialization constant without a default from a `CROSSGL_SPECIALIZE_<name>` macro.
+- Project translation for DirectX and OpenGL flattens a compute workgroup whose shape the target cannot declare but whose thread count it can, and a project can declare read-only entry storage immutable with `immutable_storage`.
+
+### Improved
+
+- The Metal importer reads more of the MSL in real headers and MLX kernels: template argument deduction, partial specializations, `decltype`, `conditional_t` and the `<simd/simd.h>` aliases.
+- WGSL output monomorphizes generic functions and passes `inout` and `out` parameters as pointers.
+- Inline ray queries have one CrossGL spelling, the DXR method names, and translate between HLSL, GLSL and SPIR-V.
+- Metal argument table indices become SPIR-V bindings, and fixed sampler state becomes host samplers on Direct3D and Vulkan.
+- SPIR-V output folds module-scope constant expressions exactly in binary32, HLSL and GLSL output write the float limits such as `FLT_MAX` exactly, and Metal `half` matrices keep binary16 values on SPIR-V and WGSL.
+- Arrays of HLSL structured buffers keep their tight element layout on GLSL, SPIR-V and Metal.
+- Translating large sources is faster.
+
+### Fixed
+
+- 226 fixes, mainly to CUDA, HIP, WGSL, Metal, HLSL and Slang output.
+
+---
+
+## [3.4.0] - 2026-10-23
 
 ### Breaking Changes
 
 - CrossTL requires Python 3.11 or later. Python 3.8, 3.9 and 3.10 have reached end of life and are no longer supported.
-
-### Improved
-
-- Continuous integration tests every supported Python version, 3.11 through 3.15. Pull requests test the oldest and newest on every push.
-
----
-
-## [3.4.0] - 2026-10-07
+- CrossGL syntax can change between releases until CrossGL expresses everything its targets can. In this release, debug prints are `printf(format, values...)` instead of `debugPrintfEXT`, comparison samplers have their own `comparison_sampler` type, and HLSL and Metal textures import as separate textures and samplers.
+- A Metal, CUDA, HIP or OpenCL kernel whose results depend on a threadgroup size that the host picks at dispatch is refused for HLSL, GLSL, SPIR-V and WGSL output, which used to fix the size at 1, 1, 1. Pass the dispatch size as `source_options={"threadgroup_size": (x, y, z)}` or in a project workgroup-size rule.
+- A CrossGL function body that does not parse is refused; it used to become an empty block. An untyped `var` whose type cannot be inferred from its initializer, or that has no initializer, is refused instead of being declared `float`.
+- CrossGL `matCxR` has GLSL's column-by-row meaning on every target, and HLSL `floatRxC` imports as `matCxR`. Comparison operators and `!` are componentwise on vectors, as in HLSL, MSL, WGSL and SPIR-V. Ray payload access qualifiers are `@ray_payload_read(...)` and `@ray_payload_write(...)`.
+- The Metal, OpenGL, WebGL, DirectX, SPIR-V, Slang and Rust generators, and the HLSL and Metal importers, refuse a construct they cannot translate with a typed error that lists every such construct, such as `MetalLoweringRefused` or `SpirvLoweringRefused`. They used to write an `/* unsupported */` or `; WARNING` comment next to a neutral value and return a program that ran differently.
+- SPIR-V output from HLSL takes descriptor sets and bindings from `register(Xn, spaceM)` and `[[vk::binding]]` instead of numbering resources in declaration order, and refuses two resources on one register. OpenGL output gives each descriptor set or register space small per-class binding points instead of `set * 1024`.
 
 ### Added
 
-- Explicit source arithmetic profiles for binary32 addition, subtraction, multiplication, division, remainder, precise arctangent and precise logarithms, with native DirectX, OpenGL and Metal controls for rounding, subnormals, signed zeros and non-finite values.
-- Exact thread-grid dispatch regions, fixed partial workgroups, Boolean subgroup votes and source-ordered software subgroup products. Unsupported collective control flow remains a diagnostic failure.
-- Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views, immutable DirectX constants and validated resource ranges.
-- Checked integer scalar metadata preconditions retained through project artifacts, reflection and packages. Python native Metal, DirectX and OpenGL adapters validate exact upload snapshots, reject shared metadata allocations and retain verification receipts. Compiler range proofs, record fields, GPU-produced metadata and C execution wrappers remain separate work.
-- Project integration demos for selected array operations, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages. The MLX demo records pinned sources, host adaptations, native dispatches and unchanged upstream test selections; it does not provide a complete replacement backend or pass the complete upstream suite.
-- Release package checks on Ubuntu, including isolated installation of both the wheel and source distribution, CLI translation and packaged native runtime resources before publication.
-- Verify published PyPI archive sizes and SHA-256 digests before creating the GitHub Release, including retry-safe rejection of conflicting existing distributions. Download GitHub Release assets into a fresh directory and require the exact validated inventory and archive bytes after both creation and updates.
-- Declarative package metadata with a pinned Flit build backend, preserving Python 3.8 source, wheel and editable installs without the affected setuptools and wheel build dependencies. Release validation and publication tooling support the same metadata format.
+- A coverage report. CI translates a probe for every feature in each language's pinned upstream feature list, checks the result with that language's reference compiler or validator, and publishes the scores and every gap to [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+- Texel buffers (`Buffer<T>`, `RWBuffer<T>`, `samplerBuffer`, `imageBuffer`) translate between HLSL, GLSL, Metal and SPIR-V.
+- DXR ray-tracing stages lower to Vulkan SPIR-V and GLSL, with hit attributes, ray payloads and callable data. HLSL output marks ray payloads with `[raypayload]` and their access qualifiers.
+- Shader debug prints translate to SPIR-V and Metal.
+- GLSL geometry stages translate to HLSL's stream form.
+- Non-uniform resource indices translate to GLSL, Metal and GLSL ES.
+- HLSL structured-buffer counters (`IncrementCounter` and `DecrementCounter`) work on Metal, GLSL, CUDA and HIP through an explicit counter buffer.
+- Built-in values can be written in their GLSL, HLSL or WGSL spelling in CrossGL and translate to every target.
+- Untyped `var name = expr;` declarations, including in `for` loop initializers and at shader scope, take their type from the initializer.
+- HLSL geometry, hull and domain stages translate to GLSL and SPIR-V. Metal, which has no geometry or tessellation stages, refuses them with a typed error.
+- GLSL subgroup built-ins, including the prefix, clustered and ballot forms, translate to SPIR-V, HLSL and Metal.
+- Source arithmetic profiles for binary32 addition, subtraction, multiplication, division, remainder, precise arctangent and logarithms. DirectX, OpenGL and Metal output get native controls for rounding, subnormals, signed zeros and non-finite values.
+- Thread-grid dispatch regions, fixed partial workgroups, Boolean subgroup votes and software subgroup products. Unsupported collective control flow is reported as an error.
+- Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views and immutable DirectX constants.
+- Checked integer metadata preconditions carried through project artifacts, reflection and runtime packages.
+- MLX integration demos for array creation, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages.
+- Package metadata lives in `pyproject.toml` with a pinned Flit build backend. Releases install the wheel and the source distribution in isolation and verify the published PyPI archives before the GitHub release is created.
 
 ### Improved
 
-- Preserve private scalar accumulators and comparison helpers in subgroup-conditional software execution, with checked geometric loop termination and complete pinned extrema-scan controls. Unsupported effects, arithmetic and barrier participation remain diagnostic.
-- Preserve private scalar-field structs through conditional collective wrappers, including checked field initialization, typed inactive values and unambiguous nested overloads. Add complete pinned complex-scan controls with original-Metal component references and unchanged launch geometry.
-- Project-specific manifests, test fixtures, adapters and reports now live under `demos/integrations/mlx`, with project validation consolidated in `demo-project-testing.yml`.
-- Python compatibility matrices run on Ubuntu, with grouped Windows and macOS suites retaining platform coverage. Compiler-only DirectX checks run on Ubuntu; Metal artifact generation is separated from native compilation. Required numerical execution remains on the corresponding native platforms.
-- Native demo checks reuse compatible translation and source-library setup, retain per-test progress and preserve numerical cases, guards and evidence when a check fails.
-- Runtime manifest construction reuses source reflection, and project report operations reuse completed validation without reinterpreting its result.
-- Metal statement and namespace scans skip ordinary source-text runs while preserving delimiter handling, source positions and incomplete-input behavior.
+- Every supported Python version, 3.11 through 3.15, is tested.
+- Unsized HLSL resource arrays get their size on Metal and OpenGL from bounded dynamic indexes as well as constant ones, so translated shaders no longer read past the array.
+- HLSL texture samples return the texture's element type, and storage-image loads and stores use four-component texels as GLSL defines them.
+- CUDA and HIP buffer elements such as `float3` and structs with vector members keep their host layout on every target.
+- SPIR-V modules for mesh, task and ray-tracing stages, which need SPIR-V 1.4, declare storage buffers in the `StorageBuffer` storage class and pass `spirv-val`.
+- GLSL stage inputs and outputs are named so the stages link, and never redeclare a global.
+- Metal import and graphics code generation are faster on large kernels.
+- Buffer layouts carry across targets: HLSL structured, append and consume buffers, Metal packed and natural layouts, and GLSL std140, std430 and scalar blocks keep their offsets. HLSL `row_major`, `packoffset` and `pack_matrix` are honoured, and `GetDimensions` reports the element stride on GLSL, SPIR-V, CUDA and HIP.
+- Texture sampling keeps its meaning across targets, including LOD clamps, implicit LOD outside fragment stages, projected depth comparisons, Metal array layers and explicit sampler pairs.
+- OpenGL output declares the lowest GLSL or GLSL ES `#version` that provides every construct the program uses.
+- Stage interfaces translate more faithfully: GLSL interface blocks keep their member locations, struct-typed varyings are flattened for SPIR-V and split for Metal, a GLSL fragment shader's several outputs become one HLSL or MSL structure, and each SPIR-V entry point has its own interface locations.
+- `SV_ClipDistanceN` and `SV_CullDistanceN` keep their index, and GLSL and SPIR-V pack them into one distance array in DXC's order.
+- Arrays of uniform blocks bind one buffer per element, Metal `constant` matrix parameters bind as HLSL constant buffers, and SPIR-V bindings of Metal resource parameters follow MSL's separate buffer, texture and sampler indices.
+- The SPIR-V importer rebuilds structured control flow, keeps integer signedness, extended arithmetic and `NoContraction`, and imports arrays of storage blocks.
+- The Metal importer handles more real-world sources: `__METAL_VERSION__` and `__METAL__` are predefined, shared headers that use `<simd/simd.h>` types translate without Apple's SDK headers, and kernels with 16-bit thread-index attributes, `unsigned int` template arguments, `::metal::`-qualified SFINAE constraints or type traits in explicit instantiations translate.
+- A function whose recursive calls are all tail calls is translated as a loop instead of being refused.
+- Native Metal dispatches reuse a long-lived worker process instead of starting one per dispatch.
+- Precise Metal square root, logarithm, power and `atan2` keep signed zeros, special values and underflow behaviour under explicit operand profiles.
+- HLSL, GLSL and Metal output keep integer promotions, vector initialization, byte narrowing, binary16 selection, bfloat rounding, atomic destinations and argument evaluation order.
+- Source maps no longer guess line locations. Only artifacts that preserve lines carry line mappings.
+- MLX project files moved to `demos/integrations/mlx`.
 
 ### Fixed
 
-- Project metadata requirements are scoped to their original source entries, including template host names, define variants and dispatch-contract jobs. Unknown selectors remain diagnostic, and packages retain per-entry upload checks without borrowing another kernel's bounds.
-- Frozen specializations, encoded resource storage and checked metadata compose in a bounded leading artifact contract block. Formatting, package inspection and native dispatch preserve each record, reject duplicates and misplaced declarations, and retain the original reflection failure.
-- Metal CI setup waits for a downloaded compiler to become executable before running the existing language and native checks. Only the explicit missing-toolchain error is retried, within bounded activation attempts; download failures and unrelated compiler errors remain fatal.
-- Precise HLSL helper returns materialize the result before returning so DXC preserves scalar, vector and record-field arithmetic dependencies. Complete cancellation-sensitive record scans retain native Windows and original/generated Metal output evidence without changing their inputs or comparisons.
-- Project checkpoints identify the installed translator sources as well as the package version. Resume rejects changed implementations and legacy checkpoints before reusing artifacts, preserving saved progress and providing restart instructions.
-- Unreferenced out-of-line Metal call operators no longer block kernel translation. Library definitions, referenced owners and uncertain bindings remain intact; selected qualified bodies retain their source behavior under explicit arithmetic profiles.
-- Precise Metal square roots use correctly rounded integer arithmetic with explicit operand-underflow profiles, preserving signed zeros and recording the selected policy in reports and runtime packages.
-- Precise Metal logarithms use range-reduced binary32 arithmetic with explicit operand-underflow profiles, preserving accuracy near one and retaining the selected policy in reports and runtime packages.
-- Precise Metal helpers keep contraction directives inside their function bodies, preserving the enclosing compiler setting and rounding across unrelated helper returns.
-- Metal default and precise power calls preserve signed-zero, negative-base, integral-exponent, infinity and NaN domains through source-specific helpers. Native regression checks retain exact domain results and explicit finite controls; complete finite-domain accuracy and subnormal parity remain separate work.
-- An explicit power operand profile treats binary32 subnormal operands as signed zero after preserving the exact exponent-one identity. Saved CrossGL, project reports and runtime packages retain the policy; ordinary finite accuracy and result underflow remain separate contracts.
-- Precise Metal `atan2` retains finite underflow at the normal/subnormal rounding midpoint instead of rounding the division upward first. Native controls include every applicable exponent scaling, neighboring operands and signed-zero checks.
-- Metal template lookup, constrained specialization, alias ownership, operator scopes and helper linkage preserve source identities through materialization.
-- HLSL, GLSL and Metal lowering preserve integer promotions, vector initialization, byte narrowing, binary16 selection payloads, bfloat rounding, atomic destinations and writable argument evaluation.
-- DirectX compilation resolves relative includes through long Windows paths without changing the compiler's working-directory semantics.
-- Source-map reports no longer infer original line locations from token overlap. Only line-preserving artifacts carry line mappings; transformed artifacts retain file-level provenance. Validation rejects legacy guessed line maps and directs report regeneration.
-- Demo artifact references are reconciled only after source, interface and compiler review. Compiler acceptance is reported separately from numerical and host-runtime coverage.
-- Software subgroup lane reads preserve lane-varying indices, partial groups and single operand evaluation in HLSL and GLSL. Metal uses shuffle semantics for dynamic indices instead of requiring a uniform broadcast index.
-- HLSL scalar-to-vector construction evaluates increment and decrement operands once. Fixed-stride collective proofs retain local integer constants without leaking scope or assuming unchecked runtime bounds.
-- Exact-width HLSL and GLSL software shuffle-and-fill preserves segment boundaries, remote fill lanes, partial-group bounds and repeated scratch use. Metal roundtrips retain the four-argument segmented form instead of a default value. Native HLSL composite helpers read both source payloads before selecting a result.
-- Exact-width HLSL and GLSL lowering stages guarded scalar inputs around pure subgroup wrappers. Workgroup barriers remain unconditional while source loads, argument effects and output stores retain their subgroup predicate. Complete pinned scan controls now include 128- and 256-thread launches with independent original-Metal references.
-- OpenGL software subgroup analysis accepts resolved wrapper roots with distinct argument counts while retaining per-function uniformity facts and rejecting ambiguous overloads.
+- The parser no longer hangs on an unterminated shader declaration, and parses `if`, `else` and loop bodies without braces.
+- HLSL output renames GLSL and Metal identifiers that HLSL reads as keywords, such as `line`, `point`, `vector` and `Buffer`.
+- Metal SIMD-group and quad-group functions declared behind `METAL_MAYBE_UNDEF` are recognized.
+- SPIR-V output keeps the source semantics of signed remainder, `fmod`, signed right shifts, mixed-sign arithmetic and NaN tests, copies locals initialised from buffer elements, and passes loose uniforms in a `CrossGLDefaultUniforms` block instead of private variables the host cannot set.
+- HLSL output stores the written components of a GLSL buffer-block vector; it used to assign to a load, which DXC rejects.
+- HLSL output declares vertex, instance, primitive and sample indices as `uint`, as DXIL requires.
+- GLSL output rebuilds a flattened stage-input structure used as a whole value, and guarded multi-stage GLSL declares one `main` per stage.
+- Functions that share a name with a module-scope value are renamed in HLSL, GLSL and MSL output, and constants that read struct constants are declared after the structs.
+- HLSL `SubpassInput` keeps its type through CrossGL, and `gl_PointCoord` reaches Metal as `[[point_coord]]`. OpenGL refuses input attachments and HLSL refuses `gl_PointCoord`.
+- Metal sparse texture reads, colour-attachment inputs on targets without framebuffer reads and array literals passed to Metal array parameters are refused with a typed error instead of producing code that does not compile. WebGL refusals are typed as well.
+- Metal colour-attachment outputs can be any scalar or vector of up to four components, and casts after `return` import correctly.
+- GLSL mesh built-in arrays and named `case` labels translate to SPIR-V.
+- Project metadata requirements apply only to the source entry that declares them.
+- Unreferenced out-of-line Metal call operators no longer block kernel translation.
+- DirectX compilation resolves relative includes through long Windows paths.
+- Software subgroup lane reads, shuffle-and-fill and guarded inputs keep their semantics in HLSL and GLSL output. Metal output uses shuffles for dynamic lane indices.
+- HLSL scalar-to-vector construction evaluates increment and decrement operands once.
 
 ---
 
@@ -68,101 +216,26 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Bounded reuse of Metal template, type-trait and function discovery records within each preprocessing run, with isolated mutable records and regression checks for unchanged artifacts, include/define changes, materialization limits, parallel translation and checkpoint resume.
-- Binary32 fused multiply-add support with exact integer-word arithmetic, explicit source rounding/subnormal profiles, private Metal helper linkage, retained source licensing and required native DirectX/OpenGL/Metal reference checks. Profiles are opt-in; complete MLX host integration remains separate.
-- Native dispatch-limit checks for the Python DirectX, OpenGL and Vulkan drivers, structured Metal pipeline-limit diagnostics, and explicit OpenGL submission-error detection. Native regression tests cover valid readback and rejected requests without clamping or silently returning unchanged output.
-- Synchronous MLX host integration for five typed array-creation entries through native DirectX/OpenGL packages, with Metal/CUDA disabled, unchanged upstream tests, numerical readback, explicit unsupported-operation errors and bounded two-platform CI. Verification requires exact adapted source identities before and after execution, complete numerical records and explicit negative-case evidence. Full primitive coverage and the complete upstream suite remain out of scope for this adapter increment.
-- Metal helper linkage survives the intermediate representation, preserving source-private and inline functions while making generated constructor and member helpers artifact-private. Required native checks link separate translated modules and execute private and exported functions; the MLX host gate now links all 15 selected complex-power entries into one library before upstream execution.
-- Pinned MLX Metal host integration with an explicit per-entry library adapter, unchanged upstream operations tests, native dispatch traces, multidimensional array-view parity and a required missing-library failure check. Eight host layouts retain 402 complex readbacks across ordinary inputs and both signed-zero branch cuts, with independently recomputed references and per-dataset dispatch accounting. This redirects selected translated complex-power entries; unselected operations remain on the upstream backend.
-- Native Metal execution through public runtime packages and loader descriptors, with exact buffer layouts, function constants, bounded compiler/worker processes and compiled-interface checks. Required macOS CI covers generic package readback and all 15 current MLX complex-power shapes, retaining 873 numerical comparisons on each of the original-source, roundtrip and public-package paths without claiming full MLX host-runtime integration.
-- Proven minimum buffer footprints from HLSL/GLSL constant-index access paths are preserved through packaging and rejected at native preflight when a bound view is too short. Current MLX multidimensional complex-power checks exercise undersized-stride rejection without executing invalid requests; unknown dynamic bounds remain outside this guarantee.
-- Required native numerical checks for all 15 complex-power entry shapes in the current MLX pin, covering 873 complex outputs across broadcasting, multidimensional and strided access, 32/64-bit indices and partial gather tiles. Every shape retains random inputs and tests both signed-zero sides of the negative-real branch cut. DirectX/OpenGL execute public runtime packages, while Metal also compares the original upstream kernels against independent CPU references.
-- Preserve canonical `atan2` signed-zero quadrants and special angles in HLSL, with range-reduced finite-angle arithmetic, scalar/vector helpers, single argument evaluation, narrow-type conversions, native HLSL round-trip preservation, and required Windows readback and precise Metal controls. Existing MLX complex-power tolerances are unchanged.
-- Exact runtime layouts for flat homogeneous struct storage buffers in DirectX and OpenGL, preserving member names, scalar types, offsets, alignment and stride through packaging and dispatch. Required CI executes the pinned MLX `g1_Powercomplex64` artifact on Windows, Linux and macOS against 256 finite/zero-base reference cases; macOS also runs the original Metal source. This does not establish whole-MLX runtime integration.
-- Pinned MLX kernel-tree coverage at `d9add9d11f3154111a4c85f267ec2fd307ecd18e`: discovery of 42 Metal units and 17,478 entries without diagnostics, plus deterministic translation and native compilation of all 24 `arg_reduce.metal` entries to Metal, OpenGL, and DirectX. Numerical execution covers `argmin_float32` and `argmax_float32` on the corresponding CI platforms, including upstream Metal parity, axis sizes 32/129, strides 1/2, and ordinary plus NaN/Infinity inputs. Strict JSON runtime requests encode non-finite float32 inputs as `nan`, `+infinity`, or `-infinity` before IEEE-754 packing. This provides 24/17,478 translation and compiler coverage and 2/17,478 numerical coverage; upstream MLX-suite execution and host-runtime redirection remain incomplete.
-- Explicit target-scoped DirectX 32-lane software subgroup lowering for supported scalar shuffle-down operations, using flattened `SV_GroupIndex` identities, bounded groupshared scratch storage, synchronized reads, and exact calling-invocation fallback without hardware wave-lane reads.
-- Entry-scoped Metal compute artifacts with reachable helper/declaration/struct pruning, structured fail-closed selection diagnostics, bounded resource reflection, exact kernel identity, and host-owned workgroup-rule metadata; all 877 discovered current-pinned MLX unary entries across five shapes, 37 operators, and 20 input/output type pairs round-trip to deterministic artifacts accepted by the native macOS Metal compiler, including the two reachable gather index specializations and exact three-/five-resource ABIs.
-- Complete current-pinned MLX unary OpenGL translation for all 877 discovered entries, with a schema-v2 hash-pinned 4,119,841-byte GLSL contract, exact 1,243-materialization and 3,363-resource accounting, explicit host index-range preconditions, one-evaluation `log10` lowering, const-device scalar-reference storage-buffer ABI, and five required Linux shards that compile and validate every non-empty SPIR-V 1.3 module; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX unary DirectX translation for all 877 discovered entries, with a schema-v2 hash-pinned HLSL contract, exact 1,243-materialization and 3,912-resource accounting, complete bfloat unary intrinsic and portable inverse-hyperbolic lowering, warning-clean contextual float-to-native-16 narrowing, const-device scalar-reference structured-buffer ABI, preserved postfix indexing, explicit host index-range preconditions, and five required Windows shards that use pinned DXC with native 16-bit types and warnings fatal to compile every non-empty DXIL module; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX copy Metal round trips for all 2,496 discovered entries across 30 shapes, 16 concrete kernel templates, 13 input/output types, and all 169 conversion pairs, with a schema-v2 hash-pinned artifact/materialization/ABI contract, exact 6,566-materialization and 8,684-resource accounting, exact free-function specialization selection, fail-closed registered complex representation projection, native-width bfloat bitcasts, and 24 required macOS shards that warning-fatally compile every non-empty AIR object; this is compiler/reflection proof and does not claim Metal numerical execution.
-- Complete current-pinned MLX copy OpenGL translation for all 2,496 discovered entries across 30 shapes, 16 concrete kernel templates, 13 input/output types, and all 169 conversion pairs, with a compact schema-v2 hash-pinned artifact/materialization/target-ABI contract, exact 6,566-materialization and 8,684-resource accounting, eight explicit source-scoped host index-range preconditions, fail-closed registered `complex_t_float` representation projection, and 24 required Linux shards that compile and validate every non-empty SPIR-V 1.3 module; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX copy DirectX translation for all 2,496 discovered entries across 30 shapes, 16 concrete kernel templates, 13 input/output types, and all 169 conversion pairs, with a compact schema-v2 hash-pinned artifact/materialization/target-ABI contract, exact 6,566-materialization and 10,036-resource accounting, generated dispatch metadata for eight shapes, fail-closed registered `complex_t_float` scalar projection, no additional source-scoped 32-bit index-range precondition, and 24 required Windows shards that compile every non-empty DXIL module with checksum-pinned DXC, native 16-bit types, and warnings fatal; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX binary Metal round trips for all 4,122 discovered entries across 18 shapes, 11 concrete kernel templates, 24 operators, and 25 input/output type pairs, with a schema-v2 hash-pinned artifact/materialization/ABI contract, the prior 238-entry scalar contract retained as an exact subset, strict warning-fatal native compilation, and 24-way required macOS CI sharding; this is compiler/reflection proof and does not claim Metal numerical execution.
-- Complete current-pinned MLX binary OpenGL translation for all 4,122 discovered entries, with a schema-v2 hash-pinned 16,276,504-byte GLSL contract, exact 6,026-materialization and 19,106-resource accounting, seven explicit host index-range preconditions for the wide-index shapes, and 24 required Linux shards that compile and validate every non-empty SPIR-V 1.3 module; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX binary DirectX translation for all 4,122 discovered entries, with a schema-v2 hash-pinned HLSL contract, exact 6,026-materialization and 21,248-resource accounting, generated dispatch metadata for all nine `threads_per_grid` shapes, computed-result bfloat `ArcTan2`/`LogAddExp`/`Power` expand-operate-requantize lowering, payload-preserving `Maximum`/`Minimum` float comparisons, seven explicit host index-range preconditions, and 24 required Windows shards that compile every non-empty DXIL module with checksum-pinned DXC, native 16-bit types, and warnings fatal; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX reduce Metal round trips for all 2,396 discovered entries across 39 exact ABI shapes, nine kernel templates, six operator families, 44 concrete operator types, and 13 input/output types, with a compact schema-v2 hash-pinned artifact/materialization/resource-digest contract, exact 25,088-resource accounting, fail-closed comparison-aware template parsing, pointer/alias/type normalization, literal-sensitive concrete-helper deduplication, storage-preserving static-constant hoisting, and 24 required macOS shards that warning-fatally compile every non-empty AIR object; this is compiler/reflection proof and does not claim Metal numerical execution.
-- Complete current-pinned MLX quantized Metal round trips for all 2,052 discovered entries across 38 normalized variants, 17 source templates, three data types, three group sizes, and six bit widths, with a compact schema-v2 hash-pinned artifact/materialization contract, 30 deduplicated exact resource ABIs containing 31,374 reflected resources, terminal 2,052-entry primary and independent byte-identical AIR proof, and 24 required macOS shards that rediscover and warning-fatally compile every non-empty Metal 3.1 AIR object; this is compiler/reflection proof and does not claim Metal numerical execution.
-- Complete current-pinned MLX reduce OpenGL translation for all 2,396 discovered entries across 39 exact ABI shapes, nine kernel templates, six operator families, 44 concrete operator types, and 13 input/output types, with a compact schema-v2 hash-pinned 31,155,122-byte GLSL contract, exact 9,216-materialization and 25,088-resource accounting, six explicit source-expression host index-range preconditions, fail-closed storage-pointer/address-view lowering with non-singleton dynamic pointer-array assignments kept fail-closed, transitive resolved-helper logical-offset writeback including direct and addressed element forwarding through exactly overload-resolved helpers, lexically scoped private scalar address views with nonlocal scalar address attempts fail-closed, fixed-array local pointer/reference escapes and residual private alias syntax rejected with lexical provenance, outer-scope For-in bound rendering with independent same-name controllers, fixed-array iterable/extents resolved before pattern binding, exact lexical For-in resource-specialization overload binding. Dynamic for-in resource specialization resolves overloads from exact call-site lexical types. Null storage-pointer reachability and elision preserve exact lexical declaration identity. Null workgroup-pointer reachability and elision preserve exact lexical declaration identity. Nested resource-specialization discovery preserves deterministic lexical order across Python hash seeds. Workgroup-pointer bounds analysis visits every control-flow expression and preserves outer mutations across lexical blocks. Loop-local pointer/stage alias shadowing and flattened input-struct retention, plus repeated-bound, loop-controller, and component-sensitive mutation invalidation, proven direct-tail-recursion lowering, and 24 required Linux shards that compile and validate every non-empty SPIR-V 1.3 module; this is compiler/reflection proof and does not claim numerical execution.
-- Complete current-pinned MLX reduce DirectX translation for all 2,396 discovered entries across 39 exact ABI shapes, nine kernel templates, six operator families, 44 concrete operator types, and 13 input/output types, with a compact schema-v2 contract pinning exact HLSL and DXIL identities, 9,216 materializations, and 27,382 reflected resources; generated dispatch metadata for 37 shapes; portable `NAN`, explicit complex SIMD shuffle, proven direct-tail-recursion, bounded pointer-array writeback, logical bfloat storage, and deterministic anonymous-record lowering with unsafe recursion, ambiguous pointer provenance, aggregate pointer members, and unsupported HIP record layouts kept fail-closed; no additional source-scoped 32-bit index-range precondition; and 24 required Windows shards that compile every non-empty DXIL module with checksum-pinned DXC, native 16-bit types, and warnings fatal. This is compiler/reflection proof and does not claim numerical execution.
-- Current-pinned MLX LayerNorm axis-32 native-loader packages with exact eight-resource ABIs, Direct3D 12 WARP and Mesa EGL numerical CI, deterministic HLSL/GLSL identities, and an upstream-derived dispatch contract.
-- Current-pinned MLX LayerNorm VJP axis-32, one-row, `has_w=true` native-loader execution with exact eight-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
-- Current-pinned MLX RMSNorm VJP axis-32, one-row, `has_w=true` native-loader execution with an exact ten-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
-- Current-pinned MLX 512-thread float32 dot-product execution through Direct3D 12 WARP and a distinct sixteen-subgroup software OpenGL artifact on Mesa, with exact four-resource ABI, SPIR-V structure, artifact identity, and numerical readback evidence.
-- Current-pinned MLX block Softmax execution for two axis-32 rows and one axis-2049 row through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact three-resource ABIs, deterministic guarded and software artifact identities, SPIR-V structure, and stable float32 numerical references.
-- Current-pinned MLX `argmin_float32` and `argmax_float32` execution for two axis-32 rows through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact signed/unsigned 64-bit resource ABIs, deterministic tie-breaking readback, and separate aggregate and Metal limitations.
-- Current-pinned MLX one-pass `sdpa_vector_float_64_64` execution through Direct3D 12 WARP and deferred-specialized software-subgroup OpenGL on Mesa, with a host-derived 1,024-thread dispatch, exact 19/18-resource ABIs, six false function constants, deterministic artifact identities, and 64-value numerical readback evidence.
-- Current-pinned MLX `fft_mem_256_float2_float2` OpenGL execution through deferred SPIR-V on Mesa, with deterministic GLSL identity, 21 specialization constants, exact four-resource vector ABI, validated barrier structure, and 256-complex-value impulse readback evidence.
-- Current-pinned MLX `gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0` execution for a 32x32 float32 vector-matrix workload through Direct3D 12 WARP and two-subgroup software OpenGL on Mesa, with exact 15-resource ABIs, deterministic HLSL/GLSL identities, validated SPIR-V structure, and 32-value numerical readback evidence.
-- Current-pinned MLX `mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false` execution for 32 exact FP4 E2M1 values through Direct3D 12 WARP and one-subgroup software OpenGL on Mesa, with a host-derived dispatch contract, exact reflected resources, deterministic HLSL/GLSL identities, validated SPIR-V structure, and zero-tolerance numerical readback.
-- Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
-- Test-derived MLX RMSNorm host-dispatch contract capturing 12 forward and VJP dispatch variants from the pinned `test_rms_norm` and `test_rms_norm_grad` workloads. Each variant is translated to an independent DirectX artifact that retains its host-derived `numthreads`, concrete function constants, and `[WaveSize(32)]`, and Windows CI compiles all 12 with DXC `cs_6_6`, 16-bit types, and warnings as errors; this is translation and compiler coverage and does not claim numerical execution.
-- Test-derived MLX LogSumExp host-dispatch contract with two float32 block-reduction workloads (32- and 288-thread workgroups with exact 32-lane subgroups). Both emit standalone DirectX artifacts that DXC `cs_6_6` compiles with warnings as errors and standalone OpenGL artifacts that compile to OpenGL SPIR-V 1.3 and validate on Linux. The axis-32 DirectX artifact also executes through the native Direct3D loader with numerical readback against a CPU reference; the axis-1025 artifact, the looped path, and other dtypes are not executed.
-- Exact subgroup-width contracts for OpenGL compute. Generated GLSL requires `GL_KHR_shader_subgroup_basic`, declares `CROSSTL_REQUIRED_SUBGROUP_WIDTH`, and guards the entry before translated work; reports and runtime manifests record the `GL_KHR_shader_subgroup` host requirement and `GL_SUBGROUP_SIZE_KHR` query, and the built-in Python and generated C++ OpenGL adapters reject a mismatched device before shader compilation, resource allocation, or dispatch. OpenGL accepts power-of-two widths from 1 to 128; targets without subgroup-width specialization fail closed with `target-not-supported`.
-- Entry-scoped project workgroup-access assertions (`[[project.workgroup_access_assertions]]`) that record host-guaranteed absolute element ranges for OpenGL workgroup-pointer specialization by source, entry point, helper, and parameter. Assertions intersect with statically derived ranges, contradictory or out-of-backing ranges fail before artifact emission, and every assertion is preserved in project reports as an explicit host/runtime precondition rather than a runtime check.
-- Entry-specific workgroup-size rules (`[project.entry_workgroup_size_rules.<source-pattern>]`) for sources whose template families use different dispatch formulas, with the source-wide rule as fallback, selector provenance in reports, and fail-closed `project.translate.workgroup-size-entry-rule-unmatched` diagnostics for stale or uncovered patterns.
-- Pinned MLX FFT and GEMV OpenGL translation proofs: the complete `fft.metal` source translates to one standalone compute shader with 99 reachable specializations and 22 function constants, and all 224 entry-scoped `gemv.metal` artifacts are emitted with exact workgroup and subgroup-width records and five explicit host index-range preconditions. Linux CI compiles both to OpenGL SPIR-V 1.3 and validates every module; this is compiler proof and does not claim numerical execution.
-- Pinned MLX `fft_mem_256_float2_float2` DirectX translation from the complete `fft.metal` source, preserving the host-derived `[numthreads(1, 1, 64)]` axis order, with DXC `cs_6_2` compilation under warnings as errors and numerical execution through the native Direct3D 12 WARP loader against the analytical 256-point DFT of a unit impulse.
-- Pinned MLX `v_copyfloat32float32` native execution: the selected entry is materialized from the full pinned source without its unreachable candidates, packaged with exact reflected scalar buffer layouts, and required to read back exactly through Direct3D 12 WARP on Windows and a headless OpenGL software context on Linux.
-- Current-pinned MLX quantized-wide OpenGL gate covering 18 selected `affine_qmv_wide` entries (float32, float16, and bfloat16 inputs; 3-, 5-, and 6-bit weights) with the source-faithful `[32, 2, 1]` workgroup lowered as two logical 32-lane software subgroups, GLSL compilation, and SPIR-V validation in Linux CI. This is selected-entry compiler coverage, not all 2,052 quantized entries, and does not claim numerical execution.
-- OpenGL `private_pointer_out_of_bounds_read` target policy (default `error`; an explicit `zero` policy guards eligible const private-pointer reads from complete, statically sized local arrays and marks recovered artifacts) and the Metal `promote_derived_pointer_members` source option, which separates supported derived pointer members into backing objects and offsets.
+- Binary32 fused multiply-add with explicit rounding and subnormal profiles.
+- Native Metal execution through runtime packages and loader descriptors, and dispatch-limit checks in the DirectX, OpenGL and Vulkan drivers.
+- Translation of every kernel in the pinned MLX unary, copy, binary and reduce families to DirectX and OpenGL, and Metal round trips of the copy, binary, reduce and quantized families. Selected kernels, among them LayerNorm, RMSNorm, Softmax, SDPA, FFT, GEMV, argmin, argmax and MXFP4, are checked numerically on Direct3D 12 WARP and Mesa.
+- Explicit 32-lane software subgroups for DirectX and OpenGL compute. Generated GLSL states the subgroup width it requires.
+- Exact runtime layouts for struct storage buffers in DirectX and OpenGL, and 64-bit integer buffers in native reflection.
+- Project options for workgroup access assertions (`[[project.workgroup_access_assertions]]`) and per-entry workgroup size rules (`[project.entry_workgroup_size_rules.<pattern>]`).
+- An OpenGL `private_pointer_out_of_bounds_read` policy, `error` by default.
 
 ### Improved
 
-- Metal entry discovery reuses the preprocessor's bounded interval index for comment and literal exclusions, avoiding repeated linear scans while preserving entry ordering, locations, provenance and unresolved-name diagnostics.
-- Metal round trips restore brace initialization for unshadowed aggregate calls, accept integral reference values in pointer-offset assignments, and resolve constrained free-function templates before unconstrained helper specialization. Enabled SFINAE fallbacks materialize concretely, disabled fallbacks leave native overload calls intact, and unknown or ambiguous resolutions fail closed. Generated fallback helpers avoid collisions with source identifiers without changing ordinary calls.
-- Metal round trips now resolve and elide source typedef chains, map native bfloat values and result reconstruction, materialize constrained free operators with source-compatible overload selection, infer concrete aggregate aliases, recognize branch-complete returns, preserve narrow `as_type` storage, and admit only proven read-only immediate scalar-parameter views as matching thread-local single-field aggregates while every other unimplemented pointer reinterpretation remains fail-closed. Dependent free-operator calls rebind only to previously emitted exact helpers; known contextual aggregate conversions use only non-explicit constructors; 64-bit vectors map to native Metal types; bfloat minimum/maximum arguments promote safely; and discarded type constructors plus Boolean relational promotions remain warning-fatal native-compiler safe.
-- Selected-entry target capability validation now inspects only the reachable scoped AST before code generation, so unrelated declarations cannot block an otherwise valid DirectX, Metal, or OpenGL artifact while reachable unsupported operations still fail closed.
-- DirectX software subgroup admission fails closed unless one bounded compute entry has concrete width-compatible dimensions, a supported payload and operation, unambiguous helper identity, logical invocation identity, explicit out-of-range policy, and statically uniform barrier control flow; relative source indexing is guarded before unsigned addition.
-- HLSL host-reflection collision checks now distinguish CBV, SRV, UAV, and sampler register namespaces, allowing legal coordinates such as `b0` and `t0` while continuing to reject duplicate bindings within one namespace.
-- Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit narrow typed-identity-masked divergent `WaveActiveSum`, `WaveActiveMin`, and `WaveActiveMax` assignments while all generated barriers remain workgroup-uniform; conditional shuffle and ambiguous control flow still fail closed.
-- Explicit OpenGL software subgroups synchronize canonical subgroup-ID-strided runtime loops across complete workgroup rounds when the bound is workgroup-uniform, the stride equals the logical subgroup count, and exactly one supported masked reduction is present; unsafe declarations, mutation, escaping control flow, and multiple collectives remain fail-closed.
-- HLSL and GLSL host reflection represents stored Boolean buffers with their portable physical uint32 ABI while preserving Boolean shader-level and specialization-constant types.
-- Metal round trips retain source `constant` resource provenance, read-only `const device` references, and postfix update position; retained Metal union layout metadata reconstructs native MSL unions with fail-closed validation, and additive shift operands remain explicitly grouped for warning-fatal compilation.
-- GLSL host reflection records exact standard scalar/vector physical widths and `std140`/`std430` alignment, including tight `vec2`/`vec4` storage and padded `vec3` array stride; native dispatch accepts supported tight vectors and rejects padded uploads rather than guessing.
-- Explicit OpenGL software subgroups accept uniquely identified helpers only when calls are direct, unconditional, top-level, and entry-owned; resource-specialized calls may reuse only identical-base workgroup proofs whose validated intervals cover the narrower request.
-- Explicit OpenGL software subgroups admit canonical runtime loops only when integer initializers and bounds are proven workgroup-uniform through constants, scalar blocks, workgroup builtins, and conservative local dataflow; lane-varying state, mutation, escaping control flow, and unresolved calls remain fail-closed.
-- Explicit OpenGL software subgroups admit direct top-level helper calls inside proven canonical workgroup-uniform positive-to-zero halving loops using the integral-equivalent `value > 0` or `value >= 1` bound with `/= 2` or `>>= 1`; wider bounds, nested calls, ambiguous identities, unsafe updates, mutation, and escaping flow remain fail-closed.
-- Native reflection and runtime requests support exact scalar `int64_t` and `uint64_t` structured/storage buffers and single-member constant/uniform blocks, including range-checked little-endian packing, readback, stride inference, and 16-byte scalar-block alignment.
-- Metal materialization evaluates concrete aggregate constexpr assertions, resolves supported concrete type traits before static assertions, canonicalizes concrete struct-owned aliases (including inside explicit helper template arguments) for partial-specialization matching, and prefers exact out-of-line member specializations; ambiguous overloads, unresolved operands, and duplicate exact definitions fail closed with structured diagnostics.
-- DirectX host reflection records exact vector resource layouts, and native-loader requests derive generated workgroup-count inputs from the physical dispatch geometry.
-- DirectX resource pointer movement no longer introduces 64-bit shader requirements for unsigned offsets, while signed source offsets keep their semantics.
-- MLX reference proofs and the scheduled full-corpus scout use separately pinned MLX revisions, so checked-in reference evidence is never relabelled when the upstream corpus moves.
-- pre-commit tooling updated (ruff 0.16.2 to 0.16.9, isort 9.0.0b2 to 9.0.1, autoflake 2.3.3 to 2.4.0).
-- Test suite grown to over 51,000 collected tests (from over 17,500 at v3.2.0).
+- Entry-scoped Metal artifacts drop unreachable helpers, declarations and structs, and target capability checks look only at the code reachable from the selected entries.
+- Metal round trips handle typedef chains, bfloat values, constrained templates, unions and `constant` resources.
+- HLSL reflection keeps CBV, SRV, UAV and sampler registers apart, and GLSL reflection records `std140` and `std430` layouts.
 
 ### Fixed
 
-- Metal argument discovery continues after line comments and infers integral remainder and mixed-signedness arithmetic using scalar promotion rules. Compound offsets retain pointer address spaces for constrained helper calls. Regression coverage compares native Metal type deductions and requires DirectX, OpenGL and Metal dispatch/readback checks without editing source expressions.
-- Metal constrained free functions resolve Boolean variable-template predicates with declaration-site namespace and alias lookup, explicit specializations, lazy trait composition and bounded recursion. Unproven constrained struct specializations now produce diagnostics instead of silently selecting a primary declaration with different field types.
-- Metal struct specialization preserves anonymous type-parameter positions and defaults, evaluates supported `enable_if` partials before choosing storage, and checks the enabled result type against the requested argument. Native regression tests distinguish fractional storage from integer fallback on all three host platforms; unknown predicates and unresolved result types remain diagnostic failures.
-- Metal round trips preserve float atomic addition and exchange on writable buffer elements and aggregate fields, with native contention, return-value, bit-pattern and single-evaluation checks. Buffer loads retain their element type and storage origin; read-only and thread-local atomic targets remain diagnostic failures. The macOS host workflow also compiles a pinned MLX gated-delta backward entry without claiming complete runtime coverage.
-- Qualified Metal math builtins retain their identity when source helpers share a name. Source overloads receive collision-safe internal names, explicit global calls retain their scope, and namespace extensions remain distinct from builtin overloads. Required Windows, Linux, and macOS numerical checks cover builtin/helper selection, including original-source Metal parity.
-- DirectX lowers canonical Metal `fabs`, `fmin`, and `fmax` to native intrinsics and preserves `select(falseValue, trueValue, condition)` argument order, scalar/vector result types, and eager evaluation. Source-defined helpers remain ordinary calls; unresolved or non-Boolean selection conditions and shadowed target intrinsics produce structured diagnostics. Required Windows readbacks cover finite values, NaNs, infinities, and both selection branches.
-- OpenGL lowers canonical Metal floating math and Boolean selection with typed, collision-safe helpers, explicit min/max NaN handling, and eager single evaluation of arguments. Unsupported operand contracts produce structured diagnostics. Required Linux compiler, SPIR-V, and numerical checks retain evidence for scalar/vector values, signed zeros, and side effects.
-- Historical and current-pinned MLX FFT HLSL evidence now reflects C++ integer promotion of all 20 native-16 shift counts, with refreshed deterministic artifact identities and an explicit structural regression.
-- Current-pinned multidimensional MLX GEMV no longer relies on WARP physical-wave lane topology: its DirectX reduction now uses deterministic logical 32-lane software subgroups, fixing the observed replacement of logical lanes 5–8 by physical lanes 21–24.
-- DirectX native 16-bit Metal `as_type` lowering uses exact `asfloat16`/`asint16`/`asuint16` reinterpretation by default; an explicit source-scoped widening mode reconstructs binary16 payloads with integer IEEE-754 masks and keeps logical `float16_t` arithmetic, sign application, returns, and consumers in float32. Scalar native `int16_t`/`uint16_t` arithmetic now also follows Metal/C++ integer promotion before shifts, preventing FP8 scale-bit construction from truncating `<< 23` to a 16-bit shift and eliminating current-pinned MXFP4’s signed-zero collapse on WARP.
-- DirectX compute `gl_SubgroupID` lowering assigns a synchronized, wave-uniform physical ID in multi-wave workgroups instead of dividing each lane's flattened `SV_GroupIndex`; proven one-wave workgroups retain the valid quotient fast path.
-- OpenGL bitcasts involving widened binary16 values preserve scalar and packed-half payloads through `packHalf2x16`/`unpackHalf2x16` instead of incorrectly reinterpreting them as float32 payloads.
-- Metal conversion analysis treats parenthesized returns as control syntax, resolves proven local conditional aliases to concrete constructor factories without guessing unresolved branches, and recognizes qualified `round`; OpenGL emits exact single-evaluation float32 `isfinite` and `signbit` bit tests while preserving user overloads and structured fail-closed diagnostics.
-- OpenGL resource specialization propagates provably dead default-null storage pointers through direct forwarding chains, decodes exact materialized Metal `vec<T,N>` constructor names, and emits every collision-safe overloaded specialization body; unresolved or observable pointer uses remain fail-closed.
-- DirectX relative wave-shuffle lowering now offers an explicit target-scoped `self` policy that selects only valid source lanes and returns the calling lane for out-of-range down/up/xor reads; the default undefined policy and unrelated artifact identities remain unchanged.
-- Source-instantiated Metal template helpers with overloaded names defer to signature-aware materialization, preventing scalar call sites from selecting vector overloads.
-- Deferred native-loader proof annotations remain importable on Python 3.8 and 3.9.
-- Metal FFT helper lowering retains signature-aware concrete helper materializations, preserves ordinary underscored values during alias inlining, resolves lowered member calls across overload and defaulted-owner identities, and tracks local member shadowing by lexical scope.
-- OpenGL applies expected vector constructors when Metal scalar literals initialize or assign vectors, and prunes lowered member helpers that are unreachable from the selected entries.
-- Mapped HLSL overloads retain their source functions' workgroup pointer analysis, so shared-array arguments lower to concrete integer offsets.
-- Metal template callback substitution, qualified template substitutions, and target-specific materialization.
+- Float atomic addition and exchange on Metal buffer elements and fields.
+- DirectX lowering of Metal `fabs`, `fmin`, `fmax` and the argument order of `select`. OpenGL lowering of Metal floating-point math and Boolean selection.
+- DirectX 16-bit `as_type` reinterpretation, and `gl_SubgroupID` in workgroups with more than one wave.
+- OpenGL bitcasts of widened binary16 values.
 
 ---
 
@@ -170,39 +243,22 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Native Direct3D and OpenGL loader target adapters with a stable generation registry, structured diagnostics, artifact verification, SPIR-V specialization, and translated-device proofs.
-- Exact native runtime variant dispatch packages that bind ready variants to copied target artifacts, verified loader descriptors, and deterministic C++17 execution wrappers, with Python and C++ lookup interfaces.
-- Bounded deferred native compilation: a closed versioned request contract, verified input packaging with deterministic provenance, a success-only output cache keyed by request and toolchain identity, and execution through native runtimes (HLSL to DXIL, GLSL to OpenGL SPIR-V).
-- Runtime variant binding to deferred native compilation, deriving bounded DirectX and OpenGL compilation requests only after exact registry, package, source, descriptor, target, execution, and specialization identity checks.
-- Execution-boundary verification of native artifact identity before dispatch.
-- Resumable project translation checkpoints with a durable contract, interruption recording, and checkpoint identity that covers configured limits.
-- Bounded, process-isolated project translation workers with deterministic report and checkpoint coordination, lazily streamed plans, transactional artifact pair publication, coordinated concurrent publication, typed worker failure coordinates, interrupted-worker termination, and per-artifact wall-clock timeouts, exposed through both the API and CLI.
-- Multiple project entry artifacts per source, a backend-neutral project source entry-point discovery contract with Metal enumeration, and opt-in discovered-entry expansion for selected sources recorded in reports, artifact matrices, and checkpoints.
-- Pinned MLX native execution evidence: a binary kernel executed on DirectX and OpenGL with exact device readback, quantized OpenGL lowering and quantized gather provenance proofs, and bounded LayerNorm host dispatch integrated into the MLX porting frontier.
-- Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
+- Native Direct3D and OpenGL loader adapters with artifact verification and SPIR-V specialization.
+- Runtime variant dispatch packages with C++17 execution wrappers.
+- Deferred native compilation with a versioned request format and an output cache.
+- Resumable project translation in isolated worker processes, with checkpoints.
+- Several entry artifacts per source, and Metal entry-point discovery.
 
 ### Improved
 
-- Metal analysis performance: lexical scope lookups are indexed and repeated whole-tree traversals eliminated.
-- OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
-- HLSL compute stages are inferred from `numthreads` attributes, keeping deferred interface reflection aligned with DXC entry-point selection.
-- Project artifact report identities stay repository-relative on Windows by preferring lexical project-root containment.
-- Per-artifact time limits are applied to MLX full-corpus scouting so stalled units produce structured diagnostics and durable checkpoint records.
-- Support matrix, generated roadmaps, and project-porting documentation regenerated for the new DirectX and OpenGL coverage.
-- Test suite grown to over 17,500 collected tests (from 13,485 at v3.0.0).
-- pre-commit tooling updated (ruff 0.15.22 to 0.16.2, isort 9.0.0b1 to 9.0.0b2).
+- Metal analysis is faster: scope lookups are indexed and repeated tree walks are gone.
+- HLSL compute stages are inferred from `numthreads`.
 
 ### Fixed
 
-- OpenGL bounded index narrowing now tracks scalar and vector-component ranges across declarations, branches, loops, casts, and mutation boundaries, normalizes supported 64-bit indices once, and fails closed when no narrowing proof exists.
-- OpenGL scalar conversion contexts, explicit source truthiness lowering, narrow integer initializer contracts, and `isnan`/`isinf` result-type inference.
-- OpenGL boolean arithmetic compound assignments and trailing-zero builtin lowering, with structured diagnostics for unsupported operand contracts and target profiles.
-- OpenGL private arrays are preserved in resource-specialized callers, redundant same-view storage pointer casts are treated as idempotent, and reinterpreted storage byte bases are forwarded explicitly so nested helpers keep pointer arithmetic without capturing caller-local expressions or double-scaling offsets.
-- DirectX aggregate initialization: destination type information is preserved while probing typed-buffer atomic expressions, omitted structure and fixed-array fields are recursively value-initialized, and untyped array literals are rejected with a structured diagnostic instead of ambiguous HLSL brace expressions.
-- Metal helper calls preserve mutable resource pointer offsets in both DirectX and OpenGL output.
-- Direct3D shutdown with live pipelines and unverified HLSL includes now fail closed, and OpenGL adapter object ownership is hardened with caller-controlled context lifetime for injected contexts.
-- Worker timeout exceptions are distinguished from job deadlines so a timeout raised inside translation code remains a typed worker failure.
-- Python 3.8 and 3.9 compatibility preserved across entry discovery and deferred compilation tests.
+- OpenGL index narrowing, scalar conversions, Boolean compound assignment and private arrays in specialized callers.
+- DirectX aggregate initialization. Metal helper calls keep resource pointer offsets in DirectX and OpenGL output.
+- Direct3D shutdown with live pipelines fails instead of continuing.
 
 ---
 
@@ -210,28 +266,19 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Portable runtime execution graphs, deterministic runtime variant registries, and request generation from native loader descriptors.
-- Generated native loader execution ABI packages with deterministic C11 and C++17 host integration artifacts.
-- Native compute runtime drivers and project-runner adapters for Direct3D, headless OpenGL, and Vulkan.
-- Initialized read-write resources, shared native allocation views, aggregate byte views, and private-array partition views for native execution.
-- Cooperative-matrix types and fragment contracts in the shared IR, including Vulkan KHR cooperative-matrix SPIR-V lowering foundations.
-- Pinned MLX project translation and validation across DirectX, OpenGL, and Vulkan, including reduced-frontier and full-corpus workflows.
+- Runtime execution graphs, variant registries and native loader packages for C11 and C++17 hosts.
+- Native compute drivers for Direct3D, headless OpenGL and Vulkan.
+- Cooperative-matrix types in CrossGL, lowered to Vulkan KHR cooperative-matrix SPIR-V.
+- Pinned MLX project translation to DirectX, OpenGL and Vulkan.
 
 ### Improved
 
-- Metal project materialization for templates, overloads, references, pointer inference, constexpr propagation, wide vectors, and aggregate return types.
-- DirectX lowering for fixed arrays, 16-bit arithmetic, overload identity, resource relocation, specialization constants, and runtime dispatch.
-- OpenGL lowering for storage aliases, interface-backed structs, specialization constants, scalar conversions, reserved identifiers, and runtime-derived globals.
-- Runtime manifests and host handoff metadata now track selected entry points, device readiness, execution resources, and native loader package identities.
-- MLX compiler-frontier accounting, native validation, and runtime proofs now cover more kernels and fail closed on unsupported contracts.
+- Metal project translation handles templates, overloads, references, pointer inference, constant expressions and wide vectors. DirectX and OpenGL lowering handles fixed arrays, 16-bit arithmetic, storage aliases and specialization constants.
 
 ### Fixed
 
-- Source-language arithmetic conversion order, explicit constructor handling, boolean compound assignments, conditional expressions, and file-scope constant preservation across target backends.
-- Metal alias-template, receiver, reference-accessor, addressed-pointer, and overload-resolution edge cases encountered in project-scale translation.
-- DirectX entry-point validation, fixed-array initialization, aggregate conditionals, minimum-precision division and remainder, and unrepresentable texture-offset diagnostics.
-- OpenGL block-name collisions, partial vector initialization, fixed-array loops, static-member layout leakage, and correlated private pointer views.
-- SPIR-V helper return lowering, empty aggregate typing, unresolved generic storage analysis, and cooperative-matrix memory operations.
+- Arithmetic conversion order, explicit constructors, Boolean compound assignment and conditional expressions.
+- Metal alias templates and overload resolution, DirectX entry-point validation and array initialization, OpenGL block-name collisions, and SPIR-V helper returns.
 
 ---
 
@@ -239,65 +286,19 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Target-only WebGL/WebGL2 GLSL ES backend with vertex and fragment stage output.
-- Target-only WebGPU/WGSL backend with vertex, fragment, and compute output.
-- DirectX target profile aliases (`dx11`, `dx12`, `d3d11`, `d3d12`) all resolving to HLSL source output.
-- MLX project porting integration with demos, CI workflow, and full-corpus validation.
-- Runtime host integration pipeline: loader scaffolds, adapter descriptors, manifest metadata, and execution adapters.
-- Project-scale shader porting pipeline with runtime readiness checks and blocked-unit tracking.
-- Metal struct-template materialization engine with instantiation, specialization, SFINAE-overloaded member lowering, and budget scaling.
-- Metal subgroup/SIMD intrinsic lowering to CrossGL Wave ops.
-- Metal atomic device lowering to CrossGL atomic intrinsics.
-- Metal threadgroup-local array hoisting to GLSL shared globals.
-- Runtime parity executors and verification harness for translated GPU artifacts.
-- WGSL resource binding, storage buffer, and texture sampler object model support.
-- Naga-based WGSL validation for generated project artifacts.
-- SPIR-V artifact assembly and validation pipeline.
-- Host runtime detection for WebGPU, OpenCL, D3D11, Rust wgpu, and game engine runtimes.
-- Open-source project porting demos with third-party notice coverage and failure summary reporting.
-- Runtime loader manifest generation and package inspection commands.
-- Host integration handoff bundles with blocked-step reporting.
-- Integer sampled texture lowering across backends.
-- GLSL specialization constant lowering for target backends.
-- Metal function constant lowering for SPIR-V output.
-- Backend-agnostic runtime manifest metadata for cross-target artifact planning.
+- WebGL (GLSL ES) and WebGPU (WGSL) output. Both are output-only.
+- DirectX profile aliases `dx11`, `dx12`, `d3d11` and `d3d12`, all producing HLSL.
+- Project-scale porting with reports, runtime readiness checks and runtime loader manifests.
+- Metal struct template materialization, and lowering of Metal subgroup and atomic operations.
+- Runtime parity checks for translated artifacts, naga validation of WGSL output, and SPIR-V assembly and validation.
 
 ### Improved
 
-- Metal preprocessor: full-source comment masking, functor lowering, template budget scaling, deterministic member lowering, and constexpr array extent recognition.
-- HLSL compute codegen: value-builtin lowering, subgroup-to-wave translation, semantic validation, and program-scope constant output.
-- GLSL codegen: subgroup builtins, specialization constants, vertex layout location mapping, storage image lowering, and fragment invocation density modeling.
-- SPIR-V codegen: storage buffer overload resolution, 64-bit layout validation, bool compute interfaces, access-chain typing, and gather offset vector operands.
-- DirectX codegen: groupshared hoisting, resource binding allocation, fragment varying semantics, typed buffer indexed writes, and loader profile metadata.
-- OpenGL codegen: Metal template specialization, buffer parameter lowering, stage input struct mapping, uniform block member disambiguation, and GLSL 330 resource bindings.
-- OpenCL reduce target artifact generation, diagnostics, and helper contract reporting.
-- Rust-GPU: vertex input lowering, compute construct lowering, storage buffer declarations, and Option value pre-lowering.
-- Mojo: GPU kernel extraction, vector overload resolution, compute builtin parameterization, and sampled texture binding lowering.
-- Slang: resource name collision avoidance, default parameter preservation, texture size query casting, and compute entry lowering.
-- WGSL: structured storage buffers, constant buffer block lowering, derivative intrinsic mapping, image2D storage textures, and reserved identifier escaping.
-- Project translation: unresolved-construct guardrails, source provenance tracking, macro variant classification, include resolution, and feature root scanning.
-- Support matrix tooling: target alias metadata, target-only source rejection documentation, and backend conformance edge coverage.
-- Split target backend registration from native source frontend availability in the backend registry and support matrix.
-- Test suite grown to 13,485 collected tests (from ~8,000 at v2.0.0).
+- HLSL compute, GLSL subgroups and specialization constants, SPIR-V storage buffers, and the WGSL, Rust, Mojo and Slang generators cover more of the language.
 
 ### Fixed
 
-- Over 100 targeted backend bug fixes across CUDA, HIP, Metal, GLSL, HLSL, SPIR-V, WGSL, OpenCL, Rust-GPU, Mojo, and Slang.
-- Metal residual-template false positives from struct member templates.
-- SPIR-V storage buffer pointer overload inference and access-chain index typing.
-- WGSL vector narrowing, entry struct varying locations, reserved identifier escaping, and uniform scalar array layout.
-- DirectX vertex input semantics, scalar fragment targets, binding allocation, and groupshared hoist aliases.
-- HLSL compute value-builtin leakage, scalar splat swizzle lowering, and array semantic allocation.
-- OpenGL bfloat16 asuint lowering, GLSL 110 interface qualifiers, and gl_FragColor reserved local conflicts.
-- Vulkan matmul builtin vector stores, complex helper call argument types, and private scalar initializer types.
-- HIP scalar kernel params, bit-extract kernel loop preservation, and host main artifact generation.
-- CUDA vector-add DirectX lowering and OpenGL uniform name stabilization.
-- Metal-to-DirectX compute resource output and constant buffer member SPIR-V access.
-- Mojo GPU builtin lowering contract and vector-add Metal/SPIR-V artifacts.
-- Slang compute entry lowering to OpenGL and struct resource name collisions.
-- WebGL dynamic sampler array helper calls and unsupported sampler resource rejection.
-- GLSL usampler texelFetch SPIR-V lowering and fragment output name handling.
-- Python 3.8 collection type compatibility in the project pipeline.
+- Over 100 backend fixes across CUDA, HIP, Metal, GLSL, HLSL, SPIR-V, WGSL, OpenCL, Rust, Mojo and Slang.
 
 ---
 
@@ -305,41 +306,24 @@ All notable changes to CrossTL are documented in this file.
 
 ### Breaking Changes
 
-- **CrossGL language expanded**: New constructs (generics, traits, algebraic enums, pattern matching, do-while, double-precision types) mean `.cgl` files written for 2.0 may not parse under 1.x.
-- **AST restructured**: `ASTNode` gained `child_nodes()`, `walk()`, and `bind_parent_links()` methods. `ShaderNode.stages` is now a `StageMap` wrapper instead of a raw `dict`.
-- **Internal imports changed**: Direct imports like `from crosstl.translator.codegen import GLSL_codegen` are no longer supported. Use the registry (`crosstl.translator.codegen.registry`) or the public `crosstl.translate()` API.
-- **Codegen `generate()` contract changed**: Backend code generators now expect the expanded AST structure with new node types.
+- CrossGL gained generics, traits, enums with data, pattern matching, do-while loops and double-precision types. `.cgl` files written for 2.0 may not parse with 1.x.
+- `ShaderNode.stages` is a `StageMap` instead of a `dict`, and AST nodes have `child_nodes()`, `walk()` and `bind_parent_links()`. Code generators expect the new AST.
+- Code generators are no longer imported directly. Use `crosstl.translate()` or `crosstl.translator.codegen.registry`.
 
 ### Added
 
-- **Validation layer** (`crosstl/translator/validation.py`): 2700+ lines of texture intrinsic, stage, and resource validation.
-- **Language specification extractor** (`crosstl/translator/language_spec.py`): Machine-readable snapshot of the CrossGL language surface.
-- **Plugin/registry system**: Backends self-register via `BackendSpec`/`SourceSpec`, enabling third-party extensions.
-- **Shared codegen utilities**: `enum_utils`, `match_utils`, `generic_function_utils`, `generic_struct_utils`, `vector_arithmetic`, `image_access_contracts`, `resource_arrays`, `resource_query`, `stage_utils`.
-- **New language features**: Generics (`generic<T>`), traits, algebraic enums with data, pattern matching (`match`/`case`), guard clauses, do-while loops, double-precision types (`dvec2-4`, `dmat2-4`).
-- **Stage coverage**: Full support for compute, geometry, tessellation, mesh/task, and ray-tracing stages across applicable backends.
-- **Support matrix tooling**: Automated feature tracking (`support/features.json`), CI-driven matrix validation, and issue synchronization.
-- **Documentation**: Sphinx-based docs with per-backend API reference, architecture guide, and support matrix.
-
-### Improved
-
-- All 9 backends (GLSL, HLSL, Metal, SPIR-V, CUDA, HIP, Mojo, Rust, Slang) massively expanded — 10-20x more generated code surface handling new language features.
-- CI expanded to cross-platform (Linux/Windows/macOS), multi-Python (3.8-3.13), per-backend test matrices with JUnit XML output.
-- Test suite grew to 7,983 passing tests (from ~200 at 1.0.0).
+- Validation of texture intrinsics, stages and resources.
+- Backends register through `BackendSpec` and `SourceSpec`, so third-party backends can plug in.
+- Compute, geometry, tessellation, mesh, task and ray-tracing stages on the backends that have them.
+- Sphinx documentation with a per-backend API reference.
 
 ### Fixed
 
-- Fragment output name handling in GLSL codegen.
-- Vector constructor declarations in CUDA/HIP parsers.
-- Switch-default ordering preservation.
-- Texture comparison function translation across backends.
+- Fragment output names in GLSL, vector constructors in the CUDA and HIP parsers, `switch` default ordering, and texture comparison functions.
 
 ### Removed
 
-- `build/` directory (stale artifact).
-- `.agent-coordination/` directory (obsolete automation scaffolding).
-- `experimental/` backend directory.
-- `pytest` removed from runtime `install_requires` (it was incorrectly listed as a runtime dependency).
+- pytest is no longer a runtime dependency.
 
 ---
 
@@ -347,22 +331,13 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Backend registry and source registry for plugin-style backend loading.
-- Slang backend (lexer, parser, codegen, preprocessor).
-- Mojo and Rust backends.
-
-### Improved
-
-- Refactored shader translation pipeline.
-- Backend integration consolidated.
+- Slang, Mojo and Rust backends.
+- Backend and source registries.
 
 ---
 
 ## [1.0.0] - 2025-10-01
 
-Initial release with:
+### Added
 
-- CrossGL intermediate representation language.
-- Translation targets: Metal, DirectX (HLSL), OpenGL (GLSL), Vulkan (SPIR-V), CUDA, HIP.
-- Bidirectional translation (native → CrossGL and CrossGL → native).
-- Basic vertex, fragment, and compute shader stage support.
+- The CrossGL language, with translation to and from Metal, HLSL, GLSL, SPIR-V, CUDA and HIP for vertex, fragment and compute stages.

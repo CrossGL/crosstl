@@ -1,0 +1,436 @@
+"""Stage built-in inputs read by name, passed to the entry point and on to the helpers that read them.
+
+GLSL reads a fragment shader's built-in inputs as global variables: ``gl_FragCoord``, ``gl_FrontFacing``,
+``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), the barycentric coordinates
+(``gl_BaryCoordEXT``, ``gl_BaryCoordNoPerspEXT`` and their NV spellings) and ``gl_ShadingRateEXT``, anywhere in the
+stage, helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input
+is a parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
+attribute (``[[front_facing]]``, ``[[sample_id]]``), and a helper sees it only as an argument. The generators bound
+only ``gl_FragCoord``, and the Metal one only in the entry point. Every other read was emitted verbatim, as an
+undeclared identifier.
+
+:func:`pass_builtin_inputs` rewrites each fragment stage for those targets, in place:
+
+* the entry point takes each built-in input that it or a helper reads as a parameter carrying the built-in
+  (``bool cgl_FrontFacing @ gl_FrontFacing``), or reuses a parameter or input-structure member that already
+  carries it. ``gl_SampleID``, ``gl_PrimitiveID`` and ``gl_ShadingRateEXT``, which HLSL and MSL deliver as ``uint``,
+  arrive in a ``uint``
+  parameter and are converted to GLSL's ``int`` once at the start of the entry point;
+* each helper that reads one, directly or through the helpers it calls, takes it as a trailing parameter, and every
+  call passes it on.
+
+The built-in attributes are then spelled for the target by :mod:`.builtin_values`, which also refuses the ones the
+target lacks (HLSL has no point-sprite coordinate). The HLSL generator already threads ``gl_FragCoord`` through
+helpers itself, so for HLSL that one is left to it. The Metal generator binds ``gl_FragCoord`` in the entry point
+only, so for Metal it is passed here as soon as a helper reads it.
+
+The compute and vertex built-in inputs behave the same way. GLSL reads ``gl_GlobalInvocationID``,
+``gl_LocalInvocationID``, ``gl_WorkGroupID``, ``gl_LocalInvocationIndex`` and ``gl_NumWorkGroups`` (GLSL 4.60
+section 7.1.3), and ``gl_VertexID``, ``gl_InstanceID`` and the draw parameters ``gl_BaseVertex``,
+``gl_BaseInstance`` and ``gl_DrawID`` (section 7.1.1), anywhere in the stage. HLSL, MSL, Slang and WGSL (WGSL
+section 13.3.1) deliver them only as entry-point parameters. The compute generators, and the Slang and WGSL ones for
+every stage, bind the ones the entry point reads itself, so there a built-in is passed here only when a helper reads
+it. The HLSL and Metal vertex generators bind only the Vulkan names (``gl_VertexIndex``, ``gl_InstanceIndex``,
+``gl_ViewIndex``) and copied an entry point's read of the OpenGL ones verbatim, so for those every read is passed.
+All but ``gl_BaseVertex`` (``SV_StartVertexLocation`` is ``int``) arrive as ``uint`` (``SV_VertexID``,
+``[[vertex_id]]``, ``@builtin(vertex_index)``, ``SV_StartInstanceLocation``) and are converted to GLSL's ``int`` at
+the start of the entry point; a ``uint`` input the entry point already declares for one is converted where it is
+read. The generators spell the draw
+parameters from the parameter's built-in and refuse the ones a target lacks: HLSL, MSL and WGSL have no draw index,
+WGSL has no base vertex or base instance, and HLSL has them only from Shader Model 6.8.
+"""
+
+from __future__ import annotations
+
+from .. import ast as A
+from .builtin_values import glsl_builtin_name
+from .hub_types import call_name
+from .rewrite import child_slots, get_child, set_child
+
+__all__ = ["pass_builtin_inputs"]
+
+_HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
+# Targets whose fragment generators bind only gl_FragCoord, so every other fragment input is passed here.
+_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal"}
+TARGETS = _FRAGMENT_BINDING_TARGETS | {"slang", "wgsl"}
+_FRAGMENT_INPUTS = {
+    "gl_FragCoord": "vec4",
+    "gl_FrontFacing": "bool",
+    "gl_PointCoord": "vec2",
+    "gl_SampleID": "int",
+    "gl_PrimitiveID": "int",
+    # GL_EXT_fragment_shader_barycentric, GL_NV_fragment_shader_barycentric and GL_EXT_fragment_shading_rate.
+    "gl_BaryCoordEXT": "vec3",
+    "gl_BaryCoordNoPerspEXT": "vec3",
+    "gl_BaryCoordNV": "vec3",
+    "gl_BaryCoordNoPerspNV": "vec3",
+    "gl_ShadingRateEXT": "int",
+}
+_COMPUTE_INPUTS = {
+    "gl_GlobalInvocationID": "uvec3",
+    "gl_LocalInvocationID": "uvec3",
+    "gl_WorkGroupID": "uvec3",
+    "gl_LocalInvocationIndex": "uint",
+    "gl_NumWorkGroups": "uvec3",
+}
+_VERTEX_INPUTS = {
+    "gl_VertexID": "int",
+    "gl_InstanceID": "int",
+    "gl_BaseVertex": "int",
+    "gl_BaseInstance": "int",
+    "gl_DrawID": "int",
+}
+_STAGE_INPUTS = {
+    "fragment": _FRAGMENT_INPUTS,
+    "pixel": _FRAGMENT_INPUTS,
+    "compute": _COMPUTE_INPUTS,
+    "vertex": _VERTEX_INPUTS,
+}
+_INPUT_TYPES = {**_FRAGMENT_INPUTS, **_COMPUTE_INPUTS, **_VERTEX_INPUTS}
+# HLSL SV_SampleIndex, SV_PrimitiveID, SV_VertexID, SV_InstanceID, SV_StartInstanceLocation and SV_ShadingRate,
+# Slang SV_DrawIndex, the MSL attributes and the WGSL built-ins for them are uint. SV_StartVertexLocation is int,
+# since a base vertex may be negative, and the Metal generator converts an int [[base_vertex]] parameter itself.
+_UNSIGNED = frozenset(
+    {
+        "gl_SampleID",
+        "gl_PrimitiveID",
+        "gl_VertexID",
+        "gl_InstanceID",
+        "gl_BaseInstance",
+        "gl_DrawID",
+        "gl_ShadingRateEXT",
+    }
+)
+
+
+def _stages(program):
+    stages = getattr(program, "stages", None) or {}
+    return list(stages.values() if isinstance(stages, dict) else stages)
+
+
+def _type_node(name):
+    """The CrossGL type node the parser builds for ``name``: ``uvec3`` is a vector of three ``uint``."""
+    for prefix, element in (("uvec", "uint"), ("vec", "float")):
+        if name.startswith(prefix) and name[len(prefix) :].isdigit():
+            return A.VectorType(A.PrimitiveType(element), int(name[len(prefix) :]))
+    return A.PrimitiveType(name)
+
+
+def _stage_kind(stage):
+    value = getattr(stage, "stage", None)
+    return str(getattr(value, "value", value) or "").lower()
+
+
+def _walk(node, seen=None):
+    seen = set() if seen is None else seen
+    if not isinstance(node, A.ASTNode) or id(node) in seen:
+        return
+    seen.add(id(node))
+    yield node
+    for field, key in list(child_slots(node)):
+        yield from _walk(get_child(node, field, key), seen)
+
+
+class _NameIndex:
+    """Per function, the names its body declares and the identifiers it reads, each walked once.
+
+    Every stage of a module sees the module's helper functions, so walking them again for each entry point costs
+    entries times module size. :meth:`clear` drops the index after a rewrite changes a function.
+    """
+
+    def __init__(self):
+        self._names = {}
+
+    def _entry(self, function):
+        key = id(function)
+        entry = self._names.get(key)
+        if entry is None or entry[0] is not function:
+            identifiers = {
+                node.name
+                for node in _walk(getattr(function, "body", None))
+                if isinstance(node, A.IdentifierNode)
+            }
+            entry = (function, _declared(function), identifiers)
+            self._names[key] = entry
+        return entry
+
+    def declared(self, function):
+        return self._entry(function)[1]
+
+    def reads(self, function, names):
+        return self._entry(function)[2] & names
+
+    def clear(self):
+        self._names.clear()
+
+
+def _declared(function):
+    names = {
+        getattr(parameter, "name", None) for parameter in function.parameters or []
+    }
+    for node in _walk(getattr(function, "body", None)):
+        if isinstance(node, A.VariableNode):
+            names.add(node.name)
+    return names
+
+
+def _program_names(program):
+    names = set()
+    for variable in getattr(program, "global_variables", None) or []:
+        names.add(variable.name)
+    for stage in _stages(program):
+        for variable in getattr(stage, "local_variables", None) or []:
+            names.add(variable.name)
+    return names
+
+
+def _all_names(program):
+    names = _program_names(program)
+    for struct in getattr(program, "structs", None) or []:
+        names.add(struct.name)
+    for stage in _stages(program):
+        functions = list(getattr(stage, "local_functions", None) or [])
+        if getattr(stage, "entry_point", None) is not None:
+            functions.append(stage.entry_point)
+        for function in functions:
+            names.add(function.name)
+            names |= _declared(function)
+    for function in getattr(program, "functions", None) or []:
+        names.add(function.name)
+        names |= _declared(function)
+    return names
+
+
+def _builtin_of(node):
+    for attribute in getattr(node, "attributes", None) or []:
+        name = glsl_builtin_name(attribute)
+        if name is not None:
+            return name
+    return None
+
+
+def _as_read(builtin, expression, declared_type):
+    """``expression``, converted to GLSL's ``int`` when it holds an ``int`` built-in in a ``uint``."""
+    if builtin in _UNSIGNED and getattr(declared_type, "name", None) == "uint":
+        return A.FunctionCallNode(A.IdentifierNode("int"), [expression])
+    return expression
+
+
+def _existing_source(program, entry, builtin):
+    """An expression for ``builtin`` the entry point already receives, or ``None``."""
+    structs = {
+        struct.name: struct for struct in getattr(program, "structs", None) or []
+    }
+    for parameter in entry.parameters or []:
+        if _builtin_of(parameter) == builtin:
+            return _as_read(
+                builtin, A.IdentifierNode(parameter.name), parameter.param_type
+            )
+        struct = structs.get(getattr(parameter.param_type, "name", None))
+        for member in getattr(struct, "members", None) or []:
+            if _builtin_of(member) == builtin:
+                return _as_read(
+                    builtin,
+                    A.MemberAccessNode(A.IdentifierNode(parameter.name), member.name),
+                    member.member_type,
+                )
+    return None
+
+
+def _fresh(preferred, taken):
+    name, index = preferred, 0
+    while name in taken:
+        index += 1
+        name = f"{preferred}_{index}"
+    taken.add(name)
+    return name
+
+
+def _replace_reads(function, replacements):
+    """Replace each read of a name in ``replacements`` with a fresh copy of its expression."""
+
+    def visit(node):
+        for field, key in list(child_slots(node)):
+            child = get_child(node, field, key)
+            if isinstance(child, A.IdentifierNode) and child.name in replacements:
+                set_child(node, field, key, _copy(replacements[child.name]))
+            elif isinstance(child, A.ASTNode):
+                visit(child)
+
+    if getattr(function, "body", None) is not None:
+        visit(function.body)
+
+
+def _copy(expression):
+    if isinstance(expression, A.FunctionCallNode):
+        return A.FunctionCallNode(
+            _copy(expression.function), [_copy(a) for a in expression.arguments]
+        )
+    if isinstance(expression, A.MemberAccessNode):
+        return A.MemberAccessNode(_copy(expression.object_expr), expression.member)
+    return A.IdentifierNode(expression.name)
+
+
+def _passes(target, kind, builtin, helper_reads):
+    if kind == "vertex" and target in _FRAGMENT_BINDING_TARGETS:
+        # The HLSL and Metal vertex generators bind none of the OpenGL vertex inputs.
+        return True
+    if kind not in {"fragment", "pixel"} or target not in _FRAGMENT_BINDING_TARGETS:
+        # The generator binds the built-ins the entry point reads; only a helper's read needs a parameter.
+        return builtin in helper_reads
+    if target in _HLSL_TARGETS and builtin == "gl_FragCoord":
+        return False
+    if target == "metal" and builtin == "gl_FragCoord":
+        return builtin in helper_reads
+    return True
+
+
+def pass_builtin_inputs(program, target) -> int:
+    """Pass the stage built-in inputs ``program`` reads by name as parameters; returns the stages changed."""
+    target = str(target or "").lower()
+    if target not in TARGETS or not isinstance(program, A.ShaderNode):
+        return 0
+    program_names = _program_names(program)
+    index = _NameIndex()
+    # id(helper) -> {built-in: parameter} for the helpers an earlier stage threaded. A module-scope helper is shared
+    # by every stage, so a later stage that reads the same built-in passes it to the parameter already there.
+    threaded = {}
+    changed = 0
+    for stage in _stages(program):
+        entry = getattr(stage, "entry_point", None)
+        kind = _stage_kind(stage)
+        inputs = _STAGE_INPUTS.get(kind)
+        if inputs is None or not isinstance(getattr(entry, "body", None), A.BlockNode):
+            continue
+        helpers = [
+            function
+            for function in list(getattr(program, "functions", None) or []) + list(
+                getattr(stage, "local_functions", None) or []
+            )
+            if function is not entry and getattr(function, "body", None) is not None
+        ]
+        candidates = set(inputs) - program_names
+        direct = {
+            function.name: (
+                index.reads(function, candidates - index.declared(function))
+                | (set(threaded.get(id(function), ())) & candidates)
+            )
+            for function in [entry, *helpers]
+        }
+        helper_reads = (
+            set().union(*(direct[helper.name] for helper in helpers))
+            if helpers
+            else set()
+        )
+        builtins = sorted(
+            builtin
+            for builtin in set().union(*direct.values())
+            if _passes(target, kind, builtin, helper_reads)
+        )
+        if not builtins:
+            continue
+        _thread(
+            program, entry, helpers, direct, builtins, _all_names(program), threaded
+        )
+        # Threading adds parameters and replaces reads, so later stages see the functions afresh.
+        index.clear()
+        changed += 1
+    return changed
+
+
+def _thread(program, entry, helpers, direct, builtins, taken, threaded):
+    earlier = set(threaded)
+    sources, conversions = {}, []
+    for builtin in builtins:
+        existing = _existing_source(program, entry, builtin)
+        if existing is not None:
+            sources[builtin] = existing
+            continue
+        name = _fresh(f"cgl_{builtin[3:]}", taken)
+        type_node = _type_node(_INPUT_TYPES[builtin])
+        attribute = [A.AttributeNode(builtin)]
+        if builtin in _UNSIGNED:
+            raw = _fresh(f"{name}_bits", taken)
+            entry.parameters = list(entry.parameters or []) + [
+                A.ParameterNode(raw, A.PrimitiveType("uint"), attributes=attribute)
+            ]
+            conversions.append(
+                A.VariableNode(
+                    name=name,
+                    var_type=type_node,
+                    initial_value=A.FunctionCallNode(
+                        A.IdentifierNode("int"), [A.IdentifierNode(raw)]
+                    ),
+                )
+            )
+        else:
+            entry.parameters = list(entry.parameters or []) + [
+                A.ParameterNode(name, type_node, attributes=attribute)
+            ]
+        sources[builtin] = A.IdentifierNode(name)
+    entry.body.statements[0:0] = conversions
+
+    # The built-ins each helper needs: the ones it reads, and the ones the helpers it calls need.
+    calls = {
+        function.name: {
+            call_name(node)
+            for node in _walk(function.body)
+            if isinstance(node, A.FunctionCallNode)
+        }
+        for function in [entry, *helpers]
+    }
+    needs = {
+        helper.name: set(direct[helper.name]) & set(builtins) for helper in helpers
+    }
+    changed = True
+    while changed:
+        changed = False
+        for helper in helpers:
+            inherited = set()
+            for callee in calls[helper.name]:
+                inherited |= needs.get(callee, set())
+            if not inherited <= needs[helper.name]:
+                needs[helper.name] |= inherited
+                changed = True
+
+    parameter_names = {}
+    for helper in helpers:
+        if id(helper) in earlier:
+            parameter_names[helper.name] = threaded[id(helper)]
+            continue
+        names = {}
+        for builtin in builtins:
+            if builtin in needs[helper.name]:
+                names[builtin] = _fresh(f"cgl_{builtin[3:]}", taken)
+                helper.parameters = list(helper.parameters or []) + [
+                    A.ParameterNode(names[builtin], _type_node(_INPUT_TYPES[builtin]))
+                ]
+        parameter_names[helper.name] = names
+        if names:
+            threaded[id(helper)] = names
+
+    for function in [entry, *helpers]:
+        if id(function) in earlier:
+            # An earlier stage already passes the built-ins through this helper's body and calls.
+            continue
+        local = (
+            sources
+            if function is entry
+            else {
+                builtin: A.IdentifierNode(name)
+                for builtin, name in parameter_names[function.name].items()
+            }
+        )
+        for call in [
+            node
+            for node in _walk(function.body)
+            if isinstance(node, A.FunctionCallNode)
+        ]:
+            needed = needs.get(call_name(call))
+            if needed:
+                arguments = list(call.arguments or []) + [
+                    _copy(local[builtin]) for builtin in builtins if builtin in needed
+                ]
+                # ``args`` aliases ``arguments`` on call nodes.
+                call.arguments = call.args = arguments
+        _replace_reads(function, local)

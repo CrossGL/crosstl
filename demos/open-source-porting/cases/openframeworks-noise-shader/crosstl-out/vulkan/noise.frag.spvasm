@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 50
+; Bound: 52
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
@@ -43,9 +43,9 @@ OpDecorate %24 BuiltIn FragCoord
 %25 = OpTypePointer Function %5
 %33 = OpConstant %5 2.0
 %35 = OpConstant %5 0.5
-%38 = OpConstant %5 4.0
-%45 = OpConstant %4 0
-%46 = OpTypePointer Uniform %8
+%40 = OpConstant %5 4.0
+%47 = OpConstant %4 0
+%48 = OpTypePointer Uniform %8
 %11 = OpVariable %10 Uniform
 %15 = OpVariable %14 UniformConstant
 %20 = OpVariable %19 Output
@@ -64,21 +64,26 @@ OpStore %29 %31
 %32 = OpLoad %5 %26
 %34 = OpFMod %5 %32 %33
 %36 = OpFOrdEqual %3 %34 %35
-%37 = OpLoad %5 %29
-%39 = OpFMod %5 %37 %38
-%40 = OpFOrdEqual %3 %39 %35
-%41 = OpLogicalAnd %3 %36 %40
-OpSelectionMerge %42 None
-OpBranchConditional %41 %43 %44
-%43 = OpLabel
-%47 = OpAccessChain %46 %11 %45
-%48 = OpLoad %8 %47
-OpStore %22 %48
-OpBranch %42
-%44 = OpLabel
+OpSelectionMerge %38 None
+OpBranchConditional %36 %37 %38
+%37 = OpLabel
+%39 = OpLoad %5 %29
+%41 = OpFMod %5 %39 %40
+%42 = OpFOrdEqual %3 %41 %35
+OpBranch %38
+%38 = OpLabel
+%43 = OpPhi %3 %36 %18 %42 %37
+OpSelectionMerge %44 None
+OpBranchConditional %43 %45 %46
+%45 = OpLabel
+%49 = OpAccessChain %48 %11 %47
+%50 = OpLoad %8 %49
+OpStore %22 %50
+OpBranch %44
+%46 = OpLabel
 OpKill
-%42 = OpLabel
-%49 = OpLoad %8 %22
-OpStore %20 %49
+%44 = OpLabel
+%51 = OpLoad %8 %22
+OpStore %20 %51
 OpReturn
 OpFunctionEnd

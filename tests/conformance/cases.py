@@ -1,6 +1,6 @@
 """Compute hazards with independent source-rule oracles.
 
-Every case is a compute kernel with an input buffer at binding 0 and an output buffer at binding 1, written in one
+Every case is a compute kernel with input buffers at bindings 0 through n-1 and an output at binding n, written in one
 source language (cases/<id>/src.<ext>). The oracle models the SOURCE language's rule under its reference
 configuration; `readings` records, per reading of the source semantics, whether the rule creates an obligation
 (HLSL: reading A = FXC/DXBC rules of D3D11.3; reading B = DXC 1.9 / DXIL; every other language: "spec").
@@ -15,7 +15,16 @@ from typing import Callable
 
 import numpy as np
 
-from . import conversion_cases, half_cases, warp_cases
+from . import (
+    array_argument_cases,
+    constants_cases,
+    control_flow_cases,
+    conversion_cases,
+    half_cases,
+    integer_cases,
+    pack_cases,
+    warp_cases,
+)
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -38,7 +47,7 @@ class Case:
     cls: str
     title: str
     rule: str
-    inputs: np.ndarray
+    inputs: np.ndarray | tuple[np.ndarray, ...] | list[np.ndarray]
     out_dtype: type
     oracle: Callable | None = None  # inputs -> expected output array
     compare: str = "exact"  # exact | bits | ulp:<k> | ulp:<k>+sign
@@ -50,12 +59,30 @@ class Case:
         None  # custom (inputs, out) -> (ok, detail) for parametric oracles
     )
     readings: dict = field(default_factory=lambda: {"spec": True})
+    constants: bytes | None = (
+        None  # constants block the host uploads, in the source's layout
+    )
     v1: str | None = None
     note: str = ""
     lang: str = ""
     src: Path | None = None
 
+    @property
+    def input_buffers(self):
+        """Arrays in binding order; keep single-array oracle and check arguments unchanged."""
+        return (
+            (self.inputs,)
+            if isinstance(self.inputs, np.ndarray)
+            else tuple(self.inputs)
+        )
+
     def __post_init__(self):
+        if not self.input_buffers or not all(
+            isinstance(buffer, np.ndarray) for buffer in self.input_buffers
+        ):
+            raise ValueError(
+                "Case inputs must be an array or a non-empty sequence of arrays"
+            )
         if self.src is None:
             d = CASES_DIR / self.id
             srcs = sorted(p for p in d.iterdir() if p.suffix in EXT_LANG)
@@ -112,6 +139,253 @@ def _i32_edge(n=64):
     return _tile(base, n).astype(np.int32)
 
 
+# The words of an MSL ``struct { float3 a; float b; float2 c; }`` that hold values: a (0-2), b (4) and c (6-7).
+_METAL_STRUCT_WORDS = np.array([0, 1, 2, 4, 6, 7])
+
+
+def check_metal_struct(inputs, out):
+    """The value words of each 8-word MSL struct, bit for bit; the padding words are unspecified."""
+    r = inputs.reshape(64, 8).astype(np.float32)
+    want = np.stack(
+        [
+            r[:, 2] + r[:, 4],
+            r[:, 1] + r[:, 4] + np.float32(0.5),
+            r[:, 0] + r[:, 4],
+            r[:, 0] - r[:, 7],
+            r[:, 4] * np.float32(2.0),
+            r[:, 1],
+        ],
+        axis=1,
+    ).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 8)[:, _METAL_STRUCT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_METAL_STRUCT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
+# The words of a CUDA ``struct { float3 a; float2 b; }`` that hold values: a (0-2) and b (4-5).
+_CUDA_STRUCT_WORDS = np.array([0, 1, 2, 4, 5])
+
+
+def check_cuda_struct(inputs, out):
+    """u_struct_layout: the value words of each 6-word CUDA struct, bit for bit; the padding word is unspecified."""
+    r = inputs.reshape(64, 6).astype(np.float32)
+    want = np.stack(
+        [
+            r[:, 2] + r[:, 4],
+            r[:, 1],
+            r[:, 0] - r[:, 5],
+            r[:, 0] * np.float32(2.0) + np.float32(1.0),
+            r[:, 5] + np.float32(0.5),
+        ],
+        axis=1,
+    ).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 6)[:, _CUDA_STRUCT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_CUDA_STRUCT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
+# The words of an MSL ``struct { float3 a; float b; }`` that hold values: a (0-2) and b (4).
+_METAL_FLOAT3_FLOAT_WORDS = np.array([0, 1, 2, 4])
+
+
+def check_metal_helper_struct(inputs, out):
+    """m_float3_helper: element i gets b = v and a = (v, 0, 1) with v = src[i].a.y + src[i].b, bit for bit; the
+    padding words are unspecified."""
+    r = inputs.reshape(64, 8).astype(np.float32)
+    v = (r[:, 1] + r[:, 4]).astype(np.float32)
+    zero, one = np.zeros_like(v), np.ones_like(v)
+    want = np.stack([v, zero, one, v], axis=1).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 8)[:, _METAL_FLOAT3_FLOAT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_METAL_FLOAT3_FLOAT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
+def o_packed_helper(inp):
+    """m_packed_helper: element i of the packed_float3 output is (z, y + 0.5, x) of input element i."""
+    r = inp.reshape(64, 3).astype(np.float32)
+    return (
+        np.stack([r[:, 2], r[:, 1] + np.float32(0.5), r[:, 0]], axis=1)
+        .reshape(-1)
+        .astype(np.float32)
+    )
+
+
+def o_struct_stride(inp):
+    r = inp.reshape(64, 7).astype(np.float32)
+    out = np.stack(
+        [
+            r[:, 6],
+            r[:, 3],
+            r[:, 2] + np.float32(0.5),
+            r[:, 1],
+            r[:, 0] + r[:, 4],
+            r[:, 1],
+            r[:, 4],
+        ],
+        axis=1,
+    )
+    return out.reshape(-1).astype(np.float32)
+
+
+def o_packed_mixed(inp):
+    # Words of an element: a at 0..2, padding 3, s at 4, b at 5..7, c at 8, padding 9, d at 10..11.
+    r = inp.reshape(64, 12).astype(np.float32)
+    out = np.stack(
+        [
+            r[:, 2],
+            r[:, 5],
+            r[:, 7] + np.float32(0.5),
+            r[:, 8],
+            r[:, 11],
+            r[:, 0] + r[:, 10] + r[:, 4],
+        ],
+        axis=1,
+    )
+    return out.reshape(-1).astype(np.float32)
+
+
+def o_matrix_orientation(inp):
+    """GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6 on mat2x3 values built from six inputs per thread."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).T.copy()  # 3 rows, 2 columns; column c is m[:, c]
+        mv = m @ np.array([1.0, 10.0])
+        vm = np.array([1.0, 10.0, 100.0]) @ m
+        c1, ck = m[:, 1].copy(), m[:, k].copy()
+        d = np.eye(3) * a[0]
+        dm = d @ mv
+        row = [*mv, *vm, c1[0], c1[2], m[2, 0], dm[0], dm[2] + d[1, 0], ck[1]]
+        m[:, 1] = m[:, 0] + c1
+        m[1, 0] = 7.0
+        row += [m[0, 1], m[2, 1], m[1, 0]]
+        s = np.column_stack([m[0:2, 0], m[1:3, 1]])
+        row.append((s @ np.array([1.0, 1000.0]))[0])
+        t = m.T
+        row.append(t[1, 2] + 2 * 100.0)
+        row.append((m @ t)[0, 2])
+        row.append((t @ m)[0, 1])
+        m[:, k] = [a[5], 2.0, 3.0]
+        row.append(m[0, 1] + m[1, 0] * 10.0)
+        m[:, k] += [1.0, 20.0, 300.0]
+        row.append(m[0, k] + m[2, k])
+        op = np.outer(m[:, 0], [1.0, 10.0])
+        row += [(m * m)[2, 1], op[2, 1], op[1, 0], m[1, 1] + 1000.0]
+        out += row
+    return np.array(out, dtype=np.float32)
+
+
+def o_hlsl_matrix_orientation(inp):
+    """HLSL floatRxC rows, row-filling constructors and initializer lists, _mRC swizzles, mul and casts."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).copy()  # HLSL float2x3: two rows of three
+        mv = m @ np.array([1.0, 10.0, 100.0])
+        vm = np.array([1.0, 10.0]) @ m
+        r1, rk = m[1].copy(), m[k].copy()
+        row = [*mv, *vm, r1[0], r1[2], m[0, 2], rk[1], m[1, 2] + m[0, 0] * 10.0]
+        row.append(m[0, 2] + m[1, 0] * 100.0)
+        m[1] = m[0] + r1
+        m[0, 1] = 7.0
+        row += [m[1, 0], m[1, 2], m[0, 1]]
+        m[k] = [a[5], 2.0, 3.0]
+        row.append(m[1, 0] + m[0, 1] * 10.0)
+        m[k] += [1.0, 20.0, 300.0]
+        row.append(m[k, 0] + m[k, 2])
+        row.append((m * m)[1, 2])
+        t = m.T
+        row += [(m @ t)[1, 0], (t @ m)[2, 0]]
+        tr = m[:2, :2]
+        row.append(tr[1, 1] + tr[0, 1] * 10.0)
+        il = np.array([[a[0], 2.0], [3.0, a[1]]])
+        row.append(il[0, 1] + il[1, 0] * 10.0 + il[1, 1] * 100.0)
+        row.append(a[0] + a[0] * 10.0)
+        m[0, 1] = 9.0
+        row.append(m[0, 1])
+        fm = np.array([[1.0, 2.0], [3.0, a[0]]])
+        row.append(fm[1, 0] + fm[0, 1] * 10.0 + fm[1, 1] * 100.0)
+        out += row
+    return np.array(out, dtype=np.float32)
+
+
+def o_matrix_expression_columns(inp):
+    """GLSL 4.60 sections 5.6, 5.9 and 8.6: columns of matrix-valued expressions built from six inputs per thread."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).T  # 3 rows, 2 columns; column c is m[:, c]
+        n = np.array([[1.0, 2.0, 3.0], [a[5], a[0], 4.0]]).T
+        c = np.array([a[0], a[2], a[4]])
+        r = np.array([a[1], 10.0])
+        q, s, t = (m / 2.0)[:, 1], (m + 1.0)[:, k], (10.0 - m)[:, 1]
+        u, v = (m * n)[:, 1], np.outer(c, r)[:, k]
+        x, y = (m - 1.0) @ r, c @ (m + n)
+        out += [q[0], q[2], s[1], s[2], t[0], t[1], u[0], u[2], v[0], v[1], x[0], x[2]]
+        out += [y[0], y[1], (m * 2.0)[1, 1], (2.0 * m - n)[2, k]]
+        d = np.array([[2.0, 4.0, 0.5], [8.0, 1.0, 0.25]]).T * float(1 << k)
+        h = (m + 1.0 - n - 0.5) / d
+        out += [-m[0, 1], h[1, k], (4.0 / d)[2, 1], (m / d)[0, k]]
+    return np.array(out, dtype=np.float32)
+
+
+def _matrix_storage_input(n=64):
+    """``n`` std430 mat2x3 values: two columns of three floats, each padded to four with -1000."""
+    columns = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
+    out = []
+    for i in range(n):
+        for column in columns + np.float32(i % 4):
+            out += [*column, -1000.0]
+    return np.array(out, dtype=np.float32)
+
+
+def o_matrix_storage(inp):
+    """GLSL 4.60 sections 4.1.11 and 7.6.2.2 on std430 mat2x3 values and matrix initializer lists."""
+    out = []
+    for i in range(inp.size // 8):
+        c0 = inp[8 * i : 8 * i + 3].astype(np.float64)
+        c1 = inp[8 * i + 4 : 8 * i + 7].astype(np.float64)
+        mv = c0 + 10.0 * c1
+        gv = np.array([c0[0], c1[0]]) + 100.0 * np.array([c0[2], 5.0])
+        hv = (
+            np.array([c1[0], c1[1]])
+            + 10.0 * np.array([c1[2], c0[0]])
+            + 100.0 * np.array([c0[1], c0[2]])
+        )
+        out += [*mv, *gv, *hv, c1[2] + c0[1] * 10.0]
+    return np.array(out, dtype=np.float32)
+
+
 def o_add_wrap(inp):
     x = inp.astype(np.int64)
     return (_wrap32(x + 1) > x).astype(np.int32)
@@ -130,6 +404,15 @@ def o_loop_wrap(inp):
         while k < b and c < 8:
             c, k = c + 1, k + 1
         out.append(c)
+    return np.array(out, np.int32)
+
+
+def o_step_values(inp):
+    """``y++``, ``--z`` and ``k++`` in a loop condition, as values, with two's-complement wrapping."""
+    out = []
+    for x in inp.astype(np.int64):
+        y = int(_wrap32(x + 1))
+        out += [int(_wrap32(x + y)), int(_wrap32(x - 1)), 2, int(_wrap32(x + 3))]
     return np.array(out, np.int32)
 
 
@@ -426,10 +709,29 @@ def o_fmod(inp):
     )
 
 
+def o_hlsl_remainder(inp):
+    x, y = inp[0::2].astype(np.float64), inp[1::2].astype(np.float64)
+    columns = (np.fmod(x, y), np.fmod(np.abs(x), np.abs(y)))
+    return np.stack(columns, axis=1).reshape(-1).astype(np.float32)
+
+
+def o_array_values(inp):
+    """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
+    x = inp.astype(np.int64)
+    return (16 * x + 21).astype(np.int32)
+
+
 def o_half_mul(inp):
     return (
         (inp.astype(np.float16) * np.float16(3.0)).astype(np.float16).astype(np.float32)
     )
+
+
+def o_reference_params(inp):
+    """x = inp + 5 through bump(int&); swap_pair(Pair&) leaves p = (i, x); 7x + 3i + x + 2x."""
+    x = inp.astype(np.int64) + 5
+    i = np.arange(inp.size, dtype=np.int64)
+    return (10 * x + 3 * i).astype(np.int32)
 
 
 def o_fib(inp):
@@ -460,13 +762,225 @@ def o_buffer_count(inp):
     return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
 
 
+def o_assignment_operand(inp):
+    """Assignments and compound assignments used as operands contribute the value they store."""
+    out = []
+    for x in inp.astype(np.int64):
+        b = x + 1
+        c = b * 2
+        b += 3
+        d = b - 1
+        b -= 2
+        e = -b
+        c = c + 1
+        if c > 5:
+            d = d * 2
+            f = d + 1
+        else:
+            e = e - 7
+            f = e - 1
+        b *= 3
+        out.extend([b, c, d, e, f, 10 * b])
+    return np.array(out, dtype=np.int32)
+
+
+def o_constant_array_arguments(inp):
+    """Helpers called with constant arrays see the constants, and their writes stay in their own copies."""
+    w, m, cs, lo = (
+        (1.0, 2.0, 3.0, 4.0),
+        ((5.0, 6.0), (7.0, 8.0)),
+        (9.0, 10.0, 11.0, 12.0),
+        (13.0, 14.0, 15.0, 16.0),
+    )
+
+    def dot4(v, k):
+        return sum(v[j] * (k + j) for j in range(4)) + 100.0
+
+    def pick2(v, i):
+        v = list(v)
+        v[i % 2] = -1.0
+        return v[0] * 3.0 + v[1]
+
+    out = []
+    for i, k in enumerate(inp.astype(np.float64)):
+        out += [
+            dot4(w, k),
+            pick2(m[i % 2], i),
+            dot4(cs, k),
+            dot4((17.0, 18.0, k, 20.0), 1.0),
+            dot4((k, k + 1.0, k + 2.0, k + 3.0), 2.0),
+            dot4(lo, k),
+            pick2(m[1], i + 1),
+            w[i % 4] + m[i % 2][1] + cs[(i + 1) % 4] + lo[(i + 2) % 4],
+        ]
+    return np.array(out, dtype=np.float32)
+
+
+def row_major_inputs():
+    """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
+    rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
+        np.float32
+    )
+    words = np.zeros((64, 2, 4), dtype=np.float32)
+    words[:, :, :3] = rows
+    return words.reshape(-1)
+
+
+def o_row_major_members(inp):
+    """The row-major mat4x2 results, row by row, followed by the columns read back from them."""
+    rows = inp.reshape(64, 2, 4)[:, :, :3].astype(np.float64)
+    out_w, out_o = [], []
+    for m in rows:  # m[r][c]: row r, column c
+        col = m[:, 2]
+        e = m[0, 1]
+        mv = m @ np.array([1.0, 2.0, 3.0])
+        w = np.stack(
+            [m[:, 0], m[:, 1], m[:, 2], col + e + mv[0] + mv[1]], axis=1
+        )  # 2 rows, 4 columns
+        w[0, 0] += 1.0
+        w[1, 1] += 1.0
+        w[:, 2] += 0.5
+        out_w.extend(w.reshape(-1))
+        out_o.extend([w[0, 0], w[1, 0], w[0, 1], w[1, 1]])
+    return np.array(out_w + out_o, dtype=np.float32)
+
+
+def row_major_struct_inputs():
+    """64 std430 row-major ``L`` structures of 20 distinct small integers each, padding words included."""
+    return ((np.arange(64 * 20, dtype=np.int64) * 37 % 1283) - 641).astype(np.float32)
+
+
+def o_row_major_struct_members(inp):
+    """Reads of the row-major matrices of ``L`` and its nested ``Inner``, three vec4 results per invocation.
+
+    In each 20-word ``L``: ``inner.n`` (mat2x3) row r, column c is word 2r + c; ``c`` is words 8-11; ``k``
+    (mat3x2) row r, column c is word 12 + 4r + c.
+    """
+    ls = inp.reshape(64, 20).astype(np.float64)
+    out = []
+    for i in range(64):
+        a, b = ls[i], ls[63 - i]
+        kv = [sum(a[12 + 4 * r + c] * (c + 1.0) for c in range(3)) for r in range(2)]
+        out.extend([a[0], a[2], a[4], a[18]])
+        out.extend([b[1], b[3], b[5], a[11]])
+        out.extend([kv[0], kv[1], b[12], b[16]])
+    return np.array(out, dtype=np.float32)
+
+
 def o_mirror(inp):
     """Each 64-element group reversed: workgroup memory is shared by the group."""
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
 
 
+def o_return_reference_copy(inp):
+    """``return bump(tile[l])`` and ``return bump(v.y) + v.x``: the inout copy-back precedes the return."""
+    out = []
+    for x in inp.astype(np.int64):
+        out += [3 * x - 1, 3 * x + 1, 4 * x + 14, 3 * x + 16]
+    return np.array(out, np.int32)
+
+
+def o_reference_copy_order(inp):
+    """Statements that read, call again with or store to an inout argument after the call that copies it back."""
+
+    def bump(t):
+        t = t * 3 + 1
+        return t, t - 2
+
+    out = []
+    for x in inp.astype(np.int64):
+        tile, value = bump(x)
+        tile = value + 1
+        v = [x, x + 5]
+        v[1], value = bump(v[1])
+        r = (value, v[1])
+        tile, value = bump(tile)
+        s = (value << 1) ^ tile
+        v[0], first = bump(v[0])
+        v[0], second = bump(v[0])
+        z = first - second
+        tile, first = bump(tile)
+        tile = tile + first
+        p = tile * 2
+        v[1], value = bump(v[1])
+        c = v[1] if value != v[1] else -1
+        tile, value = bump(tile)
+        f = value + tile
+        v[0], value = bump(v[0])
+        v[0] = v[0] + value
+        tile, value = bump(tile)
+        tile = tile + value
+        out += [r[0], r[1], s, z, p, c, f, tile + v[0]]
+    return np.array(out, np.int64).astype(np.int32)
+
+
+def o_call_argument_order(inp):
+    """Calls whose arguments have side effects: left to right, inout copied in and out locations fixed in turn."""
+
+    def bump(t):
+        t = t * 3 + 1
+        return t, t - 2
+
+    out = []
+    for x in inp.astype(np.int64):
+        y, value = bump(x)
+        two_after = x * 100 + value
+        y, value = bump(x)
+        built_in = max(value, y)
+        first = x * 2 + 1
+        second = first * 2 + 1
+        three = (first * 100 + second) * 100 + second
+        m, value = bump(x)
+        scaled = x * 10 + value
+        tile, value = bump(x)
+        two_before = value * 100 + tile
+        y, value = bump(x)
+        clamped = min(max(x, value), y + 100)
+        tile, value = bump(x)
+        atomic = tile * 3 + (tile + value)
+        k = x & 1
+        slots = [0] * 8
+        k_after, value = bump(k)
+        slots[k] = value
+        put = slots[x & 1] * 16 + slots[k_after]
+        out += [two_after, built_in, three, scaled, two_before, clamped, atomic, put]
+    return np.array(out, np.int64).astype(np.int32)
+
+
+def o_array_constants(inp):
+    """Constant arrays of floats, of structs and of two-element vector arrays, indexed by bits of the input."""
+    weights = [1.0, 2.0, 4.0, 8.0]
+    table = [(1.5, 3), (-2.5, 7)]
+    grid = [[(1.0, 0.5), (2.0, 0.25)], [(3.0, 4.0), (5.0, 6.0)]]
+    out = []
+    for k in inp.astype(np.int64):
+        scale, bias = table[(k >> 2) & 1]
+        gx, gy = grid[(k >> 3) & 1][(k >> 4) & 1]
+        out.append(weights[k & 3] * scale + bias + gx * 16.0 + gy * 64.0)
+    return np.array(out, dtype=np.float32)
+
+
 def o_warp(inp):
     return inp.astype(np.int64).reshape(-1, 32).sum(axis=1).astype(np.int32)
+
+
+def o_array_list_assignment(inp):
+    """Brace lists that read the array they replace see its old elements: a rotation, a struct swap, a row swap."""
+    out = []
+    for x in inp.astype(np.int64):
+        a = [x + 2, x, x + 1]
+        q = [(x + 5) * 100 + 1, x * 100 + 1]
+        g = 2 * 1000 + 3 * 100 + x * 10 + 1
+        out.extend(a + q + [g, x * 4, x * 2 + x * 3])
+    return np.array(out, dtype=np.int32)
+
+
+def o_buffer_helper_parameters(inp):
+    """``load`` reads ``2 x + 5`` through a read-only buffer parameter; ``store`` and ``bump`` write ``x + 7``."""
+    out = []
+    for x in inp.astype(np.int64):
+        out.extend([x * 2 + 5, x + 7])
+    return np.array(out, dtype=np.int32)
 
 
 def _width_check(inp, out, group=64, divergent=False):
@@ -535,6 +1049,15 @@ CASES = [
         np.int32,
         o_loop_wrap,
         v1="int_loop_overflow",
+    ),
+    Case(
+        "g_step_values",
+        "H1",
+        "y++, --z and while (k++ != x + 2) used as values with x near INT_MAX or INT_MIN",
+        "GLSL 4.60 §4.1.3 WRAP; §5.9: a postfix step yields the old value, a prefix step the new one",
+        _i32_edge(),
+        np.int32,
+        o_step_values,
     ),
     Case(
         "h_add_wrap",
@@ -1024,6 +1547,16 @@ CASES = [
         compare="bits",
     ),
     Case(
+        "h_fmod_remainder",
+        "fmod",
+        "fmod(x, y) and the floating-point % of magnitudes",
+        "HLSL fmod: x = i * y + f with f the sign of x and |f| < |y|; % on operands of one sign",
+        _fmod_pairs(),
+        np.float32,
+        o_hlsl_remainder,
+        compare="bits",
+    ),
+    Case(
         "m_half_mul",
         "H15",
         "half(x) * 3.0h",
@@ -1112,6 +1645,83 @@ CASES = [
         v1="m_packed_float3",
     ),
     Case(
+        "m_packed_struct",
+        "H16",
+        "struct with packed_float3 and packed_float2 members: 28-byte elements",
+        "MSL packed vector alignment",
+        np.arange(64 * 7, dtype=np.float32),
+        np.float32,
+        o_struct_stride,
+        compare="ulp:0",
+    ),
+    Case(
+        "m_packed_mixed",
+        "H16",
+        "struct mixing float3 and packed_float3 members: 48-byte elements, packed member at 20",
+        "MSL float3 and packed vector alignment",
+        np.arange(64 * 12, dtype=np.float32),
+        np.float32,
+        o_packed_mixed,
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3_stride",
+        "H16",
+        "float3: 16-byte stride",
+        "MSL float3 size and alignment",
+        np.arange(64 * 4, dtype=np.float32),
+        np.float32,
+        lambda inp: inp[1::4].astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3x3_stride",
+        "H16",
+        "float3x3: 16-byte columns, 48-byte stride; a column read and a matrix-vector product",
+        "MSL matrix size, alignment and column order",
+        np.arange(64 * 12, dtype=np.float32),
+        np.float32,
+        lambda inp: (
+            lambda r: r[:, 8]
+            + r[:, 1]
+            + np.float32(2.0) * r[:, 5]
+            + np.float32(3.0) * r[:, 9]
+        )(inp.reshape(64, 12).astype(np.float32)).astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "m_packed_helper",
+        "H16",
+        "packed_float3 pointers passed to helper functions, with an element offset: 12-byte stride",
+        "MSL packed_float3",
+        np.arange(64 * 3, dtype=np.float32),
+        np.float32,
+        o_packed_helper,
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3_helper",
+        "H16",
+        "struct {float3 a; float b;} pointers passed to helper functions, with an element offset: 32-byte elements",
+        "MSL natural struct layout",
+        np.arange(64 * 8, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 8,
+        check=check_metal_helper_struct,
+    ),
+    Case(
+        "m_float3_struct",
+        "H16",
+        "struct {float3 a; float b; float2 c;}: b at offset 16, c at 24, 32-byte elements",
+        "MSL natural struct layout",
+        np.arange(64 * 8, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 8,
+        check=check_metal_struct,
+    ),
+    Case(
         "h_float3_stride",
         "H16",
         "StructuredBuffer<float3>: 12-byte stride",
@@ -1119,6 +1729,17 @@ CASES = [
         np.arange(64 * 3, dtype=np.float32),
         np.float32,
         lambda inp: inp[1::3].astype(np.float32),
+        compare="ulp:0",
+        readings=BOTH,
+    ),
+    Case(
+        "h_struct_stride",
+        "H16",
+        "StructuredBuffer<P>: float3 and float2 members at 4-byte offsets, 28-byte elements",
+        "HLSL structured buffer layout",
+        np.arange(64 * 7, dtype=np.float32),
+        np.float32,
+        o_struct_stride,
         compare="ulp:0",
         readings=BOTH,
     ),
@@ -1133,6 +1754,17 @@ CASES = [
         compare="ulp:0",
     ),
     Case(
+        "u_struct_layout",
+        "H16",
+        "struct {float3 a; float2 b;}: b at offset 16, 24-byte elements",
+        "CUDA built-in vector alignment",
+        np.arange(64 * 6, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 6,
+        check=check_cuda_struct,
+    ),
+    Case(
         "g_std430_vec3_float",
         "H16",
         "struct {vec3 a; float b;}: b at offset 12",
@@ -1140,6 +1772,49 @@ CASES = [
         np.arange(64 * 4, dtype=np.float32),
         np.float32,
         lambda inp: inp[3::4].astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_orientation",
+        "S11",
+        "mat2x3 constructors, columns, products, built-ins and mat3(s)",
+        "GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_matrix_orientation,
+        compare="ulp:0",
+    ),
+    Case(
+        "h_matrix_orientation",
+        "S11",
+        "float2x3 rows, row-filling constructors, _mRC swizzles, mul, * and casts",
+        "HLSL matrix type, per-component math and mul references",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_hlsl_matrix_orientation,
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_expression_columns",
+        "S11",
+        "columns of mat2x3 sums, quotients, negations, compound updates, matrixCompMult and outerProduct results",
+        "GLSL 4.60 sections 5.6, 5.9 and 8.6",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_matrix_expression_columns,
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_storage",
+        "S11",
+        "std430 mat2x3 storage loads and matrix initializer lists",
+        "GLSL 4.60 sections 4.1.11 and 7.6.2.2",
+        _matrix_storage_input(),
+        np.float32,
+        o_matrix_storage,
         compare="ulp:0",
     ),
     Case(
@@ -1163,6 +1838,15 @@ CASES = [
         np.arange(67, dtype=np.int32) * 7,
         np.int32,
         lambda inp: inp[3:67].astype(np.int32),
+    ),
+    Case(
+        "u_reference_params",
+        "H17",
+        "int& and Pair& parameters written by the callee, const int& read",
+        "C++ lvalue reference parameters bind the caller's object",
+        SMALL[:64].copy(),
+        np.int32,
+        o_reference_params,
     ),
     Case(
         "m_ptr_arith",
@@ -1239,6 +1923,36 @@ CASES = [
         threads=128,
     ),
     Case(
+        "g_return_reference_copy",
+        "H13",
+        "a returned call whose inout argument is a shared array element or a vector component",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_return_reference_copy,
+        threads=128,
+    ),
+    Case(
+        "g_reference_copy_order",
+        "H13",
+        "reads, calls and stores after a call that copies an inout argument back, in the same statement",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_reference_copy_order,
+        threads=128,
+    ),
+    Case(
+        "g_call_argument_order",
+        "H13",
+        "call arguments with side effects, for shader and built-in functions, with inout and out arguments",
+        "GLSL 4.60 section 6.1.1: arguments are evaluated in order from left to right, exactly once",
+        SMALL,
+        np.int32,
+        o_call_argument_order,
+        threads=128,
+    ),
+    Case(
         "g_buffer_length",
         "H13",
         "length() of a runtime array after a buffer block's header",
@@ -1291,6 +2005,27 @@ CASES = [
         out_count=128 * warp_cases.RESULTS,
     ),
     Case(
+        "x_buffer_helper_parameters",
+        "composite",
+        "Helpers that take storage buffers as buffer T name[] parameters",
+        "A helper's storage-buffer parameter names the buffer its caller passes, so its loads and stores reach "
+        "that buffer",
+        SMALL,
+        np.int32,
+        o_buffer_helper_parameters,
+        threads=128,
+    ),
+    Case(
+        "x_array_list_assignment",
+        "composite",
+        "Brace lists assigned to int, struct and nested arrays whose elements read the array being assigned",
+        "GLSL 4.60 section 5.8: an assignment stores the value of its right operand, so a list's elements "
+        "are all computed before the array changes, as for the equivalent array constructor",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_array_list_assignment,
+    ),
+    Case(
         "m_simd_sum",
         "H13",
         "simd_sum and threads_per_simdgroup",
@@ -1337,6 +2072,228 @@ CASES = [
         o_fib,
     ),
     Case(
+        "g_pack",
+        "pack",
+        "packUnorm/packSnorm 4x8 and 2x16, packHalf2x16",
+        "GLSL 4.60 §8.4: round(clamp(c) * scale), first component in the low bits",
+        pack_cases.pack_inputs(),
+        np.uint32,
+        pack_cases.pack_reference,
+    ),
+    Case(
+        "g_unpack",
+        "pack",
+        "unpackUnorm/unpackSnorm 4x8 and 2x16, unpackHalf2x16",
+        "GLSL 4.60 §8.4: f / scale clamped to [-1, 1]; division within 2.5 ULP",
+        pack_cases.unpack_inputs(),
+        np.float32,
+        pack_cases.unpack_reference,
+        compare="ulp:3",
+    ),
+    Case(
+        "g_bitfield",
+        "bitfield",
+        "bitfieldExtract and bitfieldInsert with run-time offsets and widths",
+        "GLSL 4.60 §8.8: width 0 extracts 0 and inserts nothing; signed extracts sign-extend",
+        pack_cases.bitfield_inputs(),
+        np.uint32,
+        pack_cases.bitfield_reference,
+    ),
+    Case(
+        "g_mix_select",
+        "select",
+        "mix(x, y, bvec) with infinite and NaN operands",
+        "GLSL 4.60 §8.3: a boolean selector selects; the other operand does not reach the result",
+        pack_cases.mix_select_inputs(),
+        np.float32,
+        pack_cases.mix_select_reference,
+        compare="bits",
+    ),
+    Case(
+        "g_frexp_ldexp_modf",
+        "exponent",
+        "frexp, ldexp and modf on normal values and zero",
+        "GLSL 4.60 §8.3: significand in [0.5, 1) and exponent, x * 2^e, parts with the sign of x",
+        pack_cases.exponent_inputs(),
+        np.uint32,
+        pack_cases.exponent_reference,
+    ),
+    Case(
+        "s_frexp_ldexp_modf",
+        "exponent",
+        "FrexpStruct, ModfStruct and Ldexp with struct results read by OpCompositeExtract",
+        "GLSL.std.450: member 0 is the significand or fraction, member 1 the exponent or whole part",
+        pack_cases.exponent_inputs(),
+        np.uint32,
+        pack_cases.exponent_reference,
+    ),
+    Case(
+        "h_frexp_ldexp_modf",
+        "exponent",
+        "frexp and ldexp with float exponents, modf into an int",
+        "HLSL intrinsics: frexp exponent and ldexp x * 2^e as floats; exp2 within 3 + 2|e| ULP (Vulkan 1.3)",
+        pack_cases.hlsl_exponent_inputs(),
+        np.float32,
+        pack_cases.hlsl_exponent_reference,
+        compare="ulp:8",
+    ),
+    Case(
+        "m_bit_scans",
+        "integer",
+        "clz and ctz of uint, int and vector components, qualified and unqualified",
+        "MSL 3.2 §6.13: leading or trailing zero bits per component; a zero component counts its bit width",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.metal_bit_scan_reference,
+    ),
+    Case(
+        "m_narrow_bit_functions",
+        "integer",
+        "popcount and reverse_bits of short, ushort, char and uchar scalars and vectors",
+        "MSL 3.2 §6.13: popcount and reverse_bits count and reverse the bits of the argument's own integer type",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.narrow_bit_function_reference,
+    ),
+    Case(
+        "g_bit_scans",
+        "integer",
+        "findMSB and findLSB of uint, int and vector components",
+        "GLSL 4.60 §8.8: bit index or -1 for zero; findMSB of a negative int finds the highest clear bit",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.glsl_bit_scan_reference,
+    ),
+    Case(
+        "g_extended_arithmetic",
+        "integer",
+        "uaddCarry, usubBorrow, umulExtended and imulExtended, scalar and vector",
+        "GLSL 4.60 §8.8: sum and difference modulo 2^32 with carry or borrow; high and low words of the product",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.extended_arithmetic_reference,
+    ),
+    Case(
+        "s_extended_arithmetic",
+        "integer",
+        "OpIAddCarry, OpISubBorrow, OpUMulExtended and OpSMulExtended read by OpCompositeExtract",
+        "SPIR-V 1.6 §3.52.13: member 0 is the low word, sum or difference, member 1 the high word, carry or borrow",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.extended_arithmetic_reference,
+    ),
+    Case(
+        "s_integer_signedness",
+        "integer",
+        "Shifts, comparisons, division, remainder, modulus and conversions whose opcode signedness differs from the operand type",
+        "SPIR-V 1.6 §3.3.6: the opcode, not the operand type, decides the signedness of an integer operation",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.signedness_reference,
+    ),
+    Case(
+        "s_structured_control_flow",
+        "control",
+        "Nested loops with continue and break, a fall-through switch, a do-while, swapped loop values, a "
+        "read-then-overwrite and a return from an endless loop, in function variables",
+        "SPIR-V 1.6 §2.11: merge instructions declare the selection, switch and loop constructs",
+        control_flow_cases.structured_control_flow_inputs(),
+        np.uint32,
+        control_flow_cases.structured_control_flow_reference,
+    ),
+    Case(
+        "s_structured_control_flow_phi",
+        "control",
+        "The s_structured_control_flow kernel after spirv-opt -O, with its loop values and switch result in OpPhi",
+        "SPIR-V 1.6 §2.11 and §3.52.17: an OpPhi takes the value of the edge control arrives by",
+        control_flow_cases.structured_control_flow_inputs(),
+        np.uint32,
+        control_flow_cases.structured_control_flow_reference,
+    ),
+    Case(
+        "s_array_constants",
+        "composite",
+        "OpConstantComposite of array, struct and nested array types, read with dynamic indices",
+        "SPIR-V 1.6 §3.52.7: OpConstantComposite of an array or structure type takes its constituents in order",
+        np.arange(64, dtype=np.uint32) % 32,
+        np.float32,
+        o_array_constants,
+    ),
+    Case(
+        "g_short_circuit",
+        "control",
+        "&&, || and ?: whose unselected operands call a function that writes its inout argument, in "
+        "straight-line code, a while condition and a do-while condition, and an index guarded by a bounds test",
+        "GLSL 4.60 section 5.9: && and || evaluate the right operand only when the left one leaves the "
+        "result open; ?: evaluates only the selected expression",
+        control_flow_cases.short_circuit_inputs(),
+        np.int32,
+        control_flow_cases.short_circuit_reference,
+        threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_for_header_lists",
+        "control",
+        "for headers with two declarations, two assignments, two updates and an update that stores through an "
+        "increment, and a do-while whose continue reaches a condition that decrements",
+        "GLSL 4.60 sections 5.9 and 6.3: the comma operator evaluates its operands left to right, and the loop "
+        "expression of a for, like the condition of a do-while, runs after every iteration, also one left by "
+        "continue",
+        control_flow_cases.for_header_list_inputs(),
+        np.int32,
+        control_flow_cases.for_header_list_reference,
+    ),
+    Case(
+        "g_assignment_operand",
+        "control",
+        "Parenthesized =, +=, -= and *= used as operands of arithmetic, unary minus and both arms of ?:",
+        "GLSL 4.60 section 5.8: an assignment expression has the value of its left operand after the "
+        "assignment; section 5.9: ?: evaluates only the selected expression",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_assignment_operand,
+    ),
+    Case(
+        "g_constant_array_arguments",
+        "S20",
+        "const arrays, a row of a const array of arrays, a const struct member, array constructors, a call result "
+        "and a local const array passed by value to helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 4.3.3: a const variable is read-only",
+        np.arange(64, dtype=np.float32),
+        np.float32,
+        o_constant_array_arguments,
+        compare="ulp:0",
+    ),
+    Case(
+        "g_row_major_members",
+        "S20",
+        "layout(row_major) mat3x2 and mat4x2 block members: matrix, column and element reads, a matrix times a "
+        "vector, whole and compound writes",
+        "GLSL 4.60 section 7.6.2.2: a row-major matrix is laid out like an array of its row vectors",
+        row_major_inputs(),
+        np.float32,
+        o_row_major_members,
+    ),
+    Case(
+        "g_row_major_struct_members",
+        "S20",
+        "layout(row_major) on a buffer block reaches the mat2x3 of a nested structure and the mat3x2 of an "
+        "arrayed structure: matrix, column and element reads and a matrix times a vector",
+        "GLSL 4.60 section 4.4.5: row_major applies to the matrices of structures nested in the block, at any depth",
+        row_major_struct_inputs(),
+        np.float32,
+        o_row_major_struct_members,
+    ),
+    Case(
+        "u_array_values",
+        "H17",
+        "local, member and two-dimensional arrays read through const T v[N] parameters",
+        "C++ arrays hold N elements with the first extent outermost",
+        SMALL[:64].copy(),
+        np.int32,
+        o_array_values,
+    ),
+    Case(
         "u_atomic_add",
         "atomics",
         "atomicAdd(&out[0], 1) by 256 threads",
@@ -1347,6 +2304,84 @@ CASES = [
         threads=256,
         out_count=1,
         out_init=np.zeros(1, np.int32),
+    ),
+    Case(
+        "g_std140_uniform",
+        "S20",
+        "std140 uniform block: vec3+float slot, 16-byte array strides, mat3 columns, slot-aligned tail",
+        "GLSL 4.60 section 7.6.2.2 (std140)",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "g_array_arguments",
+        "S20",
+        "arrays passed by value from a std140 uniform block (vec4, float, mat2x3 and row-major mat2 elements) "
+        "and from shared memory, including helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 7.6.2.2 (std140)",
+        array_argument_cases.inputs(),
+        np.float32,
+        array_argument_cases.reference,
+        compare="ulp:0",
+        constants=array_argument_cases.block(),
+    ),
+    Case(
+        "s_std140_uniform",
+        "S20",
+        "std140 Uniform Block: Offset, ArrayStride and MatrixStride decorations from glslang",
+        "GLSL 4.60 section 7.6.2.2 (std140) as decorated by glslang",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "s_push_constant_std430",
+        "S20",
+        "std430 push constants: 8-byte vec2 and 4-byte float strides, mat3 columns, member after an array",
+        "GLSL 4.60 section 7.6.2.3 (std430) as decorated by glslang",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD430),
+    ),
+    Case(
+        "h_cbuffer_packing",
+        "S20",
+        "cbuffer packing: unpadded last array element, scalar after float3x3, register-aligned arrays",
+        "HLSL packing rules for constant variables",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.hlsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.HLSL),
+    ),
+    Case(
+        "h_cbuffer_row_major",
+        "S20",
+        "cbuffer packing: row_major float3x3 rows, scalar packed after the last row, unpadded array tail",
+        "HLSL packing rules for constant variables; row_major matrix packing",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.hlsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.HLSL_ROW_MAJOR),
+    ),
+    Case(
+        "m_constant_struct",
+        "S20",
+        "constant struct: 16-byte float3, packed_float3, 8-byte float2 stride, float3x3 columns",
+        "MSL 4.1 chapter 2 size and alignment of vector, packed vector and matrix types",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.msl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.MSL),
     ),
 ]
 

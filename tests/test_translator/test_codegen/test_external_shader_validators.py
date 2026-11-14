@@ -17,6 +17,7 @@ from crosstl.translator.codegen.buffer_block_diagnostics import (
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
@@ -763,6 +764,171 @@ shader SlangMeshTaskValidator {
 """
 
 
+SLANG_STORAGE_BUFFER_COMPUTE_SHADER = """
+shader SlangStorageBufferValidator {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer readonly Particle* particles;
+        buffer float* masses;
+        coherent buffer uint* counters;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            masses[i] = particles[i].position.x + particles[i].mass + *masses;
+            atomicAdd(counters[0], 1u);
+        }
+    }
+}
+"""
+
+
+CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER = """
+shader NamedStructInitializerValidator {
+    struct Pair {
+        float a;
+        float b;
+    };
+    RWStructuredBuffer<float> values;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            Pair q = Pair { b: values[gid.x], a: 1.0 };
+            Pair r = Pair { values[gid.x], 3.0 };
+            values[gid.x] = q.a + q.b + r.a + r.b;
+        }
+    }
+}
+"""
+
+
+SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
+shader SlangWorkgroupCountValidator {
+    RWStructuredBuffer<uint> groupCounts;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID, uvec3 wid @builtin(workgroup_id),
+                  uvec3 count @builtin(num_workgroups)) {
+            uvec3 groups = gl_NumWorkGroups;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y + count.z + wid.x;
+        }
+    }
+}
+"""
+
+
+SLANG_INTEGER_WIDTH_VALIDATOR_SHADER = """
+shader SlangIntegerWidthValidator {
+    int64 widen(int64 x, u8vec4 y) {
+        return x + int64(y.x);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* uin;
+        buffer uvec4* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+            i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+            u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+            i64 e = i64(uin[i]);
+            vec2<i64> g = vec2<i64>(e, e);
+            int64 w = widen(e, u8vec4(a, a));
+            outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(g.x + w));
+        }
+    }
+}
+"""
+
+
+SLANG_BIT_QUERY_VALIDATOR_SHADER = """
+shader SlangBitQueryValidator {
+    RWStructuredBuffer<int> iin @binding(0);
+    RWStructuredBuffer<uint> uin @binding(1);
+    RWStructuredBuffer<ivec4> outp @binding(2);
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint i = tid.x;
+            ivec2 sv = ivec2(iin[i], iin[i + 1u]);
+            uvec3 uv = uvec3(uin[i], uin[i + 1u], 0u);
+            let pop = bitCount(uv);
+            let msb = findMSB(sv);
+            let lsb = findLSB(uin[i]);
+            let rev = bitfieldReverse(sv);
+            uint urev = bitfieldReverse(uin[i]);
+            bool none = findMSB(iin[i]) < 0;
+            outp[i] = ivec4(pop.x + msb.y + lsb, rev.x, int(urev), none ? 1 : 0);
+        }
+    }
+}
+"""
+
+
+SLANG_ROUND_EVEN_VALIDATOR_SHADER = """
+shader SlangRoundEvenValidator {
+    RWStructuredBuffer<float> fin @binding(0);
+    RWStructuredBuffer<vec4> outp @binding(1);
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint i = tid.x;
+            float s = roundEven(fin[i]);
+            vec3 v = roundEven(vec3(fin[i], fin[i + 1u], fin[i + 2u]));
+            outp[i] = vec4(v, s);
+        }
+    }
+}
+"""
+
+
+SLANG_MATRIX_GROUP_VALIDATOR_SHADER = """
+shader SlangMatrixGroupValidator {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float s = fin[i];
+            int j = int(i % 2u);
+            vec2 v = vec2(s, 1.0);
+            mat2 m = mat2(s, 2.0, 3.0, 4.0);
+            mat2x3 w = mat2x3(s, 2.0, 3.0, 4.0, 5.0, 6.0);
+            vec2 a = (m * 2.0)[1];
+            vec2 b = (s * m)[1];
+            vec2 c = (m / 2.0)[1];
+            vec2 d = (1.0 - m)[1];
+            vec2 e = transpose(m)[0];
+            vec2 f = (transpose(m) * 2.0)[1];
+            vec2 g = (i > 0u ? m : -m)[1];
+            vec2 h = inverse(m)[1];
+            vec3 k = (w * 2.0)[1];
+            vec2 t = transpose(w)[2];
+            vec2 p = transpose(m) * v;
+            vec2 r = (m * 2.0)[j];
+            float x = (m * 2.0)[1][0];
+            vec2 y = m * 2.0 * v;
+            vec3 u = vec3(s, 1.0, 2.0);
+            vec4 q = vec4(s, 1.0, 2.0, 3.0);
+            vec2 cm = matrixCompMult(m, m)[1];
+            vec3 cw = matrixCompMult(w, w)[1];
+            mat2x3 o = outerProduct(u, v);
+            vec3 n = outerProduct(q.xyz, q.xy)[1];
+            vec4 sq = outerProduct(q, q)[3];
+            vec3 ov = outerProduct(u, v) * v;
+            outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x + r.x + x + y.x
+                + cm.x + cw.x + o[1].x + n.x + sq.w + ov.x;
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -1161,7 +1327,7 @@ shader GLSLRayQueryComputeValidator {
                 100.0
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -1195,7 +1361,7 @@ shader GLSLRayQueryTraceRayInlineValidator {
                 ray
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -1854,6 +2020,20 @@ def _glsl_specialization_constant_ast():
     return _mixed_glsl_ast(GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER, "vertex")
 
 
+def _glsl_metal_expressible_specialization_constant_ast():
+    """The specialization fixture without what Metal cannot specialize.
+
+    Metal has no double type, so the double constants become floats. ``arraySize`` sizes ``foo``'s parameter and a
+    function constant cannot, so it reads a macro named after its id. ``dupArraySize`` sizes only a stage input,
+    which Metal flattens into one attribute per element, so it stays a function constant like every other
+    specialization constant.
+    """
+    source = GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER.replace(
+        "const double", "const float"
+    )
+    return _mixed_glsl_ast(source, "vertex")
+
+
 def _require_tool(name):
     path = shutil.which(name)
     if not path:
@@ -1957,15 +2137,47 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert glsl.index(foo_prototype) < glsl.index(foo_definition)
     assert "output." not in glsl
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "constant_id" not in metal
-    assert (
-        "Metal source output cannot preserve GLSL specialization constant id" in metal
+    with pytest.raises(MetalLoweringRefused) as refusal:
+        MetalCodeGen().generate(shader_ast)
+    # ``arraySize`` sizes ``foo``'s parameter, so it becomes a compile-time macro rather than a refusal, and
+    # ``dupUcol[dupArraySize]`` is a stage input that Metal declares one attribute per element.
+    assert "'arraySize'" not in str(refusal.value)
+    assert "'dupArraySize'" not in str(refusal.value)
+    for name in ("spDouble", "spDupDouble"):
+        assert f"specialization constant '{name}'" in str(refusal.value)
+
+    metal = MetalCodeGen().generate(
+        _glsl_metal_expressible_specialization_constant_ast()
     )
-    assert "Metal does not support double specialization constant" in metal
-    assert "constant double spDouble" not in metal
+    assert "constant_id" not in metal
+    assert "cannot preserve" not in metal
+    for name, constant_id in (
+        ("spBool", 17),
+        ("spFloat", 18),
+        ("spDouble", 19),
+        ("scale", 22),
+        ("gl_MaxImageUnits", 24),
+        ("spDupBool", 117),
+        ("spDupFloat", 118),
+        ("spDupDouble", 119),
+        ("dupScale", 122),
+        ("dupArraySize", 116),
+    ):
+        raw = f"__crossgl_function_constant_{name}"
+        assert f" {raw} [[function_constant({constant_id})]];" in metal
+        assert f" {name} = is_function_constant_defined({raw}) ? {raw} : " in metal
+    assert metal.count("[[function_constant(") == 10
+    assert "#define CROSSGL_SPECIALIZATION_CONSTANT_ID_16 5\n" in metal
+    assert " arraySize = int(CROSSGL_SPECIALIZATION_CONSTANT_ID_16);" in metal
     assert "thread VertexOutput& output" in metal
-    assert metal.count("constant int gl_MaxImageUnits = 8;") == 1
+    assert (
+        metal.count(
+            " gl_MaxImageUnits = is_function_constant_defined("
+            "__crossgl_function_constant_gl_MaxImageUnits) ? "
+            "__crossgl_function_constant_gl_MaxImageUnits : int(8);"
+        )
+        == 1
+    )
     assert "Metal vertex entry points require a position output" in metal
     assert "float4 __crossgl_position [[position]];" in metal
 
@@ -2022,7 +2234,7 @@ def test_mixed_glsl_specialization_constants_metal_output_compiles_with_xcrun_me
     output_path = tmp_path / "specialization_constants.air"
 
     shader_path.write_text(
-        MetalCodeGen().generate(_glsl_specialization_constant_ast()),
+        MetalCodeGen().generate(_glsl_metal_expressible_specialization_constant_ast()),
         encoding="utf-8",
     )
 
@@ -2127,6 +2339,7 @@ def _run_validator_or_skip_unsupported_extension(
         CROSSGL_WGSL_RESOURCE_SHADER,
         CROSSGL_WGSL_COMPUTE_SHADER,
         CROSSGL_WGSL_BUFFER_BLOCK_SHADER,
+        CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER,
     ),
 )
 def test_generated_wgsl_validates_with_naga(tmp_path, shader_source):
@@ -2239,8 +2452,10 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
     code = HLSLCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert "AllMemoryBarrier();" in code
+    # barrier(); memoryBarrier(); workgroupBarrier(); run back to back, so one barrier over all memory that
+    # synchronizes the group orders every access as the three do (barrier_peephole).
+    assert code.count("AllMemoryBarrierWithGroupSync();") == 1
+    assert "GroupMemoryBarrierWithGroupSync();" not in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -2407,11 +2622,13 @@ def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
         "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, int2(1, 0))",
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth)"
+            "input.projected.xy / input.projected.z, "
+            "input.depth / input.projected.z)"
         ),
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth, int2(1, 0))"
+            "input.projected.xy / input.projected.z, "
+            "input.depth / input.projected.z, int2(1, 0))"
         ),
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",
@@ -2872,6 +3089,274 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
             stage,
             "sm_6_3",
         )
+
+
+def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
+    """``buffer T* name`` is a structured buffer at its own binding, not a pointer parameter (#2921)."""
+    shader_path = tmp_path / "slang_storage_buffers.slang"
+    spirv_path = tmp_path / "slang_storage_buffers.spv"
+    hlsl_path = tmp_path / "slang_storage_buffers.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_STORAGE_BUFFER_COMPUTE_SHADER)
+    )
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Particle> particles : register(t0"
+        in code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u0);" in code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u1);" in code
+    )
+    assert "masses[0]" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+    # A global pointer reached HLSL as ``Ptr<float, ...>``, which DXC rejects.
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
+    )
+    assert "Ptr<" not in hlsl_path.read_text(encoding="utf-8")
+
+
+def test_generated_slang_named_struct_initializer_compiles_with_slangc(tmp_path):
+    """``Pair { b: x, a: y }`` keeps its fields in member order (#3068)."""
+    shader_path = tmp_path / "slang_named_struct_initializer.slang"
+    hlsl_path = tmp_path / "slang_named_struct_initializer.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER)
+    )
+    assert "Pair q = Pair(1.0, values[gid.x]);" in code
+    assert "Pair r = Pair(values[gid.x], 3.0);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
+    )
+
+
+def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_workgroup_count.slang"
+    spirv_path = tmp_path / "slang_workgroup_count.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
+    )
+    assert "uint3 groups = WorkgroupCount();" in code
+    assert "groups.x + WorkgroupCount().y" in code
+    assert "uint3 wid : SV_GroupID" in code
+    assert "uint3 count = WorkgroupCount();" in code
+    assert "gl_NumWorkGroups" not in code
+    assert "builtin" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
+    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_8bit_and_64bit_integers_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_integer_widths.slang"
+    spirv_path = tmp_path / "slang_integer_widths.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_INTEGER_WIDTH_VALIDATOR_SHADER)
+    )
+    assert "int64_t widen(int64_t x, vector<uint8_t, 4> y)" in code
+    assert "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i])" in code
+    assert "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1)" in code
+    assert "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i])" in code
+    assert "int64_t e = int64_t(uin[i]);" in code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    # The HLSL target only re-emits source, so build SPIR-V and validate it.
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_bit_queries.slang"
+    spirv_path = tmp_path / "slang_bit_queries.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_BIT_QUERY_VALIDATOR_SHADER)
+    )
+    assert "int3 pop = int3(countbits(uv));" in code
+    assert "int2 msb = int2(firstbithigh(sv));" in code
+    assert "int lsb = int(firstbitlow(uin[i]));" in code
+    assert "int2 rev = reversebits(sv);" in code
+    assert "uint urev = reversebits(uin[i]);" in code
+    assert "bool none = int(firstbithigh(iin[i])) < 0;" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_round_even_compiles_to_spirv_round_even(tmp_path):
+    """roundEven is Slang ``rint``, which slangc lowers to SPIR-V RoundEven; Slang ``round`` is Round (#2260)."""
+    shader_path = tmp_path / "slang_round_even.slang"
+    spirv_path = tmp_path / "slang_round_even.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_ROUND_EVEN_VALIDATOR_SHADER)
+    )
+    assert "float s = rint(fin[i]);" in code
+    assert "float3 v = rint(float3(fin[i], fin[(i + 1u)], fin[(i + 2u)]));" in code
+    assert "round(" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    spirv_dis = _require_tool("spirv-dis")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+    assembly = subprocess.run(
+        [spirv_dis, str(spirv_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    ).stdout
+    extended = [line for line in assembly.splitlines() if "OpExtInst" in line]
+    assert any(" RoundEven " in line for line in extended), assembly
+    assert not any(" Round " in line for line in extended), assembly
+
+
+def test_generated_slang_matrix_group_compiles_with_slangc(tmp_path):
+    """Column subscripts, ``mul``, ``matrixCompMult`` and ``outerProduct`` on matrices are valid Slang (#2813)."""
+    shader_path = tmp_path / "slang_matrix_group.slang"
+    spirv_path = tmp_path / "slang_matrix_group.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_MATRIX_GROUP_VALIDATOR_SHADER)
+    )
+    assert "float2 a = (m * 2.0)._m01_m11;" in code
+    assert "float2 b = (s * m)._m01_m11;" in code
+    assert "float2 c = (m / 2.0)._m01_m11;" in code
+    assert "float2 d = (1.0 - m)._m01_m11;" in code
+    assert "float2 e = (transpose(m))._m00_m10;" in code
+    assert "float2 f = (transpose(m) * 2.0)._m01_m11;" in code
+    assert "float2 g = ((i > 0u ? m : -m))._m01_m11;" in code
+    assert "float2 h = (_crossgl_inverse_float2x2(m))._m01_m11;" in code
+    assert "float3 k = (w * 2.0)._m01_m11_m21;" in code
+    assert "float2 t = (transpose(w))._m02_m12;" in code
+    assert "float2 p = mul(transpose(m), v);" in code
+    assert "float2 r = transpose((m * 2.0))[j];" in code
+    assert "float x = (m * 2.0)[0][1];" in code
+    assert "float2 y = mul(m * 2.0, v);" in code
+    assert "float2 cm = ((m * m))._m01_m11;" in code
+    assert "float3 cw = ((w * w))._m01_m11_m21;" in code
+    assert "float3x2 o = _crossgl_outer_product_float3x2(u, v);" in code
+    assert (
+        "float3 n = (_crossgl_outer_product_float3x2(q.xyz, q.xy))._m01_m11_m21;" in (
+            code
+        )
+    )
+    assert "float4 sq = (_crossgl_outer_product_float4x4(q, q))._m03_m13_m23_m33;" in (
+        code
+    )
+    assert "float3 ov = mul(_crossgl_outer_product_float3x2(u, v), v);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
 
 
 @pytest.mark.parametrize(
@@ -4164,7 +4649,7 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "bool active =" not in code
     assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert ".Proceed(" not in code
-    assert ".CommittedType(" not in code
+    assert ".CommittedStatus(" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
@@ -4502,8 +4987,12 @@ def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_p
     code = MetalCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
-    assert "threadgroup_barrier(mem_flags::mem_device);" in code
+    # Adjacent barriers fold into one barrier carrying the union of their flags.
+    assert code.count("threadgroup_barrier(") == 1
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 

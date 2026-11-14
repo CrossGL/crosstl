@@ -453,13 +453,13 @@ def test_multiplication_profiles_execute(tmp_path, profile, buffer, monkeypatch)
 
 
 def test_ci_requires_multiplication_profiles_in_existing_native_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate binary32 arithmetic"
     )
     assert_native_step_prerequisites(step, job="portable-host")

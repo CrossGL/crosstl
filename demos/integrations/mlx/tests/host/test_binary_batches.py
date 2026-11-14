@@ -15,8 +15,8 @@ from demos.integrations.mlx.portable_host import verify_binary_batches as verifi
 
 def test_inventory_covers_every_base_operation_and_large_layouts():
     cases = verifier.cases()
-    assert len(cases) == len({case["id"] for case in cases}) == 48
-    assert sum(len(verifier.batch_sizes(case)) for case in cases) == 98
+    assert len(cases) == len({case["id"] for case in cases}) == 52
+    assert sum(len(verifier.batch_sizes(case)) for case in cases) == 106
     assert sum(verifier.copy_count(case) for case in cases) == 4
     assert {case["entry"] for case in cases} == (
         set(verifier.BINARY_ENTRIES) | set(verifier.COMPARISON_ENTRIES)
@@ -227,6 +227,53 @@ def test_binary_batches_require_native_readbacks_and_receipts(
     assert audited == events
 
 
+def test_inexact_results_are_bounded_per_device_and_retained_exactly(tmp_path):
+    case = next(c for c in verifier.cases() if c["operation"] == "LogAddExp")
+    item, _ = synthetic_case(tmp_path, "metal", case)
+    assert "actual" not in item["hashes"] and item["resultBound"]
+    with np.load(tmp_path / (case["id"] + ".npz"), allow_pickle=False) as saved:
+        saved = dict(saved)
+    expected = saved["actual"].astype(np.float64)
+    # A one-ulp change stays within the bound but changes the retained hash.
+    saved["actual"] = np.nextafter(saved["actual"], np.float32(np.inf))
+    nudged = verifier.record(np, case, saved)
+    assert nudged["hashes"] == item["hashes"]
+    assert nudged["resultHash"] != item["resultHash"]
+    # Exact operations keep the result hash in the cross-device identity.
+    exact = next(c for c in verifier.cases() if c["operation"] == "Remainder")
+    (tmp_path / "exact").mkdir()
+    exact_item, _ = synthetic_case(tmp_path / "exact", "metal", exact)
+    assert "actual" in exact_item["hashes"] and "resultHash" not in exact_item
+    saved["actual"] = (expected + 1e-3 + 1e-3 * np.abs(expected)).astype(np.float32)
+    with pytest.raises(ValueError):
+        verifier.record(np, case, saved)
+
+
+def test_inexact_native_batches_must_match_the_retained_readback(tmp_path, monkeypatch):
+    case = next(c for c in verifier.cases() if c["operation"] == "LogAddExp")
+    item, events = synthetic_case(tmp_path, "opengl", case)
+    monkeypatch.setattr(verifier, "audit_native_execution", lambda event: None)
+    path = tmp_path / (case["id"] + ".npz")
+    with np.load(path, allow_pickle=False) as saved:
+        saved = dict(saved)
+    # A bounded one-ulp readback is accepted when the trace carries the same bits.
+    saved["actual"] = np.nextafter(saved["actual"], np.float32(np.inf))
+    np.savez(path, **saved)
+    item.update(verifier.record(np, case, saved))
+    nudged = saved["actual"].reshape(-1)
+    first = 0
+    for event, size in zip(events, verifier.batch_sizes(case)):
+        event["binaryValues"] = nudged[first : first + size].tolist()
+        first += size
+    verifier.audit_case(np, case, item, events, tmp_path)
+    # A trace that differs from the retained readback is rejected even within the bound.
+    events[-1]["binaryValues"][0] = float(
+        np.nextafter(np.float32(events[-1]["binaryValues"][0]), np.float32(-np.inf))
+    )
+    with pytest.raises(ValueError):
+        verifier.audit_case(np, case, item, events, tmp_path)
+
+
 @pytest.mark.parametrize(
     "fault",
     [
@@ -320,8 +367,8 @@ def test_bounded_binary_proof_requires_complete_evidence(tmp_path, monkeypatch, 
         "passed": True,
         "commit": verifier.COMMIT,
         "target": "opengl",
-        "casesPerPath": 48,
-        "dispatchCount": 102,
+        "casesPerPath": 52,
+        "dispatchCount": 110,
         "fullUpstreamSuite": False,
     }
     if fault in summary:

@@ -4,7 +4,14 @@ import ctypes
 
 # Generated buffer indices share the copy adapter's signed 32-bit bound.
 MAX_ELEMENTS = 2**31 - 1
-ITEM_SIZES = {"float32": 4, "int32": 4, "uint32": 4, "bool_": 1, "bfloat16": 2}
+ITEM_SIZES = {
+    "float32": 4,
+    "int32": 4,
+    "uint32": 4,
+    "bool_": 1,
+    "bfloat16": 2,
+    "float16": 2,
+}
 # REDUCE_N_READS in the pinned kernels/defines.h.
 N_READS = 4
 # Static GLSL packages assert that the pinned all_reduce rebase

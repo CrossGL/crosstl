@@ -50,11 +50,15 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..matrix_shape import matrix_type_spelling
+from ..refusals import MojoRefusal
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
     get_array_size_from_node,
 )
+from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -80,13 +84,55 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .image_access_contracts import (
     explicit_image_format,
     image_format_channel_count,
     image_format_component_kind,
 )
+from .lowering_refusals import refuse_unsupported
+from .mojo_bit_functions import generate_mojo_bit_function_call
+from .mojo_exact_lookups import (
+    MOJO_RAY_TRACING_INTRINSICS,
+    mojo_generic_template_reason,
+    mojo_operator,
+    mojo_resource_kind_of_spelling,
+)
+from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
+    MojoLoweringRefused,
+)
+from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
+from .written_function_names import (
+    MOJO_CALLABLE_FUNCTION_NAMES,
+    MOJO_NON_CALLS,
+    refuse_written_foreign_calls,
+)
+
+
+class MojoScalarConversionError(ValueError):
+    """Raised when a source vector reaches a place that needs a scalar."""
+
+    project_diagnostic_code = "project.translate.mojo-scalar-conversion-unsupported"
+    missing_capabilities = ("mojo.scalar-conversion-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        source_type=None,
+        target_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.source_type = source_type
+        self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -911,6 +957,13 @@ MOJO_INTEGER_DTYPES = {
     "DType.uint32",
 }
 
+# Element types the round_even helper has overloads for, with their scalar types.
+ROUND_EVEN_FLOAT_DTYPES = {
+    "DType.float16": "Float16",
+    "DType.float32": "Float32",
+    "DType.float64": "Float64",
+}
+
 MOJO_FLOAT_DTYPES = {
     "DType.float32",
     "DType.float64",
@@ -1206,6 +1259,15 @@ MOJO_GPU_BUILTIN_PARAMETER_ORDER = (
     "block_dim_uint",
 )
 
+MOJO_VECTOR_COMPARISON_METHODS = {
+    "<": "lt",
+    "<=": "le",
+    ">": "gt",
+    ">=": "ge",
+    "==": "eq",
+    "!=": "ne",
+}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -1298,6 +1360,7 @@ class MojoCodeGen:
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_bit_imports = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
         self.required_ray_helpers = set()
@@ -1498,7 +1561,23 @@ class MojoCodeGen:
         }
 
     def generate(self, ast):
-        """Generate complete Mojo-like shader source for a CrossGL AST."""
+        """Generate complete Mojo-like shader source for a CrossGL AST, or raise :class:`MojoLoweringRefused`.
+
+        A call the generator has no lowering for is written as it stands, so the rendered program is refused when
+        it still calls a built-in function of another shading language that Mojo does not define and the program
+        does not declare.
+        """
+        output = self.render_program(ast)
+        refuse_written_foreign_calls(
+            output, MOJO_CALLABLE_FUNCTION_NAMES, "Mojo", non_calls=MOJO_NON_CALLS
+        )
+        return output
+
+    def render_program(self, ast):
+        """Render complete Mojo-like shader source for a CrossGL AST."""
+        refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
+        # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
+        ast = canonicalize_separate_textures(ast)
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
@@ -1561,6 +1640,7 @@ class MojoCodeGen:
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_bit_imports = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
         self.required_ray_helpers = set()
@@ -1612,6 +1692,8 @@ class MojoCodeGen:
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast)),
+            collect_constant_and_cbuffer_member_types(self, ast),
+            ast=ast,
         )
         for func in generic_function_specializations.values():
             self.register_function_return_type(func)
@@ -1655,6 +1737,9 @@ class MojoCodeGen:
                             node.initial_value, vtype, f"global declaration {node.name}"
                         )
                         init_expr = self.generate_expression(node.initial_value)
+                        self.validate_scalar_target_conversion(
+                            node.initial_value, vtype, f"global declaration {node.name}"
+                        )
                     var_name = self.mojo_identifier(node.name)
                     if vtype is None:
                         code += f"var {var_name} = {init_expr}\n"
@@ -1765,6 +1850,10 @@ class MojoCodeGen:
                     self.stage_local_function_extra_params = previous_extra_params
         if self.required_reinterpret_helpers:
             header += "from memory import bitcast\n"
+        if self.required_bit_imports:
+            header += (
+                f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
+            )
         header += "\n"
 
         return header + self.generate_required_helpers() + code
@@ -1796,7 +1885,7 @@ class MojoCodeGen:
     def validate_stage_type(self, stage_name):
         if stage_name not in MOJO_SUPPORTED_STAGE_TYPES:
             supported = ", ".join(sorted(MOJO_SUPPORTED_STAGE_TYPES))
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {stage_name} shader stage for Mojo codegen; "
                 f"supported compile-smoke stages are {supported}"
             )
@@ -1817,7 +1906,7 @@ class MojoCodeGen:
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -1826,15 +1915,15 @@ class MojoCodeGen:
     def geometry_maxvertexcount(self, func):
         arguments = self.geometry_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("Mojo geometry stage requires maxvertexcount attribute")
+            raise MojoRefusal("Mojo geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -1925,7 +2014,7 @@ class MojoCodeGen:
 
             expected_count = expected_counts[primitive]
             if not self.geometry_parameter_is_array(parameter, param_type):
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -1935,7 +2024,7 @@ class MojoCodeGen:
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -1977,7 +2066,7 @@ class MojoCodeGen:
         if patch_name not in {"InputPatch", "OutputPatch"}:
             return None
         if len(generic_args) != 2:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo tessellation patch type "
                 f"'{type_text}' must use {patch_name}<T, N>"
             )
@@ -2002,7 +2091,7 @@ class MojoCodeGen:
             patch_name, _element_type, point_count = patch_info
             value = self.literal_int_value(point_count)
             if value is not None and value <= 0:
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo "
                     f"{stage_name} stage {patch_name} parameter "
                     f"'{parameter.name}' control point count ({value}) "
@@ -2026,7 +2115,7 @@ class MojoCodeGen:
             patch_points = self.literal_int_value(point_count)
             if patch_points is None or patch_points == output_points:
                 continue
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo tessellation_control stage OutputPatch parameter "
                 f"'{parameter.name}' control point count ({patch_points}) "
                 "must match outputcontrolpoints "
@@ -2039,7 +2128,7 @@ class MojoCodeGen:
         if not any(
             self.geometry_stream_info(param_type) for _, param_type in param_infos
         ):
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -2047,7 +2136,7 @@ class MojoCodeGen:
         if not any(
             self.geometry_input_primitive_qualifier(param) for param, _ in param_infos
         ):
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -2085,18 +2174,18 @@ class MojoCodeGen:
     def tessellation_output_control_points(self, func):
         arguments = self.geometry_stage_attribute_arguments(func, "outputcontrolpoints")
         if not arguments:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo tessellation_control stage requires outputcontrolpoints attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
@@ -2120,11 +2209,11 @@ class MojoCodeGen:
         value = self.mojo_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"Mojo {stage_name} stage requires domain attribute")
+                raise MojoRefusal(f"Mojo {stage_name} stage requires domain attribute")
             return None
         canonical = self.canonical_tessellation_domain(value)
         if canonical is None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage domain '{value}' must be tri, quad, "
                 "or isoline"
             )
@@ -2148,7 +2237,7 @@ class MojoCodeGen:
         canonical = partitioning_aliases.get(normalized)
         if canonical is None:
             valid = ", ".join(["fractional_even", "fractional_odd", "integer", "pow2"])
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage partitioning '{value}' must be one of: "
                 f"{valid}"
             )
@@ -2238,7 +2327,7 @@ class MojoCodeGen:
             return None
         display_name = attribute_names[0]
         if len(arguments) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage {display_name} requires exactly one argument"
             )
         return self.attribute_value_to_string(arguments[0])
@@ -2249,13 +2338,13 @@ class MojoCodeGen:
             return None
         display_name = attribute_names[0]
         if len(arguments) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage {display_name} requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage {display_name} ({value}) must be positive"
             )
         return value_text
@@ -2265,14 +2354,14 @@ class MojoCodeGen:
         if not arguments:
             return None
         if len(arguments) > 3:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage numthreads requires at most three arguments"
             )
         values = [self.attribute_value_to_string(arg) for arg in arguments]
         for index, argument in enumerate(arguments):
             value = self.literal_int_value(argument)
             if value is not None and value <= 0:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name} stage numthreads value {index + 1} "
                     "must be positive"
                 )
@@ -2322,13 +2411,13 @@ class MojoCodeGen:
         value = self.mesh_stage_attribute_value(func, stage_name, "outputtopology")
         if value is None:
             if required:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name} stage requires outputtopology attribute"
                 )
             return None
         canonical = self.canonical_mesh_output_topology(value)
         if canonical is None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo {stage_name} stage outputtopology '{value}' must be point, "
                 "line, triangle, triangle_cw, or triangle_ccw"
             )
@@ -2374,24 +2463,24 @@ class MojoCodeGen:
             seen_roles.setdefault(role, []).append(parameter.name)
 
             if role == "mesh_payload" and stage_name != "mesh":
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo mesh payload parameters are only valid on mesh stages"
                 )
             if role in {"vertices", "indices", "primitives"}:
                 if stage_name != "mesh":
-                    raise ValueError(
+                    raise MojoRefusal(
                         f"Mojo mesh output parameter role {role} is only valid "
                         "on mesh stages"
                     )
                 if not self.geometry_parameter_is_array(parameter, param_type):
-                    raise ValueError(
+                    raise MojoRefusal(
                         f"Mojo mesh {role} parameter '{parameter.name}' must be "
                         "an array"
                     )
 
         for role, names in seen_roles.items():
             if role == "mesh_payload" and len(names) > 1:
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo mesh stage accepts at most one mesh_payload parameter"
                 )
 
@@ -2417,13 +2506,13 @@ class MojoCodeGen:
                 continue
             if role == "vertices" and max_vertices is not None:
                 if array_count > max_vertices:
-                    raise ValueError(
+                    raise MojoRefusal(
                         f"Mojo mesh vertices parameter '{parameter.name}' count "
                         f"({array_count}) exceeds maxvertices ({max_vertices})"
                     )
             if role in {"indices", "primitives"} and max_primitives is not None:
                 if array_count > max_primitives:
-                    raise ValueError(
+                    raise MojoRefusal(
                         f"Mojo mesh {role} parameter '{parameter.name}' count "
                         f"({array_count}) exceeds maxprimitives ({max_primitives})"
                     )
@@ -2471,7 +2560,7 @@ class MojoCodeGen:
     def validate_mesh_op_stage(self, operation, stage_name):
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name or 'function'} stage cannot call "
                     "SetMeshOutputCounts; SetMeshOutputCounts is only valid in "
                     "mesh stages"
@@ -2479,24 +2568,24 @@ class MojoCodeGen:
             return
         if operation == "DispatchMesh":
             if stage_name not in {"task", "amplification", "object"}:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name or 'function'} stage cannot call "
                     "DispatchMesh; DispatchMesh is only valid in task, "
                     "amplification, or object stages"
                 )
             return
-        raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
+        raise MojoRefusal(f"Unsupported Mojo mesh intrinsic {operation}")
 
     def validate_mesh_op_arguments(self, operation, arguments, stage_name):
         if operation == "SetMeshOutputCounts":
             if len(arguments) != 2:
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo mesh SetMeshOutputCounts requires exactly two arguments"
                 )
             labels = ("vertex count", "primitive count")
         elif operation == "DispatchMesh":
             if len(arguments) not in {3, 4}:
-                raise ValueError(
+                raise MojoRefusal(
                     "Mojo mesh DispatchMesh requires three group counts and an "
                     "optional payload argument"
                 )
@@ -2506,13 +2595,13 @@ class MojoCodeGen:
 
         for label, argument in zip(labels, arguments):
             if not self.mesh_count_argument_is_integer_scalar(argument):
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name} {operation} {label} argument must be an "
                     "integer scalar"
                 )
             value = self.literal_int_value(argument)
             if value is not None and value < 0:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Mojo {stage_name} {operation} {label} argument must be "
                     "non-negative"
                 )
@@ -2662,6 +2751,9 @@ class MojoCodeGen:
                 node.initial_value, variable_type, f"stage declaration {node.name}"
             )
             init_expr = self.generate_expression(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            self.validate_scalar_target_conversion(
                 node.initial_value, variable_type, f"stage declaration {node.name}"
             )
             var_name = self.mojo_identifier(node.name)
@@ -2815,7 +2907,7 @@ class MojoCodeGen:
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
             value_code = self.generate_expression(value, const_type, f"constant {name}")
-            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
+            code += f"comptime {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 
     def collect_function_return_types(self, ast):
@@ -3557,7 +3649,7 @@ class MojoCodeGen:
                     )
                     for arg in generic_args
                 ):
-                    raise ValueError(
+                    raise MojoRefusal(
                         "Mojo generic payload enum specializations must be concrete"
                     )
             for child in vars(value).values():
@@ -3674,7 +3766,10 @@ class MojoCodeGen:
             ]
             return f"{base_name}<{', '.join(mapped_args)}>"
 
-        return substitutions.get(type_text, type_text)
+        if type_text in substitutions:
+            return substitutions[type_text]
+        # Not one of the structure's type parameters: a concrete type, which the substitution leaves as it is.
+        return type_text
 
     def generic_struct_fields_for_type(self, type_value):
         specialization = self.generic_struct_specialization(type_value)
@@ -3753,9 +3848,7 @@ class MojoCodeGen:
                     value_text = self.generate_expression(value)
                     literal_value = self.literal_int_value(value)
                     next_value = literal_value + 1 if literal_value is not None else 0
-                code += (
-                    f"alias {enum_constant_name(name, variant.name)} = {value_text}\n"
-                )
+                code += f"comptime {enum_constant_name(name, variant.name)} = {value_text}\n"
         return code + ("\n" if code else "")
 
     def generate_generic_payload_enum_structs(self):
@@ -3867,10 +3960,7 @@ class MojoCodeGen:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            prefix = "dmat" if element_type == "double" else "mat"
-            if type_node.rows == type_node.cols:
-                return f"{prefix}{type_node.rows}"
-            return f"{prefix}{type_node.rows}x{type_node.cols}"
+            return matrix_type_spelling(type_node, element_type)
         else:
             return str(type_node)
 
@@ -3945,7 +4035,10 @@ class MojoCodeGen:
 
     def canonical_buffer_resource_type(self, base_type):
         base_name = self.type_name(base_type)
-        return MOJO_HLSL_BUFFER_TYPE_ALIASES.get(base_name, base_name)
+        if base_name in MOJO_HLSL_BUFFER_TYPE_ALIASES:
+            return MOJO_HLSL_BUFFER_TYPE_ALIASES[base_name]
+        # Already canonical, or not a buffer; callers check membership in MOJO_TYPED_BUFFER_RESOURCE_TYPES.
+        return base_name
 
     def resource_type_alias(self, type_name):
         type_name = self.type_name(type_name)
@@ -3968,10 +4061,12 @@ class MojoCodeGen:
         if rw_alias is not None:
             return rw_alias
 
-        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
-        if self.is_mojo_resource_type(
+        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type)
+        if mapped_base_type is None and self.is_mojo_resource_type(base_type):
+            mapped_base_type = base_type
+        if mapped_base_type is not None and self.is_texture_resource_type(
             mapped_base_type
-        ) and self.is_texture_resource_type(mapped_base_type):
+        ):
             if generic_args:
                 element_info = self.resource_element_value_info(generic_args[0])
                 if element_info is not None:
@@ -3987,7 +4082,7 @@ class MojoCodeGen:
     def writable_texture_resource_alias(self, base_type, element_type=None):
         base_name = self.type_name(base_type)
         if base_name in MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported writable texture resource for Mojo codegen; "
                 f"multisample writable texture alias is not supported: {base_name}"
             )
@@ -4108,9 +4203,11 @@ class MojoCodeGen:
             return self.array_type_name(formatted_element_type, size)
 
         mapped_type = self.resource_type_alias(type_name) or self.type_mapping.get(
-            type_name, type_name
+            type_name
         )
-        if not self.is_image_resource_type(mapped_type):
+        if mapped_type is None and self.is_mojo_resource_type(type_name):
+            mapped_type = type_name
+        if mapped_type is None or not self.is_image_resource_type(mapped_type):
             return type_name
 
         component_kind = image_format_component_kind(image_format)
@@ -4298,12 +4395,12 @@ class MojoCodeGen:
             return 1
         count = self.literal_int_value(size)
         if count is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo resource array binding count must resolve to a "
                 f"compile-time integer, got {size!r}"
             )
         if count < 1:
-            raise ValueError(
+            raise MojoRefusal(
                 "Mojo resource array binding count must be positive, " f"got {count}"
             )
         return count
@@ -4332,7 +4429,7 @@ class MojoCodeGen:
         reserved_name = self.reserved_resource_type_name(type_name)
         if reserved_name is None:
             return
-        raise ValueError(
+        raise MojoRefusal(
             f"Mojo {declaration_kind} name '{type_name}' conflicts with "
             f"reserved resource type '{reserved_name}'"
         )
@@ -4374,15 +4471,17 @@ class MojoCodeGen:
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"
         mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
-            str(base_type), str(base_type)
+            str(base_type)
         )
-        if mapped_type == "RayTracingAccelerationStructure":
-            return "acceleration_structure"
-        if mapped_type == "Sampler":
-            return "sampler"
-        if mapped_type.startswith(("Image", "IImage", "UImage")):
+        if mapped_type is None:
+            # Not mapped: a Mojo resource spelling already, or not a resource at all.
+            mapped_type = str(base_type)
+        kind = mojo_resource_kind_of_spelling(mapped_type)
+        if kind is not None:
+            return kind
+        if self.typed_image_resource_info(mapped_type) is not None:
             return "image"
-        if mapped_type.startswith("Texture"):
+        if self.typed_texture_resource_info(mapped_type) is not None:
             return "texture"
         return None
 
@@ -4413,7 +4512,7 @@ class MojoCodeGen:
             key, []
         ):
             if binding <= used_end and used_start <= end:
-                raise ValueError(
+                raise MojoRefusal(
                     "Conflicting Mojo resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "
@@ -4461,7 +4560,7 @@ class MojoCodeGen:
             key, []
         ):
             if binding <= used_end and used_start <= end:
-                raise ValueError(
+                raise MojoRefusal(
                     "Conflicting Mojo source resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "
@@ -5177,7 +5276,7 @@ class MojoCodeGen:
                 diagnostic_name = self.resource_access_diagnostic_name(
                     expr, resource_name
                 )
-                raise ValueError(
+                raise MojoRefusal(
                     f"Unsupported {operation} for Mojo codegen; "
                     f"resource '{diagnostic_name}' is writeonly"
                 )
@@ -5190,7 +5289,7 @@ class MojoCodeGen:
                 diagnostic_name = self.resource_access_diagnostic_name(
                     expr, resource_name
                 )
-                raise ValueError(
+                raise MojoRefusal(
                     f"Unsupported {operation} for Mojo codegen; "
                     f"resource '{diagnostic_name}' is readonly"
                 )
@@ -5212,7 +5311,7 @@ class MojoCodeGen:
             return
         buffer_type, _ = info
         if buffer_type not in allowed_buffer_types:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {operation} for Mojo codegen; "
                 f"{buffer_type} is not valid for this operation"
             )
@@ -5308,27 +5407,27 @@ class MojoCodeGen:
         if kind in {"position", "color"}:
             if self.is_float_vector_width(type_name, 4):
                 return
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} {context} for Mojo codegen; "
                 "expected vec4-compatible return type"
             )
 
         if kind == "depth" and not self.is_float_scalar_type(type_name):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} {context} for Mojo codegen; "
                 "expected float return type"
             )
 
     def validate_return_semantic(self, shader_type, return_type, semantic):
         if self.type_name(return_type) == "void":
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {shader_type or 'function'} {semantic} "
                 "return semantic for Mojo codegen; void return type"
             )
 
         kind = self.semantic_output_kind(semantic)
         if kind == "input_only":
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} return semantic for Mojo codegen; "
                 "input-only builtin semantics cannot be used as return semantics"
             )
@@ -5361,7 +5460,7 @@ class MojoCodeGen:
         }[kind]
         if shader_type not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} {context} for Mojo {shader_type} stage; "
                 f"valid stage is {allowed}"
             )
@@ -5451,7 +5550,7 @@ class MojoCodeGen:
         semantic_key = self.normalized_semantic_key(semantic)
         previous_param = used_semantics.get(semantic_key)
         if previous_param is not None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Conflicting Mojo {shader_type or 'function'} parameter semantic "
                 f"for '{param_name}': {self.map_semantic(semantic)} overlaps "
                 f"'{previous_param}'"
@@ -5466,7 +5565,7 @@ class MojoCodeGen:
         if kind is None:
             return
         if kind == "output_only":
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} parameter semantic for Mojo codegen; "
                 "output-only builtin semantics cannot be used as parameters"
             )
@@ -5482,7 +5581,7 @@ class MojoCodeGen:
             allowed_stages = {stage_kind}
         if shader_type is not None and shader_type not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} parameter semantic for Mojo {shader_type} "
                 f"stage; valid stage is {allowed}"
             )
@@ -5499,7 +5598,7 @@ class MojoCodeGen:
             ):
                 return
             expected = self.parameter_semantic_expected_type(expected_type)
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {semantic} parameter semantic for Mojo codegen; "
                 f"expected {expected}"
             )
@@ -5562,14 +5661,14 @@ class MojoCodeGen:
         )
         self.enum_types[node.name] = enum_type
 
-        code = f"alias {node.name} = {enum_type}\n"
+        code = f"comptime {node.name} = {enum_type}\n"
         next_value = 0
         local_aliases = {}
         local_values = {}
         for variant in getattr(node, "variants", []) or []:
             payload = getattr(variant, "data", None) or getattr(variant, "fields", None)
             if payload:
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported enum payload for Mojo codegen; only unit/numeric "
                     f"enum variants are supported: {node.name}.{variant.name}"
                 )
@@ -5591,7 +5690,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:
@@ -5605,7 +5704,7 @@ class MojoCodeGen:
     def generate_payload_enum(self, node):
         fields = enum_struct_fields(node)
         if fields is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported enum payload for Mojo codegen; payload fields must "
                 f"have stable names and compatible types: {node.name}"
             )
@@ -5651,7 +5750,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:
@@ -5818,7 +5917,10 @@ class MojoCodeGen:
             return f"{generic_constructor}()"
         if name in self.current_enum_value_aliases:
             return self.current_enum_value_aliases[name]
-        return self.enum_variant_aliases.get(name, name)
+        if name in self.enum_variant_aliases:
+            return self.enum_variant_aliases[name]
+        # Not an enum variant of the program: an identifier, written as declared.
+        return name
 
     def generic_enum_unit_variant_constructor(self, name, target_type):
         variant_fields = self.generic_enum_variant_fields_for_type(name, target_type)
@@ -6537,6 +6639,9 @@ class MojoCodeGen:
         prelude, right = self.generate_expression_with_prelude(
             node.right, indent, left_type, "assignment target"
         )
+        self.validate_scalar_target_conversion(
+            node.right, left_type, "assignment target"
+        )
         op = self.map_operator(node.operator)
         self.register_resource_assignment_alias_metadata(node.left, node.right, op)
         return f"{prelude}{indent_str}{left} {op} {right}\n"
@@ -6659,7 +6764,7 @@ class MojoCodeGen:
     ):
         if len(args) not in {1, 2}:
             buffer_type, _ = buffer_info
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"{buffer_type} expected 1 or 2 out parameter(s), got {len(args)}"
             )
@@ -6682,14 +6787,14 @@ class MojoCodeGen:
     ):
         dimension_count = self.resource_dimension_component_count(resource_type)
         if dimension_count is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"sizable texture resource required: {resource_type}"
             )
 
         if self.is_multisample_resource_type(resource_type):
             if len(args) not in {dimension_count, dimension_count + 1}:
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported GetDimensions overload for Mojo codegen; "
                     f"{resource_type} expected {dimension_count} dimension "
                     f"out parameter(s) plus optional sample count, got {len(args)}"
@@ -6721,7 +6826,7 @@ class MojoCodeGen:
             dimension_targets = args[1 : 1 + dimension_count]
             levels_target = args[-1]
         else:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"{resource_type} expected {dimension_count}, "
                 f"{dimension_count + 1}, or {dimension_count + 2} argument(s), "
@@ -6743,14 +6848,14 @@ class MojoCodeGen:
     ):
         dimension_count = self.resource_dimension_component_count(resource_type)
         if dimension_count is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"sizable image resource required: {resource_type}"
             )
 
         if self.is_multisample_resource_type(resource_type):
             if len(args) not in {dimension_count, dimension_count + 1}:
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported GetDimensions overload for Mojo codegen; "
                     f"{resource_type} expected {dimension_count} dimension "
                     f"out parameter(s) plus optional sample count, got {len(args)}"
@@ -6761,7 +6866,7 @@ class MojoCodeGen:
             )
         else:
             if len(args) != dimension_count:
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported GetDimensions overload for Mojo codegen; "
                     f"{resource_type} expected {dimension_count} dimension "
                     f"out parameter(s), got {len(args)}"
@@ -6815,7 +6920,7 @@ class MojoCodeGen:
     ):
         size_type = self.resource_size_return_type(resource_type)
         if size_type is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"sizable resource required: {resource_type}"
             )
@@ -6869,7 +6974,7 @@ class MojoCodeGen:
     def dimension_lod_expression(self, lod_arg, resource_type):
         lod_type = self.expression_result_type(lod_arg)
         if not self.is_scalar_integer_type(lod_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 f"lod argument for {resource_type} must be an integer scalar"
             )
@@ -6882,7 +6987,7 @@ class MojoCodeGen:
         if size_type == "Int32":
             if index == 0:
                 return size_expr
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions overload for Mojo codegen; "
                 "dimension component index exceeds scalar size result"
             )
@@ -6899,7 +7004,7 @@ class MojoCodeGen:
         if target_type is None:
             return value
         if not self.is_scalar_integer_type(target_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported GetDimensions out parameter for Mojo codegen; "
                 f"integer scalar target required: {target_type}"
             )
@@ -6946,7 +7051,7 @@ class MojoCodeGen:
 
     def generate_increment_expression(self, expr):
         if not self.expression_prelude_stack:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported increment/decrement expression for Mojo codegen; "
                 "statement prelude context is required"
             )
@@ -7033,6 +7138,9 @@ class MojoCodeGen:
                     var_type,
                     f"declaration {stmt.name}",
                 )
+                self.validate_scalar_target_conversion(
+                    stmt.initial_value, var_type, f"declaration {stmt.name}"
+                )
                 var_name = self.mojo_identifier(stmt.name)
                 if var_type is None:
                     return f"{prelude}{indent_str}var {var_name} = {init_expr}\n"
@@ -7091,6 +7199,9 @@ class MojoCodeGen:
                     indent,
                     self.current_return_type,
                     "return value",
+                )
+                self.validate_scalar_target_conversion(
+                    stmt.value, self.current_return_type, "return value"
                 )
                 return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
@@ -8309,6 +8420,9 @@ class MojoCodeGen:
             node.right, left_type, "assignment target"
         )
         right = self.generate_expression(node.right, left_type, "assignment target")
+        self.validate_scalar_target_conversion(
+            node.right, left_type, "assignment target"
+        )
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
 
@@ -8326,9 +8440,11 @@ class MojoCodeGen:
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(
+        condition_expr = (
             node.condition if hasattr(node, "condition") else node.if_condition
         )
+        condition = self.generate_expression(condition_expr)
+        self.validate_condition_scalar(condition_expr, "if condition")
         entry_alias_state = self.resource_access_alias_state()
         code = f"{indent_str}if {condition}:\n"
 
@@ -8363,11 +8479,20 @@ class MojoCodeGen:
     def generate_for(self, node, indent):
         indent_str = "    " * indent
 
-        init = self.generate_statement(node.init, 0).strip()
+        if isinstance(node.init, list):
+            # ``int i = 0, j = 10`` and ``k = 0, m = 3`` run in source order before the loop.
+            code = "".join(
+                f"{indent_str}{self.generate_statement(item, 0).strip()}\n"
+                for item in node.init
+                if item is not None
+            )
+        else:
+            init = self.generate_statement(node.init, 0).strip()
+            code = f"{indent_str}{init}\n"
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "for condition")
         entry_alias_state = self.resource_access_alias_state()
 
-        code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
@@ -8397,6 +8522,12 @@ class MojoCodeGen:
     def generate_for_update_statement(self, update, indent):
         if update is None:
             return ""
+
+        if isinstance(update, list):
+            # ``i++, j--``: the updates run left to right.
+            return "".join(
+                self.generate_for_update_statement(item, indent) for item in update
+            )
 
         if isinstance(update, ExpressionStatementNode):
             update = update.expression
@@ -8463,6 +8594,7 @@ class MojoCodeGen:
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "while condition")
         entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}while {condition}:\n"
@@ -8518,6 +8650,7 @@ class MojoCodeGen:
         break_flag = f"__cgl_do_break_{self.do_while_counter}"
         self.do_while_counter += 1
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "do-while condition")
 
         code = f"{indent_str}var {break_flag}: Bool = False\n"
         code += f"{indent_str}while True:\n"
@@ -8777,6 +8910,8 @@ class MojoCodeGen:
 
     def generate_expression(self, expr, target_type=None, target_context=None):
         """Render a CrossGL expression as Mojo expression syntax."""
+        if is_comma_expression(expr):
+            return refuse_comma_expression("Mojo", expr)
         if isinstance(expr, str):
             if expr in self.expression_identifier_replacements:
                 return self.expression_identifier_replacements[expr]
@@ -8825,6 +8960,12 @@ class MojoCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
+            comparison = self.generate_vector_comparison(expr)
+            if comparison is not None:
+                return comparison
+            boolean_vector_logical = self.generate_boolean_vector_logical_op(expr)
+            if boolean_vector_logical is not None:
+                return boolean_vector_logical
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
@@ -8869,6 +9010,10 @@ class MojoCodeGen:
                 return self.generate_increment_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
+                operand_type = self.expression_result_type(expr.operand)
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return f"(~{operand})"
                 return f"(not {operand})"
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
@@ -8907,6 +9052,12 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            if (
+                func_name in SHADER_CLOCK_BUILTINS
+                and not self.is_user_defined_function(func_name)
+            ):
+                return refuse_shader_clock_call("Mojo", func_name)
+
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,
                 func_expr,
@@ -8923,6 +9074,14 @@ class MojoCodeGen:
                 lambda_expr = self.generate_lambda_expression(expr.args)
                 if lambda_expr is not None:
                     return lambda_expr
+                # A lambda whose parameters or body the helper materialization cannot type has no Mojo spelling:
+                # the CrossGL text of it is not a Mojo expression.
+                refuse_unsupported(
+                    "Mojo",
+                    "lambda",
+                    "lambda whose parameter list or body cannot be materialized as a typed Mojo helper function",
+                    "lambda",
+                )
 
             enum_constructor = self.generate_enum_variant_constructor_call(
                 func_name, expr.args, target_type
@@ -8939,7 +9098,7 @@ class MojoCodeGen:
                 func_name = specialized_func_name
                 callee = specialized_func_name
             else:
-                raise_unresolved_generic_function_call(self, func_name, "Mojo")
+                reject_unresolved_generic_function_call(self, func_name, "Mojo")
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
@@ -8947,6 +9106,10 @@ class MojoCodeGen:
                     self.mojo_identifier(func_name) if func_name is not None else callee
                 )
                 return f"{call_name}({args})"
+
+            reduction = self.generate_boolean_vector_reduction(func_name, expr.args)
+            if reduction is not None:
+                return reduction
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, expr.args
@@ -8956,6 +9119,12 @@ class MojoCodeGen:
 
             if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
+            if (
+                func_name == "roundEven"
+                and len(expr.args) == 1
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.generate_round_even_call(expr.args[0])
             if func_name == "mod":
                 return self.generate_mod_call(expr.args)
             if func_name == "saturate":
@@ -9023,6 +9192,12 @@ class MojoCodeGen:
                 return self.generate_buffer_consume_call(expr.args)
             if func_name == "buffer_dimensions":
                 return self.generate_buffer_dimensions_call(expr.args)
+            if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+                raise MojoRefusal(
+                    f"Unsupported Mojo buffer counter call {func_name}; "
+                    "structured-buffer counters are not available in the Mojo "
+                    "placeholder backend"
+                )
             reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
             if reinterpret_name is not None:
                 return self.generate_reinterpret_call(reinterpret_name, expr.args)
@@ -9048,8 +9223,14 @@ class MojoCodeGen:
                 return f"{helper_name}()"
             if func_name == "__shfl_down_sync":
                 return self.generate_cuda_shuffle_down_call(expr.args)
+            bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
+            if bit_function is not None:
+                return bit_function
 
-            func_name = self.function_map.get(func_name, func_name)
+            if func_name in self.function_map:
+                func_name = self.function_map[func_name]
+            # Otherwise a program function or a Mojo library function, spelled as it is; a built-in function of
+            # another language left in the output is refused by generate.
             if func_name in MOJO_MATH_HELPERS:
                 self.required_math_helpers.add(func_name)
             if func_name in self.scalar_constructor_map:
@@ -9088,11 +9269,7 @@ class MojoCodeGen:
 
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             call_name = (
-                "lambda"
-                if func_name == "lambda"
-                else (
-                    self.mojo_identifier(func_name) if func_name is not None else callee
-                )
+                self.mojo_identifier(func_name) if func_name is not None else callee
             )
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -9121,6 +9298,7 @@ class MojoCodeGen:
                 return bool_vector_select
             branch_context = target_context or "ternary expression"
             condition = self.generate_expression(expr.condition)
+            self.validate_condition_scalar(expr.condition, "ternary condition")
             true_expr = self.generate_expression(
                 expr.true_expr, target_type, f"{branch_context} true branch"
             )
@@ -9187,7 +9365,7 @@ class MojoCodeGen:
 
         fields = self.enum_variant_constructor_fields.get(func_name, [])
         if len(args) != len(fields):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Enum constructor {func_name} expects {len(fields)} arguments, "
                 f"got {len(args)}"
             )
@@ -9211,7 +9389,7 @@ class MojoCodeGen:
         if fields is None:
             return None
         if len(args) != len(fields):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Enum constructor {func_name} expects {len(fields)} arguments, "
                 f"got {len(args)}"
             )
@@ -9326,7 +9504,7 @@ class MojoCodeGen:
         initialized_fields = set()
         for index in range(positional_count):
             if index >= len(field_items):
-                raise ValueError(
+                raise MojoRefusal(
                     f"Invalid {constructor_style} struct constructor for Mojo "
                     "codegen; "
                     f"too many positional fields in {base_context}: field "
@@ -9337,14 +9515,14 @@ class MojoCodeGen:
 
         for field_name in named_arguments:
             if field_name not in fields:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Invalid {constructor_style} struct constructor for Mojo "
                     "codegen; "
                     f"unknown field {struct_type}.{field_name} in {base_context}; "
                     f"expected one of: {expected}"
                 )
             if field_name in initialized_fields:
-                raise ValueError(
+                raise MojoRefusal(
                     f"Invalid {constructor_style} struct constructor for Mojo "
                     "codegen; "
                     f"duplicate field {struct_type}.{field_name} in {base_context}"
@@ -9354,7 +9532,7 @@ class MojoCodeGen:
         if require_all_fields:
             for field_name, _ in field_items:
                 if field_name not in initialized_fields:
-                    raise ValueError(
+                    raise MojoRefusal(
                         f"Invalid {constructor_style} struct constructor for Mojo "
                         "codegen; "
                         f"missing field {struct_type}.{field_name} in "
@@ -9436,7 +9614,7 @@ class MojoCodeGen:
         member = expr.components
         swizzle_indices = self.get_swizzle_indices(member)
         if swizzle_indices is None:
-            raise ValueError(f"Unsupported Mojo swizzle '{member}'")
+            raise MojoRefusal(f"Unsupported Mojo swizzle '{member}'")
         obj = self.generate_expression(expr.vector_expr)
         obj_type = self.expression_result_type(expr.vector_expr)
         return self.generate_swizzle(
@@ -9777,7 +9955,7 @@ class MojoCodeGen:
                 resource_args, "image_samples"
             )
 
-        raise ValueError(f"Unsupported Mojo texture operation {operation}")
+        raise MojoRefusal(f"Unsupported Mojo texture operation {operation}")
 
     def generate_texture_op_node(self, expr):
         operation = getattr(expr, "operation", "")
@@ -9792,14 +9970,14 @@ class MojoCodeGen:
     def generate_sync_node(self, stmt, indent):
         sync_type = getattr(stmt, "sync_type", "")
         if getattr(stmt, "arguments", None):
-            raise ValueError(
+            raise MojoRefusal(
                 "Invalid Mojo synchronization operation "
                 f"{sync_type}; arguments are not supported"
             )
 
         helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
         if helper_name is None:
-            raise ValueError(f"Invalid Mojo synchronization operation {sync_type}")
+            raise MojoRefusal(f"Invalid Mojo synchronization operation {sync_type}")
         self.required_sync_helpers.add(helper_name)
         indent_str = "    " * indent
         return f"{indent_str}{helper_name}()\n"
@@ -9808,7 +9986,7 @@ class MojoCodeGen:
         operation = getattr(expr, "operation", "")
         helper_base = MOJO_ATOMIC_OP_ALIASES.get(operation)
         if helper_base is None:
-            raise ValueError(f"Unsupported Mojo atomic operation {operation}")
+            raise MojoRefusal(f"Unsupported Mojo atomic operation {operation}")
         scalar_atomic = self.generate_scalar_atomic_call(
             operation, [expr.target, *getattr(expr, "arguments", [])]
         )
@@ -9835,22 +10013,22 @@ class MojoCodeGen:
         if self.is_texture_resource_type(mapped_target_type):
             return None
         if target_type not in MOJO_SCALAR_ATOMIC_TYPES:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; "
                 f"scalar integer target required: {target_type}"
             )
         if not self.is_assignable_atomic_target(target):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; assignable target required"
             )
         expected_args = 3 if operation == "compare_exchange" else 2
         if len(args) != expected_args:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; expected "
                 f"{expected_args} argument(s), got {len(args)}"
             )
         if not self.expression_prelude_stack:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; "
                 "scalar atomic lowering requires statement context"
             )
@@ -9894,7 +10072,7 @@ class MojoCodeGen:
         elif operation == "xor":
             update_expr = f"({temp_name} ^ {value_expr})"
         else:
-            raise ValueError(f"Unsupported Mojo scalar atomic operation {func_name}")
+            raise MojoRefusal(f"Unsupported Mojo scalar atomic operation {func_name}")
 
         context["lines"].append(f"{indent_str}{target_expr} = {update_expr}\n")
         return temp_name
@@ -9933,9 +10111,9 @@ class MojoCodeGen:
         args = list(getattr(expr, "arguments", []) or [])
         expected_count = MOJO_WAVE_OP_ARITIES.get(operation)
         if expected_count is None:
-            raise ValueError(f"Unsupported Mojo wave intrinsic {operation}")
+            raise MojoRefusal(f"Unsupported Mojo wave intrinsic {operation}")
         if len(args) != expected_count:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo wave intrinsic {operation} requires {expected_count} "
                 f"argument{'s' if expected_count != 1 else ''}, got {len(args)}"
             )
@@ -9953,7 +10131,7 @@ class MojoCodeGen:
 
     def generate_cuda_shuffle_down_call(self, args):
         if len(args) != 3:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Mojo __shfl_down_sync requires 3 arguments, got {len(args)}"
             )
 
@@ -10001,16 +10179,19 @@ class MojoCodeGen:
         )
 
     def generate_ray_tracing_call_expression(self, operation, args):
-        if operation not in {
-            "TraceRay",
-            "CallShader",
-            "ReportHit",
-            "IgnoreHit",
-            "AcceptHitAndEndSearch",
-        }:
+        intrinsic = MOJO_RAY_TRACING_INTRINSICS.get(operation)
+        if intrinsic is None:
             return None
 
-        helper_name = self.function_map.get(operation, operation)
+        helper_name, argument_counts = intrinsic
+        if len(args or []) not in argument_counts:
+            counts = " or ".join(str(count) for count in argument_counts)
+            return refuse_unsupported(
+                "Mojo",
+                f"{operation} with {len(args or [])} arguments",
+                f"the Mojo runtime helper {helper_name} takes {counts}",
+                f"{helper_name}()",
+            )
         self.required_ray_helpers.add(helper_name)
         generated_args = [self.generate_expression(arg) for arg in args or []]
         if operation == "TraceRay" and len(generated_args) == 11:
@@ -10057,7 +10238,7 @@ class MojoCodeGen:
             self.required_mesh_helpers.add("dispatch_mesh")
             return f"_crossgl_dispatch_mesh({', '.join(args)})"
 
-        raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
+        raise MojoRefusal(f"Unsupported Mojo mesh intrinsic {operation}")
 
     def generate_vector_constructor(self, func_name, args):
         if len(args) == 1:
@@ -10122,7 +10303,21 @@ class MojoCodeGen:
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
 
+        if uses_scalar_splat_constructor and len(emitted_args) == 1:
+            return self.scalar_splat_expression(dtype, storage_width, emitted_args[0])
+
         return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def scalar_splat_expression(self, dtype, storage_width, scalar_expr):
+        """Splat ``scalar_expr`` into every lane of a ``SIMD[dtype, width]``.
+
+        Mojo's one-argument SIMD constructor only splats a ``Scalar[dtype]``.
+        ``Bool`` is not ``Scalar[DType.bool]``, so a boolean splat must use the
+        explicit ``fill`` keyword.
+        """
+        if dtype == "DType.bool":
+            return f"SIMD[{dtype}, {storage_width}](fill={scalar_expr})"
+        return f"SIMD[{dtype}, {storage_width}]({scalar_expr})"
 
     def generate_matrix_constructor(self, func_name, args):
         dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
@@ -10242,6 +10437,62 @@ class MojoCodeGen:
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
 
+    def round_even_operand_type(self, arg):
+        """Source type of a ``round_even`` operand, including typed buffer elements."""
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None and isinstance(arg, ArrayAccessNode):
+            info = self.buffer_resource_info(self.expression_result_type(arg.array))
+            if info is not None and info[0] in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
+                arg_type = info[1]
+        return arg_type
+
+    def round_even_operand_dtypes(self, arg):
+        """Return ``(source dtype, dtype the helper rounds in, source type)``.
+
+        The helper has overloads for float16, float32 and float64 elements;
+        integer operands round as float32, as HLSL ``round`` converts them.
+        """
+        arg_type = self.round_even_operand_type(arg)
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            source_dtype = vector_info[0]
+        else:
+            source_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(arg_type))
+        if source_dtype is None or source_dtype in ROUND_EVEN_FLOAT_DTYPES:
+            return source_dtype, source_dtype, arg_type
+        return source_dtype, "DType.float32", arg_type
+
+    def is_scalar_literal_operand(self, arg):
+        """A numeric literal, optionally under unary ``+`` or ``-``."""
+        while isinstance(arg, UnaryOpNode) and self.map_operator(arg.op) in {
+            "+",
+            "-",
+        }:
+            arg = arg.operand
+        return self.is_literal_expression(arg) and not isinstance(arg, ArrayLiteralNode)
+
+    def generate_round_even_call(self, arg):
+        self.required_math_helpers.add("round_even")
+        arg_expr = self.generate_expression(arg)
+        source_dtype, target_dtype, _ = self.round_even_operand_dtypes(arg)
+        if self.is_scalar_literal_operand(arg):
+            # A literal converts to every overload, and an integer literal has no
+            # cast method, so it is spelled in the scalar type it rounds in.
+            scalar_type = ROUND_EVEN_FLOAT_DTYPES.get(target_dtype, "Float32")
+            return f"round_even({scalar_type}({arg_expr}))"
+        if source_dtype != target_dtype:
+            arg_expr = f"({arg_expr}).cast[{target_dtype}]()"
+        return f"round_even({arg_expr})"
+
+    def round_even_result_type(self, arg):
+        source_dtype, target_dtype, arg_type = self.round_even_operand_dtypes(arg)
+        if source_dtype == target_dtype:
+            return arg_type or "float"
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            return self.vector_type_name_for_dtype_width(target_dtype, vector_info[1])
+        return "float"
+
     def generate_mod_call(self, args):
         generated_args = [self.generate_expression(arg) for arg in args]
         if len(generated_args) != 2:
@@ -10305,6 +10556,10 @@ class MojoCodeGen:
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
+            if dtype in MOJO_INTEGER_DTYPES:
+                # saturate keeps its argument's type (semantics.hub_types), so an integer vector clamps to 0 and
+                # 1 per component, through SIMD's clamp method, which no generated free helper shadows.
+                return f"({self.generate_expression(args[0])}).clamp(0, 1)"
             if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
@@ -10319,6 +10574,13 @@ class MojoCodeGen:
         matrix_info = self.matrix_type_info(arg_type)
         if matrix_info is not None:
             dtype, columns, rows = matrix_info
+            if dtype in MOJO_INTEGER_DTYPES:
+                return refuse_unsupported(
+                    "Mojo",
+                    "function",
+                    "saturate of an integer matrix: the Mojo matrix runtime has no integer clamp",
+                    "saturate",
+                )
             if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
@@ -10328,6 +10590,9 @@ class MojoCodeGen:
             return f"{helper_name}({arg_expr})"
 
         arg_dtype = self.expression_mojo_dtype(args[0])
+        if arg_dtype in MOJO_INTEGER_DTYPES:
+            # An integer scalar is a one-lane SIMD value in Mojo, with the same clamp method.
+            return f"({self.generate_expression(args[0])}).clamp(0, 1)"
         if arg_dtype not in supported_float_dtypes:
             return None
 
@@ -10510,7 +10775,7 @@ class MojoCodeGen:
 
     def validate_texture_sample_args(self, args, helper_name, resource_type):
         if not self.is_texture_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
@@ -10520,7 +10785,7 @@ class MojoCodeGen:
                 if self.is_multisample_resource_type(resource_type)
                 else "sampleable texture required"
             )
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"{required}: {resource_type}"
             )
@@ -10529,7 +10794,7 @@ class MojoCodeGen:
         expected_count = expected_counts.get(helper_name)
         if expected_count is not None and len(args) != expected_count:
             argument_count = expected_count - 1
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; expected "
                 f"{argument_count} argument(s) after texture resource, got "
                 f"{len(args) - 1}"
@@ -10607,6 +10872,46 @@ class MojoCodeGen:
         self.validate_reinterpret_result_target_shape(expr, target_type, context)
         self.validate_aggregate_target_shape(expr, target_type, context)
 
+    def validate_scalar_target_conversion(self, expr, target_type, context):
+        """Refuse a source vector where the target needs a scalar.
+
+        Mojo does not convert ``SIMD[dtype, N]`` to a scalar implicitly, and a
+        comparison of two vectors is a lane-wise ``SIMD[DType.bool, N]`` mask
+        rather than a ``Bool``.
+        """
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_scalar_target_conversion(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_scalar_target_conversion(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        target_name = self.type_name(target_type)
+        if not self.is_scalar_type_name(target_name):
+            return
+
+        source_type = self.expression_result_type(expr)
+        if self.vector_type_info(source_type) is None:
+            return
+
+        source_name = self.type_name(source_type)
+        raise MojoScalarConversionError(
+            "Mojo cannot preserve source conversion from "
+            f"'{source_name}' to '{target_name}' in {context}: vector to scalar",
+            source_type=source_name,
+            target_type=target_name,
+            reason="vector-to-scalar",
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def validate_condition_scalar(self, condition, context):
+        self.validate_scalar_target_conversion(condition, "bool", context)
+
     def validate_aggregate_target_shape(self, expr, target_type, context):
         if expr is None or target_type is None:
             return
@@ -10664,7 +10969,7 @@ class MojoCodeGen:
             if source_matrix == target_matrix:
                 return
 
-        raise ValueError(
+        raise MojoRefusal(
             f"Invalid aggregate target for Mojo codegen; {context} "
             f"expects {target_name}, got {self.type_name(source_type)}"
         )
@@ -10725,7 +11030,7 @@ class MojoCodeGen:
         if self.resource_size_target_matches(expected_type, target_type):
             return
 
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} target for Mojo codegen; {context} "
             f"expects {expected_type} from {resource_type}, got "
             f"{self.type_name(target_type)}"
@@ -10785,7 +11090,7 @@ class MojoCodeGen:
         ):
             return
 
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} target for Mojo codegen; {context} "
             f"expects {expected_type} from {resource_type}, got "
             f"{self.type_name(target_type)}"
@@ -10840,7 +11145,7 @@ class MojoCodeGen:
         ):
             return
 
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} target for Mojo codegen; {context} "
             f"expects {self.type_name(expected_type)} from {resource_type}, got "
             f"{self.type_name(target_type)}"
@@ -10893,7 +11198,7 @@ class MojoCodeGen:
         if self.result_shape_target_matches(expected_type, target_type):
             return
 
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} target for Mojo codegen; {context} "
             f"expects {self.type_name(expected_type)}, got "
             f"{self.type_name(target_type)}"
@@ -11251,7 +11556,7 @@ class MojoCodeGen:
             expected_args = {1}
 
         if not args:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"{required_kind} resource required: <missing>"
             )
@@ -11259,14 +11564,14 @@ class MojoCodeGen:
         resource_type = self.map_type(self.expression_result_type(args[0]))
 
         if not is_valid_kind(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"{required_kind} resource required: {resource_type}"
             )
         if len(args) not in expected_args:
             expected_counts = sorted(count - 1 for count in expected_args)
             expected_text = " or ".join(str(count) for count in expected_counts)
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; expected "
                 f"{expected_text} argument(s) after {required_kind} resource, "
                 f"got {len(args) - 1}"
@@ -11277,7 +11582,7 @@ class MojoCodeGen:
             )
 
         if self.resource_size_return_type(resource_type) is None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"sizable {required_kind} resource required: {resource_type}"
             )
@@ -11289,24 +11594,24 @@ class MojoCodeGen:
 
     def generate_resource_query_levels_call(self, args):
         if not args:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported texture_query_levels for Mojo codegen; "
                 "texture resource required: <missing>"
             )
         if len(args) != 1:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported texture_query_levels for Mojo codegen; expected "
                 f"0 argument(s) after texture resource, got {len(args) - 1}"
             )
 
         resource_type = self.map_type(self.expression_result_type(args[0]))
         if not self.is_texture_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported texture_query_levels for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
         if self.is_multisample_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported texture_query_levels for Mojo codegen; "
                 f"non-multisample texture required: {resource_type}"
             )
@@ -11318,13 +11623,13 @@ class MojoCodeGen:
     def generate_resource_sample_count_call(self, args, helper_name):
         if not args:
             required_kind = "texture" if helper_name == "texture_samples" else "image"
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"{required_kind} resource required: <missing>"
             )
         if len(args) != 1:
             required_kind = "texture" if helper_name == "texture_samples" else "image"
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; expected "
                 f"0 argument(s) after {required_kind} resource, got {len(args) - 1}"
             )
@@ -11338,12 +11643,12 @@ class MojoCodeGen:
             is_valid_kind = self.is_image_resource_type(resource_type)
 
         if not is_valid_kind:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"{required_kind} resource required: {resource_type}"
             )
         if not self.is_multisample_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"multisample {required_kind} required: {resource_type}"
             )
@@ -11371,26 +11676,26 @@ class MojoCodeGen:
     def validate_texel_fetch_args(self, args, resource_type, *, with_offset=False):
         helper_name = "texel_fetch_offset" if with_offset else "texel_fetch"
         if not self.is_texture_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
         if self.is_shadow_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"non-shadow texture required: {resource_type}"
             )
         if self.resource_texel_coord_type(resource_type) is None or (
             with_offset and self.resource_offset_coord_type(resource_type) is None
         ):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"texel-fetch{'-offset' if with_offset else ''} texture required: "
                 f"{resource_type}"
             )
         expected_count = 4 if with_offset else 3
         if len(args) != expected_count:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; expected "
                 f"{expected_count - 1} argument(s) after texture resource, "
                 f"got {len(args) - 1}"
@@ -11439,20 +11744,20 @@ class MojoCodeGen:
 
     def validate_image_load_args(self, args, resource_type):
         if not self.is_image_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_load for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
         coord_type = self.resource_texel_coord_type(resource_type)
         if coord_type is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_load for Mojo codegen; "
                 f"loadable image resource required: {resource_type}"
             )
 
         expected_count = 3 if self.is_multisample_resource_type(resource_type) else 2
         if len(args) != expected_count:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_load for Mojo codegen; expected "
                 f"{expected_count - 1} argument(s) after image resource, got "
                 f"{len(args) - 1}"
@@ -11472,20 +11777,20 @@ class MojoCodeGen:
 
     def validate_image_store_args(self, args, resource_type):
         if not self.is_image_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_store for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
         coord_type = self.resource_texel_coord_type(resource_type)
         if coord_type is None:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_store for Mojo codegen; "
                 f"storable image resource required: {resource_type}"
             )
 
         expected_count = 4 if self.is_multisample_resource_type(resource_type) else 3
         if len(args) != expected_count:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_store for Mojo codegen; expected "
                 f"{expected_count - 1} argument(s) after image resource, got "
                 f"{len(args) - 1}"
@@ -11510,7 +11815,7 @@ class MojoCodeGen:
         expected_type = self.image_value_type(resource_type)
         actual_type = self.resource_builtin_arg_type(value_arg)
         if actual_type != expected_type:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image_store for Mojo codegen; value for "
                 f"{resource_type} must be {expected_type}, got {actual_type}"
             )
@@ -11548,7 +11853,7 @@ class MojoCodeGen:
             self.validate_resource_write_access(args[0], "buffer_append")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None and info[0] != "AppendStructuredBuffer":
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported buffer_append for Mojo codegen; "
                     f"{info[0]} is not an append buffer"
                 )
@@ -11564,7 +11869,7 @@ class MojoCodeGen:
             self.validate_resource_read_access(args[0], "buffer_consume")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None and info[0] != "ConsumeStructuredBuffer":
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported buffer_consume for Mojo codegen; "
                     f"{info[0]} is not a consume buffer"
                 )
@@ -11580,7 +11885,7 @@ class MojoCodeGen:
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None:
                 if len(args) not in {2, 3}:
-                    raise ValueError(
+                    raise MojoRefusal(
                         "Unsupported buffer_dimensions for Mojo codegen; "
                         f"expected 1 or 2 dimension argument(s), got {len(args) - 1}"
                     )
@@ -11594,11 +11899,11 @@ class MojoCodeGen:
         raw_operation = getattr(expr, "operation", "")
         operation = MOJO_BUFFER_OP_ALIASES.get(raw_operation)
         if operation is None:
-            raise ValueError(f"Unsupported Mojo buffer operation {raw_operation}")
+            raise MojoRefusal(f"Unsupported Mojo buffer operation {raw_operation}")
 
         buffer_expr = getattr(expr, "buffer_expr", None)
         if buffer_expr is None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Invalid Mojo buffer operation {raw_operation}; "
                 "missing buffer expression"
             )
@@ -11623,12 +11928,12 @@ class MojoCodeGen:
             return self.generate_byte_address_vector_buffer_op(
                 buffer_expr, arguments, operation
             )
-        raise ValueError(f"Invalid Mojo buffer operation {raw_operation}")
+        raise MojoRefusal(f"Invalid Mojo buffer operation {raw_operation}")
 
     def generate_byte_address_vector_buffer_op(self, buffer_expr, args, operation):
         info = self.buffer_resource_info(self.expression_result_type(buffer_expr))
         if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Invalid {operation} for Mojo codegen; byte-address buffer required"
             )
 
@@ -11714,7 +12019,7 @@ class MojoCodeGen:
 
             if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS:
                 self.validate_resource_read_write_access(obj_expr, member)
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported Mojo byte-address buffer atomic method "
                     f"{member}; byte-address atomics are not available in "
                     "the Mojo placeholder backend"
@@ -11746,7 +12051,7 @@ class MojoCodeGen:
 
         if member == "Append":
             if buffer_type != "AppendStructuredBuffer":
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported Append for Mojo codegen; "
                     f"{buffer_type} is not an append buffer"
                 )
@@ -11760,7 +12065,7 @@ class MojoCodeGen:
 
         if member == "Consume":
             if buffer_type != "ConsumeStructuredBuffer":
-                raise ValueError(
+                raise MojoRefusal(
                     "Unsupported Consume for Mojo codegen; "
                     f"{buffer_type} is not a consume buffer"
                 )
@@ -11779,7 +12084,7 @@ class MojoCodeGen:
 
         if member in MOJO_BUFFER_COUNTER_METHODS:
             self.validate_resource_read_write_access(obj_expr, member)
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported Mojo buffer counter method "
                 f"{member}; structured-buffer counters are not available "
                 "in the Mojo placeholder backend"
@@ -11794,7 +12099,7 @@ class MojoCodeGen:
 
         helper_name, required_receiver = requirement
         mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} for Mojo codegen; "
             f"{required_receiver} required: {mapped_type}"
         )
@@ -11806,7 +12111,7 @@ class MojoCodeGen:
 
         helper_name, required_receiver = requirement
         mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
-        raise ValueError(
+        raise MojoRefusal(
             f"Unsupported {helper_name} for Mojo codegen; "
             f"{required_receiver} required: {mapped_type}"
         )
@@ -11889,12 +12194,12 @@ class MojoCodeGen:
 
         resource_type = self.map_type(self.expression_result_type(args[0]))
         if not self.is_texture_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
         if self.is_multisample_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"non-multisample texture required: {resource_type}"
             )
@@ -11902,7 +12207,7 @@ class MojoCodeGen:
             helper_base.startswith("texture_compare")
             or helper_base.startswith("texture_gather_compare")
         ) and not self.is_shadow_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"shadow texture required: {resource_type}"
             )
@@ -11911,7 +12216,7 @@ class MojoCodeGen:
             "calculate_level_of_detail",
             "calculate_level_of_detail_unclamped",
         } and self.is_shadow_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"non-shadow texture required: {resource_type}"
             )
@@ -11929,7 +12234,7 @@ class MojoCodeGen:
         }
         if allowed_counts and len(args) - 1 not in allowed_counts:
             expected = " or ".join(str(count) for count in sorted(allowed_counts))
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; expected {expected} "
                 f"argument(s) after texture resource, got {len(args) - 1}"
             )
@@ -12181,20 +12486,20 @@ class MojoCodeGen:
         self.validate_resource_read_write_access(args[0], helper_base)
         resource_type = self.map_type(self.expression_result_type(args[0]))
         if not self.is_image_resource_type(resource_type):
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
         return_type = self.image_atomic_value_type(resource_type)
         if return_type not in {"Int32", "UInt32"}:
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsupported image atomic for Mojo codegen; "
                 f"scalar integer image required: {resource_type}"
             )
         if self.typed_image_atomic_has_vector_value_arg(
             args, helper_base, resource_type
         ):
-            raise ValueError(
+            raise MojoRefusal(
                 "Unsup"
                 "ported image atomic for Mojo codegen; "
                 f"scalar integer image required: {resource_type}"
@@ -12215,7 +12520,7 @@ class MojoCodeGen:
     def validate_image_atomic_args(self, args, helper_base, resource_type, value_type):
         coord_type = self.resource_texel_coord_type(resource_type)
         if coord_type is None:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"atomic image resource required: {resource_type}"
             )
@@ -12224,7 +12529,7 @@ class MojoCodeGen:
         sample_count = 1 if self.is_multisample_resource_type(resource_type) else 0
         expected_count = 2 + sample_count + value_count
         if len(args) != expected_count:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_base} for Mojo codegen; expected "
                 f"{expected_count - 1} argument(s) after image resource, "
                 f"got {len(args) - 1}"
@@ -12288,7 +12593,7 @@ class MojoCodeGen:
     ):
         actual_type = self.resource_builtin_arg_type(arg)
         if actual_type != expected_type:
-            raise ValueError(
+            raise MojoRefusal(
                 f"Unsupported {helper_name} for Mojo codegen; {label} for "
                 f"{resource_type} must be {expected_type}, got {actual_type}"
             )
@@ -12346,7 +12651,10 @@ class MojoCodeGen:
             return True
         if MOJO_SCALAR_DTYPES.get(type_name) in MOJO_INTEGER_DTYPES:
             return True
-        return self.type_mapping.get(type_name, type_name) in MOJO_MAPPED_INTEGER_TYPES
+        return (
+            type_name in MOJO_MAPPED_INTEGER_TYPES
+            or self.type_mapping.get(type_name) in MOJO_MAPPED_INTEGER_TYPES
+        )
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -12542,6 +12850,98 @@ class MojoCodeGen:
         code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {matrix_type}:\n"
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
+
+    def vector_comparison_info(self, op, left_type, right_type):
+        if self.map_operator(op) not in MOJO_VECTOR_COMPARISON_METHODS:
+            return None
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None and right_info is not None and left_info != right_info:
+            raise MojoRefusal(
+                "Mojo vector comparison requires matching element types and widths"
+            )
+        return left_info or right_info
+
+    def generate_vector_comparison(self, expr):
+        info = self.vector_comparison_info(
+            expr.op,
+            self.expression_result_type(expr.left),
+            self.expression_result_type(expr.right),
+        )
+        if info is None:
+            return None
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left, info[0], "vector comparison"
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right, info[0], "vector comparison"
+        )
+        if self.vector_type_info(self.expression_result_type(expr.left)) is None:
+            left = self.scalar_splat_expression(info[0], info[2], left)
+        if (
+            info[0] == "DType.bool"
+            and self.vector_type_info(self.expression_result_type(expr.right)) is None
+        ):
+            # Mojo does not convert a Bool argument to a mask either.
+            right = self.scalar_splat_expression(info[0], info[2], right)
+        method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
+        return f"({left}).{method}({right})"
+
+    def generate_boolean_vector_logical_op(self, expr):
+        """Combine boolean vector masks per component.
+
+        Mojo's ``and`` and ``or`` return one whole operand, chosen by whether
+        any lane of the left mask is true, so ``&&`` and ``||`` on boolean
+        vectors are written with the lane-wise ``&`` and ``|``. A scalar
+        ``bool`` operand of a mask is splatted to the mask's lanes. Two scalar
+        ``bool`` operands keep ``and`` and ``or``, which short-circuit.
+        """
+        op = self.map_operator(expr.op)
+        if op not in {"and", "or"}:
+            return None
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        left_mask = left_info is not None and left_info[0] == "DType.bool"
+        right_mask = right_info is not None and right_info[0] == "DType.bool"
+        if left_mask and right_mask:
+            if left_info != right_info:
+                raise MojoRefusal(
+                    "Mojo boolean vector && and || require masks of the same width"
+                )
+        elif not (
+            (left_mask and MOJO_SCALAR_DTYPES.get(right_type) == "DType.bool")
+            or (right_mask and MOJO_SCALAR_DTYPES.get(left_type) == "DType.bool")
+        ):
+            return None
+        left = self.generate_expression(expr.left)
+        right = self.generate_expression(expr.right)
+        # Mojo does not convert a Bool to a mask, so splat it explicitly.
+        if not left_mask:
+            left = f"SIMD[DType.bool, {right_info[2]}](fill={left})"
+        if not right_mask:
+            right = f"SIMD[DType.bool, {left_info[2]}](fill={right})"
+        lane_op = "&" if op == "and" else "|"
+        return f"({left} {lane_op} {right})"
+
+    def generate_boolean_vector_reduction(self, name, args):
+        if name not in {"any", "all"} or len(args) != 1:
+            return None
+        info = self.vector_type_info(self.expression_result_type(args[0]))
+        if info is None or info[0] != "DType.bool":
+            return None
+        mask = self.generate_expression(args[0])
+        if info[1] != info[2]:
+            # Three-lane vectors use four storage lanes. Ignore padding without
+            # evaluating a side-effecting argument more than once.
+            used, padding, op = (
+                ("True", "False", "&") if name == "any" else ("False", "True", "|")
+            )
+            lanes = ", ".join([used] * info[1] + [padding] * (info[2] - info[1]))
+            mask = f"({mask} {op} SIMD[DType.bool, {info[2]}]({lanes}))"
+        reduction = "reduce_or" if name == "any" else "reduce_and"
+        return f"({mask}).{reduction}()"
 
     def generate_vector_binary_op(self, expr):
         op = self.map_operator(expr.op)
@@ -13717,23 +14117,7 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
         if helper_name == "round_even":
-            return (
-                "fn round_even(x: Float32) -> Float32:\n"
-                "    var lower = floor(x)\n"
-                "    var fraction = x - lower\n"
-                "    if fraction < 0.5:\n"
-                "        return lower\n"
-                "    if fraction > 0.5:\n"
-                "        return lower + 1.0\n"
-                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
-                "    if parity == 0.0:\n"
-                "        return lower\n"
-                "    return lower + 1.0\n\n"
-                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
-                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
-                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
-                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
-            )
+            return self.generate_round_even_helper()
         if helper_name == "cross_product":
             return (
                 "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
@@ -13789,6 +14173,34 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
+
+    def generate_round_even_helper(self):
+        """Round halfway cases to the nearest even integer, per element type."""
+        code = ""
+        for dtype, scalar_type in ROUND_EVEN_FLOAT_DTYPES.items():
+            code += (
+                f"fn round_even(x: {scalar_type}) -> {scalar_type}:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+            )
+            for width in (2, 4):
+                vector_type = f"SIMD[{dtype}, {width}]"
+                components = ", ".join(
+                    f"round_even(v[{index}])" for index in range(width)
+                )
+                code += (
+                    f"fn round_even(v: {vector_type}) -> {vector_type}:\n"
+                    f"    return {vector_type}({components})\n\n"
+                )
+        return code
 
     def generate_min_max_helper(self, helper_name, comparator):
         selector = f"a if a {comparator} b else b"
@@ -14183,6 +14595,13 @@ class MojoCodeGen:
         return self.generate_expression(piece["expr"], target_type, context)
 
     def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        if target_dtype in {"DType.float16", "DType.float32"} and (
+            self.is_scalar_bool_expression(expr)
+        ):
+            # Mojo's Float16/Float32 constructors do not accept Bool directly.
+            # Converting through Int preserves GLSL's 0/1 numeric cast.
+            return f"Int({self.generate_expression(expr)})"
+
         target_type = self.constructor_scalar_expression_target_type(
             expr, target_dtype, force_scalar_target=True
         )
@@ -14789,6 +15208,17 @@ class MojoCodeGen:
             if vector_info is not None:
                 return MOJO_DTYPE_INFO[vector_info[0]][0]
             return None
+        if isinstance(expr, UnaryOpNode):
+            op = self.map_operator(expr.op)
+            operand_type = self.expression_result_type(expr.operand)
+            if op == "not":
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return operand_type
+                return "bool"
+            if op in {"+", "-", "~"}:
+                return operand_type
+            return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
@@ -14809,6 +15239,10 @@ class MojoCodeGen:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            if func_name in {"any", "all"} and not self.is_user_defined_function(
+                func_name
+            ):
+                return "bool"
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type is not None:
                 return numeric_result_type
@@ -14839,8 +15273,8 @@ class MojoCodeGen:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "roundEven" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and len(expr.args) == 1:
+                return self.round_even_result_type(expr.args[0])
             if func_name in {"inverse", "transpose"} and expr.args:
                 return self.expression_result_type(expr.args[0])
             if func_name in {"length", "dot"}:
@@ -15091,6 +15525,9 @@ class MojoCodeGen:
         return None
 
     def binary_expression_result_type(self, op, left_type, right_type):
+        comparison = self.vector_comparison_info(op, left_type, right_type)
+        if comparison is not None:
+            return self.vector_type_name_for_dtype_width("DType.bool", comparison[1])
         left_info = self.vector_type_info(left_type)
         right_info = self.vector_type_info(right_type)
         mapped_op = self.map_operator(op)
@@ -15111,6 +15548,10 @@ class MojoCodeGen:
             return left_type
         if right_info is not None:
             return right_type
+        if mapped_op in MOJO_VECTOR_COMPARISON_METHODS or mapped_op in {"and", "or"}:
+            # A comparison or logical operation on scalars yields a ``Bool``,
+            # not a value of its operand type.
+            return "bool"
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
@@ -15369,6 +15810,29 @@ class MojoCodeGen:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
 
+    def is_scalar_bool_expression(self, expr):
+        """Return whether ``expr`` evaluates to a scalar boolean.
+
+        Scalar comparisons and logical expressions are recognized directly as
+        their result type is inferred from their operands on some codegen paths.
+        Vector comparisons and logical operations remain SIMD masks.
+        """
+        expr_type = self.expression_result_type(expr)
+        if self.is_bool_scalar_type(expr_type):
+            return True
+
+        if isinstance(expr, BinaryOpNode):
+            op = self.map_operator(expr.op)
+            if op in MOJO_VECTOR_COMPARISON_METHODS or op in {"and", "or"}:
+                return (
+                    self.vector_type_info(self.expression_result_type(expr.left))
+                    is None
+                    and self.vector_type_info(self.expression_result_type(expr.right))
+                    is None
+                )
+
+        return False
+
     def compatible_numeric_vector_target(self, source_info, target_info):
         if source_info is None or target_info is None:
             return False
@@ -15448,14 +15912,41 @@ class MojoCodeGen:
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
 
+    def bool_cast_text(self, expr_text, target_dtype):
+        # Mojo's Bool has no .cast method, so a bool value going to a numeric
+        # type goes through Int first: Float32(Int(s)). Returns None when the
+        # target has no scalar constructor form here, leaving the old output.
+        constructor = {
+            "DType.float16": "Float16",
+            "DType.float32": "Float32",
+            "DType.float64": "Float64",
+            "DType.int8": "Int8",
+            "DType.int16": "Int16",
+            "DType.int32": "Int32",
+            "DType.uint8": "UInt8",
+            "DType.uint16": "UInt16",
+            "DType.uint32": "UInt32",
+        }.get(target_dtype)
+        if constructor is None:
+            return None
+        return f"{constructor}(Int({expr_text}))"
+
     def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return expr_text
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(expr_text, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"({expr_text}).cast[{target_dtype}]()"
 
     def cast_vector_component(self, component, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return component
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(component, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"{component}.cast[{target_dtype}]()"
 
     def generate_constructor_scalar_expression(
@@ -15736,14 +16227,25 @@ class MojoCodeGen:
         mapped_args = ", ".join(
             self.mojo_native_generic_argument(arg) for arg in generic_args
         )
-        return f"{self.type_mapping.get(base_type, base_type)}[{mapped_args}]"
+        mapped_base = self.type_mapping.get(base_type)
+        if mapped_base is None:
+            reason = mojo_generic_template_reason(base_type)
+            if reason is not None:
+                return refuse_unsupported("Mojo", "type", reason, type_name)
+            # A Mojo parameterised type (UnsafePointer, SIMD, Scalar) is spelled as written.
+            mapped_base = base_type
+        return f"{mapped_base}[{mapped_args}]"
 
     def mojo_native_generic_argument(self, arg):
         arg = str(arg).strip()
         nested_generic = self.mojo_native_generic_mapped_type(arg)
         if nested_generic is not None:
             return nested_generic
-        return self.type_mapping.get(arg, arg)
+        mapped = self.type_mapping.get(arg)
+        if mapped is not None:
+            return mapped
+        # A Mojo parameter value (Int64, MutAnyOrigin, a DType, a literal width) is spelled as written.
+        return arg
 
     def is_resource_type_name(self, type_name):
         if self.is_array_type_name(type_name):
@@ -15765,44 +16267,8 @@ class MojoCodeGen:
         )
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_AND": "&=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "and",
-            "OR": "or",
-            "&&": "and",
-            "||": "or",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "LOGICAL_AND": "and",
-            "LOGICAL_OR": "or",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "MOD": "%",
-            "NOT": "not",
-            "!": "not",
-        }
-        return op_map.get(op, op)
+        """``op`` spelled for Mojo; an operator CrossGL does not define is refused."""
+        return mojo_operator(op)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Mojo backend attribute name."""

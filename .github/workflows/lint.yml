@@ -1,0 +1,61 @@
+name: Lint
+
+# pre-commit.ci runs the pinned hooks on every pull request except black (see `ci.skip` in .pre-commit-config.yaml).
+# This workflow runs that pinned black hook on the Python files a pull request or merge-queue entry changes, so
+# unformatted files cannot reach main.
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  black:
+    name: Black on changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Run the pinned black hook
+        run: |
+          set -euo pipefail
+          # Both the pull-request merge commit and a merge-queue commit have the base as their first parent.
+          git diff --name-only --diff-filter=d -z HEAD^1 HEAD -- '*.py' '*.pyi' > changed
+          if [ ! -s changed ]; then
+            echo "No Python files changed."
+            exit 0
+          fi
+          python -m pip install pre-commit==4.7.0
+          xargs -0 pre-commit run black --show-diff-on-failure --color=always --files < changed
+
+  result:
+    name: Lint result
+    needs: [black]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check lint jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A lint job ended with $result."; exit 1 ;;
+            esac
+          done

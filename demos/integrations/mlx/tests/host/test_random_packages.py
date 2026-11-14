@@ -58,7 +58,8 @@ def test_random_cache_rejects_invalid_contract_before_source_access(
     elif fault == "bytes-short":
         size = 3
     elif fault == "bytes-overflow":
-        size = 524288
+        # 65537 word pairs per key has no exact portable group height.
+        size = 524296
     elif fault == "storage-overflow":
         keys, size = 65535, 524280
     elif fault == "groups":
@@ -210,6 +211,34 @@ def test_random_cache_separates_equal_grid_byte_contracts(packaged_random):
     assert other != descriptors
     assert cache.load(3, 4, launch()) == (descriptors, package)
     assert cache.load(3, 5, launch()) == (other, other_package)
+
+
+def test_random_cache_translates_wide_outputs_with_exact_group_heights(
+    packaged_random,
+):
+    cache = packaged_random[0]
+    wide = {"workgroupCount": [1, 32768, 1], "workgroupSize": [1, 2, 1]}
+    with pytest.raises(ValueError, match="launch differs"):
+        cache.get(1, 524288, launch(1, 65536))
+    descriptors, package = cache.get(1, 524288, wide)
+    assert cache.load(1, 524288, wide) == (descriptors, package)
+    region = {
+        "threadGridSize": [1, 65536, 1],
+        "sourceWorkgroupSize": [1, 2, 1],
+        "workgroupOffset": [0, 0, 0],
+        "workgroupCount": [1, 32768, 1],
+        "workgroupSize": [1, 2, 1],
+    }
+    for descriptor in descriptors.values():
+        assert descriptor["provenance"].get("dispatchRegion") == (
+            None if cache.target == "metal" else region
+        )
+        artifact = package / descriptor["artifact"]["packagePath"]
+        text = artifact.read_text()
+        if cache.target == "opengl":
+            assert "local_size_x = 1, local_size_y = 2, local_size_z = 1" in text
+        elif cache.target == "directx":
+            assert "[numthreads(1, 2, 1)]" in text
 
 
 def test_random_cache_does_not_publish_changed_translation_inputs(

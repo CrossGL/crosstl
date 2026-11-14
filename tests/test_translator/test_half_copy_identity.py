@@ -124,7 +124,12 @@ def test_half_physical_representation_covers_every_word():
 def test_half_identity_does_not_emit_numeric_narrowing(tmp_path, case):
     source = tmp_path / "copy.metal"
     source.write_text(_source(case), encoding="utf-8")
-    generated = translate(str(source), backend="opengl", format_output=False)
+    generated = translate(
+        str(source),
+        backend="opengl",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
+    )
     assert "crossgl_round_half" not in generated
 
 
@@ -142,7 +147,7 @@ def test_half_numeric_constructors_still_require_rounding(tmp_path, expression):
 
 
 def test_half_copy_controls_are_required_on_each_platform():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
@@ -150,7 +155,7 @@ def test_half_copy_controls_are_required_on_each_platform():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate Metal byte and vector storage",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "tests/test_translator/test_half_copy_identity.py" in step
         assert "-n auto" in step

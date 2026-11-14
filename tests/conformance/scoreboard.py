@@ -1,7 +1,7 @@
 """Per-cell regression comparison; missing or unavailable proof cannot pass.
 
 A scoreboard maps each cell key (case, language, target, configuration, route, Vulkan environment, runtime) to
-its outcome and the hashes of the source and input data it was measured on. A run is checked against the cells of
+its outcome and the hashes of the source, input and constants-block data it was measured on. A run is checked against the cells of
 the baseline that fall inside the run's declared scope; a cell in scope that is missing, measured on different
 data, or worse than recorded is a failure. Better outcomes pass and are reported so the baseline can be advanced.
 """
@@ -32,6 +32,19 @@ IMPROVEMENTS = {
     "runtime-error": {"refused", "diverged", "preserved"},
     "refused": {"preserved"},
 }
+# ``observed`` is the best outcome of a case without readings (a negative control): it executed with its
+# buffers intact and claims nothing about the values. Reaching it from a state that never executed, or that
+# corrupted memory, is progress; it never replaces a recorded match or refusal.
+for _failed in (
+    "translator-error",
+    "invalid",
+    "interface-changed",
+    "memory-corruption",
+    "driver-rejected",
+    "timeout",
+    "runtime-error",
+):
+    IMPROVEMENTS[_failed].add("observed")
 # A compile-only runtime has no execution evidence to lose: passing the native checker is its best outcome.
 COMPILE_ONLY_IMPROVEMENTS = {
     "translator-error": {"compiled-only"},
@@ -62,6 +75,8 @@ def snapshot(records):
         cells[identity] = {
             name: record[name] for name in ("outcome", "sourceSHA256", "inputSHA256")
         }
+        if record.get("constantsSHA256"):
+            cells[identity]["constantsSHA256"] = record["constantsSHA256"]
     counts = dict(sorted(Counter(record["outcome"] for record in records).items()))
     return {
         "schemaVersion": SCHEMA,
@@ -94,8 +109,8 @@ def check(baseline, records, scope=None):
         if actual is None:
             failures.append(f"Missing conformance cell: {identity}")
             continue
-        for name in ("sourceSHA256", "inputSHA256"):
-            if actual[name] != expected[name]:
+        for name in ("sourceSHA256", "inputSHA256", "constantsSHA256"):
+            if actual.get(name) != expected.get(name):
                 failures.append(f"Changed {name}: {identity}")
         if actual["outcome"] != expected["outcome"] and not improves(
             identity, expected["outcome"], actual["outcome"]

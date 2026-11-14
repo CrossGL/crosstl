@@ -8,7 +8,7 @@ layout(std140, binding = 2) uniform bit_extract_kernel_size_Args {
 // Compute Shader
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 void main() {
-    uint offset = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);
+    uint offset = gl_GlobalInvocationID.x;
     uint stride = (gl_WorkGroupSize.x * gl_NumWorkGroups.x);
     for (uint i = offset; (i < size); i += stride) {
         d_output[i] = ((d_input[i] >> 8) & 15u);

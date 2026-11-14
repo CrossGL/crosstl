@@ -64,7 +64,8 @@ def test_parse_layout_locations_and_components():
         "out mediump vec4 out_fragColor;" in glsl
     )
     assert "fragColor = color;" in glsl
-    assert "\n    vec4 fragColor;" in glsl
+    # The precise output makes the function precise, so its locals are too.
+    assert "\n    precise vec4 fragColor;" in glsl
     assert "out_fragColor = fragColor;" in glsl
     assert "\n    fragColor = fragColor;" not in glsl
 
@@ -115,6 +116,27 @@ def test_codegen_preserves_explicit_block_member_layout_from_khronos_docs():
 
     shader_ast = crosstl.translator.parse(crossgl)
     assert shader_ast is not None
+
+
+def test_codegen_keeps_swizzles_named_like_block_members():
+    # ``.z`` and ``.y`` below are swizzles and a struct field, not the block's
+    # own ``z`` and ``y`` members, so only ``f.<member>`` loses its instance.
+    code = """
+    #version 450
+    struct L { vec3 color; float z; };
+    layout(std140, binding = 1) uniform F { L lights[2]; mat2x3 m; float z; vec3 y; } f;
+    layout(location = 0) out vec4 o;
+    void main() {
+        o = vec4(f.lights[1].color.z + f.lights[0].z + f.m[1].z + f.z + f.y.y);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert (
+        "o = vec4(((((lights[1].color.z + lights[0].z) + m[1].z) + z) + y.y));"
+        in crossgl
+    )
 
 
 def test_codegen_layout_integer_constant_expression_values():
@@ -1203,11 +1225,11 @@ def test_parse_ray_query_type_and_functions_roundtrip():
 
     assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
     assert "rayQueryEXT rq;" in crossgl
-    assert "rq.Initialize(" in crossgl
+    assert "rq.TraceRayInline(" in crossgl
     assert "bool active = rq.Proceed();" in crossgl
-    assert "uint hitType = rq.CommittedType();" in crossgl
+    assert "uint hitType = rq.CommittedStatus();" in crossgl
     assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl
-    assert "uint committedInstance = rq.CommittedInstanceID();" in crossgl
+    assert "uint committedInstance = rq.CommittedInstanceIndex();" in crossgl
     assert "uint candidateGeometry = rq.CandidateGeometryIndex();" in crossgl
     assert "vec3 committedOrigin = rq.CommittedObjectRayOrigin();" in crossgl
     assert "vec3 candidateDirection = rq.CandidateObjectRayDirection();" in crossgl
@@ -1216,19 +1238,18 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "vec3 worldDirection = rq.WorldRayDirection();" in crossgl
     assert "uint rayFlags = rq.RayFlags();" in crossgl
     assert "float rayTMin = rq.RayTMin();" in crossgl
-    assert "uint customIndex = rq.CommittedInstanceCustomIndex();" in crossgl
+    assert "uint customIndex = rq.CommittedInstanceID();" in crossgl
     assert (
-        "uint sbtOffset = rq.CandidateInstanceShaderBindingTableRecordOffset();"
-        in crossgl
+        "uint sbtOffset = rq.CandidateInstanceContributionToHitGroupIndex();" in crossgl
     )
     assert "vec2 barycentrics = rq.CandidateTriangleBarycentrics();" in crossgl
     assert "bool frontFace = rq.CommittedTriangleFrontFace();" in crossgl
-    assert "bool aabbOpaque = rq.CandidateAABBOpaque();" in crossgl
+    assert "bool aabbOpaque = (!rq.CandidateProceduralPrimitiveNonOpaque());" in crossgl
     assert "vec3 trianglePositions[3];" in crossgl
     assert "rq.CandidateTriangleVertexPositions(trianglePositions);" in crossgl
     assert "rq.CommittedTriangleVertexPositions(trianglePositions);" in crossgl
-    assert "rq.GenerateIntersection(1.0);" in crossgl
-    assert "rq.ConfirmIntersection();" in crossgl
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in crossgl
+    assert "rq.CommitNonOpaqueTriangleHit();" in crossgl
     assert "rq.Abort();" in crossgl
     assert "rayQueryInitializeEXT(" not in crossgl
     assert "rayQueryProceedEXT(rq)" not in crossgl
@@ -1282,8 +1303,11 @@ def test_parse_ray_query_type_and_functions_roundtrip():
         "vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);" in glsl
     )
     assert "bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);" in glsl
+    # CrossGL asks the DXR question (is the candidate non-opaque?), so the
+    # GLSL opaque query comes back doubly negated.
     assert (
-        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);" in glsl
+        "bool aabbOpaque = (!(!rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq)));"
+        in glsl
     )
     assert "vec3 trianglePositions[3];" in glsl
     assert (
@@ -1298,7 +1322,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "rayQueryConfirmIntersectionEXT(rq);" in glsl
     assert "rayQueryTerminateEXT(rq);" in glsl
     assert ".Proceed(" not in glsl
-    assert ".CommittedType(" not in glsl
+    assert ".CommittedStatus(" not in glsl
 
 
 def test_parse_ray_query_transform_matrices_roundtrip_with_glsl_orientation():
@@ -1323,11 +1347,12 @@ def test_parse_ray_query_transform_matrices_roundtrip_with_glsl_orientation():
     crossgl = generate_crossgl(code, "compute")
 
     assert "bool active = rq.Proceed();" in crossgl
-    assert "mat3x4 committedObjectToWorld = rq.CommittedObjectToWorld();" in crossgl
-    assert "mat3x4 candidateObjectToWorld = rq.CandidateObjectToWorld();" in crossgl
-    assert "mat3x4 committedWorldToObject = rq.CommittedWorldToObject();" in crossgl
-    assert "mat3x4 candidateWorldToObject = rq.CandidateWorldToObject();" in crossgl
-    assert "mat4x3 committedObjectToWorld" not in crossgl
+    # GLSL and CrossGL share matCxR: these transforms have 4 columns of 3 rows.
+    assert "mat4x3 committedObjectToWorld = rq.CommittedObjectToWorld();" in crossgl
+    assert "mat4x3 candidateObjectToWorld = rq.CandidateObjectToWorld();" in crossgl
+    assert "mat4x3 committedWorldToObject = rq.CommittedWorldToObject();" in crossgl
+    assert "mat4x3 candidateWorldToObject = rq.CandidateWorldToObject();" in crossgl
+    assert "mat3x4 committedObjectToWorld" not in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
@@ -1418,7 +1443,7 @@ def test_parse_mesh_intrinsics_roundtrip_through_canonical_crossgl(
     assert regenerated_call in glsl
 
 
-def test_parse_task_payload_dispatch_pattern_roundtrips_as_payload_argument():
+def test_parse_task_payload_store_and_dispatch_roundtrip():
     code = """
     #version 450 core
     #extension GL_EXT_mesh_shader : require
@@ -1443,8 +1468,9 @@ def test_parse_task_payload_dispatch_pattern_roundtrips_as_payload_argument():
     assert "TaskPayload payload @taskPayloadSharedEXT;" in crossgl
     assert "TaskPayload localPayload;" in crossgl
     assert "localPayload.meshlet = 7u;" in crossgl
-    assert "DispatchMesh(2, 3, 4, localPayload);" in crossgl
-    assert "payload = localPayload;" not in crossgl
+    # The store into the payload stays a store; the dispatch passes no local as the payload.
+    assert "payload = localPayload;" in crossgl
+    assert "DispatchMesh(2, 3, 4);" in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 

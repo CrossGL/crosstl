@@ -12,7 +12,8 @@ annotation.  The Metal backend writes ``metal::precise::`` again for half
 operands.  The OpenGL backend reads it for the odd functions sinh, tanh,
 asinh and atanh, whose GLSL builtins Mesa evaluates through exp and log: the
 sign of zero is lost and ``tanh(NaN)`` is ``-1``.  Their helpers copy the
-operand's sign bit and pass NaN through.  Two further Mesa folds are kept out
+operand's sign bit, pass NaN through and evaluate small magnitudes, where
+Mesa's formulas cancel, through odd series.  Two further Mesa folds are kept out
 of OpenGL output: every float ``fma`` is computed into a ``precise`` result,
 so it stays one fused operation, and ``x - x`` of one float identifier is a
 ``precise`` difference, so infinities and NaN still give NaN.
@@ -47,6 +48,7 @@ import pytest
 
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.math_namespaces import (
     METAL_FAST_MATH_FUNCTIONS,
@@ -178,6 +180,15 @@ def _translate_text(tmp_path, text, target, name):
     return translate(str(path), backend=target, format_output=False)
 
 
+def _translate_or_refusal(tmp_path, text, target, name):
+    # A target that refuses an unrelated construct must refuse every spelling
+    # identically; the namespace may not change either outcome.
+    try:
+        return _translate_text(tmp_path, text, target, name)
+    except LoweringRefused as refusal:
+        return f"refused: {refusal}"
+
+
 def test_precise_math_operation_names():
     for operation in sorted(METAL_PRECISE_MATH_FUNCTIONS):
         assert metal_precise_math_operation(f"precise::{operation}") == operation
@@ -234,7 +245,7 @@ def test_crossgl_parser_normalizes_precise_calls():
 )
 def test_other_targets_ignore_the_precise_namespace(tmp_path, target):
     outputs = [
-        _translate_text(tmp_path, _crossgl(prefix), target, f"{label}.cgl")
+        _translate_or_refusal(tmp_path, _crossgl(prefix), target, f"{label}.cgl")
         for label, prefix in (
             ("plain", ""),
             ("precise", "precise::"),
@@ -315,9 +326,10 @@ def test_opengl_odd_precise_functions_keep_sign_and_nan(tmp_path):
     for operation in ODD_OPERATIONS:
         helper = f"crossgl_precise_{operation}_float"
         assert f"float {helper}(float value) {{" in generated
+        threshold = "1.0" if operation in ("sinh", "tanh") else "0.5"
         assert (
-            f"uint magnitude = floatBitsToUint({operation}(value)) & 0x7fffffffu;"
-            in generated
+            f"uint bits = floatBitsToUint(magnitude < {threshold} ? small : "
+            f"{operation}(magnitude)) & 0x7fffffffu;" in generated
         )
         assert f"{helper}(" in generated.split("void main()", 1)[1]
         assert f"crossgl_precise_{operation}" not in plain
@@ -326,7 +338,8 @@ def test_opengl_odd_precise_functions_keep_sign_and_nan(tmp_path):
         assert f"crossgl_precise_{operation}_vec4(v)" in generated
     assert "mix(result, value, isnan(value))" in generated
     assert "isnan(value) ? value : result" in generated
-    assert "magnitude | (floatBitsToUint(value) & 0x80000000u)" in generated
+    assert "bits | (floatBitsToUint(value) & 0x80000000u)" in generated
+    assert "mix(sinh(magnitude), small, lessThan(magnitude, vec4(1.0)))" in generated
     # Unannotated calls keep the builtins, as do even functions and functions
     # without the Mesa defect.
     assert "float p = (sinh(x) + tanh(x));" in generated
@@ -1011,6 +1024,113 @@ def test_opengl_odd_functions_keep_sign_of_zero_and_nan_natively(tmp_path):
                 _float(actual[row * stride + len(ODD_OPERATIONS) + index]),
                 narrow=False,
             )
+
+
+# Magnitudes where Mesa's exp- and log-based builtins cancel, the series
+# thresholds and their neighbours, and larger operands the builtins keep.
+NEAR_ZERO_MAGNITUDES = (
+    2.0**-24,
+    1.0e-6,
+    2.0**-12,
+    1.0e-3,
+    0.001476988,
+    0.0234868,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.45,
+    0.49999997,
+    0.5,
+    0.75,
+    0.99999994,
+    1.0,
+    1.5,
+)
+# np.allclose's default rtol is 1e-5; Mesa's builtins exceed it near zero.
+NEAR_ZERO_RELATIVE_ERROR = 1.0e-6
+
+
+def _series_values(helper, magnitudes):
+    """Evaluate a helper's series lines in binary32, as the GLSL computes them."""
+    import numpy as np
+
+    magnitude = np.array(magnitudes, dtype=np.float32)
+    names = {"magnitude": magnitude, "squared": magnitude * magnitude}
+    names["sqrt"] = np.sqrt
+    for line in helper.splitlines()[3:]:
+        line = line.strip()
+        if line.startswith("uint "):
+            break
+        name, expression = line.removeprefix("float ").rstrip(";").split(" = ", 1)
+        names[name] = eval(expression, {"__builtins__": {}}, names)
+        assert names[name].dtype == np.float32, line
+    return names["small"]
+
+
+@pytest.mark.parametrize("operation", ODD_OPERATIONS)
+def test_opengl_precise_odd_series_keep_binary32_accuracy(operation):
+    import numpy as np
+
+    from crosstl.translator.codegen.glsl_precise_odd import (
+        SERIES_THRESHOLDS,
+        glsl_precise_odd_helper,
+    )
+
+    helper = glsl_precise_odd_helper("h", operation, "float", 1)
+    threshold = float(SERIES_THRESHOLDS[operation])
+    words = np.arange(
+        np.float32(2.0**-30).view(np.uint32),
+        np.float32(threshold).view(np.uint32),
+        97,
+        dtype=np.uint32,
+    )
+    magnitudes = words.view(np.float32)
+    got = _series_values(helper, magnitudes).astype(np.float64)
+    reference = {"asinh": np.arcsinh, "atanh": np.arctanh}.get(
+        operation, getattr(np, operation)
+    )
+    want = reference(magnitudes.astype(np.float64))
+    ulps = np.abs(got - want) / np.spacing(np.abs(want).astype(np.float32))
+    assert ulps.max() <= 3.0, (operation, float(ulps.max()))
+    # The formula the builtin uses near zero: sinh through exp loses the
+    # relative accuracy the series keeps.
+    if operation == "sinh":
+        small = np.float32(0.001476988)
+        naive = (np.exp(small) - np.exp(-small)) * np.float32(0.5)
+        assert abs(float(naive) / math.sinh(float(small)) - 1.0) > 1.0e-6
+
+
+def test_opengl_odd_functions_keep_binary32_accuracy_near_zero_natively(tmp_path):
+    _skip_without_native({"opengl"})
+    operands = [sign * value for value in NEAR_ZERO_MAGNITUDES for sign in (1.0, -1.0)]
+    operands = [_float(_bits(value)) for value in operands]
+    inputs = []
+    for value in operands:
+        inputs.extend((_bits(value), 0))
+    stride = 2 * len(ODD_OPERATIONS)
+    expected = [0] * (stride * len(operands)) + GUARD
+    generated = _translate_text(tmp_path, _gl_odd_source(), "opengl", "near.metal")
+    actual = _execute(
+        tmp_path / "generated",
+        "opengl",
+        generated,
+        inputs,
+        expected,
+        check_outputs=_words,
+        invocations=len(operands),
+    ).pop("maxUlpError")
+    worst = {}
+    for row, operand in enumerate(operands):
+        for index, operation in enumerate(ODD_OPERATIONS):
+            if operation == "atanh" and abs(operand) >= 1.0:
+                continue  # The special-value test covers the poles and NaN.
+            result = _float(actual[row * stride + len(ODD_OPERATIONS) + index])
+            want = getattr(math, operation)(operand)
+            error = abs(result - want) / abs(want)
+            worst[operation] = max(worst.get(operation, 0.0), error)
+            assert error <= NEAR_ZERO_RELATIVE_ERROR, (operation, operand, result, want)
+    (tmp_path / "evidence.json").write_text(json.dumps(worst, indent=2), "utf-8")
 
 
 def test_directx_odd_functions_keep_sign_nan_and_saturation_natively(tmp_path):

@@ -7,9 +7,12 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_stage_refusals import MetalStageUnsupportedError
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import partial_output
 
 GEOMETRY_GLSL = """
 #version 450 core
@@ -144,23 +147,33 @@ def test_codegen_geometry_layout_max_vertices_feeds_directx_attribute():
 
     assert "layout(points, max_vertices = 1) out;" in crossgl
 
-    generated = HLSLCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
+    # The HLSL generator has no stream-output lowering for GLSL's EmitVertex and EndPrimitive, which it used to
+    # write as calls DXC rejects, so the program is refused; the attribute is still derived from the layout.
+    generated, message = partial_output(
+        DirectXLoweringRefused,
+        HLSLCodeGen().generate_stage,
+        parse_crossgl(crossgl),
+        "geometry",
+    )
 
+    assert "call to 'EmitVertex'" in message and "call to 'EndPrimitive'" in message
     assert "[maxvertexcount(1)]" in generated
     assert "requires HLSL attribute(s): maxvertexcount" not in generated
 
 
-def test_codegen_geometry_layout_max_vertices_reaches_metal_validation():
+def test_codegen_geometry_layout_max_vertices_reaches_metal_stage_refusal():
     crossgl = generate_crossgl(GEOMETRY_POINTS_MAX_VERTICES_GLSL, "geometry")
 
     assert "layout(points, max_vertices = 1) out;" in crossgl
 
-    with pytest.raises(ValueError) as excinfo:
+    # Metal has no geometry stage, so the stage itself is refused before any geometry metadata is read.
+    with pytest.raises(MetalStageUnsupportedError) as excinfo:
         MetalCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
 
     message = str(excinfo.value)
     assert "maxvertexcount" not in message
-    assert "PointStream" in message
+    assert "(stage geometry)" in message
+    assert excinfo.value.code.endswith("metal-stage-unsupported")
 
 
 def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():
@@ -194,6 +207,49 @@ def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():
 
     assert "layout(points, stream = 0) out;" in glsl
     assert "layout(stream = 1) out;" in glsl
+
+
+def test_outputs_after_a_default_stream_layout_belong_to_that_stream():
+    # GLSL 4.60 section 4.4.2.2: an output declared without a stream belongs to the current default stream.
+    code = """
+    #version 450
+    layout(points) in;
+    layout(points, max_vertices = 2) out;
+    layout(location = 0) in vec4 position[];
+    layout(location = 1) out vec4 first;
+    layout(stream = 1) out;
+    layout(location = 0) out vec4 extra;
+    layout(location = 3) out Captured { vec4 value; } captured;
+    layout(location = 2, stream = 0) out vec4 back;
+    layout(stream = 0) out;
+    layout(location = 4) out vec4 last;
+
+    void main() {
+        gl_Position = position[0];
+        first = position[0];
+        back = position[0];
+        last = position[0];
+        EmitStreamVertex(0);
+        extra = position[0];
+        captured.value = position[0];
+        EmitStreamVertex(1);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "out vec4 first @location(1);" in crossgl
+    assert "out vec4 extra @location(0) @stream(1);" in crossgl
+    assert "@location(3) @stream(1) @glsl_interface_instance(captured)" in crossgl
+    assert "out vec4 back @location(2) @stream(0);" in crossgl
+    assert "out vec4 last @location(4);" in crossgl
+    parse_crossgl(crossgl)
+
+    glsl = regenerate_glsl(code, "geometry")
+
+    assert "layout(location = 0, stream = 1) out vec4 extra;" in glsl
+    assert "layout(location = 3, stream = 1) out Captured" in glsl
+    assert "layout(location = 4) out vec4 last;" in glsl
 
 
 def test_codegen_geometry_builtin_gl_pervertex_redeclarations_roundtrip():

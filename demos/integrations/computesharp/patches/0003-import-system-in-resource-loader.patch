@@ -1,0 +1,12 @@
+diff --git a/src/ComputeSharp.SourceGenerators/ComputeShaderDescriptorGenerator.Resources.Syntax.cs b/src/ComputeSharp.SourceGenerators/ComputeShaderDescriptorGenerator.Resources.Syntax.cs
+index 647155e..80a0c52 100644
+--- a/src/ComputeSharp.SourceGenerators/ComputeShaderDescriptorGenerator.Resources.Syntax.cs
++++ b/src/ComputeSharp.SourceGenerators/ComputeShaderDescriptorGenerator.Resources.Syntax.cs
+@@ -53,6 +53,7 @@ partial class ComputeShaderDescriptorGenerator
+                 return;
+             }
+ 
++            _ = usingDirectives.Add("global::System");
+             _ = usingDirectives.Add("global::System.CodeDom.Compiler");
+             _ = usingDirectives.Add("global::System.Diagnostics");
+             _ = usingDirectives.Add("global::System.Diagnostics.CodeAnalysis");

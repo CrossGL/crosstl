@@ -11,10 +11,14 @@ import re
 import tempfile
 from pathlib import Path
 
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 from ..process import run
 from ..toolchains import tool
-from ..validators import dxil_is_signed
-from .manifest import GLSLANG_STAGE
+from ..validators import dxil_is_signed, hlsl_arguments
+from .manifest import GLSLANG_STAGE, RAY_TRACING
 
 TIMEOUT = 120
 COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
@@ -60,7 +64,7 @@ GLSL_GUARDS = {
 ENTRY_PATTERNS = {
     "metal": re.compile(
         r"\b(?:kernel|vertex|fragment)\s+(?:(?:const|static|inline)\s+)*[\w:]+(?:\s*<[^;{}]*?>)?[\s*&]+\w+\s*\("
-        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*\]\]|\[\[host_name\("
+        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*(?:\]\]|,)|\[\[host_name\("
     ),
     "glsl": re.compile(r"\bvoid\s+main\s*\("),
     "essl": re.compile(r"\bvoid\s+main\s*\("),
@@ -140,11 +144,8 @@ def check_hlsl(path, scratch, stages):
     if missing:
         return missing
     text = Path(path).read_text(errors="replace")
-    extra = (
-        ["-enable-16bit-types"]
-        if re.search(r"\b(?:u?int16_t|float16_t)\b", text)
-        else []
-    )
+    # Native 16-bit scalars, vectors (float16_t3) and matrices need -enable-16bit-types.
+    extra = hlsl_arguments(path)
     entries = hlsl_entries(text, stages)
     jobs = [
         (
@@ -187,8 +188,78 @@ def check_hlsl(path, scratch, stages):
     return _verdict(results, entries=[name for name, _, _ in jobs])
 
 
+# Stages the GLSL generator writes with an extension defined only for SPIR-V generation.
+VULKAN_ONLY_STAGES = RAY_TRACING | {"mesh", "task"}
+
+
+def glsl_environment(stages):
+    """glslang options for the API a GLSL artifact's stages exist in.
+
+    Ray tracing stages exist only in Vulkan: GL_EXT_ray_tracing is defined for SPIR-V generation, and glslang
+    rejects the extension under OpenGL rules. So do the mesh and task stages the GLSL generator writes with
+    GL_EXT_mesh_shader, which glslang accepts only when it generates SPIR-V 1.4 or later ("not supported for current
+    targeted SPIR-V version" under OpenGL rules); OpenGL has only GL_NV_mesh_shader. They are checked with Vulkan
+    1.2 rules, the first Vulkan whose SPIR-V (1.5) includes the 1.4 that SPV_KHR_ray_tracing and SPV_EXT_mesh_shader
+    require. Every other stage is checked with the OpenGL or OpenGL ES rules the artifact's ``#version`` selects.
+    """
+    if stages and set(stages) <= VULKAN_ONLY_STAGES:
+        return ["--target-env", "vulkan1.2"]
+    return []
+
+
+def _glsl_command(path, stage, scratch):
+    environment = glsl_environment([stage])
+    # Vulkan rules make glslang write SPIR-V, by default to ``<stage>.spv`` in the working directory.
+    output = ["-o", str(Path(scratch) / f"{stage}.spv")] if environment else []
+    return [
+        *tool("glslangValidator").command,
+        *environment,
+        *output,
+        "-S",
+        GLSLANG_STAGE[stage],
+        path,
+    ]
+
+
+# A specialization constant without a default reads its source-path value from a macro that the host defines after
+# #version (crosstl/translator/codegen/glsl_specialization_macros.py), as an MSL host passes MTLFunctionConstantValues.
+# The check defines each macro with the value the artifact's SPIR-V path encodes, as spirv-val checks a SPIR-V module
+# under its default specialization.
+SPECIALIZATION_MACRO = re.compile(
+    r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)"
+)
+GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+# A workgroup size the source's host chooses reads its source-path value from three macros
+# (crosstl/translator/codegen/glsl_host_workgroup_size.py); the check gives them the size of one invocation that
+# the artifact's SPIR-V path encodes as their default.
+HOST_WORKGROUP_SIZE_DEFAULT = "1"
+
+
+def glsl_specialized_source(path, text, scratch):
+    """``path``, or a copy in ``scratch`` that defines the artifact's specialization macros after ``#version``."""
+    macros = {
+        match.group(2): match.group(1) for match in SPECIALIZATION_MACRO.finditer(text)
+    }
+    if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        macros.update(
+            dict.fromkeys(HOST_WORKGROUP_SIZE_MACROS, HOST_WORKGROUP_SIZE_DEFAULT)
+        )
+    version = GLSL_VERSION_LINE.search(text)
+    if not macros or version is None:
+        return path
+    following_line = text.count("\n", 0, version.end()) + 1
+    defines = "".join(
+        f"#define {name} {value}\n" for name, value in sorted(macros.items())
+    )
+    copy = Path(scratch) / Path(path).name
+    copy.write_text(
+        f"{text[: version.end()]}{defines}#line {following_line}\n{text[version.end() :]}"
+    )
+    return str(copy)
+
+
 def check_glsl(path, stages):
-    """glslang with the OpenGL or OpenGL ES rules the artifact's ``#version`` selects."""
+    """glslang with the rules of the API the stages exist in (:func:`glsl_environment`)."""
     missing = _missing("glslangValidator")
     if missing:
         return missing
@@ -200,14 +271,13 @@ def check_glsl(path, stages):
     ]
     selected = guarded or list(stages)
     results = []
-    for stage in selected:
-        result = run(
-            [*tool("glslangValidator").command, "-S", GLSLANG_STAGE[stage], path],
-            timeout=TIMEOUT,
-        )
-        results.append(result)
-        if result.status != "accepted":
-            break
+    with tempfile.TemporaryDirectory(prefix="crosstl-glslang-") as scratch:
+        source = glsl_specialized_source(path, text, scratch)
+        for stage in selected:
+            result = run(_glsl_command(source, stage, scratch), timeout=TIMEOUT)
+            results.append(result)
+            if result.status != "accepted":
+                break
     return _verdict(results, entries=selected)
 
 
@@ -216,11 +286,22 @@ def spirv_environment(text):
     return SPIRV_ENVIRONMENT.get(match.group(1), "vulkan1.1") if match else "vulkan1.1"
 
 
+# An entry whose size the pipeline specializes, next to entries of other sizes, is sized by LocalSizeId, which Vulkan
+# accepts when the device enables VK_KHR_maintenance4 (crosstl/translator/codegen/spirv_entry_workgroup_sizes.py).
+LOCAL_SIZE_ID = re.compile(r"^\s*OpExecutionModeId\s+%\S+\s+LocalSizeId\b", re.M)
+
+
+def spirv_features(text):
+    """spirv-val options for the device features the module requires."""
+    return ["--allow-localsizeid"] if LOCAL_SIZE_ID.search(text) else []
+
+
 def check_spirv(path, scratch):
     missing = _missing("spirv-as", "spirv-val")
     if missing:
         return missing
-    environment = spirv_environment(Path(path).read_text(errors="replace"))
+    text = Path(path).read_text(errors="replace")
+    environment = spirv_environment(text)
     binary = Path(scratch) / "unit.spv"
     results = [
         run(
@@ -238,11 +319,32 @@ def check_spirv(path, scratch):
     if results[0].status == "accepted":
         results.append(
             run(
-                [*tool("spirv-val").command, "--target-env", environment, binary],
+                [
+                    *tool("spirv-val").command,
+                    "--target-env",
+                    environment,
+                    *spirv_features(text),
+                    binary,
+                ],
                 timeout=TIMEOUT,
             )
         )
     return _verdict(results, environment=environment)
+
+
+# GLSL ES requires #version before anything else, comments included (GLSL ES 3.00 section 3.4).
+ESSL_VERSION = re.compile(r"\A#[ \t]*version[ \t]+300[ \t]+es\b")
+
+
+def check_essl(path, stages):
+    """WebGL 2 compiles GLSL ES 3.00 only; glslang would judge a desktop ``#version`` by desktop rules instead."""
+    if not ESSL_VERSION.match(Path(path).read_text(errors="replace")):
+        return {
+            "verdict": "rejected",
+            "commands": [],
+            "log": "the WebGL 2 artifact does not begin with #version 300 es",
+        }
+    return check_glsl(path, stages)
 
 
 def check(path, target, stages):
@@ -252,7 +354,9 @@ def check(path, target, stages):
             return check_metal(path, scratch)
         if target == "hlsl":
             return check_hlsl(path, scratch, stages)
-        if target in ("glsl", "essl"):
+        if target == "essl":
+            return check_essl(path, stages)
+        if target == "glsl":
             return check_glsl(path, stages)
         if target == "spirv":
             return check_spirv(path, scratch)

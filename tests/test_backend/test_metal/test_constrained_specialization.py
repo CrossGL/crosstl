@@ -121,8 +121,11 @@ kernel void select_body""",
         .replace("= update_value(values", "= nested::update_value(values")
     )
     output = MetalPreprocessor().preprocess(text)
-    assert "return values[index] * value;" in output
-    assert "= update_value_float(values" in output
+    assert "= ::nested::update_value_float(values" in output
+    assert (
+        "namespace nested {\ninline float update_value_float(device float* values, "
+        "float value, uint index) {\n    return values[index] * value;\n}\n}"
+    ) in output
 
 
 def test_equivalent_explicit_specializations_are_diagnosed():

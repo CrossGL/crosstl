@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 447,
+        "endLine": 24,
+        "endOffset": 471,
         "file": "crosstl-out/cgl/noise.frag.cgl",
-        "length": 447,
+        "length": 471,
         "line": 1,
         "offset": 0
       },

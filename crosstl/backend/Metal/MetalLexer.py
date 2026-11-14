@@ -1,8 +1,10 @@
 """Lexer for importing Metal source into CrossGL Translator."""
 
-import re
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import MetalSourceRefusal, MetalSyntaxError
+
+from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import MetalPreprocessor
 
 # using sets for faster lookup
@@ -78,12 +80,12 @@ TOKENS = tuple(
         ("BUFFER", r"\bbuffer\b"),
         ("SAMPLER", r"\bsampler\b"),
         # Matrix types (must come before vector types)
-        ("MATRIX", r"\b(float|x?half|double)[2-4]x[2-4]\b"),
+        ("MATRIX", r"\b(float|half|double)[2-4]x[2-4]\b"),
         ("SIMD_MATRIX", r"\bsimd_float[2-4]x[2-4]\b"),
         # Vector types
         (
             "VECTOR",
-            r"\b(float|x?half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
+            r"\b(float|half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
         ),
         (
             "PACKED_VECTOR",
@@ -365,9 +367,12 @@ class MetalLexer:
     ):
         """Initialize the lexer with raw Metal source text."""
         if not isinstance(promote_derived_pointer_members, bool):
-            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
+            raise MetalSourceRefusal(
+                "Metal promote_derived_pointer_members must be a boolean"
+            )
         code = code.lstrip("\ufeff")
-        self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self._token_dispatch = ordered_pattern_dispatch(TOKENS)
+        self._token_patterns = self._token_dispatch.patterns
         if preprocess:
             preprocessor_kwargs = {
                 "include_paths": include_paths,
@@ -407,7 +412,7 @@ class MetalLexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Illegal character '{self.code[pos]}' at line {line_num}, column {col_num}\n"
                     f"Context: ...{context}..."
                 )
@@ -446,10 +451,12 @@ class MetalLexer:
             if end_pos == -1:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Unterminated block comment at line {line_num}, column {col_num}"
                 )
-        for token_type, pattern in self._token_patterns:
+        # Only patterns that can begin with this character are tried, in table
+        # order, so the first matching pattern is the one the full table picks.
+        for token_type, pattern in self._token_dispatch.candidates(self.code[pos]):
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)

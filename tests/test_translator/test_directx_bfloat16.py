@@ -287,8 +287,8 @@ def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path)
     (kernels / "unsupported.cgl").write_text(
         textwrap.dedent("""
             shader UnsupportedBFloatBuiltin {
-                bfloat16_t apply_cospi(bfloat16_t value) {
-                    return cospi(value);
+                bfloat16_t apply_fract(bfloat16_t value) {
+                    return fract(value);
                 }
             }
             """).strip(),
@@ -319,7 +319,7 @@ def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path)
     assert diagnostic["details"] == {
         "bfloat16Lowering": {
             "approximationUsed": False,
-            "operation": "cospi",
+            "operation": "fract",
             "reason": "unsupported-bfloat16-builtin",
             "sourceType": "bfloat16_t",
             "status": "unsupported",

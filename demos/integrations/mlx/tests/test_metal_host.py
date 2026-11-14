@@ -598,11 +598,11 @@ def test_ci_requires_pinned_native_host_execution():
 def test_ci_prepares_metal_before_required_native_tests():
     import yaml
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Prepare Metal host toolchain"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -616,36 +616,36 @@ def test_ci_prepares_metal_before_required_native_tests():
     assert "metallib .mlx-metal-host/toolchain/probe.air" in step
     for suffix in ("air", "metallib"):
         assert f"test -s .mlx-metal-host/toolchain/probe.{suffix}" in step
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "metal-host",
         "Validate Metal argument inference",
         "Prepare Metal host toolchain",
     )
-    upload = ci_coverage.workflow_job_step_section(
+    upload = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Retain native host execution evidence"
     )
     assert "if: always()" in upload
     upload_step = yaml.safe_load(upload)[0]
     assert ".mlx-metal-host" in upload_step["with"]["path"].splitlines()
     assert upload_step["with"]["include-hidden-files"] is True
-    dependencies = ci_coverage.workflow_job_step_section(
+    dependencies = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Install CrossTL and test dependencies"
     )
     assert '"PyYAML>=6,<7"' in dependencies
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/fixtures/runtime_verification/vector_add.metal",
         )
 
 
 def test_ci_requires_pinned_attention_numerical_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Execute pinned MLX attention row dots"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -659,14 +659,14 @@ def test_ci_requires_pinned_attention_numerical_execution():
     assert "--junitxml=.mlx-metal-host/attention-odo/results.xml" in step
     assert "tee .mlx-metal-host/attention-odo.log" in step
     assert "demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py" in step
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "metal-host",
         "Execute pinned MLX attention row dots",
         "Checkout pinned upstream MLX",
     )
     for event in ("pull_request", "push"):
-        paths = ci_coverage.workflow_event_path_filters(workflow, event)
+        paths = workflow_text.workflow_event_path_filters(workflow, event)
         for path in (
             "demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py",
             "demos/integrations/mlx/tests/kernels/test_gated_delta_runtime.py",
@@ -674,17 +674,17 @@ def test_ci_requires_pinned_attention_numerical_execution():
             "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
         ):
             assert_paths_covered(paths, path)
-    assert ci_coverage.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > (
+    assert workflow_text.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > (
         120 + 180 + 300 + 600 + 900 + 1800 + 3300 + 600
     )
 
 
 def test_ci_requires_half_conversion_reference():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Validate half conversion reference"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -698,7 +698,7 @@ def test_ci_requires_half_conversion_reference():
     assert "test_opengl_half_conversion.py -k half_rounding_native" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_opengl_half_conversion.py",
         )
 
@@ -706,11 +706,11 @@ def test_ci_requires_half_conversion_reference():
 def test_ci_requires_resident_attention_reductions():
     import re
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Execute pinned resident attention reductions"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -728,7 +728,7 @@ def test_ci_requires_resident_attention_reductions():
     assert (
         "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py" in step
     )
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "metal-host",
         "Execute pinned resident attention reductions",
@@ -740,23 +740,25 @@ def test_ci_requires_resident_attention_reductions():
             "tests/fixtures/runtime_verification/metal_dispatch_sequence.swift",
         ):
             assert_paths_covered(
-                ci_coverage.workflow_event_path_filters(workflow, event), path
+                workflow_text.workflow_event_path_filters(workflow, event), path
             )
-    assert ci_coverage.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > sum(
+    assert workflow_text.workflow_job_timeout_minutes(
+        workflow, "metal-host"
+    ) * 60 > sum(
         int(value)
         for value in re.findall(
             r"--timeout-seconds (\d+)",
-            ci_coverage.workflow_job_text(workflow, "metal-host"),
+            workflow_text.workflow_job_text(workflow, "metal-host"),
         )
     )
 
 
 def test_ci_requires_pinned_attention_derivative_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Execute pinned MLX attention derivatives"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -772,7 +774,7 @@ def test_ci_requires_pinned_attention_derivative_execution():
     assert "tee .mlx-metal-host/attention-ds.log" in step
     assert "demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py" in step
     for event in ("pull_request", "push"):
-        paths = ci_coverage.workflow_event_path_filters(workflow, event)
+        paths = workflow_text.workflow_event_path_filters(workflow, event)
         for path in (
             "demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py",
             "demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py",
@@ -781,17 +783,17 @@ def test_ci_requires_pinned_attention_derivative_execution():
             "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
         ):
             assert_paths_covered(paths, path)
-    assert ci_coverage.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > (
+    assert workflow_text.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > (
         120 + 180 + 300 + 600 + 900 + 600 + 1800 + 3300 + 600
     )
 
 
 def test_ci_requires_pinned_backward_numerical_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[4]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Execute pinned MLX gated-delta gradients"
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -805,18 +807,18 @@ def test_ci_requires_pinned_backward_numerical_execution():
     assert "--junitxml=.mlx-metal-host/gated-delta-runtime/results.xml" in step
     assert "tee .mlx-metal-host/gated-delta-runtime.log" in step
     assert "demos/integrations/mlx/tests/kernels/test_gated_delta_runtime.py" in step
-    dependencies = ci_coverage.workflow_job_step_section(
+    dependencies = workflow_text.workflow_job_step_section(
         workflow, "metal-host", "Install CrossTL and test dependencies"
     )
     assert "numpy" in dependencies
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "metal-host",
         "Execute pinned MLX gated-delta gradients",
         "Checkout pinned upstream MLX",
     )
     for event in ("pull_request", "push"):
-        paths = ci_coverage.workflow_event_path_filters(workflow, event)
+        paths = workflow_text.workflow_event_path_filters(workflow, event)
         for path in (
             "demos/integrations/mlx/tests/kernels/test_gated_delta_runtime.py",
             "demos/integrations/mlx/tests/kernels/test_gated_delta_metal.py",

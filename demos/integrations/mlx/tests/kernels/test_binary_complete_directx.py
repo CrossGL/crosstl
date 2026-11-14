@@ -29,6 +29,7 @@ from demos.integrations.mlx.tests.kernels.test_binary_complete_metal_roundtrip i
     BinaryMetalWorkload,
     _expected_materializations,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 REQUIRE_BINARY_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_BINARY_DIRECTX_TRANSLATION"
 BINARY_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_BINARY_DIRECTX_SHARD_INDEX"
@@ -44,10 +45,10 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "29df27db6344475efa12d0a89acf20915824690c607ef7bb58e7f8a016922a7c"
+    "8bf74ae277ee65e517451093186d877290eff2b0840e7937ac6b216038be0c44"
 )
 BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1473797
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16599843
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16641371
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2784)
 BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 21017)
 INDEX_RANGE_ASSERTIONS = (
@@ -634,11 +635,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_BINARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "CSMain",

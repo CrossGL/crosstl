@@ -19,10 +19,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
+
 __all__ = [
+    "ARRAYS_OF_ARRAYS",
     "GLSLRequirement",
     "VARIABLE_GATHER_OFFSET",
     "ES_OPAQUE_TYPES",
+    "declares_array_of_arrays",
     "generated_program_requirements",
     "parse_version_line",
     "resolve_version_line",
@@ -83,6 +87,44 @@ _BUILTIN_FUNCTION_GROUPS = (
         (400, 310, ("GL_ARB_texture_gather",) + _GPU_SHADER5, ()),
     ),
     (("textureGatherOffsets",), (400, 320, _GPU_SHADER5, _ES_GPU_SHADER5)),
+    # Minimum-LOD clamped sampling exists only through GL_ARB_sparse_texture_clamp, which GLSL ES does not have.
+    (
+        (
+            "textureClampARB",
+            "textureOffsetClampARB",
+            "textureGradClampARB",
+            "textureGradOffsetClampARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture_clamp",), ()),
+    ),
+    # Residency-reporting reads exist only through GL_ARB_sparse_texture2, which GLSL ES does not have.
+    (
+        (
+            "sparseTextureARB",
+            "sparseTextureLodARB",
+            "sparseTextureOffsetARB",
+            "sparseTexelFetchARB",
+            "sparseTexelFetchOffsetARB",
+            "sparseTextureLodOffsetARB",
+            "sparseTextureGradARB",
+            "sparseTextureGradOffsetARB",
+            "sparseTextureGatherARB",
+            "sparseTextureGatherOffsetARB",
+            "sparseTextureGatherOffsetsARB",
+            "sparseTexelsResidentARB",
+            "sparseImageLoadARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture2",), ()),
+    ),
+    (
+        (
+            "sparseTextureClampARB",
+            "sparseTextureOffsetClampARB",
+            "sparseTextureGradClampARB",
+            "sparseTextureGradOffsetClampARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture_clamp",), ()),
+    ),
     (("textureQueryLod",), (400, None, ("GL_ARB_texture_query_lod",), ())),
     (("textureQueryLevels",), (430, None, ("GL_ARB_texture_query_levels",), ())),
     (
@@ -166,6 +208,20 @@ _BUILTIN_FUNCTION_GROUPS = (
     ),
     (
         (
+            "atomicCounterAdd",
+            "atomicCounterSubtract",
+            "atomicCounterMin",
+            "atomicCounterMax",
+            "atomicCounterAnd",
+            "atomicCounterOr",
+            "atomicCounterXor",
+            "atomicCounterExchange",
+            "atomicCounterCompSwap",
+        ),
+        (460, None, (), ()),
+    ),
+    (
+        (
             "atomicAdd",
             "atomicMin",
             "atomicMax",
@@ -237,6 +293,10 @@ _TYPE_GROUPS = (
             for shape in ("2D", "3D", "Cube", "2DArray")
         ),
         (420, 310, _IMAGE_LOAD_STORE, ()),
+    ),
+    (
+        tuple(f"{prefix}imageBuffer" for prefix in ("", "i", "u")),
+        (420, 320, _IMAGE_LOAD_STORE, ("GL_EXT_texture_buffer",)),
     ),
     (("atomic_uint",), (420, 310, ("GL_ARB_shader_atomic_counters",), ())),
 )
@@ -317,6 +377,44 @@ _STAGE_REQUIREMENTS = {
     ),
     "compute": GLSLRequirement("the compute stage", 430, 310, _COMPUTE),
 }
+
+# Arrays of arrays arrived in GLSL 4.30 and GLSL ES 3.10 (section 4.1.9 of both); GLSL ES has no extension for
+# them, so WebGL 2's fixed GLSL ES 3.00 refuses one.
+ARRAYS_OF_ARRAYS = GLSLRequirement(
+    "an array of arrays", 430, 310, ("GL_ARB_arrays_of_arrays",)
+)
+_BUILTIN_TYPE_NAME = re.compile(
+    r"(?:void|bool|int|uint|float|double|atomic_uint|[bdiu]?vec[234]|d?mat[234](?:x[234])?"
+    r"|u?int(?:8|16|64)_t|float(?:16|64)_t|(?:f16|f64|i8|i16|i64|u8|u16|u64)vec[234]"
+    r"|f(?:16|64)mat[234](?:x[234])?|[iu]?(?:sampler|image|texture|subpassInput)\w*)\Z"
+)
+_STRUCT_NAME = re.compile(r"\bstruct\s+([A-Za-z_]\w*)")
+_SUBSCRIPT = r"\[[^\[\]]*\]\s*\["
+# ``T name[A][B]`` (a declarator) and ``T[A][B]`` (an array type, in a constructor, declaration or return type).
+_ARRAY_DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*" + _SUBSCRIPT)
+_ARRAY_TYPE = re.compile(r"\b([A-Za-z_]\w*)\s*" + _SUBSCRIPT)
+# ``} instance[A][B];`` closes an interface block that declares an array of arrays of instances.
+_BLOCK_INSTANCE_ARRAY = re.compile(r"^\}\s*[A-Za-z_]\w*\s*" + _SUBSCRIPT)
+
+
+def _is_type_name(name, struct_names):
+    return name in struct_names or _BUILTIN_TYPE_NAME.match(name) is not None
+
+
+def declares_array_of_arrays(stripped, struct_names=()):
+    """Whether a rendered GLSL line declares or constructs an array of arrays.
+
+    A subscript chain such as ``a[1][1]`` only counts after a type name, since GLSL ES 3.00 indexes a matrix or
+    an array of vectors that way.
+    """
+    if _BLOCK_INSTANCE_ARRAY.match(stripped):
+        return True
+    return any(
+        _is_type_name(match.group(1), struct_names)
+        for pattern in (_ARRAY_DECLARATOR, _ARRAY_TYPE)
+        for match in pattern.finditer(stripped)
+    )
+
 
 _UNKNOWN_STAGE = object()
 _INTERFACE_QUALIFIERS = {
@@ -410,6 +508,9 @@ def _split_layout(stripped):
                     for part in inner.split(",")
                     if part.strip()
                 }
+                if any(part.startswith(f"{DESCRIPTOR_BINDING_MACRO}(") for part in ids):
+                    # The Vulkan/OpenGL binding macro expands to a binding qualifier.
+                    ids.add("binding")
                 return ids, stripped[index + 1 :].strip()
     return None, None
 
@@ -488,11 +589,14 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
 
     found = {}
     body = _COMMENTS.sub("", str(code or ""))
+    struct_names = frozenset(_STRUCT_NAME.findall(body))
     for line in body.splitlines():
         stripped = line.strip()
         stage = stage_of(stripped)
         if stage is None:
             continue
+        if declares_array_of_arrays(stripped, struct_names):
+            found.setdefault(ARRAYS_OF_ARRAYS, None)
         if stripped.startswith("layout"):
             ids, declaration = _split_layout(stripped)
             if ids is not None:
@@ -609,7 +713,43 @@ def with_es_default_precisions(code):
         ),
         0,
     )
-    while insert_at < len(lines) and lines[insert_at].strip().startswith("#extension"):
-        insert_at += 1
+    insert_at = extension_directives_end(lines, insert_at)
     lines[insert_at:insert_at] = [f"precision highp {kind};" for kind in missing]
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def extension_directives_end(lines, start):
+    """Return the index after the ``#extension`` directives that start at ``start``.
+
+    GLSL ES 3.20 section 3.4 requires ``#extension`` directives to precede every non-preprocessor token, so
+    statements inserted after ``#version`` go after them. A conditional block counts as part of the directives
+    when it holds nothing but ``#extension`` directives and nested conditionals.
+    """
+    index = start
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped.startswith("#extension"):
+            index += 1
+            continue
+        if not stripped.startswith("#if"):
+            break
+        block_end = _extension_block_end(lines, index)
+        if block_end is None:
+            break
+        index = block_end
+    return index
+
+
+def _extension_block_end(lines, start):
+    depth = 0
+    for index in range(start, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("#if"):
+            depth += 1
+        elif stripped.startswith("#endif"):
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        elif not stripped.startswith(("#extension", "#else", "#elif")):
+            return None
+    return None

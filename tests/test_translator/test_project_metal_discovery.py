@@ -13,7 +13,7 @@ from crosstl.backend.Metal import preprocessor as metal_preprocessor
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.project import ProjectConfig
 from crosstl.project import pipeline as project_pipeline
-from crosstl.project import translate_project
+from crosstl.project import source_closure_memo, translate_project
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
@@ -273,13 +273,13 @@ def test_inferred_pointer_offsets_execute(tmp_path, original):
 
 @pytest.mark.parametrize("job", ["metal-host", "portable-host"])
 def test_ci_requires_native_argument_inference(job):
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, job, "Validate Metal argument inference"
     )
     assert_native_step_prerequisites(step, job=job)
@@ -412,6 +412,15 @@ def test_project_parameter_comments_preserve_constrained_calls(tmp_path, target)
     assert (tmp_path / artifact["path"]).read_text(encoding="utf-8") == generated
 
 
+def _clear_source_closure_memos():
+    for memo in (
+        source_closure_memo.ENTRY_DISCOVERY_MEMO,
+        source_closure_memo.SOURCE_HOST_INTERFACE_MEMO,
+        source_closure_memo.PREPROCESSOR_RUN_MEMO,
+    ):
+        memo.clear()
+
+
 @contextmanager
 def _uncached_discovery(monkeypatch):
     with monkeypatch.context() as patch:
@@ -427,12 +436,18 @@ def _uncached_discovery(monkeypatch):
         for name in (
             "template_functions",
             "non_template_function_definitions",
+            "project_template_instantiations",
         ):
             patch.setattr(
                 MetalPreprocessor,
                 f"_find_{name}",
                 getattr(MetalPreprocessor, f"_scan_{name}"),
             )
+        patch.setattr(
+            source_closure_memo.SourceClosureMemo,
+            "compute",
+            lambda self, *, produce, **inputs: produce(),
+        )
 
         def traits(self, code, namespace_spans=None):
             if namespace_spans is None:
@@ -509,16 +524,23 @@ def test_discovery_reuse_preserves_entry_and_variant_artifacts(
     with _uncached_discovery(monkeypatch):
         uncached = _translate(config)
     assert cache.cache_info().misses == 0
+    _clear_source_closure_memos()
     cached = _translate(config)
     initial_hits = cache.cache_info().hits
+    # Without the project-level memos, the preprocessed-entry cache answers.
+    _clear_source_closure_memos()
     repeated = _translate(config)
     assert cache.cache_info().hits > initial_hits
+    discovery_hits = source_closure_memo.ENTRY_DISCOVERY_MEMO.hits
+    memoized = _translate(config)
+    assert source_closure_memo.ENTRY_DISCOVERY_MEMO.hits > discovery_hits
 
     assert cached[0]["diagnostics"] == []
     assert cached[0]["summary"]["translatedCount"] == 4
     assert len(set(cached[1].values())) == 4
     _assert_equivalent(cached, uncached)
     _assert_equivalent(repeated, uncached)
+    _assert_equivalent(memoized, uncached)
 
 
 @pytest.mark.parametrize("change", ["include", "defines"])

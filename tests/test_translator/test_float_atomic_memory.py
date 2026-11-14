@@ -384,7 +384,7 @@ def test_float_atomic_memory_resource_arithmetic_executes(tmp_path, operation):
 
 
 def test_float_atomic_memory_requires_native_metal_and_directx_evidence():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
@@ -394,14 +394,14 @@ def test_float_atomic_memory_requires_native_metal_and_directx_evidence():
         "Validate general gather and empty arrays",
         "Validate indexed DirectX gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_float_atomic_memory.py" in step
         assert "test_float_atomic_memory.py" in step
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
-    opengl = ci_coverage.workflow_step_section(
+    opengl = workflow_text.workflow_step_section(
         workflow, "Validate indexed OpenGL gather and resource aggregates"
     )
     assert "test_float_atomic_memory.py" in opengl

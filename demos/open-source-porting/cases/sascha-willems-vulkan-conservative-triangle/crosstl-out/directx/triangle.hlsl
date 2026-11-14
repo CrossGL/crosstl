@@ -1,8 +1,4 @@
 
-struct UBO {
-    float4x4 projection;
-    float4x4 model;
-};
 struct gl_PerVertex {
     float4 gl_Position;
 };
@@ -15,13 +11,14 @@ struct VertexOutput {
     float4 gl_Position: SV_Position;
 };
 // Constant Buffers
-cbuffer Uniforms : register(b0) {
-    UBO ubo;
+cbuffer UBO : register(b0) {
+    float4x4 projection;
+    float4x4 model;
 };
 // Vertex Shader
 VertexOutput VSMain(VertexInput input) {
     VertexOutput output;
     output.outColor = input.inColor;
-    output.gl_Position = mul(mul(ubo.projection, ubo.model), float4(input.inPos, 1.0));
+    output.gl_Position = mul(mul(projection, model), float4(input.inPos, 1.0));
     return output;
 }

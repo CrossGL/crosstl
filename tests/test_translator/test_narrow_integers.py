@@ -49,7 +49,11 @@ kernel void k(device const int* a [[buffer(0)]], device int* o [[buffer(1)]],
 def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    output = crosstl.translate(str(path), backend=backend, format_output=False)
+    # Metal kernels state the threadgroup size their host dispatches them with.
+    options = {"threadgroup_size": 64} if suffix == ".metal" else None
+    output = crosstl.translate(
+        str(path), backend=backend, format_output=False, source_options=options
+    )
     # WGSL from Metal and CUDA kernels has unrelated interface defects (scalar invocation-id builtins and buffer
     # parameters), so only WGSL from GLSL is checked natively.
     if backend == "vulkan" or suffix == ".comp":
@@ -87,6 +91,21 @@ def parse_cgl(text):
 
 def wgsl_line(output, needle):
     return next(line.strip() for line in output.splitlines() if needle in line)
+
+
+def spirv_masks(output, mask):
+    """The number of ``OpBitwiseAnd`` instructions with a constant operand ``mask``."""
+    lines = [line.split() for line in output.splitlines()]
+    constants = {
+        words[0]
+        for words in lines
+        if len(words) == 5 and words[2] == "OpConstant" and words[4] == str(mask)
+    }
+    return sum(
+        1
+        for words in lines
+        if len(words) > 2 and words[2] == "OpBitwiseAnd" and words[-1] in constants
+    )
 
 
 # Types and normalization ----------------------------------------------------------------------------------------
@@ -199,6 +218,41 @@ def test_explicit_narrow_glsl_arithmetic_wraps_at_its_width(tmp_path, target):
 
 
 @pytest.mark.parametrize("target", TARGETS)
+def test_glsl_shift_keeps_its_left_operand_type(tmp_path, target):
+    # GLSL section 5.9: a shift has the type of its left operand, whatever the count's type.
+    body = """    uint16_t v = uint16_t(a[i]);
+    int k = a[i + 1];
+    o[i] = int(v << 12) + int(v << k);"""
+    output = translate(
+        tmp_path, GLSL_KERNEL.format(helpers="", body=body), target, ".comp"
+    )
+    if target == "wgsl":
+        line = wgsl_line(output, "o[i]")
+        assert line.count("& 65535") == 2, line
+    else:
+        # The initializer of v and both shifts.
+        assert spirv_masks(output, 65535) == 3
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_in_range_glsl_operations_keep_their_narrow_type(tmp_path, target):
+    # ``v & w`` stays a uint16_t, so the enclosing sum wraps at 16 bits as well.
+    body = """    uint16_t v = uint16_t(a[i]);
+    uint16_t w = uint16_t(a[i + 1]);
+    o[i] = int((v & w) + v) + int((v >> 1) * w);"""
+    output = translate(
+        tmp_path, GLSL_KERNEL.format(helpers="", body=body), target, ".comp"
+    )
+    if target == "wgsl":
+        line = wgsl_line(output, "o[i]")
+        assert "(i32(((v & w) + v)) & 65535)" in line, line
+        assert "(i32(((v >> 1) * w)) & 65535)" in line, line
+    else:
+        # The initializers of v and w, the sum and the product.
+        assert spirv_masks(output, 65535) == 4
+
+
+@pytest.mark.parametrize("target", TARGETS)
 def test_narrow_increment_statement_wraps(tmp_path, target):
     body = """    uchar v = uchar(a[i]);
     v++;
@@ -279,3 +333,42 @@ def test_thread_references_address_widened_registers(tmp_path, target):
         tmp_path, METAL_KERNEL.format(helpers=helpers, body=body), target, ".metal"
     )
     assert "OpTypeInt 8" not in output
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_initializers_outside_function_bodies_are_legalized(tmp_path, target):
+    """Program constants and static struct member initializers wrap at their narrow width like local ones."""
+    helpers = (
+        "constant uchar bias = uchar(300);\n"
+        "template <typename T> struct Bounds;\n"
+        "template <> struct Bounds<uchar> {\n"
+        "  static constexpr constant uchar wrapped = uchar(260);\n"
+        "};\n"
+    )
+    body = (
+        "    uchar v = uchar(a[i]) + bias + Bounds<uchar>::wrapped;\n    o[i] = int(v);"
+    )
+    output = translate(
+        tmp_path, METAL_KERNEL.format(helpers=helpers, body=body), target, ".metal"
+    )
+    if target == "wgsl":
+        assert "bias: i32 = 44;" in output
+        assert wgsl_line(output, "var v") == (
+            "var v: i32 = (i32((((i32(a[i]) & 255) + bias) + 4)) & 255);"
+        )
+    else:
+        assert "OpTypeInt 8" not in output
+
+
+def test_for_header_declaring_several_narrow_variables(tmp_path):
+    # WGSL has no for-header declaring several variables, whatever their type.
+    body = """    int result = 0;
+    for (short j = 0, step = 3; j < a[i]; ++j) {
+        result += j * step;
+    }
+    o[i] = result;"""
+    output = translate(
+        tmp_path, METAL_KERNEL.format(helpers="", body=body), "vulkan", ".metal"
+    )
+    assert "OpTypeInt 16" not in output
+    assert "OpBitwiseAnd" in output

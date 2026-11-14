@@ -1,6 +1,14 @@
-"""Helpers for lowering CrossGL generic structs to C-style shader languages."""
+"""Helpers for lowering CrossGL generic structs to C-style shader languages.
 
-from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+A specialization declares the definition's data members with the generic parameters substituted, and nothing else.
+A struct-level attribute such as ``@metal_alignas(4 * metal_sizeof(T))`` changes the specialization's layout, so a
+definition that carries one is refused with :class:`GenericStructAttributeError` when it is specialized rather than
+declared without it.
+"""
+
+from ..ast import ArrayNode, ArrayType, EnumNode, FunctionNode, StructNode
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import TargetRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .enum_utils import (
     collect_generic_parameter_names,
@@ -10,8 +18,16 @@ from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
+    substitute_generic_value_names,
     type_node_contains_generic_parameter,
 )
+from .generic_vector_deduction import concrete_generic_vector_type
+
+
+class GenericStructAttributeError(TranslationDiagnostic):
+    """A generic struct with struct-level attributes, which a specialization would not carry."""
+
+    code = f"{CODE_PREFIX}generic-struct-attribute"
 
 
 def collect_generic_struct_definitions(nodes, excluded_names=None):
@@ -37,6 +53,12 @@ def collect_generic_struct_definitions(nodes, excluded_names=None):
             "name": node.name,
             "generic_params": generic_params,
             "members": members,
+            "attributes": sorted(
+                {
+                    str(getattr(attribute, "name", attribute))
+                    for attribute in getattr(node, "attributes", None) or []
+                }
+            ),
         }
     return definitions
 
@@ -96,6 +118,9 @@ def collect_generic_struct_specializations(nodes, definitions, type_name_string)
         if value is None:
             return
         if isinstance(value, str):
+            # A spelling in the program is CrossGL's; the specialization keys are the target's.
+            if "<" in value and generic_type_parts(value)[0] in definitions:
+                value = target_generic_struct_text(value, type_name_string)
             add_type_text(value)
             return
         if isinstance(value, (int, float, bool)):
@@ -153,6 +178,26 @@ def collect_generic_struct_specializations(nodes, definitions, type_name_string)
     )
 
 
+def target_generic_struct_text(type_text, type_name_string):
+    """The target's spelling of the CrossGL instance ``type_text``: ``Pair<float2, float>`` for ``Pair<vec2,
+    float>`` on Metal. Text that is no CrossGL type is returned unchanged."""
+    from ..lexer import Lexer
+    from ..parser import Parser
+
+    text = str(type_text or "").strip()
+    if "<" not in text:
+        return text
+    try:
+        parser = Parser(Lexer(text).get_tokens())
+        node = parser.parse_type()
+        if parser.current_token[0] != "EOF":
+            return text
+        rendered = type_name_string(node)
+    except Exception:  # noqa: BLE001 - any text the parser rejects keeps its spelling
+        return text
+    return normalize_specialization_type_text(rendered) or text
+
+
 def normalize_specialization_type_text(type_text):
     type_text = str(type_text or "").strip()
     if not type_text:
@@ -174,6 +219,12 @@ def type_text_contains_generic_parameter(type_text, generic_names):
 
 
 def build_generic_struct_specialization(type_text, definition):
+    if definition.get("attributes"):
+        names = ", ".join(f"@{name}" for name in definition["attributes"])
+        raise GenericStructAttributeError(
+            f"generic struct {definition['name']} cannot be specialized as {type_text}: its attributes {names} are "
+            "not carried to specializations"
+        )
     base_name, generic_args = generic_type_parts(type_text)
     substitutions = dict(zip(definition["generic_params"], generic_args))
     return {
@@ -211,10 +262,15 @@ def resolve_generic_struct_specialization(generator, type_value, expected_base=N
         return None
 
     specializations = getattr(generator, "generic_struct_specializations", {})
-    return specializations.get(type_text) or build_generic_struct_specialization(
-        type_text,
-        definition,
-    )
+    found = specializations.get(type_text)
+    if found is None and isinstance(type_value, str):
+        # A CrossGL spelling (``Pair<vec2, float>``) names the specialization the target spells its own way
+        # (``Pair<float2, float>`` on Metal).
+        target_text = target_generic_struct_text(type_text, generator.type_name_string)
+        found = specializations.get(target_text)
+        if found is None and target_text != type_text:
+            return build_generic_struct_specialization(target_text, definition)
+    return found or build_generic_struct_specialization(type_text, definition)
 
 
 def generate_generic_structs(generator, specializations):
@@ -416,13 +472,13 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
     field_names = [field_name for field_name, _field_type in fields]
 
     if len(positional_args) > len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} expects at most {len(fields)} "
             f"arguments, got {len(positional_args)}"
         )
     unknown_names = sorted(set(named_args) - set(field_names))
     if unknown_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Struct constructor {constructor_name} has no field "
             f"{', '.join(unknown_names)}"
         )
@@ -459,6 +515,35 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
         rendered_args.append(default_value_expression(generator, field_type))
 
     return rendered_args
+
+
+def named_struct_constructor_arguments(constructor_name, expr, fields):
+    """Order a complete named initializer without silently losing or zeroing fields."""
+    positional = list(expr.arguments)
+    named = dict(expr.named_arguments)
+    names = [name for name, _type in fields]
+    unknown = sorted(set(named) - set(names))
+    if unknown:
+        raise TargetRefusal(
+            f"Struct constructor {constructor_name} has no field {', '.join(unknown)}"
+        )
+    duplicates = sorted(set(names[: len(positional)]) & set(named))
+    if duplicates:
+        raise TargetRefusal(
+            f"Struct constructor {constructor_name} initializes more than once: "
+            f"{', '.join(duplicates)}"
+        )
+    arguments = constructor_argument_expressions(expr, fields)
+    if arguments is None:
+        raise TargetRefusal(
+            f"Struct constructor {constructor_name} expects at most {len(fields)} arguments"
+        )
+    missing = [name for name in names if name not in arguments]
+    if missing:
+        raise TargetRefusal(
+            f"Struct constructor {constructor_name} is missing fields: {', '.join(missing)}"
+        )
+    return [(arguments[name], field_type) for name, field_type in fields]
 
 
 def constructor_argument_expressions(expr, fields):
@@ -552,17 +637,58 @@ def generic_struct_specialized_fields(type_name_string, specialization):
     fields = []
     for member in specialization["definition"]["members"]:
         field_name = member.name
-        field_type = generic_struct_member_type_name(member, type_name_string)
-        fields.append(
-            (
-                field_name,
-                substitute_generic_type_name_with_arrays(
-                    field_type,
-                    specialization["substitutions"],
-                ),
-            )
+        field_type = specialized_struct_member_type(
+            member,
+            type_name_string,
+            specialization["substitutions"],
         )
+        fields.append((field_name, field_type))
     return fields
+
+
+def specialized_struct_member_type(member, type_name_string, substitutions):
+    """The member type with the specialization's type parameters substituted.
+
+    A ``vecN<T>`` member is spelled ``T2`` by the generators, which no string substitution can repair, so its
+    element is substituted as a type node first (the array-parameter fix of ``generic_vector_deduction`` applied to
+    struct members). Anything else keeps the string substitution it already had.
+    """
+    concrete = concrete_vector_member_type(member, type_name_string, substitutions)
+    if concrete is not None:
+        return concrete
+    return substitute_generic_type_name_with_arrays(
+        generic_struct_member_type_name(member, type_name_string),
+        substitutions,
+    )
+
+
+def concrete_vector_member_type(member, type_name_string, substitutions):
+    """The concrete spelling of a ``vecN<T>`` struct member, else ``None``.
+
+    The member's type node is substituted (see :func:`concrete_generic_vector_type`) instead of its ``T2`` spelling,
+    which string substitution cannot repair. An array member substitutes its element and keeps the ``[N]`` suffix,
+    whether the parser kept it as a legacy ``ArrayNode`` or as an ``ArrayType`` member type.
+    """
+    member_type = getattr(member, "member_type", None)
+    if member_type is None:
+        member_type = getattr(member, "vtype", "float")
+    if isinstance(member, ArrayNode):
+        element_type = getattr(
+            member, "element_type", getattr(member, "vtype", "float")
+        )
+        size = getattr(member, "size", None)
+        array_suffix = f"[{size}]" if size else "[]"
+    elif isinstance(member_type, ArrayType):
+        element_type = member_type.element_type
+        _base, array_suffix = split_array_type_suffix(type_name_string(member_type))
+    else:
+        element_type = member_type
+        array_suffix = ""
+    concrete = concrete_generic_vector_type(element_type, substitutions)
+    if concrete is None:
+        return None
+    spelling = concrete if isinstance(concrete, str) else type_name_string(concrete)
+    return spelling + array_suffix
 
 
 def generic_struct_member_type_name(member, type_name_string):
@@ -582,7 +708,10 @@ def generic_struct_member_type_name(member, type_name_string):
 
 def substitute_generic_type_name_with_arrays(type_name, substitutions):
     base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
-    return substitute_generic_type_name(base_type, substitutions) + array_suffix
+    # A dimension may be a value parameter: ``T items[N]`` in ``generic<T, N> struct Ring``.
+    return substitute_generic_type_name(
+        base_type, substitutions
+    ) + substitute_generic_value_names(array_suffix, substitutions)
 
 
 def generic_struct_specialization_name(type_name):

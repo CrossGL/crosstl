@@ -10,7 +10,6 @@
       "targets": [
         "cgl",
         "opengl",
-        "metal",
         "directx",
         "vulkan"
       ],

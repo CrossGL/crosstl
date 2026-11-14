@@ -27,6 +27,8 @@ from crosstl.translator.ast import (
     VariableNode,
     VectorType,
 )
+from crosstl.translator.host_workgroup_size import function_entry_execution_config
+from crosstl.translator.renames import renamed
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
@@ -46,6 +48,17 @@ _STAGE_CONTROL_ATTRIBUTES = {"compute", "workgroup_size", "local_size"}
 _EVENT_LOCAL_MEMORY_BUILTINS = {
     "async_work_group_copy",
     "wait_group_events",
+}
+# OpenCL C 2.0 device-side enqueue event functions.
+# They create and signal clk_event_t objects that only an OpenCL device queue
+# understands, and no target has an equivalent.
+_DEVICE_ENQUEUE_EVENT_BUILTINS = {
+    "capture_event_profiling_info",
+    "create_user_event",
+    "is_valid_event",
+    "release_event",
+    "retain_event",
+    "set_user_event_status",
 }
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _SYNTHETIC_BUILTIN_ALIASES = {
@@ -270,6 +283,32 @@ def _opencl_target_contracts(cgl_ast):
             )
         )
 
+    # Before OpenCL C 2.0 these names are not reserved, so a call to a helper the
+    # program defines under one of them is an ordinary call.
+    defined_names = {
+        function.name for function in functions if _function_statements(function)
+    }
+    for builtin_name in sorted(
+        called_names.intersection(_DEVICE_ENQUEUE_EVENT_BUILTINS) - defined_names
+    ):
+        contracts.append(
+            OpenCLTargetUnsupportedContract(
+                code=OPENCL_TARGET_BUILTIN_CODE,
+                kind="device-enqueue-event-builtin",
+                name=builtin_name,
+                signature=f"{builtin_name}(...)",
+                reason=(
+                    "device-side enqueue event builtins operate on OpenCL "
+                    "clk_event_t objects that no target can represent"
+                ),
+                action=(
+                    "move event creation and signalling to the host, or keep the "
+                    "source on an OpenCL path"
+                ),
+                missing_capabilities=("opencl.device-enqueue-event",),
+            )
+        )
+
     return tuple(contracts)
 
 
@@ -314,6 +353,17 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
             f"target lowering: {_format_list(event_local_calls)}"
         )
 
+    device_event_calls = [
+        contract.name
+        for contract in contracts
+        if contract.kind == "device-enqueue-event-builtin"
+    ]
+    if device_event_calls:
+        unsupported.append(
+            "OpenCL device-side enqueue event builtins have no target "
+            f"equivalent: {_format_list(device_event_calls)}"
+        )
+
     target = _target_backend_label(target_backend)
     details = "; ".join(unsupported)
     raise OpenCLTargetUnsupportedError(
@@ -325,8 +375,9 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
 
 def _clone_target_type(type_node):
     if isinstance(type_node, PrimitiveType):
+        # The aliases rename WGSL-style scalar spellings; every other name is a CrossGL scalar already.
         return PrimitiveType(
-            _TARGET_SCALAR_TYPE_ALIASES.get(type_node.name, type_node.name),
+            renamed(_TARGET_SCALAR_TYPE_ALIASES, type_node.name),
             size_bits=type_node.size_bits,
         )
     if isinstance(type_node, VectorType):
@@ -373,6 +424,15 @@ def _binding_attribute(binding):
     )
 
 
+def _layout_attributes(parameter):
+    """The ``@buffer_layout`` of a storage parameter, which its structured buffer keeps."""
+    return [
+        attribute
+        for attribute in getattr(parameter, "attributes", []) or []
+        if str(getattr(attribute, "name", "")).lower() == "buffer_layout"
+    ]
+
+
 def _mark_directx_relocatable_binding(node, provenance):
     node.add_annotation(DIRECTX_RELOCATABLE_BINDING_ANNOTATION, True)
     node.add_annotation(DIRECTX_BINDING_PROVENANCE_ANNOTATION, provenance)
@@ -390,6 +450,9 @@ def _parameter_binding(parameter):
 
 
 def _stage_execution_config(function):
+    config = function_entry_execution_config(function)
+    if config:
+        return config
     for attribute in getattr(function, "attributes", []) or []:
         name = str(getattr(attribute, "name", "")).lower()
         if name not in {"workgroup_size", "local_size", "numthreads"}:
@@ -475,6 +538,17 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
         cbuffer,
         f"OpenCL target-lowered scalar parameter block {function_name}_Args",
     )
+
+
+_OPAQUE_RESOURCE_TYPE_PREFIXES = ("texture", "image", "iimage", "uimage", "sampler")
+
+
+def _is_opaque_resource_parameter(parameter):
+    """Images, textures and samplers are bound resources, not constant-buffer members."""
+    param_type = getattr(parameter, "param_type", None)
+    if not isinstance(param_type, NamedType):
+        return False
+    return str(param_type.name).startswith(_OPAQUE_RESOURCE_TYPE_PREFIXES)
 
 
 def _resource_qualifiers(parameter):
@@ -883,10 +957,32 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                                 parameter,
                                 writable=_is_writable_storage_parameter(parameter),
                             ),
-                            attributes=[_binding_attribute(binding)],
+                            attributes=[
+                                _binding_attribute(binding),
+                                *_layout_attributes(parameter),
+                            ],
                         ),
                         (
                             "OpenCL target-lowered storage parameter "
+                            f"{function.name}.{parameter.name}"
+                        ),
+                    )
+                )
+                continue
+            if _is_opaque_resource_parameter(parameter):
+                binding = _parameter_binding(parameter)
+                if binding is None:
+                    binding = next_binding
+                next_binding = max(next_binding, binding + 1)
+                global_variables.append(
+                    _mark_directx_relocatable_binding(
+                        VariableNode(
+                            parameter.name,
+                            _clone_target_type(getattr(parameter, "param_type", None)),
+                            attributes=[_binding_attribute(binding)],
+                        ),
+                        (
+                            "OpenCL target-lowered resource parameter "
                             f"{function.name}.{parameter.name}"
                         ),
                     )

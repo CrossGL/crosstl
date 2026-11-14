@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
@@ -11,7 +12,9 @@ import crosstl.translator.codegen as codegen
 from crosstl.translator.ast import PointerType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
 IDENTIFIER_SUFFIXES = st.from_regex(r"[a-z][a-z0-9_]{0,10}", fullmatch=True)
@@ -39,19 +42,31 @@ NUMERIC_CASES = (
 @dataclass(frozen=True)
 class ResourceMemoryQualifierCase:
     attribute: str
-    hlsl_prefix: str
+    hlsl_prefix: str | None  # None: HLSL cannot declare it and refuses the resource.
     glsl_qualifier: str
     metal_access: str
+    # Extra MSL texture template argument; None: MSL cannot declare it and refuses.
+    metal_coherence: str | None = ""
 
 
 RESOURCE_MEMORY_QUALIFIER_CASES = (
     ResourceMemoryQualifierCase(
-        "coherent", "globallycoherent ", "coherent", "read_write"
+        "coherent",
+        "globallycoherent ",
+        "coherent",
+        "read_write",
+        ", memory_coherence::memory_coherence_device",
     ),
     ResourceMemoryQualifierCase(
-        "globallycoherent", "globallycoherent ", "coherent", "read_write"
+        "globallycoherent",
+        "globallycoherent ",
+        "coherent",
+        "read_write",
+        ", memory_coherence::memory_coherence_device",
     ),
-    ResourceMemoryQualifierCase("volatile", "", "volatile", "read_write"),
+    # HLSL has no volatile resources: DXC rejects 'volatile' on a global, and an
+    # MSL volatile texture has no read or write members.
+    ResourceMemoryQualifierCase("volatile", None, "volatile", "read_write", None),
     ResourceMemoryQualifierCase("restrict", "", "restrict", "read_write"),
     ResourceMemoryQualifierCase("readonly", "", "readonly", "read"),
     ResourceMemoryQualifierCase("writeonly", "", "writeonly", "write"),
@@ -560,10 +575,18 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
         "float2(0.25, 0.75), 0.33, 1.0)" in hlsl
     )
 
+    # The two elements are two sampler states, so OpenGL samples shadowMap through two combined uniforms.
+    glsl_body = "\n".join(
+        line for line in glsl.splitlines() if not line.startswith("// crosstl-")
+    )
     assert "comparison_sampler" not in glsl
-    assert "shadowCompareSamplers" not in glsl
+    assert not re.search(r"\bshadowCompareSamplers\b", glsl_body)
+    assert "uniform sampler2DShadow shadowMap_shadowCompareSamplers_1;" in glsl
     assert "texture(shadowMap, vec3(vec2(0.5, 0.5), 0.25))" in glsl
-    assert "textureLod(shadowMap, vec3(vec2(0.25, 0.75), 0.33), 1.0)" in glsl
+    assert (
+        "textureLod(shadowMap_shadowCompareSamplers_1, vec3(vec2(0.25, 0.75), 0.33), 1.0)"
+        in glsl
+    )
 
     assert "array<sampler, 2> shadowCompareSamplers [[sampler(4)]]" in metal
     assert (
@@ -583,6 +606,7 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
 
 @settings(max_examples=20, deadline=None)
 @example(suffix="a_", qualifier_case=RESOURCE_MEMORY_QUALIFIER_CASES[0])
+@example(suffix="a_", qualifier_case=RESOURCE_MEMORY_QUALIFIER_CASES[2])
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     qualifier_case=st.sampled_from(RESOURCE_MEMORY_QUALIFIER_CASES),
@@ -604,24 +628,31 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
 
     ast = crosstl.translator.parse(shader)
 
-    hlsl = HLSLCodeGen().generate(ast)
     glsl_codegen = GLSLCodeGen()
     glsl = glsl_codegen.generate(ast)
-    metal = MetalCodeGen().generate(ast)
+    outputs = [("opengl", glsl)]
+    metal = None
+    if qualifier_case.metal_coherence is None:
+        with pytest.raises(MetalLoweringRefused, match=qualifier_case.attribute):
+            MetalCodeGen().generate(ast)
+    else:
+        metal = MetalCodeGen().generate(ast)
+        outputs.append(("metal", metal))
+    if qualifier_case.hlsl_prefix is None:
+        with pytest.raises(DirectXLoweringRefused, match=qualifier_case.attribute):
+            HLSLCodeGen().generate(ast)
+    else:
+        hlsl = HLSLCodeGen().generate(ast)
+        outputs.append(("directx", hlsl))
+        assert (
+            f"{qualifier_case.hlsl_prefix}RWTexture2D<uint> {image_name} : register(u0);"
+            in hlsl
+        )
+        assert f": {qualifier_case.attribute}" not in hlsl
+        assert f"@{qualifier_case.attribute}" not in hlsl
 
-    for backend, generated in (
-        ("directx", hlsl),
-        ("opengl", glsl),
-        ("metal", metal),
-    ):
+    for backend, generated in outputs:
         _assert_codegen_output_is_usable(backend, generated)
-
-    assert (
-        f"{qualifier_case.hlsl_prefix}RWTexture2D<uint> {image_name} : register(u0);"
-        in hlsl
-    )
-    assert f": {qualifier_case.attribute}" not in hlsl
-    assert f"@{qualifier_case.attribute}" not in hlsl
 
     glsl_image_name = glsl_codegen.glsl_sanitized_identifier_base(image_name)
     assert (
@@ -629,8 +660,11 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
         f"{qualifier_case.glsl_qualifier} uniform uimage2D {glsl_image_name};" in glsl
     )
 
+    if metal is None:
+        return
     assert (
-        f"texture2d<uint, access::{qualifier_case.metal_access}> "
+        f"texture2d<uint, access::{qualifier_case.metal_access}"
+        f"{qualifier_case.metal_coherence}> "
         f"{image_name} [[texture(0)]]" in metal
     )
     assert f"[[{qualifier_case.attribute}]]" not in metal
@@ -686,7 +720,8 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
         in hlsl
     )
     assert f"{buffer_case.hlsl_type} value = {source_name}.Load(tid.x);" in hlsl
-    assert f"{target_name}.GetDimensions(len);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert f"len = cgl_buffer_count({target_name});" in hlsl
     assert f"{target_name}[tid.x] = value;" in hlsl
     assert "buffer_load" not in hlsl
     assert "buffer_store" not in hlsl

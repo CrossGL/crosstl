@@ -11,6 +11,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import FrozenSet, Mapping, Optional, Sequence, Tuple
 
+from .refusals import CrossGLRefusal
+
 
 class ScalarKind(str, Enum):
     """Backend-neutral scalar categories accepted by conversion contracts."""
@@ -61,17 +63,19 @@ class ScalarToStructureConversion:
 
     def __post_init__(self):
         if not self.destination_type:
-            raise ValueError("Structure conversion destination type cannot be empty")
+            raise CrossGLRefusal(
+                "Structure conversion destination type cannot be empty"
+            )
         if not self.source_kinds:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' needs source kinds"
             )
         if not self.fields:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' needs fields"
             )
         if any(not name for name in self.representation_types):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' has an invalid "
                 "representation type"
             )
@@ -79,15 +83,15 @@ class ScalarToStructureConversion:
         if any(not name for name in field_names) or len(set(field_names)) != len(
             field_names
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' has invalid fields"
             )
         if any(not field.type_name for field in self.fields):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' has untyped fields"
             )
         if self.scalar_source_use_count == 0:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Structure conversion '{self.destination_type}' does not use its source"
             )
 
@@ -157,7 +161,7 @@ def _registered_structure_conversion_identities() -> (
         for identity in {contract.destination_type, *contract.representation_types}:
             existing = identities.get(identity)
             if existing is not None and existing is not contract:
-                raise ValueError(
+                raise CrossGLRefusal(
                     "Structure conversion identity "
                     f"'{identity}' is registered by more than one contract"
                 )

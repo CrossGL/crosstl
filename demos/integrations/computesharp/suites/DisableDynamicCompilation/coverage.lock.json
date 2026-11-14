@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-lock",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "contractSHA256": "9ced23face115d0ec2a0bc09de218730585486988f474cbc0b3e2d7a01c20f73",
+  "testMethodCount": 2,
+  "caseCount": 4,
+  "allCasesDigest": "cc28bf8e966914f6456ab368a55a0c49b0a34b821a01633d00f9e2bb45031297",
+  "totals": {
+    "required-gpu": {
+      "methods": 2,
+      "cases": 4
+    },
+    "cpu-only": {
+      "methods": 0,
+      "cases": 0
+    },
+    "windows-specific": {
+      "methods": 0,
+      "cases": 0
+    }
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "execution": "software",
+      "expected": {
+        "pass": 2,
+        "inconclusive": 0,
+        "optional": 2,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 2,
+        "inconclusive": 0,
+        "optional": 2,
+        "excluded": 0
+      }
+    },
+    "metal-apple-gpu": {
+      "role": "translated-target",
+      "execution": "hardware",
+      "expected": {
+        "pass": 4,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 4,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "role": "translated-target",
+      "execution": "software",
+      "expected": {
+        "pass": 4,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 4,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DisableDynamicCompilation/DispatchTests.cs",
+        "line": 16
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "4de2ccef5daa4d0fc153b1158dedb46bf58294ca66795b16b836e79a42501cbb"
+    },
+    "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DisableDynamicCompilation/DispatchTests.cs",
+        "line": 51
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "ebfe238f8e7b59c7c6c8ad4aba9e3731cc3460ae23a3c1179495a42dfc588dbb"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp-negative-controls",
+  "description": "Faults injected by the portable runtime (CROSSTL_COMPUTESHARP_FAULT) and the upstream test methods that must fail under each fault. Every discovered case of every listed method must execute and fail; a pass, a skip or a missing case fails the control. The same cases must pass in the unfaulted run.",
+  "controls": [
+    {
+      "fault": "omit-dispatch",
+      "purpose": "Dispatches are recorded in the evidence but never reach the device, so outputs keep their initial contents.",
+      "methods": [
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+      ]
+    },
+    {
+      "fault": "perturb-constants",
+      "purpose": "The first user constant (or the dispatch width when there is none) changes before the dispatch.",
+      "methods": [
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok"
+      ]
+    },
+    {
+      "fault": "perturb-unorm-scales",
+      "purpose": "Every UNORM store scale buffer holds one level per channel, so translated stores to UNORM textures write only 0 or 1.",
+      "methods": [
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+      ]
+    },
+    {
+      "fault": "corrupt-readback",
+      "purpose": "The first byte of every buffer and texture readback is altered on the host.",
+      "methods": [
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+        "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+      ]
+    }
+  ]
+}

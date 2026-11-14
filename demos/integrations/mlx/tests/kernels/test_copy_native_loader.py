@@ -24,6 +24,7 @@ from crosstl.project import (
     build_runtime_package,
     translate_project,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
@@ -36,8 +37,8 @@ MLX_COPY_GENERATED_ARTIFACTS = {
         "sizeBytes": 1546,
     },
     "opengl": {
-        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
-        "sizeBytes": 1619,
+        "sha256": "8f7725f7bfc591e6aab8ea65cc1088401d624b0eb4f4a131b10dc06d0569755d",
+        "sizeBytes": 1668,
     },
 }
 REQUIRE_PROOF_ENVS = {
@@ -184,12 +185,10 @@ def _build_runtime_package(
         "intermediate": "crossgl",
         "pipeline": "entry-scoped-translate",
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": MLX_COPY_GENERATED_ARTIFACTS[target]["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == (
-        MLX_COPY_GENERATED_ARTIFACTS[target]["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=MLX_COPY_GENERATED_ARTIFACTS[target]["sha256"],
+        size_bytes=(MLX_COPY_GENERATED_ARTIFACTS[target]["sizeBytes"]),
     )
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
@@ -231,9 +230,12 @@ def _build_runtime_package(
         )
     else:
         assert "float cast_to_float_float(float val)" in generated
+        # GLSL forbids writes to gl_GlobalInvocationID, so the kernel's
+        # ``index *= N`` works on a copy of the input.
+        assert "uint index_copy = index;" in generated
         assert (
-            "dst[(index + uint(i))] = "
-            "cast_to_float_float(src[(index + uint(i))]);" in generated
+            "dst[(index_copy + uint(i))] = "
+            "cast_to_float_float(src[(index_copy + uint(i))]);" in generated
         )
 
     report_path = work_dir / "portability-report.json"

@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 from pathlib import Path
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -17,6 +16,7 @@ from demos.integrations.mlx.portable_host import (
     scatter_axis_layout,
     scatter_layout,
 )
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
 def execute(host, request):
@@ -231,7 +231,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
         "inputs": inputs,
         "outputHash": hashlib.sha256(bytes(native)).hexdigest(),
     }
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+    write_trace(host, record)
     ctypes.memmove(supplied["out"].data, native, ctypes.sizeof(native))
     host.dispatch_count += 1

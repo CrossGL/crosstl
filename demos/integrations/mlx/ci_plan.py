@@ -13,14 +13,17 @@ FULL_PATHS = (
     "demos/integrations/mlx/**",
     WORKFLOW,
 )
-# The tier selector, its tests and the demo's prose never run inside the full
-# tier, and the complete test suite runs the selector's tests on every pull
-# request and queue group, so a change limited to them needs only the smoke
-# tier. ``PLAN_JOB`` names a workflow change confined to the ci-plan job.
+# The tier selector, the smoke canary, their tests and the demo's prose never
+# run inside the full tier. The smoke tier runs the canary and the complete test
+# suite runs their tests on every pull request and queue group, so a change
+# limited to them needs only the smoke tier. ``PLAN_JOB`` names a workflow
+# change confined to the ci-plan job.
 PLAN_JOB = f"{WORKFLOW}#ci-plan"
 PLANNER_PATHS = (
     "demos/integrations/mlx/ci_plan.py",
+    "demos/integrations/mlx/smoke_canary.py",
     "demos/integrations/mlx/tests/test_ci_plan.py",
+    "demos/integrations/mlx/tests/test_smoke_canary.py",
     "demos/integrations/mlx/*.md",
     PLAN_JOB,
 )
@@ -28,14 +31,11 @@ SMOKE_PATHS = (
     "crosstl/**",
     "tests/**",
     "tools/**",
-    "support/**",
     ".github/actions/**",
     ".github/actionlint.yaml",
     ".pre-commit-config.yaml",
     "conftest.py",
     "pyproject.toml",
-    "requirements*.txt",
-    "setup.cfg",
 )
 
 

@@ -20,6 +20,7 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from ..refusals import TargetRefusal
 
 
 def split_array_suffix(array_suffix):
@@ -146,8 +147,18 @@ def collect_resource_array_size_hints(
     strict_fixed_local_array_sizes=False,
     propagate_argument_sizes_to_callee=True,
     validate_fixed_argument_sizes=True,
+    required_sizes=None,
 ):
-    """Infer resource-array sizes from literal accesses and call propagation."""
+    """Infer resource-array sizes from literal accesses and call propagation.
+
+    ``required_sizes`` adds sizes unsized global arrays need for other reasons, such as their non-constant indexes. It
+    is a mapping, or a callable that receives ``resolved``, the ids of the array-access nodes whose index this
+    inference evaluated in every context it scanned them in, and ``approximate_loops``, the ids of the loops it did not
+    unroll in some scan (it follows one iteration of those), and returns one
+    (:class:`resource_array_bounds.DynamicIndexSizes`). The sizes propagate like those of literal accesses.
+    """
+    resolved_accesses = {}
+    approximate_loops = set()
     fixed_global_array_sizes = fixed_global_array_sizes or {}
     fixed_function_array_sizes = fixed_function_array_sizes or {}
     global_hints = {name: initial_size for name in global_arrays}
@@ -156,6 +167,15 @@ def collect_resource_array_size_hints(
         for func_name, params in function_arrays.items()
     }
     fixed_requirements = {}
+    if (
+        not global_hints
+        and not any(function_hints.values())
+        and not fixed_global_array_sizes
+        and not any(fixed_function_array_sizes.values())
+    ):
+        # No array to size or check: every scan below only reads these tables,
+        # so they would stay empty. Skip walking every function body.
+        return {}, {func_name: {} for func_name in function_hints}
     functions_by_name = {getattr(func, "name", None): func for func in functions}
     functions_by_name = {name: func for name, func in functions_by_name.items() if name}
     return_index_hints = {}
@@ -163,7 +183,7 @@ def collect_resource_array_size_hints(
     def assert_not_larger_than_known_fixed(name, fixed_size, required_size):
         """Raise when inferred usage exceeds a known fixed array size."""
         if required_size > fixed_size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{name}': {fixed_size} and {required_size}"
             )
@@ -1798,6 +1818,7 @@ def collect_resource_array_size_hints(
                         propagated_names,
                     )
                     return
+                approximate_loops.add(id(value))
                 zero_iteration_hints = dict(loop_index_hints)
                 body_index_hints = dict(loop_index_hints)
                 yield from walk(
@@ -1860,6 +1881,7 @@ def collect_resource_array_size_hints(
                         propagated_names,
                     )
                     return
+                approximate_loops.add(id(value))
                 body_index_hints = dict(loop_index_hints)
                 yield from walk(body, loop_constants, body_index_hints)
                 merge_loop_index_hints(
@@ -1871,6 +1893,7 @@ def collect_resource_array_size_hints(
                 return
 
             if isinstance(value, WhileNode):
+                approximate_loops.add(id(value))
                 yield value, active_constants, active_index_hints
                 condition_index_hints = dict(active_index_hints)
                 yield from walk(
@@ -1894,6 +1917,7 @@ def collect_resource_array_size_hints(
                 return
 
             if isinstance(value, DoWhileNode):
+                approximate_loops.add(id(value))
                 yield value, active_constants, active_index_hints
                 body = getattr(value, "body", None)
                 body_index_hints = dict(active_index_hints)
@@ -2112,10 +2136,18 @@ def collect_resource_array_size_hints(
             if isinstance(node, ArrayAccessNode):
                 array_expr = getattr(node, "array", getattr(node, "array_expr", None))
                 index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-                array_name = expression_name(array_expr)
+                # Only an index into the declared array itself sizes it; ``a[i][j]``'s ``j`` indexes an element.
+                array_name = (
+                    None
+                    if isinstance(array_expr, ArrayAccessNode)
+                    else expression_name(array_expr)
+                )
                 index = resource_index_hint(
                     index_expr, visible_constants, visible_index_hints, call_stack
                 )
+                resolved_accesses[id(node)] = resolved_accesses.get(
+                    id(node), True
+                ) and (index is not None and index >= 0)
                 if array_name is not None and index is not None and index >= 0:
                     changed = (
                         record_array_required_size(func_name, array_name, index + 1)
@@ -2155,9 +2187,17 @@ def collect_resource_array_size_hints(
                 continue
             array_expr = getattr(node, "array", getattr(node, "array_expr", None))
             index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-            array_name = expression_name(array_expr)
+            # Only an index into the declared array itself sizes it; ``a[i][j]``'s ``j`` indexes an element.
+            array_name = (
+                None
+                if isinstance(array_expr, ArrayAccessNode)
+                else expression_name(array_expr)
+            )
             index = resource_index_hint(
                 index_expr, visible_constants, visible_index_hints
+            )
+            resolved_accesses[id(node)] = resolved_accesses.get(id(node), True) and (
+                index is not None and index >= 0
             )
             if array_name is None or index is None or index < 0:
                 continue
@@ -2170,18 +2210,28 @@ def collect_resource_array_size_hints(
             func_name, func, initial_constants, {}, {func_name}
         )
 
+    if callable(required_sizes):
+        required_sizes = required_sizes(
+            resolved=frozenset(
+                node_id for node_id, resolved in resolved_accesses.items() if resolved
+            ),
+            approximate_loops=frozenset(approximate_loops),
+        )
+    for array_name, required_size in sorted((required_sizes or {}).items()):
+        record_array_required_size(None, array_name, required_size)
+
     def register_fixed_requirement(scope_key, size, current_size):
         """Record a fixed size requirement for a propagated array argument."""
         if size is None:
             return
         existing = fixed_requirements.get(scope_key)
         if existing is not None and existing != size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {existing} and {size}"
             )
         if current_size and current_size > size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {current_size} and {size}"
             )
@@ -2191,7 +2241,7 @@ def collect_resource_array_size_hints(
         """Raise when propagated usage exceeds a fixed array requirement."""
         fixed_size = fixed_requirements.get(scope_key)
         if fixed_size is not None and required_size > fixed_size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {fixed_size} and {required_size}"
             )
@@ -2237,7 +2287,7 @@ def collect_resource_array_size_hints(
                         arg_size = fixed_global_array_sizes[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2248,7 +2298,7 @@ def collect_resource_array_size_hints(
                         arg_size = caller_fixed_hints[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2256,7 +2306,7 @@ def collect_resource_array_size_hints(
                         arg_size = caller_local_fixed_hints[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2268,13 +2318,13 @@ def collect_resource_array_size_hints(
                         parameter_key = (callee_name, callee_param_name)
                         existing_size = fixed_local_parameter_sizes.get(parameter_key)
                         if existing_size is not None and existing_size != arg_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed local array sizes for private "
                                 f"pointer parameter '{callee_name}.{callee_param_name}': "
                                 f"{existing_size} and {arg_size}"
                             )
                         if callee_param_hints[callee_param_name] > arg_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Private pointer parameter "
                                 f"'{callee_name}.{callee_param_name}' requires at least "
                                 f"{callee_param_hints[callee_param_name]} elements, but "
@@ -2317,7 +2367,7 @@ def collect_resource_array_size_hints(
                         and arg_size
                         and required_size > arg_size
                     ):
-                        raise ValueError(
+                        raise TargetRefusal(
                             "Conflicting fixed resource array sizes for "
                             f"'{arg_name}': {arg_size} and {required_size}"
                         )

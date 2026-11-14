@@ -1,6 +1,9 @@
+import re
+
 import pytest
 
 import crosstl.translator as cgl_translator
+from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 
 EXTERNAL_REPOS = {
@@ -306,9 +309,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "switch (++a) {",
             "switch (index) {",
-            "a += 10;",
             "outputBuffer[index] = a;",
         ],
+        # A statement before a switch's first case label never runs (C11 6.8.4.2/4).
+        "not_contains": ["a += 10;"],
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -487,13 +491,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "outer:",
-            "break outer;",
-            "break;",
-            "return result;",
-        ],
+        # CrossGL has no labeled break; the import is refused rather than written as text.
+        "refused": "'break outer' leaves an enclosing labeled statement",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -771,11 +770,11 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "enum Mode {",
-            "typealias ModeTypedef = Mode;",
-            "const ModeTypedef mode = Mode::Add;",
+            "typedef Mode ModeTypedef;",
+            "const ModeTypedef mode @constant_id(5) = Mode::Add;",
             "outputBuffer[id.x] = uint(mode);",
         ],
-        "not_contains": ["typedef Mode ModeTypedef;"],
+        "not_contains": ["typealias ModeTypedef = Mode;"],
     },
     {
         "id": "slang_func_keyword_default_parameter_from_current_docs",
@@ -1191,24 +1190,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "sampler shadowSampler;",
-            "sampler2D shadowMap2D;",
-            "sampler2DArray shadowMap2DArray;",
-            "samplerCube shadowMapCube;",
-            "textureCompare(shadowMap2D, shadowSampler, input.texCoord, input.depth)",
-            (
-                "textureCompareOffset(shadowMap2DArray, shadowSampler, "
-                "vec3(input.texCoord, 0), input.depth, offset2)"
-            ),
-            "textureCompare(shadowMapCube, shadowSampler, cubeDir, input.depth)",
-            (
-                "unsupported Slang texture overload extras for SampleCmpBias: "
-                "dropped LOD bias"
-            ),
-        ],
-        "not_contains": ["SampleCmpBias("],
+        # CrossGL's textureCompare operations take no LOD bias.
+        "refused": "SampleCmpBias: CrossGL has no operand for LOD bias",
     },
     {
         "id": "slang_texture2d_getdimensions_querysize_lod_from_spirv_generated",
@@ -1270,9 +1253,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "struct MatrixData {",
             "mat4 m1;",
-            "float2x4 m2;",
-            "float3x2 m3;",
+            "mat4x2 m2;",
+            "mat2x3 m3;",
             "outputBuffer[0] = MatrixData().m1[0][0];",
+            "outputBuffer[1] = MatrixData().m2[3][1];",
         ],
         "not_contains": ["MATRIX_LAYOUT", "row_major", "column_major"],
     },
@@ -1303,16 +1287,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct MyVec {",
-            "float x;",
-            "float y;",
-            "v.x = 5.0;",
-            "v.y = 9.0;",
-            'printf("%g\\n%g\\n", v[0], v[1]);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "FunctionNode("],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": "the __subscript of Slang structure 'MyVec' has no CrossGL form",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1350,18 +1326,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct TestStruct {",
-            "float arr[5];",
-            "TestStruct ts;",
-            "ts.arr[2] = 20.0;",
-            "uint idx = 2;",
-            "float v0 = ts[int(2)];",
-            "float v1 = ts[idx];",
-            'printf("%g %g\\n", v0, v1);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "where T"],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'TestStruct' has no CrossGL form"
+        ),
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1473,17 +1441,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct FixedArray {",
-            "int data[4];",
-        ],
-        "not_contains": [
-            "interface IIndexable",
-            ": IIndexable",
-            "__subscript",
-            "operator[]",
-        ],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'FixedArray' has no CrossGL form"
+        ),
     },
     {
         "id": "slang_2026_dyn_interface_parameter_codegen_reparse",
@@ -1649,7 +1610,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "vec4 color @ ray_payload_read(caller) @ ray_payload_write(caller,closesthit,miss);",
             "ray_generation {",
-            "resultTexture[uvec2(0, 0)] = payload.color;",
+            "imageStore(resultTexture, uvec2(0, 0), payload.color);",
             "payload.color = vec4(0, 0, 0, 1);",
         ],
         "not_contains": ["@ read(caller):write"],
@@ -1689,7 +1650,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "import PixelStatsShared;",
             "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
-            "image2D gStatsRayCountTotal;",
+            "uimage2D gStatsRayCountTotal @format(unknown) @texel(uint);",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
             "totalRays += gStatsRayCount[i][pixel];",
         ],
@@ -1791,10 +1752,10 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "image2D texFrame;",
-            "bool mandelbrot(vec2 z, int i)",
+            "image2D texFrame @format(unknown);",
+            "bool mandelbrot(inout vec2 z, out int i)",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
-            "texFrame[thread] = vec4(color, 1.0);",
+            "imageStore(texFrame, thread, vec4(color, 1.0));",
         ],
     },
     {
@@ -1843,7 +1804,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "struct Vertex {",
             "vec3 position @ in_Position;",
-            "vec4 svPosition @ Out_Position;",
+            "vec4 svPosition @ gl_Position;",
             "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",
         ],
@@ -2409,7 +2370,8 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2DMS tex;",
-            "return imageLoad(tex, 0.xx, 0);",
+            # ``0.xx`` is the literal 0 swizzled into an int2.
+            "return imageLoad(tex, ivec2(0), 0).x;",
         ],
         "not_contains": ["Expected COMMA or RPAREN"],
     },
@@ -2438,42 +2400,13 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "vec4 main(Params p @register(b1)) @ Out_Color",
+            "vec4 main(Params p @register(b1)) @ gl_FragColor",
             "return vec4(g_params.x + p.x, 0, 0, 0);",
         ],
         "not_contains": [
             "Expected semantic name",
             "ConstantBuffer<Params> p : register(b1)",
         ],
-    },
-    {
-        # Source: https://github.com/shader-slang/slang
-        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
-        # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
-        "id": "slang_gfx_structured_buffer_pointer_element_reparse",
-        "repo": "shader-slang/slang-current-2026-06-10",
-        "path": "tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang",
-        "source": (
-            """
-            StructuredBuffer<int**> ptrs;
-            RWStructuredBuffer<int> output;
-
-            [shader("compute")]
-            [numthreads(1, 1, 1)]
-            void computeMain()
-            {
-                int** pp = ptrs[0];
-                output[0] = **pp;
-            }
-        """
-        ),
-        "crossgl": True,
-        "contains": [
-            "buffer<int**> ptrs;",
-            "int** pp = ptrs[0];",
-            "output[0] = **pp;",
-        ],
-        "not_contains": ["StructuredBuffer<int**> ptrs;"],
     },
 ]
 
@@ -2490,6 +2423,11 @@ def generate_crossgl(ast):
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda item: item["id"])
 def test_external_fixture_codegen_crossgl_reparse(fixture):
     ast = parse_slang(fixture["source"])
+    refused = fixture.get("refused")
+    if refused is not None:
+        with pytest.raises(SlangImportRefused, match=re.escape(refused)):
+            generate_crossgl(ast)
+        return
     generated = generate_crossgl(ast)
 
     enum_underlying_types = fixture.get("enum_underlying_types", {})
@@ -2522,6 +2460,29 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
 
     if fixture.get("crossgl", False):
         cgl_translator.parse(generated)
+
+
+def test_structured_buffer_of_pointers_is_refused():
+    # Source: https://github.com/shader-slang/slang
+    # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+    # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
+    # Before, the importer wrote ``buffer<int**> ptrs;``, which CrossGL could not read and
+    # dropped, so ``ptrs`` was used without a declaration.
+    source = """
+        StructuredBuffer<int**> ptrs;
+        RWStructuredBuffer<int> output;
+
+        [shader("compute")]
+        [numthreads(1, 1, 1)]
+        void computeMain()
+        {
+            int** pp = ptrs[0];
+            output[0] = **pp;
+        }
+    """
+
+    with pytest.raises(SlangImportRefused, match="elements are pointers"):
+        generate_crossgl(parse_slang(source))
 
 
 def test_gfx_public_namespace_static_constants_codegen_crossgl_reparse():

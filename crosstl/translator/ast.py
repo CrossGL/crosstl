@@ -2,12 +2,13 @@
 
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from .refusals import CrossGLRefusal
 
 
 class ASTNode:
@@ -33,11 +34,16 @@ class ASTNode:
         return self.annotations.get(key, default)
 
     def child_nodes(self):
-        """Yield direct structural AST children, excluding metadata backlinks."""
-        for field_name, value in vars(self).items():
-            if field_name in AST_CHILD_FIELD_EXCLUSIONS:
-                continue
-            yield from iter_ast_child_nodes(value)
+        """Yield direct structural AST children, excluding metadata backlinks.
+
+        Several nodes keep one child under two field names (``ArrayAccessNode.array`` and ``array_expr``,
+        ``AssignmentNode.target`` and ``left``). Such a child is yielded once, so a visitor that acts on every child
+        does not evaluate it twice: ``vals[k++]`` increments ``k`` once.
+        """
+        # The children are collected eagerly into one list: nested ``yield from``
+        # generators made every child pass through one frame per container level,
+        # and this method runs for every node of every structural walk.
+        return iter(_child_node_list(self))
 
     def walk(self):
         """Yield this node and all structural descendants once."""
@@ -52,8 +58,9 @@ class ASTNode:
             visited.add(node_id)
             yield node
 
-            children = list(node.child_nodes())
-            stack.extend(reversed(children))
+            children = _child_node_list(node)
+            children.reverse()
+            stack.extend(children)
 
     def bind_parent_links(self, parent=None):
         """Set parent links for this structural subtree and return ``self``."""
@@ -77,20 +84,108 @@ class ASTNode:
 AST_CHILD_FIELD_EXCLUSIONS = frozenset({"annotations", "parent", "source_location"})
 
 
+_AST_CHILD_CONTAINERS = (list, tuple, dict, set)
+
+
+# How a structural walk treats a field value, decided once per concrete type. The walks run for every node of
+# every rule pass and generator, and one dictionary lookup on ``type(value)`` replaces a chain of ``isinstance``
+# checks. A value's kind depends only on the classes of its type, so the answer for one value holds for every
+# value of that type.
+FIELD_LEAF = 0
+FIELD_NODE = 1
+FIELD_LIST = 2
+FIELD_STAGES = 3
+FIELD_DICT = 4
+FIELD_TUPLE = 5
+FIELD_SET = 6
+FIELD_KINDS = {
+    type(None): FIELD_LEAF,
+    str: FIELD_LEAF,
+    int: FIELD_LEAF,
+    bool: FIELD_LEAF,
+}
+
+
+def field_kind(value):
+    """The structural kind (``FIELD_*``) of a field value, cached per type in :data:`FIELD_KINDS`.
+
+    The checks run in this order, so a ``StageMap`` is a stage map rather than a dictionary.
+    """
+    value_type = type(value)
+    kind = FIELD_KINDS.get(value_type)
+    if kind is not None:
+        return kind
+    if isinstance(value, ASTNode):
+        kind = FIELD_NODE
+    elif isinstance(value, list):
+        kind = FIELD_LIST
+    elif isinstance(value, StageMap):
+        kind = FIELD_STAGES
+    elif isinstance(value, dict):
+        kind = FIELD_DICT
+    elif isinstance(value, tuple):
+        kind = FIELD_TUPLE
+    elif isinstance(value, set):
+        kind = FIELD_SET
+    else:
+        kind = FIELD_LEAF
+    FIELD_KINDS[value_type] = kind
+    return kind
+
+
+def _child_node_list(node):
+    """A new list of ``node``'s direct structural children, in :meth:`ASTNode.child_nodes` order."""
+    children = []
+    append = children.append
+    yielded = set()
+    kinds = FIELD_KINDS
+    exclusions = AST_CHILD_FIELD_EXCLUSIONS
+    for field_name, value in vars(node).items():
+        if field_name in exclusions:
+            continue
+        kind = kinds.get(type(value))
+        if kind is None:
+            kind = field_kind(value)
+        if kind == FIELD_LEAF:
+            continue
+        value_id = id(value)
+        if value_id in yielded:
+            continue
+        yielded.add(value_id)
+        if kind == FIELD_NODE:
+            append(value)
+        elif kind == FIELD_LIST or kind == FIELD_TUPLE:
+            for item in value:
+                if isinstance(item, ASTNode):
+                    append(item)
+                elif isinstance(item, _AST_CHILD_CONTAINERS):
+                    _append_ast_child_nodes(item, children)
+        else:
+            _append_ast_child_nodes(value, children)
+    return children
+
+
+def _append_ast_child_nodes(value, children):
+    """Append the ASTNode children of a nested structural field value, in order."""
+    if isinstance(value, ASTNode):
+        children.append(value)
+        return
+    if isinstance(value, dict):
+        value = value.values()
+    elif not isinstance(value, (list, tuple, set)):
+        return
+    for item in value:
+        if isinstance(item, ASTNode):
+            children.append(item)
+        elif isinstance(item, _AST_CHILD_CONTAINERS):
+            _append_ast_child_nodes(item, children)
+
+
 def iter_ast_child_nodes(value):
     """Yield ASTNode children from a nested structural field value."""
-    if isinstance(value, ASTNode):
-        yield value
-        return
-
-    if isinstance(value, dict):
-        for item in value.values():
-            yield from iter_ast_child_nodes(item)
-        return
-
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            yield from iter_ast_child_nodes(item)
+    children = []
+    _append_ast_child_nodes(value, children)
+    return iter(children)
 
 
 class TypeNode(ASTNode):
@@ -245,7 +340,7 @@ class CooperativeMatrixType(TypeNode):
             ("elements_per_lane", self.elements_per_lane),
         ):
             if isinstance(value, bool) or (type(value) is int and value <= 0):
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"CooperativeMatrix {name} must be a positive integer, "
                     f"got {value}"
                 )
@@ -254,12 +349,12 @@ class CooperativeMatrixType(TypeNode):
             self.fragment_mapping_provenance is not None
             and self.fragment_mapping is None
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "CooperativeMatrix fragment_mapping_provenance requires a "
                 "fragment_mapping"
             )
         if self.fragment_mapping is not None and self.fragment_layout is None:
-            raise ValueError(
+            raise CrossGLRefusal(
                 "CooperativeMatrix fragment_mapping requires a fragment_layout"
             )
 
@@ -279,7 +374,7 @@ class CooperativeMatrixType(TypeNode):
             matrix_elements = self.rows * self.cols
             distributed_elements = self.subgroup_size * self.elements_per_lane
             if matrix_elements != distributed_elements:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"CooperativeMatrix {self.fragment_layout} fragment layout is "
                     "inconsistent: "
                     f"rows={self.rows} * columns={self.cols} produces "
@@ -303,7 +398,7 @@ class CooperativeMatrixType(TypeNode):
             self.elements_per_lane,
         )
         if mapping is None:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"CooperativeMatrix fragment mapping '{self.fragment_mapping}' has "
                 "no registered contract for "
                 f"rows={self.rows}, columns={self.cols}, "
@@ -480,6 +575,7 @@ class ShaderNode(ASTNode):
         cbuffers: List["StructNode"] = None,
         imports: List["ImportNode"] = None,
         preprocessors: List["PreprocessorNode"] = None,
+        static_assertions: List["StaticAssertNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -493,6 +589,8 @@ class ShaderNode(ASTNode):
         self.cbuffers = cbuffers or []
         self.imports = imports or []
         self.preprocessors = preprocessors or []
+        # Shader-, stage- and structure-scope static_assert declarations, in source order.
+        self.static_assertions = static_assertions or []
 
     def __repr__(self):
         return f"ShaderNode(name={self.name}, execution_model={self.execution_model})"
@@ -571,6 +669,13 @@ class StageMap(dict):
     def all_for_stage(self, key):
         return list(self._stage_lists.get(key, []))
 
+    def replace_stage(self, key, index, value):
+        """Replace the ``index``-th stage declared for ``key``; ``map[key]`` stays the first one."""
+        entries = self._stage_lists[key]
+        entries[index] = value
+        if index == 0:
+            dict.__setitem__(self, key, value)
+
     def copy(self):
         return StageMap(self)
 
@@ -620,6 +725,7 @@ class StructNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         inheritance: List[NamedType] = None,
         visibility: str = "public",
+        methods: List["FunctionNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -629,6 +735,8 @@ class StructNode(ASTNode):
         self.attributes = attributes or []
         self.inheritance = inheritance or []
         self.visibility = visibility
+        # Member functions; the struct_methods rule pass lowers them to free functions.
+        self.methods = methods or []
 
     def __repr__(self):
         return f"StructNode(name={self.name}, members={len(self.members)})"
@@ -1119,6 +1227,34 @@ class ReturnNode(StatementNode):
         return f"ReturnNode(value={self.value})"
 
 
+class StaticAssertNode(StatementNode):
+    """``static_assert(condition[, message])``: a constant condition checked at translation time.
+
+    It declares nothing and has no run-time effect. One written in a block is a statement; the parser collects one
+    at shader, stage or structure scope in ``ShaderNode.static_assertions``. ``message`` is the text of the string
+    literal, or None. :mod:`.semantics.static_assertions` checks and removes every one before code generation.
+    One declared in a generic structure records that structure's name as ``template`` and its type parameters as
+    ``generic_params``; :mod:`.semantics.template_assertions` handles those whose condition names a parameter.
+    """
+
+    def __init__(
+        self,
+        condition: "ExpressionNode",
+        message: Optional[str] = None,
+        template: Optional[str] = None,
+        generic_params: Sequence[str] = (),
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.condition = condition
+        self.message = message
+        self.template = template
+        self.generic_params = tuple(generic_params)
+
+    def __repr__(self):
+        return f"StaticAssertNode(condition={self.condition}, message={self.message!r})"
+
+
 class BreakNode(StatementNode):
     """Break statements."""
 
@@ -1325,6 +1461,17 @@ class ArrayLiteralNode(ExpressionNode):
 
     def __repr__(self):
         return f"ArrayLiteralNode(elements={len(self.elements)})"
+
+
+class CommaExpressionNode(ExpressionNode):
+    """Comma expression ``(a, b)``: evaluates its operands left to right, and its value is the last one's."""
+
+    def __init__(self, expressions: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.expressions = expressions
+
+    def __repr__(self):
+        return f"CommaExpressionNode(expressions={len(self.expressions)})"
 
 
 class SwizzleNode(ExpressionNode):
@@ -1666,6 +1813,7 @@ class CooperativeMatrixOpNode(ExpressionNode):
         {
             "element",
             "fill",
+            "diagonal",
             "load",
             "store",
             "multiply",
@@ -1686,7 +1834,9 @@ class CooperativeMatrixOpNode(ExpressionNode):
         **kwargs,
     ):
         if operation not in self.SUPPORTED_OPERATIONS:
-            raise ValueError(f"Unsupported cooperative matrix operation: {operation}")
+            raise CrossGLRefusal(
+                f"Unsupported cooperative matrix operation: {operation}"
+            )
         resolved_expression_type = (
             expression_type if expression_type is not None else result_type
         )

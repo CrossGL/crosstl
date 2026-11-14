@@ -1013,10 +1013,10 @@ def test_parse_repeated_layout_qualifiers_from_slang_glsl():
     block_var = next(var for var in ast.uniforms if var.name == "C_0")
     image_var = next(var for var in ast.uniforms if var.name == "t_0")
 
-    assert ast.layouts[0] == {"layout": {"row_major": None}, "qualifiers": ["uniform"]}
-    assert ast.layouts[1] == {"layout": {"row_major": None}, "qualifiers": ["buffer"]}
-    assert block.interface_layout == {"binding": "0", "std140": None}
-    assert block_var.layout == {"binding": "0", "std140": None}
+    # The default block layouts reach the blocks declared after them (GLSL 4.60 section 4.4.5).
+    assert ast.layouts == []
+    assert block.interface_layout == {"row_major": None, "binding": "0", "std140": None}
+    assert block_var.layout == {"row_major": None, "binding": "0", "std140": None}
     assert image_var.layout == {"r32ui": None, "binding": "1"}
 
 
@@ -1198,6 +1198,26 @@ def test_parse_ternary_and_bitwise_expressions():
         }
         """)
     parse_ok(code, "vertex")
+
+
+def test_ternary_false_branch_stops_at_the_next_argument(tmp_path):
+    # GLSL 4.60 grammar: conditional_expression is "logical_or QUESTION expression COLON assignment_expression",
+    # so "vec4(c ? 1.0 : 0.0, x, 0.0, 1.0)" has four arguments, not one ternary over a comma expression.
+    import crosstl
+
+    source = tmp_path / "shader.frag"
+    source.write_text(textwrap.dedent("""
+        #version 450
+        layout(location = 0) in float x;
+        layout(location = 0) out vec4 o;
+        void main() {
+            o = vec4(x > 0.5 ? 1.0 : 0.0, x, 0.0, 1.0);
+        }
+        """))
+
+    crossgl = crosstl.translate(str(source), backend="cgl", format_output=False)
+
+    assert "o = vec4(((input.x > 0.5) ? 1.0 : 0.0), input.x, 0.0, 1.0);" in crossgl
 
 
 def test_parse_logical_xor_precedence():

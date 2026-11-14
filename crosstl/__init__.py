@@ -2,7 +2,14 @@
 
 from importlib import import_module
 
-__all__ = ["translate", "supported_backends", "supported_sources", "project"]
+__all__ = [
+    "translate",
+    "translate_with_metadata",
+    "TranslationResult",
+    "supported_backends",
+    "supported_sources",
+    "project",
+]
 
 
 def supported_backends():
@@ -24,6 +31,10 @@ def __getattr__(name):
         from ._crosstl import translate
 
         return translate
+    if name in {"translate_with_metadata", "TranslationResult"}:
+        from . import _crosstl
+
+        return getattr(_crosstl, name)
     if name == "project":
         return import_module(f"{__name__}.project")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

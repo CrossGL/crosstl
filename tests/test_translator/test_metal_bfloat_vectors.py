@@ -177,11 +177,11 @@ def test_bfloat_vectors_execute_natively(tmp_path, width, form):
 def test_bfloat_vector_gate_requires_original_and_generated_execution():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate bfloat vector round trips"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -191,6 +191,6 @@ def test_bfloat_vector_gate_requires_original_and_generated_execution():
     assert "continue-on-error" not in step and "if:" not in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_metal_bfloat_vectors.py",
         )

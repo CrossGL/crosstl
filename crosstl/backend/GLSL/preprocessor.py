@@ -4,7 +4,9 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
+from crosstl.backend.DirectX.macro_expansion import GLSL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
+from crosstl.translator.refusals import OpenGLSyntaxError
 
 HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
 EXTENSION_DIRECTIVE_RE = re.compile(r"^\s*#\s*extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:")
@@ -19,6 +21,8 @@ EXTENSION_COMPANION_MACROS = {
 
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
+
+    macro_dialect = GLSL_MACROS
 
     def _handle_include(
         self, rest: str, file_path: Optional[str]
@@ -48,21 +52,6 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         return None
-
-    def _handle_define(self, rest: str):
-        rest = rest.lstrip()
-        name_match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", rest)
-        name = name_match.group(0) if name_match else None
-
-        super()._handle_define(rest)
-
-        macro = self.macros.get(name) if name else None
-        if (
-            macro is not None
-            and not macro.is_function_like()
-            and "##" in macro.replacement
-        ):
-            macro.replacement = self._replace_params(macro.replacement, {})
 
     def _split_logical_lines(self, code: str) -> List[str]:
         return super()._split_logical_lines(
@@ -108,7 +97,7 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     def _skip_block_comment_text(self, code: str, start: int) -> Tuple[int, int]:
         end = code.find("*/", start + 2)
         if end == -1:
-            raise SyntaxError("Unterminated block comment")
+            raise OpenGLSyntaxError("Unterminated block comment")
         comment = code[start : end + 2]
         return len(comment), comment.count("\n")
 
@@ -214,7 +203,7 @@ class GLSLPreprocessor:
             return
         if self._has_tokens_before(code, version_index):
             if self.strict:
-                raise SyntaxError("#version must appear before any other tokens")
+                raise OpenGLSyntaxError("#version must appear before any other tokens")
 
     def _find_version_index(self, code: str) -> Optional[int]:
         i = 0

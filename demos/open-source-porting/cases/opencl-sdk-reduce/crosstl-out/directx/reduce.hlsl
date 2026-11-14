@@ -29,10 +29,10 @@ uint zmin(uint a, uint b) {
 }
 
 // Compute Shader
-[numthreads(1, 1, 1)]
+[numthreads(64, 1, 1)]
 void CSMain(uint3 groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID) {
     uint lid = groupThreadID.x;
-    uint lsi = uint3(1, 1, 1).x;
+    uint lsi = uint3(64, 1, 1).x;
     uint wid = groupID.x;
     uint wsi = crossglNumWorkGroups.x;
     uint wg_stride = (lsi * 2);

@@ -4,6 +4,7 @@ import pytest
 
 import crosstl
 import crosstl.translator
+from crosstl.backend.import_refusals import RustImportRefused
 from crosstl.backend.Rust.RustAst import (
     BinaryOpNode,
     BlockNode,
@@ -660,16 +661,9 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "fragment {" in result
-    assert "AccelerationStructure accel @ set(0) @ binding(0)" in result
-    assert "spirv_std::ray_query!(let mut handle);" in result
-    assert (
-        "handle.initialize(accel, RayFlags::NONE, 0, vec3(0.0, 0.0, 0.0), "
-        "0.0, vec3(0.0, 0.0, 0.0), 0.0);" in result
-    )
-    assert "vec3 origin = handle.get_world_ray_origin();" in result
+    # The importer has no expansion for the ray_query! macro, so it refuses it rather than writing it as text.
+    with pytest.raises(RustImportRefused, match=re.escape("spirv_std::ray_query!")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_compute_shader_method_turbofish_codegen():
@@ -1131,16 +1125,9 @@ def test_rust_gpu_path_qualified_attribute_codegen():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "void emit_vertex()" in result
-    assert 'asm!("OpEmitVertex",);' in result
-    assert (
-        "void emit_mesh_tasks_ext("
-        "uint group_count_x, uint group_count_y, uint group_count_z)" in result
-    )
-    assert "! emit_mesh_tasks_ext" not in result
-    crosstl.translator.parse(result)
+    # Inline SPIR-V targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
@@ -1358,7 +1345,7 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     """
     result = parse_and_generate(code)
 
-    assert "typedef Image2d = sampler2D;" in result
+    assert "typedef sampler2D Image2d;" in result
     assert "fragment main_fs {" in result
     assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
     assert "image2D storage_tex @ set(3) @ binding(1)" in result
@@ -2706,9 +2693,9 @@ def test_type_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef Real = float;" in result
-        assert "typedef Color = vec3;" in result
-        assert "typedef Weights = float[4];" in result
+        assert "typedef float Real;" in result
+        assert "typedef vec3 Color;" in result
+        assert "typedef float[4] Weights;" in result
         assert "typedef" in result
         assert "Buffer" not in result
         assert "Vector" not in result
@@ -2756,7 +2743,7 @@ def test_module_path_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef Real = float;" in result
+        assert "typedef float Real;" in result
         assert "Real sample(Real x, vec3 normal)" in result
         assert "lifted = vec3(1.0, 2.0, 3.0);" in result
         assert "c = self::helper::CONST;" in result
@@ -5414,9 +5401,9 @@ def test_tuple_pattern_if_let_expression_initializer_conversion():
         assert "LetPatternConditionNode" not in result
         assert "auto _rust_match_tuple_0;" in result
         assert "if (is_Some(def_location))" in result
-        assert "_rust_match_tuple_0 = (def_location.0, def_location.1);" in result
+        assert "_rust_match_tuple_0 = (def_location.0, def_location.1,);" in result
         assert (
-            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER);"
+            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER,);"
             in result
         )
         assert "file_metadata = _rust_tuple_0(_rust_match_tuple_0);" in result
@@ -6745,7 +6732,7 @@ def test_gpu_resource_method_calls_convert_on_resource_type_alias_receivers():
 
     result = parse_and_generate(code)
 
-    assert "typedef ColorTexture = sampler2D;" in result
+    assert "typedef sampler2D ColorTexture;" in result
     assert (
         "vec4 alias_resources(ColorTexture tex, sampler2D generic_tex, "
         "sampler2DShadow shadow, RWStructuredBuffer<int> values"
@@ -7587,14 +7574,9 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         '                {payload}", payload = in(reg) payload, } } }'
     )
 
-    try:
-        result = parse_and_generate(code)
-
-        asm_line = next(line for line in result.splitlines() if "asm!(" in line)
-        assert r"\n" in asm_line
-        crosstl.translator.parse(result)
-    except Exception as e:
-        pytest.fail(f"Escaped newline string literal conversion failed: {e}")
+    # Inline assembly targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_turbofish_prefix_string_literal_codegen_reparse():
@@ -7717,15 +7699,9 @@ def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert (
-        "Tuple<uint, bool> match_all_32(uint mask, uint value, bool predicate)"
-        in result
-    )
-    assert "(uint, bool) match_all_32" not in result
-    assert "asm!(" in result
-    crosstl.translator.parse(result)
+    # Inline PTX targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_cuda_global_include_str_macro_initializer_codegen_reparse():
@@ -8699,9 +8675,9 @@ def test_tuple_field_access_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "let pair = (a, b);" in result
+        assert "let pair = (a, b,);" in result
         assert "let first = pair.0;" in result
-        assert "let second = (a, b).1;" in result
+        assert "let second = (a, b,).1;" in result
         assert "return (first + second);" in result
     except Exception as e:
         pytest.fail(f"Tuple field access conversion failed: {e}")
@@ -8969,7 +8945,7 @@ def test_reference_array_conversion():
     try:
         result = parse_and_generate(code)
         assert (
-            "void sample_arrays(Filter filter, float weights[4], vec3 output[2])"
+            "void sample_arrays(Filter filter, float weights[4], inout vec3 output[2])"
             in result
         )
         assert "first = weights[0];" in result
@@ -8990,7 +8966,7 @@ def test_lifetime_reference_type_conversion():
     try:
         result = parse_and_generate(code)
         assert "vec3 borrow(vec3 value)" in result
-        assert "vec3 borrow_mut(vec3 value)" in result
+        assert "vec3 borrow_mut(inout vec3 value)" in result
         assert "return value;" in result
         assert "'a" not in result
         assert "&" not in result
@@ -9044,13 +9020,9 @@ def test_wgpu_shader_loading_host_types_codegen_reparse():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "void init(wgpu_Device device)" in result
-    assert "wgpu_ShaderModuleDescriptor {" in result
-    assert 'include_str!("shader.wgsl")' in result
-    assert 'wgpu::include_wgsl!("shader.wgsl")' in result
-    crosstl.translator.parse(result)
+    # include_str! and include_wgsl! read files at compile time; the importer refuses them rather than writing them as text.
+    with pytest.raises(RustImportRefused, match=re.escape("include_str!")):
+        parse_and_generate(code)
 
 
 def test_wgpu_spawn_impl_future_static_bound_codegen_from_upstream():
@@ -11311,7 +11283,7 @@ def test_rust_gpu_mouse_shader_impl_trait_parameter_codegen():
 
     result = parse_and_generate(code)
 
-    assert "void Painter_fill(Painter self, Shape shape, vec4 color)" in result
+    assert "void Painter_fill(inout Painter self, Shape shape, vec4 color)" in result
     assert "impl Shape shape" not in result
     crosstl.translator.parse(result)
 
@@ -11480,7 +11452,7 @@ def test_type_alias_codegen_reparse_from_rust_gpu_entry_interface():
 
     result = parse_and_generate(code)
 
-    assert "typedef Id = Word;" in result
+    assert "typedef Word Id;" in result
     crosstl.translator.parse(result)
 
 
@@ -11498,7 +11470,7 @@ def test_tuple_typed_global_array_codegen_reparse_from_rust_gpu_libm_table():
 
     assert (
         "const Tuple<str, LibmIntrinsic> LIBM_TABLE[] = "
-        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos))};'
+        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos),)};'
     ) in result
     crosstl.translator.parse(result)
 
@@ -11596,7 +11568,7 @@ def test_unsafe_extern_function_pointer_type_codegen_reparse_from_rusty_v8_callb
 
     result = parse_and_generate(code)
 
-    assert "typedef NamedGetterCallbackForAccessor = auto;" in result
+    assert "typedef auto NamedGetterCallbackForAccessor;" in result
     assert "auto callback;" in result
     assert "auto fallback;" in result
     assert "static auto CALLBACK = handler;" in result
@@ -11858,12 +11830,9 @@ def test_matches_macro_subject_codegen_reparse_from_naga_msl_and_wgsl():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "context.resolve_type(right)" in result
-    assert "resolve_inner!(ctx, argument)" in result
-    assert "FunctionCallNode" not in result
-    crosstl.translator.parse(result)
+    # A macro_rules! definition is not expanded, so its use is refused rather than written as text.
+    with pytest.raises(RustImportRefused, match=re.escape("resolve_inner!")):
+        parse_and_generate(code)
 
 
 def test_unicode_char_literal_range_codegen_reparse_from_naga_wgsl_lexer():

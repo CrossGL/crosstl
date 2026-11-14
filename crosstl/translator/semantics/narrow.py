@@ -8,7 +8,9 @@ every narrow register a 32-bit ``int`` and keeps the invariant that it holds a v
 - a value written to a narrow register (initializer, assignment, compound assignment, increment, argument of a
   narrow parameter, return from a narrow function) and every conversion to a narrow type is normalized: unsigned
   ``int(e) & mask``, signed ``((int(e) & mask) ^ sign) - sign``, which is the value modulo 2^N (C++ [conv.integral]
-  and the explicit arithmetic types of GLSL, HLSL and SPIR-V);
+  and the explicit arithmetic types of GLSL, HLSL and SPIR-V). A floating ``e`` is converted with
+  ``clamp(int(e), min, max)`` instead: every source leaves a truncation outside the narrow range undefined, and
+  saturation is the result Metal, Direct3D and Apple GPUs give (see :mod:`.nan_conversions`);
 - reads need nothing: ``int`` represents every 8- and 16-bit value, so C, C++, MSL, OpenCL C and CUDA integer
   promotion (C++ [conv.prom]) computes exactly the promoted result;
 - arithmetic whose result keeps a narrow type is normalized as well: scalar operations of sources without integer
@@ -31,7 +33,16 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import HubType, TypeScope, call_name, iter_structs
-from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
+from .narrow_generic_calls import NarrowGenericCalls, call_names_narrow_type_arguments
+from .rewrite import (
+    call,
+    child_slots,
+    clone,
+    field_slots,
+    get_child,
+    is_pure,
+    set_child,
+)
 
 __all__ = [
     "NARROW_TARGETS",
@@ -106,6 +117,11 @@ _COMPOUND = {
 }
 # Operations whose result may leave the range of in-range operands; ``&``, ``|``, ``^`` and ``>>`` stay in range.
 _LEAVES_RANGE = frozenset({"+", "-", "*", "/", "%", "<<"})
+_LEAVES_RANGE_UNARY = frozenset({"-", "~"})
+# Operations whose result keeps the narrow type of their operands; a shift keeps its left operand's type.
+_TYPED_BINARY = frozenset({"+", "-", "*", "/", "%", "&", "|", "^"})
+_SHIFTS = frozenset({"<<", ">>"})
+_TYPED_UNARY = frozenset({"-", "~", "+"})
 _STATEMENT_FIELDS = frozenset(
     {
         "statements",
@@ -252,6 +268,25 @@ def normalized(expr, narrow: HubType):
     return result
 
 
+def _bound(value, lanes):
+    literal = A.LiteralNode(abs(value), A.PrimitiveType("int"))
+    scalar = literal if value >= 0 else A.UnaryOpNode("-", literal)
+    return scalar if lanes == 1 else call(f"ivec{lanes}", [scalar])
+
+
+def saturated(expr, narrow: HubType):
+    """A floating ``expr`` converted to ``int`` (lane-wise) and clamped to ``narrow``'s range."""
+    lanes = narrow.lanes
+    if narrow.kind == "u":
+        low, high = 0, (1 << narrow.bits) - 1
+    else:
+        low, high = -(1 << (narrow.bits - 1)), (1 << (narrow.bits - 1)) - 1
+    value = call("int" if lanes == 1 else f"ivec{lanes}", [expr])
+    result = call("clamp", [value, _bound(low, lanes), _bound(high, lanes)])
+    result.annotations["cgl_narrow"] = narrow
+    return result
+
+
 # The pass -------------------------------------------------------------------------------------------------------
 class NarrowLegalizer:
     def __init__(self, program, source, target):
@@ -270,6 +305,7 @@ class NarrowLegalizer:
         for function in self._functions():
             self.functions.setdefault(function.name, []).append(function)
         self.return_type = None
+        self.generic_calls = None
 
     # Program structure ------------------------------------------------------------------------------------------
     def _functions(self):
@@ -305,16 +341,25 @@ class NarrowLegalizer:
         if not self._mentions_narrow():
             return
         program, scope = self.program, self.scope
+        stages = self._stages()
+        self.generic_calls = NarrowGenericCalls(
+            self,
+            [(getattr(program, "functions", None) or [], None)]
+            + [(getattr(s, "local_functions", None) or [], s) for s in stages],
+            narrow_of,
+        )
         for constant in getattr(program, "constants", None) or []:
             scope.declare(constant.name, constant.const_type)
-            self._normalize_declaration(constant, "const_type", "value")
+            self._initializer(constant, "const_type", "value")
         self._declare_variables(getattr(program, "global_variables", None) or [])
         for cbuffer in getattr(program, "cbuffers", None) or []:
             scope.declare_cbuffer(cbuffer)
-        for function in getattr(program, "functions", None) or []:
+        self._member_initializers()
+        # Snapshots: instantiations of narrow generic calls join the lists and are legalized when drained.
+        for function in list(getattr(program, "functions", None) or []):
             if isinstance(function, A.FunctionNode):
                 self.function(function)
-        for stage in self._stages():
+        for stage in stages:
             scope.push()
             self._declare_variables(getattr(stage, "local_variables", None) or [])
             for cbuffer in getattr(stage, "local_cbuffers", None) or []:
@@ -324,7 +369,10 @@ class NarrowLegalizer:
             ]:
                 if isinstance(function, A.FunctionNode):
                     self.function(function)
+            self.generic_calls.drain(stage)
             scope.pop()
+        self.generic_calls.drain(None)
+        self.generic_calls.verify_drained()
         self.retype()
         self.verify()
 
@@ -339,8 +387,9 @@ class NarrowLegalizer:
             ):
                 if widened(getattr(node, field, None)) is not None:
                     return True
-            if isinstance(node, A.FunctionCallNode) and narrow_from_name(
-                call_name(node)
+            if isinstance(node, A.FunctionCallNode) and (
+                narrow_from_name(call_name(node))
+                or call_names_narrow_type_arguments(node, narrow_of)
             ):
                 return True
             if isinstance(node, A.CastNode) and narrow_of(node.target_type) is not None:
@@ -351,7 +400,25 @@ class NarrowLegalizer:
         for variable in variables:
             self.scope.declare(variable.name, variable.var_type)
             self.scope.declare_block_members(variable)
-            self._normalize_declaration(variable, "var_type", "initial_value")
+            self._initializer(variable, "var_type", "initial_value")
+
+    def _initializer(self, node, type_field, value_field):
+        """A declaration outside a function body: legalize its initializer, then convert it to a narrow type."""
+        value = getattr(node, value_field, None)
+        if value is not None:
+            replacement = self.visit(value)
+            if replacement is not value:
+                set_child(node, value_field, None, replacement)
+        self._normalize_declaration(node, type_field, value_field)
+
+    def _member_initializers(self):
+        """Struct member initializers (static members included) sit outside every function body."""
+        for struct in iter_structs(self.program):
+            if not isinstance(struct, A.StructNode):
+                continue
+            for member in struct.members or []:
+                if isinstance(member, A.StructMemberNode):
+                    self._initializer(member, "member_type", "default_value")
 
     def refuse(self, what, reason_code, node=None):
         raise NarrowIntegerUnsupportedError(
@@ -387,14 +454,15 @@ class NarrowLegalizer:
             return node
         if isinstance(node, A.ForNode):
             self.scope.push()
-            if node.init is not None:
-                set_child(node, "init", None, self.statement(node.init))
+            # A header that declares several variables (``short i = 0, step = 3``) holds a list.
+            for slot in field_slots(node, "init"):
+                set_child(node, *slot, self.statement(get_child(node, *slot)))
             for field in ("condition", "body"):
                 child = getattr(node, field)
                 if child is not None:
                     set_child(node, field, None, self.visit(child))
-            if node.update is not None:
-                set_child(node, "update", None, self.statement(node.update))
+            for slot in field_slots(node, "update"):
+                set_child(node, *slot, self.statement(get_child(node, *slot)))
             self.scope.pop()
             return node
         self.visit_children(node)
@@ -449,7 +517,7 @@ class NarrowLegalizer:
         if isinstance(node, A.CastNode):
             narrow = narrow_of(node.target_type)
             if narrow is not None:
-                return normalized(node.expression, narrow)
+                return self.converted(node.expression, narrow)
             return node
         if isinstance(node, A.ReturnNode):
             if self.return_type is not None and node.value is not None:
@@ -459,8 +527,13 @@ class NarrowLegalizer:
             return node
         if isinstance(node, (A.BinaryOpNode, A.UnaryOpNode)):
             narrow = self.arithmetic_narrow(node)
-            if narrow is not None:
+            if narrow is None:
+                return node
+            unary = isinstance(node, A.UnaryOpNode)
+            if node.op in (_LEAVES_RANGE_UNARY if unary else _LEAVES_RANGE):
                 return normalized(node, narrow)
+            # An in-range result keeps its narrow type for the enclosing operation.
+            node.annotations["cgl_narrow"] = narrow
         return node
 
     def rewrite_assignment(self, node):
@@ -479,7 +552,7 @@ class NarrowLegalizer:
             )
         self._require_pure(node.target, node)
         combined = A.BinaryOpNode(clone(node.target), operation, node.value)
-        replacement = A.AssignmentNode(node.target, normalized(combined, narrow))
+        replacement = A.AssignmentNode(node.target, self.converted(combined, narrow))
         replacement.source_location = node.source_location
         return replacement
 
@@ -489,9 +562,11 @@ class NarrowLegalizer:
         narrow = narrow_from_name(name)
         if narrow is not None:
             if len(arguments) == 1:
-                return normalized(arguments[0], narrow)
+                return self.converted(arguments[0], narrow)
             vector = call(f"ivec{narrow.lanes}", arguments)
             return normalized(vector, narrow)
+        if self.generic_calls is not None:
+            name = self.generic_calls.resolve(node) or name
         callee = self._callee(name, len(arguments), node)
         if callee is not None:
             for index, parameter in enumerate(callee.parameters or []):
@@ -554,7 +629,16 @@ class NarrowLegalizer:
     # Narrow typing of source expressions ------------------------------------------------------------------------
     def coerce(self, expr, narrow):
         """``expr`` as a value of ``narrow``: unchanged when it already is one, normalized otherwise."""
-        return expr if self.narrow_value(expr) == narrow else normalized(expr, narrow)
+        return (
+            expr if self.narrow_value(expr) == narrow else self.converted(expr, narrow)
+        )
+
+    def converted(self, expr, narrow):
+        """``expr`` converted to ``narrow``: saturated when it is floating, reduced modulo 2^N otherwise."""
+        operand = self.scope.infer(expr)
+        if operand is not None and operand.kind == "f":
+            return saturated(expr, narrow)
+        return normalized(expr, narrow)
 
     def narrow_lvalue(self, expr):
         if isinstance(expr, A.SwizzleNode):
@@ -592,16 +676,26 @@ class NarrowLegalizer:
         return None
 
     def arithmetic_narrow(self, node):
-        """The narrow type an arithmetic result keeps, when the source does not promote it."""
+        """The narrow type an arithmetic result keeps under the source's rules, else ``None``.
+
+        A narrow scalar result of a promoting source is ``int``. A shift keeps its left operand's type whatever the
+        count's type (GLSL section 5.9, MSL section 2.2, HLSL and C++ [expr.shift]).
+        """
         if isinstance(node, A.UnaryOpNode):
-            if node.op not in ("-", "~"):
+            if node.op not in _TYPED_UNARY or getattr(node, "is_postfix", False):
                 return None
-            operand = self.narrow_value(node.operand)
-            if operand is None or (self.promotes and operand.lanes == 1):
-                return None
-            return operand
-        if node.op not in _LEAVES_RANGE:
+            result = self.narrow_value(node.operand)
+        elif node.op in _SHIFTS:
+            result = self.narrow_value(node.left)
+        elif node.op in _TYPED_BINARY:
+            result = self._common_narrow(node)
+        else:
             return None
+        if result is None or (self.promotes and result.lanes == 1):
+            return None
+        return result
+
+    def _common_narrow(self, node):
         left, right = self.narrow_value(node.left), self.narrow_value(node.right)
         if left is None and right is None:
             return None
@@ -618,10 +712,7 @@ class NarrowLegalizer:
             left.scalar == right.scalar and 1 in (left.lanes, right.lanes)
         ):
             return None
-        result = left if left.lanes >= right.lanes else right
-        if self.promotes and result.lanes == 1:
-            return None
-        return result
+        return left if left.lanes >= right.lanes else right
 
     # Retyping ---------------------------------------------------------------------------------------------------
     def retype(self):

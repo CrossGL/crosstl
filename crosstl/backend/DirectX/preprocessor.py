@@ -5,7 +5,22 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
+from crosstl.translator.preprocessor.macros import UnterminatedInvocation
+from crosstl.translator.refusals import DirectXSyntaxError
+
+from .macro_expansion import (
+    HLSL_MACROS,
+    MacroDialect,
+    code_extent,
+    comments_to_spaces,
+    evaluate_condition,
+    expand_condition,
+    expand_line,
+)
+
 PRESERVED_SYSTEM_INCLUDE_SENTINEL = "__CROSSGL_HLSL_PRESERVED_INCLUDE__ "
+# ``\w`` on a str pattern is exactly ``str.isalnum()`` or ``_``.
+IDENTIFIER_CONTINUATION_RE = re.compile(r"\w*")
 
 
 @dataclass
@@ -21,8 +36,23 @@ class Macro:
         return self.params is not None
 
 
+class LogicalLines(list):
+    """Logical source lines; ``physical[i]`` is the number of physical lines that line ``i`` spans."""
+
+    def __init__(self, lines: List[str], physical: List[int]):
+        super().__init__(lines)
+        self.physical = physical
+
+
 class HLSLPreprocessor:
-    """Small HLSL preprocessor used before lexing imported source files."""
+    """Small HLSL preprocessor used before lexing imported source files.
+
+    Directives are interpreted line by line here; macro replacement follows the C++ rules through the shared
+    preprocessor's expander (:mod:`.macro_expansion`), configured by ``macro_dialect`` for the compiler whose
+    source a subclass reads.
+    """
+
+    macro_dialect: MacroDialect = HLSL_MACROS
 
     def __init__(
         self,
@@ -36,6 +66,14 @@ class HLSLPreprocessor:
         self.strict = strict
         self.max_expansion_depth = max_expansion_depth
         self.pragma_once_files: Set[str] = set()
+        # State of the built-in macros (macro_expansion): __COUNTER__, __INCLUDE_LEVEL__ and __BASE_FILE__,
+        # the physical line of each part of a joined line, and whether a replaced line ends in a
+        # function-like macro name that a '(' on a following line would still invoke.
+        self._macro_counter = 0
+        self._include_depth = 0
+        self._base_file: Optional[str] = None
+        self._joined_line_numbers: Optional[List[int]] = None
+        self._invocation_continues = False
 
         if defines:
             for name, value in defines.items():
@@ -44,6 +82,9 @@ class HLSLPreprocessor:
                 )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
+        self._macro_counter = 0
+        self._include_depth = 0
+        self._base_file = file_path
         logical_lines = self._split_logical_lines(code)
         output_lines = self._process_lines(logical_lines, file_path)
         return "\n".join(output_lines).replace(
@@ -51,20 +92,57 @@ class HLSLPreprocessor:
         )
 
     def _split_logical_lines(self, code: str) -> List[str]:
+        """Logical lines of ``code``: backslash-newline splices are removed ([lex.phases]/1.2), and a line that
+        opens a block comment continues to the line that closes it, because a comment is one space
+        ([lex.phases]/1.3): a directive goes on after its comment (which becomes a space) and a ``#`` inside a
+        comment starts no directive. A text line keeps the comment and its line breaks.
+        """
         lines = code.splitlines()
         logical_lines: List[str] = []
+        physical: List[int] = []
         buffer = ""
+        spliced = 0
+        comment_at = -1  # where the block comment that ``buffer`` leaves open starts
+        checked = 0  # ``buffer`` before this offset holds no comment end
         for line in lines:
             stripped = line.rstrip()
             if stripped.endswith("\\"):
                 buffer += stripped[:-1]
+                spliced += 1
                 continue
             buffer += line
+            if comment_at >= 0 and "*/" not in buffer[checked:]:
+                extent = comment_at
+            else:
+                start = max(comment_at, 0)
+                extent = start + code_extent(buffer[start:])
+            if extent < len(buffer):
+                comment_at = extent
+                buffer += "\n"
+                checked = len(buffer) - 1
+                spliced += 1
+                continue
+            if comment_at >= 0 and self._is_directive_line(buffer):
+                buffer = comments_to_spaces(buffer)
             logical_lines.append(buffer)
+            physical.append(spliced + 1)
             buffer = ""
+            spliced = 0
+            comment_at = -1
         if buffer:
+            if comment_at >= 0:
+                buffer = buffer[:-1]  # the source ends inside a block comment
             logical_lines.append(buffer)
-        return logical_lines
+            physical.append(spliced)
+        return LogicalLines(logical_lines, physical)
+
+    def _is_directive_line(self, line: str) -> bool:
+        """Whether ``line`` starts with ``#``, or with its alternative token ``%:`` where the dialect has
+        digraphs ([lex.digraph])."""
+        stripped = line.lstrip()
+        return stripped.startswith("#") or (
+            self.macro_dialect.mode.digraphs and stripped.startswith("%:")
+        )
 
     def _paren_balance(self, text: str) -> int:
         balance = 0
@@ -75,7 +153,12 @@ class HLSLPreprocessor:
                 i += consumed
                 continue
             if text.startswith("//", i):
-                break
+                # A joined invocation keeps its line breaks; the comment ends with its line.
+                newline = text.find("\n", i + 2)
+                if newline == -1:
+                    break
+                i = newline + 1
+                continue
             if text.startswith("/*", i):
                 end = text.find("*/", i + 2)
                 if end == -1:
@@ -98,6 +181,7 @@ class HLSLPreprocessor:
         def is_active() -> bool:
             return all(frame["active"] for frame in conditional_stack)
 
+        physical = getattr(lines, "physical", None)
         idx = 0
         while idx < len(lines):
             raw_line = lines[idx]
@@ -106,10 +190,13 @@ class HLSLPreprocessor:
             active = is_active()
             consumed_lines = 1
 
-            if stripped.startswith("#"):
+            if self._is_directive_line(stripped):
+                if stripped.startswith("%:"):
+                    stripped = "#" + stripped[2:]
                 directive, rest = self._parse_directive(stripped)
                 if directive in ("if", "ifdef", "ifndef"):
-                    condition = self._evaluate_condition(
+                    # The condition of a group nested in a skipped group is not evaluated ([cpp.cond]/13).
+                    condition = active and self._evaluate_condition(
                         directive, rest, current_line, current_file
                     )
                     parent_active = active
@@ -123,7 +210,7 @@ class HLSLPreprocessor:
                     )
                 elif directive == "elif":
                     if not conditional_stack:
-                        raise SyntaxError("#elif without #if")
+                        raise DirectXSyntaxError("#elif without #if")
                     frame = conditional_stack[-1]
                     if frame["parent_active"] and not frame["branch_taken"]:
                         condition = self._evaluate_expression(
@@ -133,9 +220,23 @@ class HLSLPreprocessor:
                         frame["branch_taken"] = condition
                     else:
                         frame["active"] = False
+                elif (
+                    directive in ("elifdef", "elifndef") and self.macro_dialect.elifdef
+                ):
+                    if not conditional_stack:
+                        raise DirectXSyntaxError(f"#{directive} without #if")
+                    frame = conditional_stack[-1]
+                    if frame["parent_active"] and not frame["branch_taken"]:
+                        condition = self._evaluate_condition(
+                            directive[2:], rest, current_line, current_file
+                        )
+                        frame["active"] = condition
+                        frame["branch_taken"] = condition
+                    else:
+                        frame["active"] = False
                 elif directive == "else":
                     if not conditional_stack:
-                        raise SyntaxError("#else without #if")
+                        raise DirectXSyntaxError("#else without #if")
                     frame = conditional_stack[-1]
                     frame["active"] = (
                         frame["parent_active"] and not frame["branch_taken"]
@@ -143,7 +244,7 @@ class HLSLPreprocessor:
                     frame["branch_taken"] = True
                 elif directive == "endif":
                     if not conditional_stack:
-                        raise SyntaxError("#endif without #if")
+                        raise DirectXSyntaxError("#endif without #if")
                     conditional_stack.pop()
                 elif not active:
                     pass
@@ -162,7 +263,13 @@ class HLSLPreprocessor:
                             included_text = included
                             included_path = file_path
                         nested_lines = self._split_logical_lines(included_text)
-                        output.extend(self._process_lines(nested_lines, included_path))
+                        self._include_depth += 1
+                        try:
+                            output.extend(
+                                self._process_lines(nested_lines, included_path)
+                            )
+                        finally:
+                            self._include_depth -= 1
                 elif directive == "line":
                     line_info = self._handle_line_directive(rest)
                     if line_info is not None:
@@ -177,7 +284,12 @@ class HLSLPreprocessor:
                         output.append(line)
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
-                        raise SyntaxError(f"#{directive}: {rest.strip()}")
+                        raise DirectXSyntaxError(f"#{directive}: {rest.strip()}")
+                elif (
+                    not directive
+                    and not self._strip_macro_comments(stripped[1:]).strip()
+                ):
+                    pass  # the null directive ([cpp.null])
                 else:
                     if active:
                         output.append(line)
@@ -186,17 +298,89 @@ class HLSLPreprocessor:
                     line, consumed_lines = self._join_multiline_function_macro_call(
                         lines, idx
                     )
-                    expanded = self._expand_macros(
-                        line, current_line, False, current_file
+                    expanded, consumed_lines = self._expand_text_line(
+                        lines, idx, line, consumed_lines, current_line, current_file
                     )
                     output.append(expanded)
-            current_line += consumed_lines
+            if physical is not None:
+                current_line += sum(physical[idx : idx + consumed_lines])
+            else:
+                current_line += consumed_lines
             idx += consumed_lines
 
         if conditional_stack:
-            raise SyntaxError("Unterminated #if block")
+            raise DirectXSyntaxError("Unterminated #if block")
 
         return output
+
+    def _expand_text_line(
+        self,
+        lines: List[str],
+        start: int,
+        line: str,
+        consumed: int,
+        line_num: int,
+        file_path: Optional[str],
+    ) -> Tuple[str, int]:
+        """Replace the macros of the text line ``line`` (``lines[start:start + consumed]`` joined), joining
+        following lines while a macro invocation continues on them: its argument list is not terminated, or the
+        replaced line ends in a function-like macro name and the next line that is not blank starts with ``(``.
+        As in the shared preprocessor, a directive ends the text that an invocation can take in.
+        """
+        physical = getattr(lines, "physical", None)
+        while True:
+            self._invocation_continues = False
+            self._joined_line_numbers = self._physical_line_numbers(
+                physical, start, consumed, line_num
+            )
+            try:
+                expanded = self._expand_macros(line, line_num, False, file_path)
+            except UnterminatedInvocation:
+                following = start + consumed
+                if following >= len(lines) or self._is_directive_line(lines[following]):
+                    raise
+                line += "\n" + lines[following]
+                consumed += 1
+                continue
+            finally:
+                self._joined_line_numbers = None
+            more = (
+                self._lines_to_invocation_parenthesis(lines, start + consumed)
+                if self._invocation_continues
+                else 0
+            )
+            if not more:
+                return expanded, consumed
+            for following in range(start + consumed, start + consumed + more):
+                line += "\n" + lines[following]
+            consumed += more
+
+    @staticmethod
+    def _physical_line_numbers(
+        physical: Optional[List[int]], start: int, consumed: int, line_num: int
+    ) -> Optional[List[int]]:
+        if physical is None or consumed == 1:
+            return None
+        numbers = []
+        for count in physical[start : start + consumed]:
+            numbers.append(line_num)
+            line_num += count
+        return numbers
+
+    def _lines_to_invocation_parenthesis(self, lines: List[str], start: int) -> int:
+        """How many lines from ``start`` to take in so that the first token after blank lines, a ``(``, joins
+        the line before; 0 when that token is not ``(`` or a directive or an open block comment comes first.
+        """
+        index = start
+        while index < len(lines):
+            text = lines[index]
+            if self._is_directive_line(text) or code_extent(text) < len(text):
+                return 0
+            code = self._strip_macro_comments(text).strip()
+            if code:
+                return index - start + 1 if code.startswith("(") else 0
+            index += 1
+        return 0
 
     def _join_multiline_function_macro_call(
         self, lines: List[str], start: int
@@ -209,7 +393,8 @@ class HLSLPreprocessor:
             next_line = lines[start + consumed]
             if next_line.lstrip().startswith("#"):
                 break
-            line += " " + next_line.lstrip()
+            # Keep the physical line break, so a // comment ends where its line does.
+            line += "\n" + next_line.lstrip()
             consumed += 1
         return line, consumed
 
@@ -237,14 +422,11 @@ class HLSLPreprocessor:
         line_num: int,
         file_path: Optional[str],
     ) -> bool:
-        if directive == "ifdef":
+        if directive in ("ifdef", "ifndef"):
             parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
             name = parts[0] if parts else ""
-            return name in self.macros
-        if directive == "ifndef":
-            parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
-            name = parts[0] if parts else ""
-            return name not in self.macros
+            defined = name in self.macros or name in self.macro_dialect.builtins
+            return defined if directive == "ifdef" else not defined
         return bool(
             self._evaluate_expression(
                 self._expand_macros(rest, line_num, True, file_path)
@@ -252,9 +434,7 @@ class HLSLPreprocessor:
         )
 
     def _evaluate_expression(self, expr: str) -> int:
-        tokenizer = _ExpressionTokenizer(expr)
-        parser = _ExpressionParser(tokenizer)
-        return parser.parse_expression()
+        return int(evaluate_condition(self, expr))
 
     def _handle_define(self, rest: str):
         rest = rest.lstrip()
@@ -274,8 +454,6 @@ class HLSLPreprocessor:
             )
         else:
             replacement = self._strip_macro_comments(after.lstrip())
-            if "##" in replacement:
-                replacement = self._replace_params(replacement, {})
             self.macros[name] = Macro(name=name, params=None, replacement=replacement)
 
     def _strip_macro_comments(self, text: str) -> str:
@@ -326,8 +504,8 @@ class HLSLPreprocessor:
             params[-1] = "__VA_ARGS__"
             is_variadic = True
         elif params and params[-1].endswith("..."):
-            params[-1] = params[-1].replace("...", "")
-            params.append("__VA_ARGS__")
+            # GNU named variable argument ``rest...``: ``rest`` takes the variable arguments.
+            params[-1] = params[-1][: -len("...")].strip()
             is_variadic = True
         return params, remainder, is_variadic
 
@@ -340,22 +518,45 @@ class HLSLPreprocessor:
         delimiter = match.group(1)
         target = match.group(2)
 
-        search_paths: List[str] = []
-        if delimiter == '"' and file_path:
-            search_paths.append(os.path.dirname(file_path))
-        search_paths.extend(self.include_paths)
-
-        for base in search_paths:
-            candidate = os.path.join(base, target)
-            if os.path.isfile(candidate):
-                if self._canonical_path(candidate) in self.pragma_once_files:
-                    return "", candidate
-                return self._read_source_file(candidate), candidate
+        candidate = self._find_header(target, delimiter == '"', file_path)
+        if candidate is not None:
+            if self._canonical_path(candidate) in self.pragma_once_files:
+                return "", candidate
+            return self._read_source_file(candidate), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         if delimiter == "<":
             return f"{PRESERVED_SYSTEM_INCLUDE_SENTINEL}<{target}>", file_path or ""
+        return None
+
+    def _find_header(
+        self,
+        target: str,
+        quoted: bool,
+        file_path: Optional[str],
+        after_current: bool = False,
+    ) -> Optional[str]:
+        """The file that ``#include "target"`` (``quoted``) or ``#include <target>`` names: a quoted header is
+        looked for next to ``file_path`` first, then on the include path. ``after_current`` searches only the
+        include path entries after the one that holds ``file_path``, as ``#include_next`` does; in a file that no
+        entry holds it searches the whole include path, as Clang does."""
+        search_paths: List[str] = []
+        if quoted and file_path and not after_current:
+            search_paths.append(os.path.dirname(file_path))
+        paths = list(self.include_paths)
+        if after_current and file_path:
+            directory = self._canonical_path(os.path.dirname(file_path))
+            for index, base in enumerate(paths):
+                root = self._canonical_path(base)
+                if directory == root or directory.startswith(root + os.sep):
+                    paths = paths[index + 1 :]
+                    break
+        search_paths.extend(paths)
+        for base in search_paths:
+            candidate = os.path.join(base, target)
+            if os.path.isfile(candidate):
+                return candidate
         return None
 
     def _is_pragma_once(self, rest: str) -> bool:
@@ -394,90 +595,19 @@ class HLSLPreprocessor:
         file_path: Optional[str] = None,
         disabled_macros: Optional[Set[str]] = None,
     ) -> str:
-        disabled_macros = disabled_macros or set()
-        result = ""
-        i = 0
-        depth = 0
-        while i < len(text):
-            ch = text[i]
-            if ch in "\"'":
-                literal, consumed = self._read_string(text, i)
-                result += literal
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                result += text[i:]
-                break
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                if end == -1:
-                    result += text[i:]
-                    break
-                result += text[i : end + 2]
-                i = end + 2
-                continue
-
-            if ch.isalpha() or ch == "_":
-                ident, consumed = self._read_identifier(text, i)
-                i += consumed
-                if ident == "__LINE__":
-                    result += str(line_num)
-                    continue
-                if ident == "__FILE__":
-                    result += self._stringize(file_path or "")
-                    continue
-                if in_expression and ident == "defined":
-                    value, consumed_def = self._parse_defined(text, i)
-                    result += "1" if value else "0"
-                    i += consumed_def
-                    continue
-
-                macro = None if ident in disabled_macros else self.macros.get(ident)
-                if macro is None:
-                    result += "0" if in_expression else ident
-                    continue
-
-                if macro.is_function_like():
-                    j = i
-                    while j < len(text) and text[j].isspace():
-                        j += 1
-                    if j < len(text) and text[j] == "(":
-                        args, consumed_args = self._parse_macro_args(text, j)
-                        i = j + consumed_args
-                        replaced = self._expand_function_macro(macro, args)
-                        result += self._expand_macros(
-                            replaced,
-                            line_num,
-                            in_expression,
-                            file_path,
-                            disabled_macros | {ident},
-                        )
-                        continue
-                    result += ident
-                    continue
-
-                replaced = macro.replacement if macro.replacement is not None else ""
-                result += self._expand_macros(
-                    replaced,
-                    line_num,
-                    in_expression,
-                    file_path,
-                    disabled_macros | {ident},
-                )
-                continue
-
-            result += ch
-            i += 1
-            depth += 1
-            if depth > 100000:
-                break
-        return result
+        if in_expression:
+            return expand_condition(self, text, line_num, file_path, disabled_macros)
+        return expand_line(self, text, line_num, file_path, disabled_macros)
 
     def _read_identifier(self, text: str, start: int) -> Tuple[str, int]:
-        i = start
-        while i < len(text) and (text[i].isalnum() or text[i] == "_"):
-            i += 1
-        return text[start:i], i - start
+        if start < 0:
+            # A regex position cannot be negative; keep str indexing semantics.
+            i = start
+            while i < len(text) and (text[i].isalnum() or text[i] == "_"):
+                i += 1
+            return text[start:i], i - start
+        identifier = IDENTIFIER_CONTINUATION_RE.match(text, start).group()
+        return identifier, len(identifier)
 
     def _read_string(self, text: str, start: int) -> Tuple[str, int]:
         quote = text[start]
@@ -491,356 +621,7 @@ class HLSLPreprocessor:
             i += 1
         return text[start:], len(text) - start
 
-    def _parse_defined(self, text: str, start: int) -> Tuple[bool, int]:
-        i = start
-        while i < len(text) and text[i].isspace():
-            i += 1
-        if i < len(text) and text[i] == "(":
-            i += 1
-            while i < len(text) and text[i].isspace():
-                i += 1
-            ident, consumed = self._read_identifier(text, i)
-            i += consumed
-            while i < len(text) and text[i] != ")":
-                i += 1
-            if i < len(text) and text[i] == ")":
-                i += 1
-            return ident in self.macros, i - start
-
-        ident, consumed = self._read_identifier(text, i)
-        i += consumed
-        return ident in self.macros, i - start
-
-    def _parse_macro_args(self, text: str, start: int) -> Tuple[List[str], int]:
-        assert text[start] == "("
-        args: List[str] = []
-        current = ""
-        depth = 0
-        i = start
-        while i < len(text):
-            ch = text[i]
-            if ch == "(":
-                depth += 1
-                if depth > 1:
-                    current += ch
-            elif ch == ")":
-                depth -= 1
-                if depth == 0:
-                    args.append(current.strip())
-                    return args, i - start + 1
-                current += ch
-            elif ch == "," and depth == 1:
-                args.append(current.strip())
-                current = ""
-            else:
-                current += ch
-            i += 1
-        return args, i - start
-
-    def _expand_function_macro(self, macro: Macro, args: List[str]) -> str:
-        params = macro.params or []
-        param_map: Dict[str, str] = {}
-
-        if macro.is_variadic and len(args) >= len(params):
-            fixed_count = len(params) - 1
-            for idx in range(fixed_count):
-                param_map[params[idx]] = args[idx] if idx < len(args) else ""
-            param_map["__VA_ARGS__"] = ", ".join(args[fixed_count:])
-        else:
-            for idx, name in enumerate(params):
-                param_map[name] = args[idx] if idx < len(args) else ""
-
-        replacement = self._replace_params(macro.replacement, param_map)
-        if macro.name in replacement:
-            pattern = rf"\b{re.escape(macro.name)}(?=\s*\()"
-            replacement = re.sub(pattern, f"{macro.name}/**/", replacement)
-        return replacement
-
-    def _replace_params(self, replacement: str, param_map: Dict[str, str]) -> str:
-        tokens = self._tokenize_replacement(replacement)
-        output: List[str] = []
-        i = 0
-        while i < len(tokens):
-            tok_type, _tok_val = tokens[i]
-            if tok_type == "hash":
-                next_idx = self._next_non_ws_token(tokens, i + 1)
-                if next_idx is None:
-                    output.append(self._token_value(tokens[i], param_map))
-                    i += 1
-                    continue
-                next_type, next_val = tokens[next_idx]
-                if next_type == "ident" and next_val in param_map:
-                    output.append(self._stringize(param_map[next_val]))
-                    i = next_idx + 1
-                    continue
-            if tok_type == "paste" and output:
-                next_idx = self._next_non_ws_token(tokens, i + 1)
-                trailing_ws = []
-                while output and output[-1].isspace():
-                    trailing_ws.append(output.pop())
-                if output and next_idx is not None:
-                    next_val = self._token_value(tokens[next_idx], param_map)
-                    prev = output.pop()
-                    output.append(prev + next_val)
-                    i = next_idx + 1
-                    continue
-                output.extend(reversed(trailing_ws))
-            output.append(self._token_value(tokens[i], param_map))
-            i += 1
-        return "".join(output)
-
-    def _next_non_ws_token(
-        self, tokens: List[Tuple[str, str]], start: int
-    ) -> Optional[int]:
-        i = start
-        while i < len(tokens) and tokens[i][0] == "ws":
-            i += 1
-        if i >= len(tokens):
-            return None
-        return i
-
     def _stringize(self, value: str) -> str:
         collapsed = re.sub(r"\s+", " ", value.strip())
         escaped = collapsed.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
-
-    def _tokenize_replacement(self, text: str) -> List[Tuple[str, str]]:
-        tokens: List[Tuple[str, str]] = []
-        i = 0
-        while i < len(text):
-            if text.startswith("##", i):
-                tokens.append(("paste", "##"))
-                i += 2
-                continue
-            if text[i] == "#":
-                tokens.append(("hash", "#"))
-                i += 1
-                continue
-            if text[i].isspace():
-                start = i
-                while i < len(text) and text[i].isspace():
-                    i += 1
-                tokens.append(("ws", text[start:i]))
-                continue
-            if text[i].isalpha() or text[i] == "_":
-                ident, consumed = self._read_identifier(text, i)
-                tokens.append(("ident", ident))
-                i += consumed
-                continue
-            if text[i] in "\"'":
-                literal, consumed = self._read_string(text, i)
-                tokens.append(("literal", literal))
-                i += consumed
-                continue
-            tokens.append(("sym", text[i]))
-            i += 1
-        return tokens
-
-    def _token_value(self, token: Tuple[str, str], param_map: Dict[str, str]) -> str:
-        tok_type, tok_val = token
-        if tok_type == "ident" and tok_val in param_map:
-            return param_map[tok_val]
-        return tok_val
-
-
-class _ExpressionTokenizer:
-    """Tokenizer for integer expressions inside conditional directives."""
-
-    def __init__(self, expr: str):
-        self.expr = expr
-        self.pos = 0
-
-    def next_token(self) -> Tuple[str, Optional[int]]:
-        while self.pos < len(self.expr) and self.expr[self.pos].isspace():
-            self.pos += 1
-        if self.pos >= len(self.expr):
-            return "EOF", None
-
-        multi = [
-            "||",
-            "&&",
-            "==",
-            "!=",
-            "<=",
-            ">=",
-            "<<",
-            ">>",
-        ]
-        for op in multi:
-            if self.expr.startswith(op, self.pos):
-                self.pos += len(op)
-                return op, None
-
-        ch = self.expr[self.pos]
-        self.pos += 1
-        if ch.isdigit():
-            start = self.pos - 1
-            while self.pos < len(self.expr) and (
-                self.expr[self.pos].isalnum() or self.expr[self.pos] in "xX"
-            ):
-                self.pos += 1
-            text = self.expr[start : self.pos]
-            return "NUMBER", self._parse_number(text)
-        if ch.isalpha() or ch == "_":
-            start = self.pos - 1
-            while self.pos < len(self.expr) and (
-                self.expr[self.pos].isalnum() or self.expr[self.pos] == "_"
-            ):
-                self.pos += 1
-            return "NUMBER", 0
-        return ch, None
-
-    def _parse_number(self, text: str) -> int:
-        text = re.sub(r"[uUlL]+$", "", text)
-        if text.startswith(("0x", "0X")):
-            return int(text, 16)
-        if text.startswith(("0b", "0B")):
-            return int(text, 2)
-        if text.startswith("0") and len(text) > 1:
-            try:
-                return int(text, 8)
-            except ValueError:
-                return int(text, 10)
-        try:
-            return int(float(text))
-        except ValueError:
-            return 0
-
-
-class _ExpressionParser:
-    """Recursive-descent evaluator for preprocessor integer expressions."""
-
-    def __init__(self, tokenizer: _ExpressionTokenizer):
-        self.tokenizer = tokenizer
-        self.current = self.tokenizer.next_token()
-
-    def _eat(self, token_type: str):
-        if self.current[0] != token_type:
-            raise SyntaxError(f"Expected {token_type}, got {self.current[0]}")
-        self.current = self.tokenizer.next_token()
-
-    def parse_expression(self) -> int:
-        return self._parse_logical_or()
-
-    def _parse_logical_or(self) -> int:
-        left = self._parse_logical_and()
-        while self.current[0] == "||":
-            self._eat("||")
-            right = self._parse_logical_and()
-            left = 1 if (left or right) else 0
-        return left
-
-    def _parse_logical_and(self) -> int:
-        left = self._parse_bitwise_or()
-        while self.current[0] == "&&":
-            self._eat("&&")
-            right = self._parse_bitwise_or()
-            left = 1 if (left and right) else 0
-        return left
-
-    def _parse_bitwise_or(self) -> int:
-        left = self._parse_bitwise_xor()
-        while self.current[0] == "|":
-            self._eat("|")
-            right = self._parse_bitwise_xor()
-            left = left | right
-        return left
-
-    def _parse_bitwise_xor(self) -> int:
-        left = self._parse_bitwise_and()
-        while self.current[0] == "^":
-            self._eat("^")
-            right = self._parse_bitwise_and()
-            left = left ^ right
-        return left
-
-    def _parse_bitwise_and(self) -> int:
-        left = self._parse_equality()
-        while self.current[0] == "&":
-            self._eat("&")
-            right = self._parse_equality()
-            left = left & right
-        return left
-
-    def _parse_equality(self) -> int:
-        left = self._parse_relational()
-        while self.current[0] in ("==", "!="):
-            op = self.current[0]
-            self._eat(op)
-            right = self._parse_relational()
-            left = 1 if (left == right if op == "==" else left != right) else 0
-        return left
-
-    def _parse_relational(self) -> int:
-        left = self._parse_shift()
-        while self.current[0] in ("<", "<=", ">", ">="):
-            op = self.current[0]
-            self._eat(op)
-            right = self._parse_shift()
-            if op == "<":
-                left = 1 if left < right else 0
-            elif op == "<=":
-                left = 1 if left <= right else 0
-            elif op == ">":
-                left = 1 if left > right else 0
-            else:
-                left = 1 if left >= right else 0
-        return left
-
-    def _parse_shift(self) -> int:
-        left = self._parse_additive()
-        while self.current[0] in ("<<", ">>"):
-            op = self.current[0]
-            self._eat(op)
-            right = self._parse_additive()
-            left = left << right if op == "<<" else left >> right
-        return left
-
-    def _parse_additive(self) -> int:
-        left = self._parse_multiplicative()
-        while self.current[0] in ("+", "-"):
-            op = self.current[0]
-            self._eat(op)
-            right = self._parse_multiplicative()
-            left = left + right if op == "+" else left - right
-        return left
-
-    def _parse_multiplicative(self) -> int:
-        left = self._parse_unary()
-        while self.current[0] in ("*", "/", "%"):
-            op = self.current[0]
-            self._eat(op)
-            right = self._parse_unary()
-            if op == "*":
-                left = left * right
-            elif op == "/":
-                left = left // right if right != 0 else 0
-            else:
-                left = left % right if right != 0 else 0
-        return left
-
-    def _parse_unary(self) -> int:
-        if self.current[0] in ("+", "-", "!", "~"):
-            op = self.current[0]
-            self._eat(op)
-            value = self._parse_unary()
-            if op == "+":
-                return value
-            if op == "-":
-                return -value
-            if op == "!":
-                return 0 if value else 1
-            return ~value
-        return self._parse_primary()
-
-    def _parse_primary(self) -> int:
-        if self.current[0] == "NUMBER":
-            value = self.current[1] or 0
-            self._eat("NUMBER")
-            return value
-        if self.current[0] == "(":
-            self._eat("(")
-            value = self.parse_expression()
-            self._eat(")")
-            return value
-        return 0

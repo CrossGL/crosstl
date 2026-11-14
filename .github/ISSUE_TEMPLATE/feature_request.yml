@@ -1,0 +1,22 @@
+name: Feature request or backend gap
+description: A language feature, backend or option CrossTL does not support yet
+labels: [enhancement]
+body:
+  - type: textarea
+    id: feature
+    attributes:
+      label: What you need
+      description: The feature, and the languages and direction (import into CrossGL or generate from it) it concerns.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: A short shader or kernel that uses it, and the output you would expect.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Why it matters
+      description: The project or workload that needs it, and any workaround you use today.

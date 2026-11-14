@@ -372,11 +372,11 @@ def test_self_comparisons_execute_with_raw_float_payloads(
 
 
 def test_float_self_comparison_gate_is_required_on_every_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate subgroup-guarded returns"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -384,6 +384,6 @@ def test_float_self_comparison_gate_is_required_on_every_native_target():
     assert "if:" not in step and "continue-on-error" not in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_self_comparisons.py",
         )

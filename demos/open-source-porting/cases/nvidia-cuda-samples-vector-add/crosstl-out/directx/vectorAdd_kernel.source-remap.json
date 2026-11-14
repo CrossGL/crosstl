@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 468,
+        "endOffset": 414,
         "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
-        "length": 468,
+        "length": 414,
         "line": 1,
         "offset": 0
       },

@@ -40,6 +40,10 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+)
 
 REQUIRE_REDUCE_OPENGL_ENV = "CROSTL_REQUIRE_MLX_REDUCE_OPENGL_TRANSLATION"
 REDUCE_OPENGL_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_OPENGL_SHARD_INDEX"
@@ -55,21 +59,21 @@ REDUCE_OPENGL_CONTRACT_PATH = (
     / "reduce.opengl-translation.json"
 )
 REDUCE_OPENGL_CONTRACT_SHA256 = (
-    "d547511afa6894d3437ef37dc4648ef8dedb7627a015ac7118747e6466aac5c9"
+    "894599727cc4b0d5deb1e3eec4420ec57cec4a6d11d42357082b66b865ecd7f3"
 )
-REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500899
+REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500901
 REDUCE_OPENGL_SPECIALIZATION_COUNT = 9216
 REDUCE_OPENGL_REFLECTED_RESOURCE_COUNT = 25088
-REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 45283816
+REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 44853060
 REDUCE_OPENGL_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1331)
 REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = (
     "col_reduce_2pass_large_5_32_32_reduce_prodcomplex64",
-    45499,
+    44794,
 )
 INDEX_RANGE_ASSERTIONS = (
     ("in_ + LoopedElemToLoc_1_int64_t_false__location(loop)", 0, 2**31 - 1),
     ("in_ + LoopedElemToLoc_2_int64_t_false__location(loop)", 0, 2**31 - 1),
-    ("in_ + LoopedElemToLoc_5_int64_t_true__location(loop)", 0, 2**31 - 1),
+    ("in_ + LoopedElemToLoc_5_int64_t__location(loop)", 0, 2**31 - 1),
     ("inputs[i - 1] + reduction_size", 0, 2**31 - 1),
     (
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
@@ -585,11 +589,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "main",
@@ -606,8 +608,13 @@ def _translate_and_validate(
     assert execution[0]["targetEntryPoint"] == "main"
     assert execution[0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == workload.materialization_sha256
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]

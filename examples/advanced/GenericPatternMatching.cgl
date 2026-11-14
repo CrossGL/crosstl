@@ -209,32 +209,6 @@ shader GenericPatternMatching {
         }
     }
 
-    // Higher-order functions and closures
-    generic<T, U> fn map_option(opt: Option<T>, mapper: fn(T) -> U) -> Option<U> {
-        match opt {
-            Option::Some(value) => Option::Some(mapper(value)),
-            Option::None => Option::None
-        }
-    }
-
-    generic<T> fn chain_operations(
-        input: T,
-        operations: [fn(T) -> Result<T, MathError>]
-    ) -> Result<T, MathError> {
-        let mut current = Result::Ok(input);
-
-        for op in operations {
-            match current {
-                Result::Ok(value) => {
-                    current = op(value);
-                },
-                Result::Err(e) => return Result::Err(e)
-            }
-        }
-
-        current
-    }
-
     struct Geometry {
         center: vec3,
         normal: vec3

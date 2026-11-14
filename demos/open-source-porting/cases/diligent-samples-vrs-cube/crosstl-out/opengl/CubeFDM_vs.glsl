@@ -2,14 +2,8 @@
 layout(location = 0) in vec3 in_Pos;
 layout(location = 1) in vec2 in_UV;
 layout(location = 0) out vec2 out_UV;
-struct g_Constants {
-    mat4 WorldViewProj;
-    int PrimitiveShadingRate;
-    int DrawMode;
-};
-
 // Constant Buffers
-layout(std140, binding = 0) uniform Uniforms {
+layout(std140, binding = 0) uniform g_Constants {
     mat4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;

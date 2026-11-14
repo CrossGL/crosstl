@@ -28,7 +28,43 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
-from .array_utils import parse_array_type, split_array_type_suffix
+from ..matrix_shape import matrix_type_spelling
+from ..refusals import CudaRefusal, supersedes_pending_refusals
+from ..semantics.declared_types import declared_type_names
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
+from .array_utils import (
+    parse_array_type,
+    prepend_array_dimension,
+    split_array_type_suffix,
+)
+from .assignment_values import assignment_value_expression
+from .c_family_operands import postfix_operand, prefix_unary_operand
+from .c_float_literals import c_float_literal_text
+from .c_narrow_integer_vectors import generic_narrow_vector_spelling
+from .c_pointer_math import generate_pointer_math_call
+from .c_reference_parameters import (
+    is_output_parameter,
+    multi_component_swizzle_arguments,
+    overlapping_output_arguments,
+    reference_declarator,
+)
+from .c_vector_reductions import generate_vector_reduction_call
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
+from .comma_expressions import (
+    CommaExpressionVisitorMixin,
+    comma_result_operand,
+    is_comma_expression,
+)
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_refusals import CudaLoweringRefused
+from .float_remainder_assignment import float_remainder_assignment
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -36,11 +72,25 @@ from .generic_function_utils import (
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
+    generic_function_specialization_named,
     iter_function_nodes,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
+    is_constant_value_declaration,
+)
+from .gpu_subgroup_builtins import (
+    reserved_builtin_reason,
+    subgroup_builtin_expression,
+)
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -48,15 +98,34 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .relational_builtins import lower_relational_builtins
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
+from .sampler_pairs import canonicalize_separate_textures
+from .stage_local_structs import module_structs
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
     stage_matches,
 )
+from .value_array_parameters import (
+    collect_function_parameters_by_name,
+    collect_struct_names,
+    fixed_array_dimensions,
+    plan_value_array_copies,
+    value_array_copy_lines,
+)
 from .vector_arithmetic import VectorArithmeticMixin
+from .written_function_names import (
+    CUDA_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
+from .written_type_names import (
+    CUDA_TYPE_NAMES,
+    refuse_written_foreign_types,
+    written_type_name,
+)
 
 CUDA_WAVE_OP_ARITIES = {
     "WaveGetLaneCount": 0,
@@ -135,11 +204,34 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+CUDA_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
+}
+
 CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
     "countbits": "bitCount",
     "reversebits": "bitfieldReverse",
     "firstbitlow": "findLSB",
     "firstbithigh": "findMSB",
+}
+
+# CrossGL's sized scalar constructors have no CUDA spelling, and several map to multi-word C++ types
+# (``unsigned int``, ``long long``) that cannot take the functional-cast form ``T(x)``, so they lower to
+# ``static_cast<T>(x)`` as the HIP generator's do.
+CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "u64",
+    "int64",
+    "uint64",
+    "f32",
+    "f64",
 }
 
 CUDA_FP16_VECTOR_TYPES = {
@@ -160,8 +252,20 @@ CUDA_FP16_VECTOR_TYPES = {
 }
 
 
-class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+def _refuse_buffer_counter(reason):
+    raise CudaRefusal(f"CUDA buffer counter: {reason}")
+
+
+class CudaCodeGen(
+    LoweringRefusalMixin,
+    CommaExpressionVisitorMixin,
+    VectorArithmeticMixin,
+    ResourceQueryMixin,
+    ResourceDiagnosticMixin,
+):
     """Emit CUDA source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = CudaLoweringRefused
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
@@ -199,6 +303,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         "RWTexture2DMS": "image2DMS",
         "RWTexture2DMSArray": "image2DMSArray",
     }
+    # The type names the program declares, and the foreign built-in type names written so far (``None`` outside
+    # a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
 
     def __init__(self):
         """Initialize CUDA type maps and per-generation visitor state."""
@@ -219,6 +327,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
+        self.function_parameters_by_name = {}
+        self.value_array_struct_names = frozenset()
         self.helper_functions = {}
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
@@ -236,6 +346,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.cuda_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -311,7 +423,40 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
 
     def generate(self, ast_node):
-        """Generate complete CUDA source for a CrossGL AST."""
+        """Generate complete CUDA source for a CrossGL AST, or raise :class:`CudaLoweringRefused`.
+
+        A construct with no faithful CUDA lowering is refused; no program is returned while a refusal is
+        pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
+        """
+        refuse_cooperative_matrices(ast_node, label="CUDA", target="cuda")
+        return self.refusals.run(self.render_checked_program, ast_node)
+
+    def render_checked_program(self, ast_node):
+        """Render the program and refuse each built-in type and function of another language it still names."""
+        self.program_type_names = declared_type_names(ast_node)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(ast_node)
+            refuse_written_foreign_types(
+                output, self.written_foreign_type_names, "CUDA"
+            )
+            refuse_written_foreign_calls(output, CUDA_CALLABLE_FUNCTION_NAMES, "CUDA")
+        finally:
+            self.written_foreign_type_names = None
+        return output
+
+    def render_program(self, ast_node):
+        """Render complete CUDA source for a CrossGL AST."""
+        # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
+        ast_node = canonicalize_separate_textures(ast_node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        ast_node = rename_cuda_library_functions(ast_node)
+        # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
+        lower_relational_builtins(ast_node)
+        # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
+        ast_node = materialize_structured_buffer_counters(
+            ast_node, _refuse_buffer_counter
+        )
         self.output = []
         self.indent_level = 0
         self.validate_supported_stage_types(ast_node)
@@ -332,6 +477,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         ) = self.collect_struct_member_metadata(ast_node)
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
+        self.function_parameters_by_name = collect_function_parameters_by_name(
+            ast_node, self.type_name_string
+        )
+        self.value_array_struct_names = collect_struct_names(ast_node)
         self.generic_function_definitions = {}
         self.generic_function_definition_ordinals = {}
         self.generic_function_specializations = {}
@@ -340,6 +489,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast_node)),
+            collect_constant_and_cbuffer_member_types(self, ast_node),
+            ast=ast_node,
         )
         self.function_return_types.update(
             {
@@ -358,6 +509,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -425,7 +578,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
         for name in sorted(generic_names):
             if re.search(rf"\b{re.escape(name)}\b", result):
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA codegen cannot emit unresolved generic parameter "
                     f"'{name}'; specialize generic declarations before CUDA "
                     "generation"
@@ -452,7 +605,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "ray_generation": "ray_generation",
             "ray_intersection": "intersection",
             "ray_miss": "miss",
-        }.get(stage_name, stage_name)
+        }[
+            stage_name
+        ]  # only called for cuda_ray_stage_names(), which this table covers
 
     def has_geometry_stage(self, ast_node, target_stage=None):
         if not stage_matches(target_stage, "geometry"):
@@ -886,7 +1041,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA output does not support stage type(s): {stage_list}"
             )
 
@@ -907,7 +1062,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             ray_builtin = self.cuda_ray_builtin_expression(node)
             if ray_builtin is not None and node not in self.variable_types:
                 return ray_builtin
-            return self.builtin_map.get(node, node)
+            return self.cuda_identifier_spelling(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -1037,6 +1192,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("#include <cuda_fp16.h>")
+        # CrossGL's fixed-width integers lower to uint8_t, int64_t and friends, which none of the
+        # CUDA headers above declares.
+        self.emit("#include <cstdint>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
@@ -1047,8 +1205,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if self.has_mesh_task_stage(node):
             self.emit_generated_code(self.generate_cuda_mesh_task_helpers())
 
-        structs = getattr(node, "structs", [])
-        for struct in structs:
+        for struct in module_structs(node, "CUDA"):
             self.visit(struct)
             self.emit("")
 
@@ -1074,9 +1231,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for var in global_vars
             if getattr(var, "name", None)
         }
-        for stage in (getattr(node, "stages", {}) or {}).values():
+        for stage_type, stage in (getattr(node, "stages", {}) or {}).items():
+            stage_name = (
+                str(stage_type).split(".")[-1].lower()
+                if hasattr(stage_type, "name")
+                else str(stage_type).lower()
+            )
             for var in getattr(stage, "local_variables", []) or []:
                 if self.is_cuda_shared_variable(var):
+                    continue
+                if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
+                    # A stage-local input that names a compute built-in is the
+                    # built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -1085,7 +1251,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 previous_type = emitted_stage_local_variables.get(var_name)
                 if previous_type is not None:
                     if previous_type != var_type:
-                        raise ValueError(
+                        raise CudaRefusal(
                             "Conflicting CUDA stage-local declaration for "
                             f"'{var_name}': {previous_type} differs from {var_type}"
                         )
@@ -1362,6 +1528,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if stage_name in self.cuda_mesh_task_stage_names():
             self.validate_cuda_mesh_task_stage(node, stage_name)
 
+        value_array_copies = (
+            {}
+            if stage_name is not None
+            else plan_value_array_copies(
+                node,
+                param_list,
+                self.type_name_string,
+                self.function_parameters_by_name,
+                self.value_array_struct_names,
+            )
+        )
+        value_array_copy_statements = []
         for param in param_list:
             if hasattr(param, "param_type"):
                 param_type = param.param_type
@@ -1390,11 +1568,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     param,
                 )
                 params.append(geometry_stream_declaration)
+            elif param_name in value_array_copies:
+                incoming = value_array_copies[param_name]
+                self.register_variable_type(param_name, declaration_type, param)
+                params.append(self.format_typed_declarator(declaration_type, incoming))
+                value_array_copy_statements.extend(
+                    value_array_copy_lines(
+                        self.format_typed_declarator(declaration_type, param_name),
+                        param_name,
+                        incoming,
+                        fixed_array_dimensions(self.type_name_string(declaration_type)),
+                    )
+                )
             else:
                 self.register_variable_type(param_name, declaration_type, param)
-                params.append(
-                    self.format_typed_declarator(declaration_type, param_name)
+                declarator = self.format_typed_declarator(declaration_type, param_name)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declarator = reference_declarator(declarator, param_name)
+                declarator = self.apply_restrict_qualifier_to_declaration(
+                    declarator, param_name, param
                 )
+                params.append(declarator)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
@@ -1476,6 +1671,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit(f"{signature_prefix} {return_type} {function_name}({param_str}) {{")
 
         self.indent_level += 1
+        for statement in value_array_copy_statements:
+            self.emit(statement)
 
         fragment_output_name = None
         if fragment_output_param is not None:
@@ -1608,7 +1805,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.emit(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.emit(f"{declaration};")
 
     def format_variable_declaration(self, node):
         var_type = None
@@ -1655,8 +1855,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if hasattr(node, "qualifiers"):
                 for qualifier in node.qualifiers:
                     qualifier = str(qualifier).lower()
-                    if qualifier == "const":
-                        qualifiers.append("const")
+                    if qualifier == "const" or (
+                        qualifier == "constant"
+                        and is_constant_value_declaration(node)
+                        and self.cuda_pointer_or_reference_type_info(
+                            self.type_name_string(var_type)
+                        )
+                        is None
+                    ):
+                        if "const" not in qualifiers:
+                            qualifiers.append("const")
                     elif qualifier == "static":
                         qualifiers.append("static")
                     elif "workgroup" in qualifier or "shared" in qualifier:
@@ -1672,6 +1880,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             declaration = (
                 f"{qualifier_str}"
                 f"{self.format_typed_declarator(declaration_type, node.name)}"
+            )
+            declaration = self.apply_restrict_qualifier_to_declaration(
+                declaration, node.name, node
             )
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
@@ -1837,7 +2048,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "SV_StartVertexLocation": "start_vertex_location",
             "SV_VertexID": "vertex_id",
         }
-        return generic_semantics.get(semantic_name, semantic_name)
+        if semantic_name in generic_semantics:
+            return generic_semantics[semantic_name]
+        # Only stage metadata comments record the semantic; a user semantic is recorded as written.
+        return semantic_name
 
     def cuda_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -1892,12 +2106,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if kind in {"position", "color"}:
             if self.is_cuda_float4_type(type_name):
                 return
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "expected vec4-compatible type"
             )
         if kind == "depth" and not self.is_cuda_float_scalar_type(type_name):
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "expected float type"
             )
@@ -1907,7 +2121,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -1920,7 +2134,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }[kind]
         if stage_name not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA {stage_name} stage; "
                 f"valid stage is {allowed}"
             )
@@ -1974,15 +2188,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def cuda_geometry_maxvertexcount(self, func):
         arguments = self.cuda_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("CUDA geometry stage requires maxvertexcount attribute")
+            raise CudaRefusal("CUDA geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -1992,7 +2206,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -2001,19 +2215,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def cuda_tessellation_output_control_points(self, func):
         arguments = self.cuda_stage_attribute_arguments(func, "outputcontrolpoints")
         if not arguments:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage requires outputcontrolpoints "
                 "attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
@@ -2037,11 +2251,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         value = self.cuda_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"CUDA {stage_name} stage requires domain attribute")
+                raise CudaRefusal(f"CUDA {stage_name} stage requires domain attribute")
             return None
         canonical = self.canonical_cuda_tessellation_domain(value)
         if canonical is None:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage domain '{value}' must be tri, quad, "
                 "or isoline"
             )
@@ -2060,7 +2274,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
         if normalized not in valid_partitioning:
             valid = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage partitioning '{value}' must be one of: "
                 f"{valid}"
             )
@@ -2120,8 +2334,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def cuda_mesh_task_stage_label(self, stage_name):
         return {
             "amplification": "amplification/task",
+            "mesh": "mesh",
             "object": "object/task",
-        }.get(stage_name, stage_name)
+            "task": "task",
+        }[
+            stage_name
+        ]  # only called for cuda_mesh_task_stage_names(), which this table covers
 
     def cuda_mesh_task_positive_attribute(self, func, attribute_name, stage_name):
         value = self.cuda_stage_attribute_value(func, attribute_name, stage_name)
@@ -2131,7 +2349,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.cuda_stage_attribute_arguments(func, attribute_name)[0]
         )
         if value_int is not None and value_int <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage {attribute_name} ({value_int}) "
                 "must be positive"
             )
@@ -2143,7 +2361,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise CudaRefusal(
                     f"CUDA {stage_name} stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2151,7 +2369,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for axis, argument in zip("xyz", arguments):
                 value = self.literal_int_value(argument)
                 if value is not None and value <= 0:
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"CUDA {stage_name} stage {attribute_name} {axis} "
                         f"dimension ({value}) must be positive"
                     )
@@ -2174,7 +2392,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
         topology = topology_aliases.get(normalized)
         if topology is None:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage outputtopology '{value}' must be "
                 "point, line, or triangle"
             )
@@ -2303,7 +2521,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
             expected_count = expected_counts[primitive]
             if not self.cuda_parameter_is_array(parameter):
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -2313,7 +2531,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -2326,7 +2544,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.cuda_geometry_stream_info(self.parameter_raw_type(param))
             for param in parameters
         ):
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -2334,7 +2552,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if not any(
             self.cuda_geometry_input_primitive_qualifier(param) for param in parameters
         ):
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -2377,7 +2595,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if semantic is None:
             return
         if self.map_type(return_type) == "void":
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} return semantic for CUDA codegen; "
                 "void return type"
             )
@@ -2484,6 +2702,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "workgroup_id",
         }:
             return role
+        return None
+
+    def cuda_stage_local_builtin_role(self, stage_name, var):
+        """Return the compute built-in role for a stage-local input variable.
+
+        A stage-local ``@input`` variable carrying a compute built-in semantic
+        (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``, the
+        shape the SPIR-V importer writes for a GLSL compute shader that reads
+        ``gl_GlobalInvocationID``) is the built-in itself, not a variable to
+        declare: CUDA has no such global, and a file-scope declaration would
+        be an uninitialised host global that the kernel must not read. A
+        variable whose name is a compute built-in and which is declared as a
+        stage input is the same built-in even when the semantic spelling is
+        missing.
+        """
+        if stage_name != "compute":
+            return None
+        role = self.cuda_compute_builtin_parameter_role(stage_name, var)
+        if role is not None:
+            return role
+        if self.cuda_compute_builtin_role_for_name(getattr(var, "name", None)) is None:
+            return None
+        if any(
+            str(getattr(attr, "name", "")).lower() == "input"
+            for attr in getattr(var, "attributes", []) or []
+        ):
+            return self.cuda_compute_builtin_role_for_name(var.name)
         return None
 
     def cuda_compute_builtin_expression(self, role, component=None):
@@ -2616,9 +2861,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
         if len(components) == 1:
             return vector_info["component_type"]
-        return self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
+        return self.swizzle_vector_type(vector_info, len(components))
 
     def cuda_stage_builtin_alias_expression(self, name, component=None):
         role = self.stage_builtin_aliases.get(name)
@@ -2660,7 +2903,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and actual_type in {"uint", "unsigned int", "uint2"}
         ):
             return
-        raise ValueError(
+        raise CudaRefusal(
             f"Unsupported {semantic} stage parameter semantic for CUDA codegen; "
             f"expected {expected_type} type"
         )
@@ -2682,14 +2925,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 mapped_semantic, expected_type, allowed_stages = rule
                 if stage_name not in allowed_stages:
                     allowed = ", ".join(sorted(allowed_stages))
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"Unsupported {semantic} stage parameter semantic for CUDA "
                         f"{stage_name} stage; valid stage is {allowed}"
                     )
                 param_name = getattr(param, "name", getattr(param, "param_name", None))
                 previous_name = seen_system_semantics.get(mapped_semantic)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"Duplicate CUDA stage parameter semantic {mapped_semantic} "
                         f"on '{previous_name}' and '{param_name}'"
                     )
@@ -2701,7 +2944,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
             kind = self.cuda_semantic_output_kind(semantic)
             if kind in {"color", "depth"}:
-                raise ValueError(
+                raise CudaRefusal(
                     f"Unsupported {semantic} stage parameter semantic for CUDA "
                     f"{stage_name} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -2717,9 +2960,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         metadata_comment = self.cuda_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.emit(metadata_comment)
+        place = file_scope_placement(self, node, metadata_comment)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
-            self.emit(f"{declaration};")
+            self.emit(f"{place(declaration)};")
             initial_value = getattr(
                 node,
                 "initial_value",
@@ -2739,17 +2983,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     effective_var_type,
                 )
             if metadata_declaration:
-                self.emit(f"{metadata_declaration};")
+                self.emit(f"{place(metadata_declaration)};")
             length_declaration = self.structured_buffer_length_declaration(
                 node.name, var_type
             )
             if length_declaration:
-                self.emit(f"{length_declaration};")
+                self.emit(f"{place(length_declaration)};")
             counter_declaration = self.structured_buffer_counter_declaration(
                 node.name, var_type
             )
             if counter_declaration:
-                self.emit(f"{counter_declaration};")
+                self.emit(f"{place(counter_declaration)};")
             return None
 
         return node.name
@@ -2774,6 +3018,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "CUDA",
             )
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             assignment = self.generate_match_expression_diagnostic_assignment(
                 node.name,
                 var_type,
@@ -2805,6 +3051,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return a for-clause expression, preserving CUDA metadata sidecars."""
         if node is None:
             return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.format_for_clause_expression(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "cuda",
+            )
         if isinstance(node, VariableNode):
             return self.format_variable_declaration(node)
 
@@ -2834,7 +3086,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         enum_constant = self.enum_variant_constants.get(name)
         if enum_constant is not None:
             return enum_constant
-        return self.builtin_map.get(name, name)
+        return self.cuda_identifier_spelling(name)
+
+    def cuda_identifier_spelling(self, name):
+        """The CUDA spelling of an identifier: a mapped built-in, or a program name as it is declared.
+
+        A name in the reserved ``gl_`` namespace that is neither mapped nor declared by the program is a built-in
+        variable with no CUDA equivalent, and is refused (:mod:`.gpu_subgroup_builtins`).
+        """
+        if name in self.builtin_map:
+            return self.builtin_map[name]
+        if name not in self.variable_types:
+            subgroup = subgroup_builtin_expression(
+                name, self.cuda_warp_lane_index_expression()
+            )
+            if subgroup is not None:
+                return subgroup
+            reason = reserved_builtin_reason(name, "CUDA")
+            if reason is not None:
+                return self.refuse_lowering(reason, name)
+        return name
 
     def cuda_ray_builtin_expression(self, name):
         helper_name = {
@@ -2872,6 +3143,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and not isinstance(value, bool)
         ):
             return f"{value}u"
+        if literal_type == "float":
+            float_text = c_float_literal_text(value)
+            if float_text is not None:
+                return float_text
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
@@ -2898,7 +3173,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
-        return self.format_assignment_expression(node)
+        return assignment_value_expression(self.format_assignment_expression(node))
 
     def format_assignment_expression(self, node):
         operator = getattr(node, "operator", "=")
@@ -2910,6 +3185,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         if diagnostic is not None:
             return diagnostic
+        # C++ has no floating %=; x = x % y lowers the remainder through fmodf.
+        remainder = float_remainder_assignment(
+            node.target,
+            node.value,
+            operator,
+            type_of=self.expression_result_type,
+            is_floating=self.is_floating_value_type,
+            backend="cuda",
+        )
+        if remainder is not None:
+            return self.format_assignment_expression(remainder)
         swizzle_assignment = self.format_swizzle_assignment_expression(
             node.target,
             node.value,
@@ -2978,19 +3264,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if object_node is None or components is None or len(components) <= 1:
             return None
 
-        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        object_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if object_info is None:
             return None
-        result_type = self.vector_type_for_components(
-            object_info["component_type"], len(components)
-        )
-        result_info = self.vector_type_info(result_type)
+        result_type = self.swizzle_vector_type(object_info, len(components))
+        result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
 
         object_expr = self.visit(object_node)
         value_expr = self.visit(value_node)
-        value_info = self.vector_type_info(self.expression_result_type(value_node))
+        value_info = self.swizzle_result_vector_info(
+            self.expression_result_type(value_node)
+        )
         temp_name = self.next_cuda_temp_variable("swizzle_value")
         if value_info is not None:
             if len(value_info["components"]) != len(components):
@@ -3090,11 +3378,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if operator == "not":
             operator = "!"
         if getattr(node, "is_postfix", getattr(node, "postfix", False)):
-            return f"{operand}{operator}"
+            return f"{postfix_operand(operand)}{operator}"
         lowered = self.lower_vector_unary_operation(node.operand, operand, operator)
         if lowered is not None:
             return lowered
-        return f"{operator}{operand}"
+        return f"{operator}{prefix_unary_operand(operator, operand)}"
 
     def visit_ConstructorNode(self, node):
         """Lower braced AST constructors to CUDA aggregate/value constructors."""
@@ -3136,8 +3424,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if half_constructor is not None:
             return half_constructor
 
+        scalar_alias_constructor = self.cuda_scalar_alias_constructor_expression(
+            constructor_type, args
+        )
+        if scalar_alias_constructor is not None:
+            return scalar_alias_constructor
+
         mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
         return f"{mapped_type}({', '.join(args)})"
+
+    def cuda_scalar_alias_constructor_expression(self, constructor_type, args):
+        """Lower a sized scalar constructor such as ``f64(x)`` or ``u32(x)`` to ``static_cast``."""
+        if constructor_type not in CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES:
+            return None
+        if len(args) > 1:
+            return None
+
+        mapped_type = self.map_type(constructor_type)
+        value = args[0] if args else "0"
+        return f"static_cast<{mapped_type}>({value})"
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
@@ -3199,14 +3504,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         field_names = [field_name for field_name, _field_type in fields]
 
         if len(positional_args) > len(fields):
-            raise ValueError(
+            raise CudaRefusal(
                 f"Struct constructor {struct_name} expects at most {len(fields)} "
                 f"arguments, got {len(positional_args)}"
             )
 
         unknown_names = sorted(set(named_args) - set(field_names))
         if unknown_names:
-            raise ValueError(
+            raise CudaRefusal(
                 f"Struct constructor {struct_name} has no field "
                 f"{', '.join(unknown_names)}"
             )
@@ -3272,7 +3577,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if specialized_func_name is not None:
             func_name = specialized_func_name
         else:
-            raise_unresolved_generic_function_call(self, func_name, "CUDA")
+            reject_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
 
@@ -3290,6 +3595,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.generate_mesh_task_call_expression(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            scalar_alias_constructor = self.cuda_scalar_alias_constructor_expression(
+                func_name, args
+            )
+            if scalar_alias_constructor is not None:
+                return scalar_alias_constructor
         if not is_user_function:
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, raw_args
@@ -3335,15 +3646,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if warp_sync_call is not None:
                 return warp_sync_call
 
+            shader_clock_call = self.generate_cuda_shader_clock_call(
+                func_name, raw_args
+            )
+            if shader_clock_call is not None:
+                return shader_clock_call
+
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
 
         if func_name in self.synchronization_builtins and raw_args:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA synchronization builtin '{func_name}' requires 0 "
                 f"arguments; got {len(raw_args)}"
             )
+
+        reduction_call = generate_vector_reduction_call(
+            self, "CUDA", func_name, raw_args, args
+        )
+        if reduction_call is not None:
+            return reduction_call
 
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)
@@ -3410,7 +3733,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if smoothstep_call is not None:
                 return smoothstep_call
 
-        if func_name in {"dot", "cross", "length", "normalize"}:
+        pointer_math_call = generate_pointer_math_call(
+            self, CudaLoweringRefused, func_name, raw_args, args
+        )
+        if pointer_math_call is not None:
+            return pointer_math_call
+
+        if func_name in {
+            "dot",
+            "cross",
+            "distance",
+            "length",
+            "normalize",
+            "reflect",
+            "refract",
+            "faceforward",
+        }:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
@@ -3444,6 +3782,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
+            if func_name in self.structs_by_name:
+                # The structure has no constructor; aggregate initialization sets its members in order.
+                mapped_type = self.convert_crossgl_type_to_cuda(func_name)
+                return f"{mapped_type}{{{', '.join(args)}}}"
 
         scalar_math_call = self.generate_scalar_math_call(
             math_func_name, raw_args, args
@@ -3453,18 +3795,39 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args_str = ", ".join(args)
 
+        euclidean_norm_name = self.cuda_euclidean_norm_function_name(
+            func_name, raw_args
+        )
+        if euclidean_norm_name is not None:
+            return f"{euclidean_norm_name}({args_str})"
+
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
     def cuda_math_function_name(self, func_name):
-        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
-            func_name, func_name
-        )
+        """The math lowering's name for ``func_name``: ``inverseSqrt`` and ``rsqrt`` are spellings of ``inversesqrt``.
+
+        Any other name is its own math lowering name; the math lowerings return ``None`` for a name they do not
+        handle, and the call is then refused if it names another language's built-in function.
+        """
+        if func_name in {"inverseSqrt", "rsqrt"}:
+            return "inversesqrt"
+        return func_name
 
     def normalize_cuda_integer_bit_function(self, func_name):
-        return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
+        if func_name in CUDA_INTEGER_BIT_FUNCTION_ALIASES:
+            return CUDA_INTEGER_BIT_FUNCTION_ALIASES[func_name]
+        # Already the CrossGL spelling, or not an integer bit function; callers check the result.
+        return func_name
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
         target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -3493,6 +3856,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if result_type is None:
             return None
 
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and CUDA converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise CudaLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
+
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
@@ -3519,6 +3901,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -3527,6 +3910,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -3558,6 +3949,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         operation = self.normalize_cuda_integer_bit_function(func_name)
         source_type = self.expression_result_type(raw_args[0])
+        if source_type is None and operation == "countLeadingZeros":
+            # A sized cast such as u64(x) has no inferred type; read its width from the cast so that
+            # __clz does not truncate a 64-bit value.
+            source_type = self.cuda_integer_cast_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
         if source_info is not None:
@@ -3584,6 +3979,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             source_type,
             result_type,
         )
+
+    def cuda_integer_cast_type(self, node):
+        """The target type of a scalar integer cast such as ``u64(x)``, or None."""
+        if not isinstance(node, FunctionCallNode):
+            return None
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.scalar_component_type(type_name) in {"int", "uint"}:
+            return type_name
+        return None
 
     def require_cuda_integer_bit_vector_helper(
         self,
@@ -3641,6 +4048,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            intrinsic_name = "__clzll" if bit_width == 64 else "__clz"
+            return f"{intrinsic_name}({value})"
         if operation == "findLSB":
             return f"(__ffs({value}) - 1)"
         if operation == "findMSB":
@@ -3720,23 +4130,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         stage_name = getattr(self, "current_stage_name", None)
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA SetMeshOutputCounts is only valid in mesh stages"
                 )
             if len(raw_args) != 2:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA SetMeshOutputCounts requires exactly two arguments"
                 )
             return f"cgl_cuda_set_mesh_output_counts({', '.join(args)})"
 
         if operation == "DispatchMesh":
             if stage_name not in {"task", "object", "amplification"}:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA DispatchMesh is only valid in task, object, or "
                     "amplification stages"
                 )
             if len(raw_args) not in {3, 4}:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA DispatchMesh requires exactly three arguments, or four "
                     "with a task payload"
                 )
@@ -3799,9 +4209,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def generate_wave_operation(self, operation, raw_args, args):
         expected_count = CUDA_WAVE_OP_ARITIES.get(operation)
         if expected_count is None:
-            raise ValueError(f"Unsupported CUDA wave intrinsic {operation}")
+            raise CudaRefusal(f"Unsupported CUDA wave intrinsic {operation}")
         if len(raw_args) != expected_count:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA wave intrinsic {operation} requires {expected_count} "
                 f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
             )
@@ -3951,7 +4361,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def unsupported_cuda_wave_operation(self, operation, raw_args, reason):
         result_type = self.wave_result_type(operation, raw_args)
         fallback = self.diagnostic_zero_value_for_type(result_type)
-        return f"/* unsupported CUDA wave intrinsic {operation}: {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA wave intrinsic {operation}: {reason}", fallback
+        )
 
     def cuda_wave_scalar_kind(self, type_name):
         mapped_type = self.map_type(type_name)
@@ -4030,13 +4442,81 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         suffix = suffix.replace("&", "_ref").replace("::", "_")
         return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
 
+    CUDA_SHADER_CLOCK_BUILTINS = {
+        "clockARB",
+        "clock2x32ARB",
+        "clockRealtimeEXT",
+        "clockRealtime2x32EXT",
+    }
+
+    # The CrossGL result types, so arithmetic on a 2x32 pair goes through the
+    # uint2 helpers as it does for any other uvec2 value.
+    CUDA_SHADER_CLOCK_RESULT_TYPES = {
+        "clockARB": "uint64_t",
+        "clock2x32ARB": "uvec2",
+        "clockRealtimeEXT": "uint64_t",
+        "clockRealtime2x32EXT": "uvec2",
+    }
+
+    def generate_cuda_shader_clock_call(self, func_name, raw_args):
+        """GL_ARB_shader_clock and GL_EXT_shader_realtime_clock built-ins.
+
+        clockARB reads the per-multiprocessor counter, which is CUDA's clock64().
+        clockRealtimeEXT reads the device-wide nanosecond timer, the PTX %globaltimer
+        register. The 2x32 forms return the same counter as a uint2 (low, high).
+        """
+        if func_name not in self.CUDA_SHADER_CLOCK_BUILTINS:
+            return None
+        if raw_args:
+            raise CudaRefusal(
+                f"CUDA shader clock builtin {func_name} requires 0 arguments; "
+                f"got {len(raw_args)}"
+            )
+        if func_name == "clockARB":
+            return "clock64()"
+        if func_name == "clockRealtimeEXT":
+            return self.require_cuda_realtime_clock_helper()
+        if func_name == "clock2x32ARB":
+            return self.require_cuda_clock_pair_helper(
+                "cgl_cuda_clock2x32", "(unsigned long long)clock64()"
+            )
+        realtime = self.require_cuda_realtime_clock_helper()
+        return self.require_cuda_clock_pair_helper(
+            "cgl_cuda_realtime_clock2x32", realtime
+        )
+
+    def require_cuda_realtime_clock_helper(self):
+        helper_name = "cgl_cuda_realtime_clock"
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline unsigned long long {helper_name}()\n"
+                "{\n"
+                "    unsigned long long timer;\n"
+                '    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(timer));\n'
+                "    return timer;\n"
+                "}"
+            )
+        return f"{helper_name}()"
+
+    def require_cuda_clock_pair_helper(self, helper_name, source):
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline uint2 {helper_name}()\n"
+                "{\n"
+                f"    unsigned long long ticks = {source};\n"
+                "    return make_uint2((unsigned int)ticks, "
+                "(unsigned int)(ticks >> 32));\n"
+                "}"
+            )
+        return f"{helper_name}()"
+
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
         expected_counts = CUDA_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
         if expected_counts is None:
             return None
         if len(raw_args) not in expected_counts:
             expected_list = " or ".join(str(count) for count in expected_counts)
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA warp sync builtin {func_name} requires {expected_list} "
                 f"arguments, got {len(raw_args)}"
             )
@@ -4566,7 +5046,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         integer_kinds = {"int", "uint"}
         add_kinds = {*integer_kinds, "uint64", "float"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_kinds, "int/uint/u64/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -4580,6 +5060,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
+        # CUDA's block- and system-scoped atomics (atomicAdd_block,
+        # atomicCAS_system, ...) take the same operands as the device-wide
+        # intrinsic they are named after.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            for scope in ("_block", "_system"):
+                operations.setdefault(
+                    f"{intrinsic}{scope}",
+                    (f"{intrinsic}{scope}", arg_count, kinds, kinds_label),
+                )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to CUDA atomics."""
@@ -4809,10 +5299,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def unsupported_plain_atomic_call(self, operation, reason, fallback):
-        """Return diagnostic code for unsupported plain CUDA atomics."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} atomic call: "
-            f"{operation} {reason} */ {fallback}"
+        """Refuse unsupported plain CUDA atomics; the returned value stands in until the refusal is raised."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} atomic call: {operation} {reason}",
+            fallback,
         )
 
     def structured_buffer_atomic_target(self, target_expr):
@@ -4886,11 +5376,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def unsupported_structured_buffer_atomic_call(
         self, operation, buffer_type, reason, fallback
     ):
-        """Return diagnostic code for unsupported structured-buffer atomics."""
+        """Refuse unsupported structured-buffer atomics; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer atomic: "
-            f"{operation} on {buffer_type} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer atomic: {operation} on {buffer_type} {reason}",
+            fallback,
         )
 
     def generate_byte_address_buffer_call(
@@ -5209,11 +5699,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return helper_name
 
     def unsupported_byte_address_buffer_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for unsupported byte-address buffer operations."""
+        """Refuse unsupported byte-address buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} byte-address buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} byte-address buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_member_call(self, function_expr):
@@ -5238,11 +5728,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return f"{buffer_name}[{args[0]}]"
 
     def unsupported_structured_buffer_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for unsupported structured-buffer operations."""
+        """Refuse unsupported structured-buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def generate_lambda_expression(self, args):
@@ -5307,7 +5797,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return raw
 
     def generate_mod_call(self, raw_args, args):
-        """Lower CrossGL/GLSL mod with GLSL floor semantics."""
+        """Lower CrossGL/GLSL mod with GLSL floor semantics.
+
+        The ``%`` operator is the truncated remainder (``fmodf``) instead; see
+        VectorArithmeticMixin.lower_scalar_modulo_operation.
+        """
         if len(raw_args) != 2 or len(args) != 2:
             return None
 
@@ -5316,40 +5810,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
         if vector_call is not None:
             return vector_call
 
-        return self.lower_scalar_modulo_operation(
-            raw_args[0],
-            args[0],
-            raw_args[1],
-            args[1],
-        )
-
-    def lower_scalar_modulo_operation(
-        self,
-        left_node,
-        left_expr,
-        right_node,
-        right_expr,
-    ):
-        """Lower floating-point scalar modulo with GLSL floor semantics."""
-        scalar_type = self.cuda_mod_scalar_type(left_node, right_node)
+        scalar_type = self.cuda_mod_scalar_type(raw_args[0], raw_args[1])
         if scalar_type is None:
             return None
-
         helper_name = self.require_cuda_scalar_mod_helper(scalar_type)
-        return f"{helper_name}({left_expr}, {right_expr})"
-
-    def format_vector_binary_component(self, component_type, operator, left, right):
-        if operator == "%" and component_type in {"float", "double"}:
-            helper_name = self.require_cuda_scalar_mod_helper(component_type)
-            return f"{helper_name}({left}, {right})"
-        return super().format_vector_binary_component(
-            component_type, operator, left, right
-        )
+        return f"{helper_name}({args[0]}, {args[1]})"
 
     def cuda_mod_scalar_type(self, left_node, right_node):
         component_types = []
@@ -5429,7 +5899,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def require_vector_fract_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5437,11 +5907,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if helper_name in self.helper_functions:
             return helper_name
 
-        scalar_helper_name = self.require_scalar_fract_helper(component_type)
-        components = [
-            f"{scalar_helper_name}(value.{component})"
-            for component in vector_info["components"]
-        ]
+        # __half has no floor overload, so widen through the float helper.
+        scalar_helper_name = self.require_scalar_fract_helper(
+            "float" if component_type == "half" else component_type
+        )
+        if component_type == "half":
+            components = [
+                f"__float2half({scalar_helper_name}(__half2float(value.{component})))"
+                for component in vector_info["components"]
+            ]
+        else:
+            components = [
+                f"{scalar_helper_name}(value.{component})"
+                for component in vector_info["components"]
+            ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
             "{\n"
@@ -5455,7 +5934,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Flatten vector arguments passed to CUDA make_* constructors."""
         if len(args) == 1:
             arg_type = self.expression_result_type(raw_args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
+            if arg_type is not None and not self.swizzle_result_vector_info(arg_type):
                 return args * len(vector_info["components"])
 
         generated_args = []
@@ -5473,7 +5952,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return generated_args[: len(vector_info["components"])]
                 continue
 
-            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            arg_info = self.swizzle_result_vector_info(
+                self.expression_result_type(raw_arg)
+            )
             if arg_info is None:
                 generated_args.append(arg_expr)
             else:
@@ -5519,7 +6000,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -5587,12 +6070,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if value_info is not None
             else self.scalar_component_type(value_type)
         )
-        if component_type not in {"float", "double"}:
-            return None
-        return self.generate_clamp_call(
-            [raw_args[0], None, None],
-            [args[0], "0.0", "1.0"],
-        )
+        if component_type in {"float", "double"}:
+            return self.generate_clamp_call(
+                [raw_args[0], None, None],
+                [args[0], "0.0", "1.0"],
+            )
+        if component_type in {"int", "uint", "unsigned int"}:
+            # saturate keeps its argument's type (semantics.hub_types), so an integer clamps to 0 and 1 as the
+            # GLSL output's clamp(n, 0, 1) does.
+            return self.generate_clamp_call(
+                [raw_args[0], None, None],
+                [args[0], "0", "1"],
+            )
+        return None
 
     def generate_step_call(self, raw_args, args):
         if len(raw_args) != 2 or len(args) != 2:
@@ -5610,15 +6100,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.format_step_component(scalar_type, args[0], args[1])
 
         result_info = value_info or edge_info
-        if result_info["component_type"] not in {"float", "double"}:
+        if result_info["component_type"] not in {"float", "double", "half"}:
             return None
         if not self.compatible_step_operand(edge_info, result_info):
             return None
         if not self.compatible_step_operand(value_info, result_info):
             return None
-        if edge_info is None and not self.compatible_step_scalar(edge_type):
+        if edge_info is None and not self.compatible_step_scalar(
+            edge_type, result_info["component_type"]
+        ):
             return None
-        if value_info is None and not self.compatible_step_scalar(value_type):
+        if value_info is None and not self.compatible_step_scalar(
+            value_type, result_info["component_type"]
+        ):
             return None
 
         helper_name = self.require_vector_step_helper(
@@ -5647,8 +6141,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             operand_info["components"]
         ) == len(result_info["components"])
 
-    def compatible_step_scalar(self, type_name):
+    def compatible_step_scalar(self, type_name, result_component_type=None):
         component_type = self.scalar_component_type(type_name)
+        if result_component_type == "half":
+            return component_type in {"half", None}
         return component_type in {"float", "double", None}
 
     def require_vector_step_helper(self, result_info, edge_is_vector, value_is_vector):
@@ -5667,9 +6163,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         for component in result_info["components"]:
             edge = f"edge.{component}" if edge_is_vector else "edge"
             value = f"value.{component}" if value_is_vector else "value"
-            components.append(
-                self.format_step_component(result_info["component_type"], edge, value)
-            )
+            if result_info["component_type"] == "half":
+                components.append(
+                    "__float2half("
+                    + self.format_step_component(
+                        "float", f"__half2float({edge})", f"__half2float({value})"
+                    )
+                    + ")"
+                )
+            else:
+                components.append(
+                    self.format_step_component(
+                        result_info["component_type"], edge, value
+                    )
+                )
 
         helper = (
             f"__device__ inline {result_info['type']} {helper_name}"
@@ -5755,7 +6262,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def require_vector_mix_helper(self, vector_info, factor_is_vector):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5772,13 +6279,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         components = []
         for component in vector_info["components"]:
             factor_component = f"a.{component}" if factor_is_vector else "a"
-            components.append(
-                self.format_mix_component(
-                    f"x.{component}",
-                    f"y.{component}",
-                    factor_component,
+            if component_type == "half":
+                components.append(
+                    "__float2half("
+                    + self.format_mix_component(
+                        f"__half2float(x.{component})",
+                        f"__half2float(y.{component})",
+                        f"__half2float({factor_component})",
+                    )
+                    + ")"
                 )
-            )
+            else:
+                components.append(
+                    self.format_mix_component(
+                        f"x.{component}",
+                        f"y.{component}",
+                        factor_component,
+                    )
+                )
 
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
@@ -5810,7 +6328,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 args[2],
             )
 
-        if vector_info["component_type"] not in {"float", "double"}:
+        if vector_info["component_type"] not in {"float", "double", "half"}:
             return None
         for info in vector_infos:
             if info is None:
@@ -5879,6 +6397,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         params = [
             f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
         ]
+
+        def widen(piece, expr):
+            # Half lanes widen to float; int scalars convert implicitly in fmaf.
+            if piece["kind"] == "vector" or piece["param_type"] == "half":
+                return f"__half2float({expr})"
+            return expr
+
         component_args = []
         for component in vector_info["components"]:
             multiply_left = self.vector_operation_piece_param_expr(
@@ -5888,14 +6413,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 pieces[1], 1, component
             )
             addend = self.vector_operation_piece_param_expr(pieces[2], 2, component)
-            component_args.append(
-                self.format_fused_multiply_add_component(
-                    vector_info["component_type"],
-                    multiply_left,
-                    multiply_right,
-                    addend,
+            if vector_info["component_type"] == "half":
+                component_args.append(
+                    "__float2half("
+                    + self.format_fused_multiply_add_component(
+                        "float",
+                        widen(pieces[0], multiply_left),
+                        widen(pieces[1], multiply_right),
+                        widen(pieces[2], addend),
+                    )
+                    + ")"
                 )
-            )
+            else:
+                component_args.append(
+                    self.format_fused_multiply_add_component(
+                        vector_info["component_type"],
+                        multiply_left,
+                        multiply_right,
+                        addend,
+                    )
+                )
 
         helper = (
             f"__device__ inline {vector_info['type']} {helper_name}"
@@ -5948,7 +6485,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def require_vector_atan2_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5956,11 +6493,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if helper_name in self.helper_functions:
             return helper_name
 
-        scalar_func = "atan2" if component_type == "double" else "atan2f"
-        components = [
-            f"{scalar_func}(y.{component}, x.{component})"
-            for component in vector_info["components"]
-        ]
+        if component_type == "half":
+            components = [
+                f"__float2half(atan2f(__half2float(y.{component}), __half2float(x.{component})))"
+                for component in vector_info["components"]
+            ]
+        else:
+            scalar_func = "atan2" if component_type == "double" else "atan2f"
+            components = [
+                f"{scalar_func}(y.{component}, x.{component})"
+                for component in vector_info["components"]
+            ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
             f"({vector_type} y, {vector_type} x)\n"
@@ -6093,7 +6636,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -6104,10 +6649,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if len(components) == 1:
             return f"{object_expr}.{components[0]}"
 
-        result_type = self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
-        result_info = self.vector_type_info(result_type)
+        result_type = self.swizzle_vector_type(vector_info, len(components))
+        result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
 
@@ -6133,17 +6676,70 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
+        builtin_component = self.cuda_compute_builtin_index_component(node)
+        if builtin_component is not None:
+            return builtin_component
         if hasattr(node, "array_expr"):
             array = self.visit(node.array_expr)
         else:
             array = self.visit(node.array)
 
-        if hasattr(node, "index_expr"):
-            index = self.visit(node.index_expr)
-        else:
-            index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            if hasattr(node, "index_expr"):
+                index = self.visit(node.index_expr)
+            else:
+                index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
 
         return f"{array}[{index}]"
+
+    def cuda_compute_builtin_index_component(self, node):
+        """Return the component expression for a constant subscript of a compute built-in.
+
+        ``gl_GlobalInvocationID[0]`` reads the ``.x`` component: a CUDA
+        ``uint3`` has no subscript operator, so the ``make_uint3(...)[0]`` the
+        generic path would emit does not compile. A user symbol with a
+        built-in name shadows the built-in and keeps the generic subscript. A
+        non-constant or out-of-range subscript, a subscript of the scalar
+        local-invocation index, or a write to a built-in component has no
+        faithful CUDA lowering and is refused instead.
+        """
+        array_node = getattr(node, "array_expr", getattr(node, "array", None))
+        if not isinstance(array_node, IdentifierNode):
+            return None
+        name = getattr(array_node, "name", None)
+        if name in self.stage_builtin_aliases:
+            role = self.stage_builtin_aliases[name]
+        elif self.cuda_identifier_shadows_compute_builtin(name):
+            return None
+        else:
+            role = self.cuda_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
+            raise CudaLoweringRefused(
+                [f"cannot assign to a component of compute built-in '{name}' in CUDA"]
+            )
+        index_node = getattr(node, "index_expr", getattr(node, "index", None))
+        index = self.literal_int_value(index_node)
+        if index is None or index not in (0, 1, 2):
+            raise CudaLoweringRefused(
+                [
+                    (
+                        f"cannot subscript compute built-in '{name}' with a "
+                        "non-constant index in CUDA; use .x, .y or .z"
+                    )
+                ]
+            )
+        component = "xyz"[index]
+        expression = self.cuda_compute_builtin_expression(role, component)
+        if expression is None:
+            raise CudaLoweringRefused(
+                [f"compute built-in '{name}' has no '.{component}' component in CUDA"]
+            )
+        return expression
 
     def visit_ArrayLiteralNode(self, node):
         elements = ", ".join(self.visit(element) for element in node.elements)
@@ -6281,11 +6877,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     self, node, self.indent_level, "CUDA"
                 )
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             reason = self.cuda_match_error_reason(error)
-            code = (
-                f"{'    ' * self.indent_level}"
-                f"/* unsupported CUDA match statement: {reason} */\n"
-            )
+            code = self.refuse_lowering(f"CUDA match statement: {reason}")
         self.emit_generated_code(code)
 
     def cuda_match_error_reason(self, error):
@@ -6303,11 +6898,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self, target_variable, target_type, reason, indent, _target_name
     ):
         indent_str = "    " * indent
-        fallback = self.diagnostic_zero_value_for_type(target_type)
-        return (
-            f"{indent_str}{target_variable} = /* unsupported CUDA match "
-            f"expression: {reason} */ {fallback};\n"
+        fallback = self.refuse_lowering(
+            f"CUDA match expression: {reason}",
+            self.diagnostic_zero_value_for_type(target_type),
         )
+        return f"{indent_str}{target_variable} = {fallback};\n"
 
     def generate_switch_case(self, label, body, indent, auto_break=False):
         indent_str = "    " * indent
@@ -6442,7 +7037,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def emit_match_expression_return(self, match_node):
         return_type = self.type_name_string(self.current_function_return_type)
         if not return_type or return_type == "void":
-            raise ValueError(
+            raise CudaRefusal(
                 "Unsupported match expression for CUDA codegen; return context "
                 "requires a concrete non-void result type"
             )
@@ -6459,6 +7054,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "CUDA",
             )
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             assignment = self.generate_match_expression_diagnostic_assignment(
                 result_name,
                 return_type,
@@ -6478,14 +7075,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("continue;")
 
     def visit_BlockNode(self, node):
-        """Visit block statement"""
-        self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.emit("{")
+        self.indent_level += 1
+        try:
+            self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.emit("}")
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
         crossgl_type = self.type_name_string(crossgl_type)
         if crossgl_type is None:
             return "void"
+        crossgl_type = generic_narrow_vector_spelling(crossgl_type) or crossgl_type
 
         geometry_stream_type = self.cuda_geometry_stream_mapped_type(crossgl_type)
         if geometry_stream_type is not None:
@@ -6530,6 +7137,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "u32": "unsigned int",
             "i64": "long long",
             "u64": "unsigned long long",
+            "int64": "long long",
+            "uint64": "unsigned long long",
+            # The other sized and minimum-precision scalar spellings of the IR (hub_types): exact widths, except
+            # that a minimum-precision type may be computed at full precision (HLSL "Minimum precision").
+            "int8": "char",
+            "uint8": "unsigned char",
+            "uchar": "unsigned char",
+            "int16": "short",
+            "uint16": "unsigned short",
+            "int32": "int",
+            "uint32": "unsigned int",
+            "ulong": "unsigned long long",
+            "float16_t": "half",
+            "min16float": "float",
+            "min16int": "int",
+            "min16uint": "unsigned int",
             "f16": "half",
             "f32": "float",
             "f64": "double",
@@ -6698,13 +7321,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             ),
         }
 
+        # Every spelling the two alias tables produce, with its i/u image variants, is a type_mapping key.
         sampled_resource_type = self.canonical_sampled_resource_type(crossgl_type)
         if sampled_resource_type:
-            return type_mapping.get(sampled_resource_type, sampled_resource_type)
+            return type_mapping[sampled_resource_type]
 
         storage_resource_type = self.canonical_storage_resource_type(crossgl_type)
         if storage_resource_type:
-            return type_mapping.get(storage_resource_type, storage_resource_type)
+            return type_mapping[storage_resource_type]
 
         ray_resource_type = self.canonical_ray_resource_type(crossgl_type)
         if ray_resource_type:
@@ -6728,8 +7352,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
+        wide_vector_type = wide_integer_vector_type(crossgl_type)
+        if wide_vector_type is not None:
+            return wide_vector_type
+
+        if crossgl_type in type_mapping:
+            return self.cuda_mapped_type_result(type_mapping[crossgl_type])
+        # A program type or a CUDA type is written as it is; a built-in type of another language is recorded and
+        # refused by render_checked_program if the output still names it.
         return self.cuda_mapped_type_result(
-            type_mapping.get(crossgl_type, crossgl_type)
+            written_type_name(
+                crossgl_type,
+                CUDA_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
         )
 
     def cuda_mapped_type_result(self, mapped_type):
@@ -7184,13 +7821,51 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
         return self.structured_buffer_counter_name(name)
 
+    def cuda_reject_unbindable_reference_arguments(self, func_name, params, raw_args):
+        """Refuse calls whose out/inout arguments cannot bind to references."""
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise CudaLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; CUDA references would not copy out separately"
+                ]
+            )
+        swizzles = multi_component_swizzle_arguments(
+            params, raw_args, self.member_swizzle_components
+        )
+        if swizzles:
+            raise CudaLoweringRefused(
+                [
+                    f"swizzle passed to an out/inout parameter: {func_name} receives "
+                    + ", ".join(
+                        f"'.{swizzle}' as argument {position}"
+                        for position, swizzle in swizzles
+                    )
+                    + "; CUDA builds a swizzle of several components as a new vector, "
+                    "which a reference cannot bind to; copy it into a local, pass that "
+                    "and assign it back"
+                ]
+            )
+
     def cuda_user_function_call_arguments(self, func_name, raw_args, args):
         """Expand user calls with CUDA sidecar resource arguments."""
         callee = self.query_functions_by_name.get(func_name)
         if callee is None:
+            specialized = generic_function_specialization_named(self, func_name)
+            if specialized is not None:
+                self.cuda_reject_unbindable_reference_arguments(
+                    func_name,
+                    getattr(
+                        specialized, "parameters", getattr(specialized, "params", [])
+                    ),
+                    raw_args,
+                )
             return args + self.cuda_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        self.cuda_reject_unbindable_reference_arguments(func_name, params, raw_args)
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):
@@ -7239,9 +7914,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         resource_type = self.resource_base_type(type_name) or "unknown resource"
         fallback = "nullptr" if "[" in type_name else "CglResourceQueryInfo{}"
         param_label = f" argument {param_name}" if param_name else " argument"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"metadata unavailable for {resource_type}{param_label} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: metadata unavailable for {resource_type}{param_label}",
+            fallback,
         )
 
     def diagnostic_zero_value_for_type(self, type_name):
@@ -7326,6 +8001,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if is_comma_expression(node):
+            return self.expression_result_type(comma_result_operand(node))
         if isinstance(node, (IdentifierNode, VariableNode)):
             name = getattr(node, "name", None)
             if not self.cuda_identifier_shadows_compute_builtin(name):
@@ -7344,7 +8021,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             operation = getattr(node, "operation", "")
             if operation == "Proceed":
                 return "bool"
-            if operation in {"CandidateRayT", "CommittedRayT"}:
+            if operation in {"CandidateTriangleRayT", "CommittedRayT"}:
                 return "float"
             return "uint"
         if isinstance(node, MemberAccessNode):
@@ -7391,12 +8068,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
             if func_name == "ReportHit":
                 return "bool"
+            if func_name in self.CUDA_SHADER_CLOCK_RESULT_TYPES:
+                return self.CUDA_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args
                 and not self.is_user_defined_function(func_name)
             ):
                 return self.expression_result_type(raw_args[0])
+            reflection_result_type = self.reflection_result_type(func_name, raw_args)
+            if reflection_result_type is not None:
+                return reflection_result_type
             bitcast_result_type = self.cuda_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
@@ -9245,9 +9927,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if metadata_expr is None:
                 resource_type = self.resource_base_type(target_type) or target_type
                 resource_type = resource_type or "resource"
-                metadata_expr = (
-                    "/* unsupported CUDA resource query: metadata unavailable for "
-                    f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+                metadata_expr = self.refuse_lowering(
+                    f"CUDA resource query: metadata unavailable for {resource_type} assignment",
+                    "CglResourceQueryInfo{}",
                 )
             return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
 
@@ -9263,9 +9945,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if metadata_expr is None:
             resource_type = self.resource_base_type(target_type) or target_type
             resource_type = resource_type or "resource"
-            metadata_expr = (
-                "/* unsupported CUDA resource query: metadata unavailable for "
-                f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+            metadata_expr = self.refuse_lowering(
+                f"CUDA resource query: metadata unavailable for {resource_type} assignment",
+                "CglResourceQueryInfo{}",
             )
         return f"{target_metadata} = {metadata_expr}"
 
@@ -9732,8 +10414,56 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return False
 
+    def cuda_euclidean_norm_function_name(self, func_name, raw_args):
+        """Name CrossGL ``norm``/``rnorm`` of an array for its element type.
+
+        CrossGL spells both precisions without the ``f`` suffix. CUDA's ``norm``/``rnorm``
+        take ``const double*`` and ``normf``/``rnormf`` take ``const float*``, so an array
+        of any other element type, or of one the generator cannot resolve, is refused.
+        """
+        if (
+            func_name not in {"norm", "rnorm"}
+            or len(raw_args or []) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+
+        array_expr = raw_args[1]
+        lvalue = self.strip_address_of_expression(array_expr)
+        if lvalue is not array_expr:
+            # ``&x`` points at ``x`` itself.
+            element_type = self.type_name_string(self.expression_result_type(lvalue))
+        else:
+            array_type = self.type_name_string(self.expression_result_type(array_expr))
+            base_type, array_suffix = split_array_type_suffix(array_type or "")
+            pointer = self.cuda_indirect_type_info(array_type)
+            if array_suffix.count("[") == 1:
+                # A one-dimensional array decays to a pointer to its first element.
+                element_type = base_type
+            elif pointer is not None and pointer["kind"] == "pointer":
+                element_type = pointer["pointee_type"]
+            else:
+                element_type = None
+
+        component = self.scalar_component_type(element_type) if element_type else None
+        if component == "float":
+            return f"{func_name}f"
+        if component == "double":
+            return func_name
+        elements = f"{element_type} elements" if element_type else "unresolved elements"
+        raise CudaLoweringRefused(
+            [
+                f"Euclidean norm: {func_name} of {elements}: CUDA has normf and "
+                "rnormf for float arrays and norm and rnorm for double arrays"
+            ]
+        )
+
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
+        func_name = generic_narrow_vector_spelling(func_name) or func_name
+        wide_vector_constructor = wide_integer_vector_constructor(func_name)
+        if wide_vector_constructor is not None:
+            return wide_vector_constructor
         function_mapping = {
             # Math functions
             "sqrt": "sqrtf",
@@ -9903,7 +10633,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "textureGrad": "tex2DGrad",
         }
 
-        return function_mapping.get(func_name, func_name)
+        if func_name in function_mapping:
+            return function_mapping[func_name]
+        # A program function or a CUDA library function, spelled as it is; a built-in function of another
+        # language left in the output is refused by render_checked_program.
+        return func_name
 
     def attribute_value_to_string(self, value):
         if value is None:
@@ -10105,7 +10839,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if binding <= used_end and used_start <= end:
                 if used_start == binding and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise CudaRefusal(
                     "Conflicting CUDA resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "
@@ -10271,11 +11005,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return type_name
         if type_name.startswith("const "):
             return type_name
+        # Only a runtime-sized array becomes a pointer whose pointee can be
+        # const. A block object, sized array or scalar would be an
+        # uninitialized `__device__ const` object, which CUDA rejects, so it
+        # stays writable and the readonly diagnostics guard its writes.
         if "[" not in type_name or "]" not in type_name:
-            return f"const {type_name}"
+            return type_name
         open_bracket = type_name.find("[")
         base_type = type_name[:open_bracket].strip()
         array_suffix = type_name[open_bracket:]
+        if array_suffix != "[]":
+            return type_name
         return f"const {base_type}{array_suffix}"
 
     def glsl_buffer_block_metadata_comment(self, node, type_name):
@@ -10323,9 +11063,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def glsl_buffer_block_diagnostic(self, operation, expr, reason, fallback):
         _, resource_name = self.glsl_buffer_block_access(expr)
         resource_name = resource_name or "unknown"
-        return (
-            f"/* unsupported {self.resource_backend_name()} GLSL buffer block "
-            f"{operation}: resource '{resource_name}' {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} GLSL buffer block {operation}: resource '{resource_name}' {reason}",
+            fallback,
         )
 
     def glsl_buffer_block_read_diagnostic(self, expr, operation):
@@ -10451,9 +11191,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self, resource_label, operation, buffer_type, reason, fallback
     ):
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} {resource_label} "
-            f"access: {operation} {reason} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} {resource_label} access: {operation} {reason} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_access_diagnostic(
@@ -10578,6 +11318,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if attr_name:
                 names.add(attr_name)
         return names
+
+    def apply_restrict_qualifier_to_declaration(self, declaration, name, node):
+        """Write a CrossGL ``restrict`` pointer declaration with ``__restrict__``, as HIP output does."""
+        if (
+            "*" not in declaration
+            or not name
+            or "__restrict__" in declaration
+            or "restrict" not in self.declaration_qualifier_names(node)
+        ):
+            return declaration
+        position = declaration.rfind(f" {name}")
+        if position < 0:
+            return declaration
+        return f"{declaration[:position]} __restrict__{declaration[position:]}"
 
     def apply_readonly_qualifier_to_type(self, type_name, node):
         """Apply readonly declaration qualifiers to pointer/reference types."""
@@ -10744,9 +11498,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self, func_name, resource_type, fallback
     ):
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} metadata unavailable on {resource_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} metadata unavailable on {resource_type}",
+            fallback,
         )
 
     def unsupported_dimension_metadata_query_call(self, func_name, resource_type):
@@ -10776,9 +11530,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return_type,
             ["0"] * len(spec["dimensions"]),
         )
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            fallback,
         )
 
     def generate_dimension_query(self, func_name, raw_args, args):
@@ -10901,6 +11655,44 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return narrow_info
         return super().vector_type_info(type_name)
 
+    def vector_type_for_components(self, component_type, component_count):
+        # half has no vecN spelling: f16vec3 and f16vec4 lower to the
+        # cgl_half helpers and f16vec2 to the native half2
+        if component_type == "half" and 2 <= component_count <= 4:
+            return f"f16vec{component_count}"
+        return super().vector_type_for_components(component_type, component_count)
+
+    def swizzle_result_vector_info(self, result_type):
+        result_info = self.vector_type_info(result_type)
+        if result_info is not None:
+            return result_info
+        if self.native_vector_component_type(result_type) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+            }
+        return None
+
+    def native_vector_component_type(self, type_name):
+        # half2 maps to the native half2 type, which vector_type_info leaves
+        # undescribed; its components are still half
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in {
+            "half2",
+            "f16vec2",
+            "float16vec2",
+            "vec2<f16>",
+            "vec2<float16>",
+            "vec2<half>",
+        }:
+            return "half"
+        return None
+
     def cuda_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
@@ -10924,6 +11716,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         compact_type = "".join(str(type_text).split())
+        compact_type = generic_narrow_vector_spelling(compact_type) or compact_type
         if (
             len(compact_type) < 8
             or not compact_type.startswith("vec")
@@ -10951,6 +11744,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "constructor": f"make_{vector_type}",
             "component_type": component_type,
             "components": components,
+            "vector_element": scalar_type,
         }
 
     def require_cuda_half3_helper(self):
@@ -12009,9 +12803,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported CUDA image resource call: "
-            f"{func_name} coordinate rank on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA image resource call: {func_name} coordinate rank on {image_type}",
+            fallback,
         )
 
     def image_resource_access(self, image_arg):
@@ -12104,9 +12898,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported CUDA image access: "
-            f"{func_name} {reason} on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA image access: {func_name} {reason} on {image_type}", fallback
         )
 
     def image_access_diagnostic(self, func_name, image_type, raw_image):
@@ -12138,18 +12931,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported CUDA image atomic resource call: "
-            f"{func_name} coordinate rank on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"CUDA image atomic resource call: {func_name} coordinate rank on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def unsupported_image_atomic_access_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported CUDA image atomic resource call: "
-            f"{func_name} requires readwrite image resource on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"CUDA image atomic resource call: {func_name} requires readwrite image resource on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def image_atomic_access_diagnostic(self, func_name, image_type, raw_image):
@@ -12172,9 +12963,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def unsupported_scalar_resource_query_call(self, func_name, resource_type):
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ 0"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            "0",
         )
 
     def generate_resource_call(self, func_name, raw_args, args):
@@ -12923,16 +13714,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         elif hasattr(type_node, "element_type"):
             if hasattr(type_node, "rows"):
                 element_type = self.convert_type_node_to_string(type_node.element_type)
-                prefix = "dmat" if element_type == "double" else "mat"
-                return f"{prefix}{type_node.rows}x{type_node.cols}"
+                return matrix_type_spelling(type_node, element_type, short_square=False)
             elif not hasattr(type_node, "size"):
                 return str(type_node)
             elif str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
-                    return f"{element_type}[{self.format_array_size(type_node.size)}]"
+                    return prepend_array_dimension(
+                        element_type, self.format_array_size(type_node.size)
+                    )
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
@@ -12945,6 +13737,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 elif element_type == "uint":
                     return f"uvec{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"

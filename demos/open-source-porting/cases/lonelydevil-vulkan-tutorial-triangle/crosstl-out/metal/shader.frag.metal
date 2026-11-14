@@ -3,7 +3,7 @@
 using namespace metal;
 
 struct FragmentInput {
-    float3 fragColor [[attribute(0)]];
+    float3 fragColor [[user(locn0)]];
 };
 // Fragment Shader
 fragment float4 fragment_main(FragmentInput input [[stage_in]]) {

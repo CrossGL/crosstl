@@ -67,8 +67,44 @@ def _wrap_materialization(monkeypatch, mutate):
     )
 
 
-@pytest.mark.parametrize("with_workgroup", (False, True))
-def test_subgroup_width_rules_emit_exact_directx_contract(tmp_path, with_workgroup):
+def test_subgroup_width_rules_without_a_workgroup_size_leave_it_to_the_host(tmp_path):
+    # The lane index depends on how the host's threadgroup splits into SIMD-groups, so one-invocation
+    # workgroups would change every lane but the first. HLSL reads the size from macros the host defines
+    # when it compiles the shader; GLSL lets the host set it when it creates the pipeline.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_fixture(repo)
+
+    payload = project_api.translate_project(
+        _config(repo, targets=("directx", "opengl"), with_workgroup=False),
+        format_output=False,
+    ).to_json()
+
+    by_target = payload["summary"]["artifactsByTarget"]
+    assert by_target["directx"]["failedCount"] == 0
+    assert (
+        by_target["directx"]["translatedCount"] == by_target["directx"]["artifactCount"]
+    )
+    assert by_target["opengl"] == {
+        "artifactCount": 2,
+        "translatedCount": 2,
+        "failedCount": 0,
+    }
+    codes = {item["code"] for item in payload["diagnostics"]}
+    assert "project.translate.workgroup-size-host-defined" not in codes
+    (hlsl,) = (repo / "out" / "directx").rglob("*.hlsl")
+    text = hlsl.read_text(encoding="utf-8")
+    numthreads = (
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, "
+        "CROSSGL_WORKGROUP_SIZE_Z)]"
+    )
+    assert text.count(numthreads) == 2
+    assert "[WaveSize(32)]" in text and "[WaveSize(64)]" in text
+
+
+def test_subgroup_width_rules_emit_exact_directx_contract(
+    tmp_path, with_workgroup=True
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_fixture(repo)
@@ -186,8 +222,9 @@ def test_subgroup_width_validation_isolated_from_entry_workgroup_rules(tmp_path)
     assert manifest["summary"]["entryPointCount"] == 2
 
 
-@pytest.mark.parametrize("with_workgroup", (False, True))
-def test_subgroup_width_rules_emit_guarded_opengl_contracts(tmp_path, with_workgroup):
+def test_subgroup_width_rules_emit_guarded_opengl_contracts(
+    tmp_path, with_workgroup=True
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_fixture(repo)
@@ -399,7 +436,7 @@ def test_subgroup_width_report_replays_generated_wave_size_contract(tmp_path):
     repo.mkdir()
     _write_fixture(repo)
     payload = project_api.translate_project(
-        _config(repo), format_output=False
+        _config(repo, with_workgroup=True), format_output=False
     ).to_json()
     artifact = payload["artifacts"][0]
     generated_path = repo / artifact["path"]
@@ -435,6 +472,7 @@ def test_subgroup_width_rules_report_unmatched_source_patterns(tmp_path):
         targets=["directx"],
         output_dir="out",
         subgroup_width_rules={"shaders/missing-*.metal": "32"},
+        workgroup_size_rules={"shaders/wave.metal": ["WIDTH", "Y", "1"]},
     )
 
     report = project_api.translate_project(config, format_output=False)
@@ -451,7 +489,10 @@ def test_subgroup_width_rules_report_unmatched_source_patterns(tmp_path):
         "execution.subgroup-width-specialization"
     ]
     assert payload["summary"]["translatedCount"] == 1
-    assert "execution" not in payload["artifacts"][0]
+    # The workgroup rule gives the lane partition; no subgroup-width contract is attached.
+    execution = payload["artifacts"][0]["execution"]
+    assert "subgroupWidthEnforcement" not in execution
+    assert all("subgroupWidth" not in entry for entry in execution["entryPoints"])
     report_path = repo / "unmatched-rule.json"
     report.write_json(report_path)
     validation = project_api.validate_project_report(report_path)

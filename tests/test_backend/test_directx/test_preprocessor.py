@@ -80,7 +80,8 @@ def test_self_referential_function_macro_does_not_reexpand_recursively():
 
     output = HLSLPreprocessor().preprocess(code)
 
-    assert "case 1: size = GetBVHSize/**/(BVH1); break;" in output
+    # Clang and DXC leave the painted name: ``case 1: size = GetBVHSize(BVH1); break;``.
+    assert "case 1: size = GetBVHSize(BVH1); break;" in output
 
 
 def test_variadic_stringize_and_paste():

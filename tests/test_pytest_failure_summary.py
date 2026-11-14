@@ -28,8 +28,8 @@ def _write_junit(path):
     <testcase classname="tests.test_translator.test_codegen.test_mojo_codegen" name="test_generic_user_struct_compile" file="tests/test_translator/test_codegen/test_mojo_codegen.py">
       <error message="mojo compiler rejected generated source">compiler failed</error>
     </testcase>
-    <testcase classname="tests.test_support_matrix" name="test_matrix_check" file="tests/test_support_matrix.py">
-      <failure message="support matrix check failed">generated support matrix is stale</failure>
+    <testcase classname="tests.test_ci_workflows" name="test_result_jobs" file="tests/test_ci_workflows.py">
+      <failure message="workflow guard failed">result job is missing</failure>
     </testcase>
     <testcase classname="tests.test_translator.test_codegen.test_metal_codegen" name="test_codegen_text" file="tests/test_translator/test_codegen/test_metal_codegen.py">
       <failure message="generated source assertion failed">expected texture call</failure>
@@ -45,7 +45,7 @@ def _write_junit(path):
     )
 
 
-def test_build_summary_categorizes_backend_compiler_and_support_failures(tmp_path):
+def test_build_summary_categorizes_backend_compiler_and_ci_failures(tmp_path):
     module = _load_module()
     junit = tmp_path / "pytest.xml"
     _write_junit(junit)
@@ -63,7 +63,7 @@ def test_build_summary_categorizes_backend_compiler_and_support_failures(tmp_pat
     assert summary["summary"]["categories"] == {
         "backend_codegen": 1,
         "backend_compiler_validation": 2,
-        "support_automation": 1,
+        "ci_tooling": 1,
     }
     assert summary["summary"]["backends"] == {
         "metal": 1,
@@ -139,14 +139,14 @@ def test_cli_writes_json_and_markdown_outputs(tmp_path):
     assert payload["summary"]["failed_testcase_count"] == 4
     assert "# Pytest Failure Summary" in markdown
     assert "backend_compiler_validation" in markdown
-    assert "support_automation" in markdown
+    assert "ci_tooling" in markdown
 
 
 def test_cli_writes_demo_step_failure_summary(tmp_path):
     json_output = tmp_path / "demo-summary.json"
     markdown_output = tmp_path / "demo-summary.md"
     report_path = (
-        "support/generated/demo-reports/linux-opengl/"
+        "build/reports/demo-reports/linux-opengl/"
         "glfw-opengl-triangle-portability-report.json"
     )
     command = (

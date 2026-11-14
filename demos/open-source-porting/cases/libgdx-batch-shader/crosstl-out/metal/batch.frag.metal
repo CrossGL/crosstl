@@ -7,8 +7,8 @@ struct FragmentInput {
     float2 v_texCoords;
 };
 // Fragment Shader
-fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float> u_texture [[texture(0)]]) {
+fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float> u_texture [[texture(0)]], sampler u_textureSampler [[sampler(0)]]) {
     float4 gl_FragColor;
-    gl_FragColor = input.v_color * u_texture.sample(sampler(mag_filter::linear, min_filter::linear), input.v_texCoords);
+    gl_FragColor = input.v_color * u_texture.sample(u_textureSampler, input.v_texCoords);
     return gl_FragColor;
 }

@@ -77,6 +77,7 @@ from demos.integrations.mlx.tests.kernels.test_current_ternary import (
     _metal_bytes,
     _runtime_value,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -1915,8 +1916,7 @@ def test_current_mlx_binary_family_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {"algorithm": "sha256", "value": sha256}
-            assert artifact["generatedSizeBytes"] == size_bytes
+            check_generated_artifact(artifact, sha256=sha256, size_bytes=size_bytes)
             (execution,) = artifact["execution"]["entryPoints"]
             assert execution["workgroupSize"] == [1, 1, 1]
             generated = root / artifact["path"]
@@ -1999,32 +1999,30 @@ def test_current_mlx_binary_family_native_parity(
 
 
 def test_ci_requires_native_binary_family_parity():
-    from tests.ci_helpers import assert_workflow_triggers, current_parity_step
+    from tests.ci_helpers import assert_workflow_triggers, current_parity_shard_step
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    for index in range(CI_SHARD_COUNT):
-        group = f"binary-{index}"
-        step = current_parity_step(
-            workflow,
-            f"Prove current MLX binary family native parity (shard {index} of "
-            f"{CI_SHARD_COUNT})",
-            group=group,
-        )
-        for required in (
-            f'{REQUIRE_ENV}: "1"',
-            f'{SHARD_INDEX_ENV}: "{index}"',
-            f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
-            "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-            "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-            "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-            "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
-            "pytest -q -n auto",
-            f"--basetemp=mlx-current-results/{group}",
-            f"--junitxml=mlx-current-results/{group}.xml",
-            "demos/integrations/mlx/tests/kernels/test_current_binary_family.py",
-        ):
-            assert required in step, (group, required)
-        assert "continue-on-error" not in step
+    step = current_parity_shard_step(
+        workflow,
+        "Prove current MLX binary family native parity",
+        family="binary",
+        count=CI_SHARD_COUNT,
+    )
+    for required in (
+        f'{REQUIRE_ENV}: "1"',
+        f"{SHARD_INDEX_ENV}: ${{{{ matrix.shard }}}}",
+        f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
+        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
+        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
+        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
+        "pytest -q -n auto",
+        "--basetemp=mlx-current-results/${{ matrix.group }}",
+        "--junitxml=mlx-current-results/${{ matrix.group }}.xml",
+        "demos/integrations/mlx/tests/kernels/test_current_binary_family.py",
+    ):
+        assert required in step, required
+    assert "continue-on-error" not in step
     assert_workflow_triggers(
         workflow, "demos/integrations/mlx/tests/kernels/test_current_binary_family.py"
     )

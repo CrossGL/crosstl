@@ -19,12 +19,9 @@ on:
       - "crosstl/translator/validation.py"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
-      - "support/demo-ci-metadata.json"
-      - "support/generated/project-porting-roadmap.json"
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
-      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   pull_request:
     branches:
@@ -41,12 +38,9 @@ on:
       - "crosstl/translator/validation.py"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
-      - "support/demo-ci-metadata.json"
-      - "support/generated/project-porting-roadmap.json"
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
-      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   workflow_dispatch:
 
@@ -54,7 +48,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -67,23 +61,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
     env:
-      DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}
+      DEMO_FAILURE_SUMMARY_DIR: build/reports/demo-reports/${{ matrix.os }}
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install Linux shader validators
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
 
       - name: Install DirectX Shader Compiler
         if: runner.os == 'Windows'
@@ -111,15 +109,14 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -e . pytest pytest-xdist
+          python -m pip install -e ".[test]"
         shell: bash
 
       - name: Prepare demo failure summary helper
         shell: bash
         run: |
           mkdir -p "$DEMO_FAILURE_SUMMARY_DIR"
-          cat > support/generated/demo-failure-summary.sh <<'BASH'
+          cat > build/reports/demo-failure-summary.sh <<'BASH'
           command_text() {
             local text
             printf -v text "%q " "$@"
@@ -172,35 +169,30 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir -p support/generated/demo-reports/${{ matrix.os }}
-          demo_test_files=()
-          while IFS= read -r demo_test_file; do
-            demo_test_file="${demo_test_file%$'\r'}"
-            demo_test_files+=("$demo_test_file")
-          done < <(python tools/demo_ci_metadata.py emit-pytest-files)
-          demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
-          demo_selector="${demo_selector%$'\r'}"
+          mkdir -p build/reports/demo-reports/${{ matrix.os }}
+          tests=tests/test_translator/test_project_translation.py
           python -m pytest -q -n auto \
-            "${demo_test_files[@]}" \
-            -k "$demo_selector" \
-            --junitxml support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+            "$tests::test_directx_toolchain_smoke_commands_use_monogame_sprite_entries" \
+            "$tests::test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper" \
+            "$tests::test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl" \
+            --junitxml build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
 
       - name: Write demo failure summary
         if: failure() && steps.run_demo_tests.outcome == 'failure'
         shell: bash
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml \
-            --json-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json \
-            --markdown-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
-          cat support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml \
+            --json-output build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json \
+            --markdown-output build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+          cat build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify checked-in demo artifacts
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
-          reports_dir="support/generated/demo-reports/${{ matrix.os }}/artifacts"
+          source build/reports/demo-failure-summary.sh
+          reports_dir="build/reports/demo-reports/${{ matrix.os }}/artifacts"
           while IFS= read -r config_path; do
             config_path="${config_path%$'\r'}"
             case_dir="$(dirname "$config_path")"
@@ -209,7 +201,7 @@ jobs:
               python demos/open-source-porting/run_demo.py
               --check
               --case="$case_name"
-              --reports-dir support/generated/demo-reports/${{ matrix.os }}/artifacts
+              --reports-dir build/reports/demo-reports/${{ matrix.os }}/artifacts
             )
             failed_command="$(command_text "${command[@]}")"
             if ! "${command[@]}"; then
@@ -230,8 +222,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
-          reports_dir="support/generated/demo-reports/linux-opengl"
+          source build/reports/demo-failure-summary.sh
+          reports_dir="build/reports/demo-reports/linux-opengl"
           case_args=()
           read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args opengl)"
           for ((index = 1; index < ${#case_args[@]}; index += 2)); do
@@ -265,8 +257,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
-          reports_dir="support/generated/demo-reports/linux-vulkan"
+          source build/reports/demo-failure-summary.sh
+          reports_dir="build/reports/demo-reports/linux-vulkan"
           case_args=()
           read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args vulkan)"
           for ((index = 1; index < ${#case_args[@]}; index += 2)); do
@@ -300,8 +292,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
-          reports_dir="support/generated/demo-reports/macos-metal"
+          source build/reports/demo-failure-summary.sh
+          reports_dir="build/reports/demo-reports/macos-metal"
           case_args=()
           read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args metal)"
           for ((index = 1; index < ${#case_args[@]}; index += 2)); do
@@ -335,7 +327,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
+          source build/reports/demo-failure-summary.sh
           out_dir="${RUNNER_TEMP}/demo-metal-air"
           mkdir -p "$out_dir"
           while IFS= read -r shader; do
@@ -366,8 +358,8 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
-          reports_dir="support/generated/demo-reports/windows-directx"
+          source build/reports/demo-failure-summary.sh
+          reports_dir="build/reports/demo-reports/windows-directx"
           case_args=()
           read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args directx)"
           for ((index = 1; index < ${#case_args[@]}; index += 2)); do
@@ -401,7 +393,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
-          source support/generated/demo-failure-summary.sh
+          source build/reports/demo-failure-summary.sh
           out_dir="${RUNNER_TEMP}/demo-directx-dxil"
           mkdir -p "$out_dir"
           command=(
@@ -428,7 +420,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: open-source-porting-demo-reports-${{ matrix.os }}
-          path: support/generated/demo-reports
+          path: build/reports/demo-reports
           if-no-files-found: ignore
           retention-days: 30
 
@@ -439,10 +431,10 @@ jobs:
         with:
           name: open-source-porting-demo-failure-summary-${{ matrix.os }}
           path: |
-            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
-            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json
-            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
-            support/generated/demo-reports/**/*-failure-summary.json
-            support/generated/demo-reports/**/*-failure-summary.md
+            build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+            build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json
+            build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+            build/reports/demo-reports/**/*-failure-summary.json
+            build/reports/demo-reports/**/*-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30

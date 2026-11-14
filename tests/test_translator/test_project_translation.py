@@ -44,6 +44,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.project.host_reflection import (
     REFLECTION_INCOMPLETE_OUTPUT,
     REFLECTION_TOOL_UNAVAILABLE,
@@ -197,11 +201,14 @@ def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
     dxc = shutil.which("dxc")
     if dxc:
         output_path = tmp_path / "shader.dxil"
+        profile = dxc_profile_for_source("cs_6_0", hlsl_code)
+        compiler_arguments = dxc_compiler_arguments_for_source(hlsl_code)
         compile_result = subprocess.run(
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                profile,
+                *compiler_arguments,
                 "-E",
                 "CSMain",
                 str(shader_path),
@@ -767,6 +774,7 @@ def test_project_package_exposes_public_api_surface():
         "plan_runtime_integration",
         "publish_native_deferred_compilation_cache",
         "scan_project",
+        "toolchain_doctor_report",
         "translate_project",
         "compile_native_deferred_compilation_request",
         "runtime_execution_request_to_graph",
@@ -1533,12 +1541,14 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert builtin["valueProvenance"]["kind"] == "source-default"
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
-        "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
+        "void foo(in float4 p[arraySize], VertexInput input, "
+        "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
-    assert "float4 ucol[arraySize]: TEXCOORD0;" in generated
-    assert "float4 dupUcol[dupArraySize]: TEXCOORD5;" in generated
-    assert "float4 dupUcol[dupArraySize]: TEXCOORD1;" not in generated
+    # The project gives the specialization constants their default values, which size the input members.
+    assert "float4 ucol[5]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[12]: TEXCOORD5;" in generated
+    assert "float4 dupUcol[12]: TEXCOORD1;" not in generated
     assert_directx_vertex_validates_if_available(generated, tmp_path)
 
 
@@ -2238,10 +2248,12 @@ def _write_failed_artifact_report(repo):
 
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     backend_catalog = json.loads(
-        (ROOT / "support" / "backends.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "backends.json").read_text(encoding="utf-8")
     )
 
     assert manifest["schemaVersion"] == 1
@@ -2260,89 +2272,6 @@ def test_support_external_corpus_manifest_documents_pinned_reductions():
         assert len(entry["commit"]) == 40
         assert entry["sourceUrl"].startswith(entry["repository"])
         assert entry["targets"] == ["cgl"]
-
-
-def test_support_project_feature_evidence_references_existing_tests():
-    catalog = json.loads(
-        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
-    )
-
-    declared_tests_by_path = {}
-
-    def declared_tests(path_text):
-        if path_text not in declared_tests_by_path:
-            test_file = ROOT / path_text
-            declared_tests_by_path[path_text] = {
-                line.strip().split("(", 1)[0][len("def ") :]
-                for line in test_file.read_text(encoding="utf-8").splitlines()
-                if line.strip().startswith("def test_")
-            }
-        return declared_tests_by_path[path_text]
-
-    def referenced_test(item):
-        if not isinstance(item, str):
-            return None
-        path_text, separator, test_name = item.partition("::def ")
-        if (
-            not separator
-            or not path_text.startswith("tests/")
-            or not path_text.endswith(".py")
-            or not test_name.startswith("test_")
-        ):
-            return None
-        return path_text, test_name
-
-    missing_evidence = []
-    missing_tests = []
-    for feature in catalog["features"]:
-        if feature.get("category") != "project":
-            continue
-        for backend, support in feature.get("support", {}).items():
-            evidence = support.get("evidence")
-            if not evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-                continue
-            test_evidence = []
-            for item in evidence:
-                test_reference = referenced_test(item)
-                if test_reference is None:
-                    continue
-                path_text, test_name = test_reference
-                test_evidence.append(item)
-                if test_name not in declared_tests(path_text):
-                    missing_tests.append(item)
-            if not test_evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-
-    assert missing_evidence == []
-    assert missing_tests == []
-
-
-def test_support_project_source_map_notes_document_granularity_contract():
-    catalog = json.loads(
-        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
-    )
-    checked_features = {"project.validation_hooks", "project.source_provenance"}
-    stale_phrase = "single file-level source-map mapping"
-    required_phrases = (
-        "file-level source-map mapping cardinality",
-        "fine-grained positive-length source-map mappings",
-    )
-
-    stale_notes = []
-    missing_notes = []
-    for feature in catalog["features"]:
-        if feature.get("id") not in checked_features:
-            continue
-        for backend, support in feature.get("support", {}).items():
-            notes = support.get("notes", "")
-            if stale_phrase in notes:
-                stale_notes.append(f"{feature.get('id')}:{backend}")
-            if not all(phrase in notes for phrase in required_phrases):
-                missing_notes.append(f"{feature.get('id')}:{backend}")
-
-    assert stale_notes == []
-    assert missing_notes == []
 
 
 def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
@@ -7785,7 +7714,7 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
 
     assert "struct VSMain_Input" in metal
     assert "float4 position [[attribute(0)]];" in metal
-    assert "float2 uv [[attribute(4)]];" in metal
+    assert "float2 uv [[attribute(5)]];" in metal
     assert "VSMain_Input _crossglInput [[stage_in]]" in metal
     assert "float4 position = _crossglInput.position;" in metal
     assert "float2 uv = _crossglInput.uv;" in metal
@@ -7795,10 +7724,10 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "[[TexCoord]]" not in metal
     assert "fragment void fragment_main" not in metal
 
-    assert "layout(location = 4) out vec2 out_uv;" in opengl
-    assert "layout(location = 4) in vec2 in_out_uv;" in opengl
+    assert "layout(location = 5) out vec2 out_uv;" in opengl
+    assert "layout(location = 5) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
-    assert "fragColor = texture(g_texture, in_out_uv);" in opengl
+    assert "fragColor = texture(g_texture, out_uv);" in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
     assert "void main() {\n}" not in opengl
     assert "PSInput" not in opengl
@@ -7956,9 +7885,18 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", vertex_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
-    assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
-    assert vertex_glsl.splitlines().count("out vec4 PSIn_Color;") == 1
-    assert fragment_glsl.splitlines().count("in vec4 PSIn_Color;") == 1
+    assert (
+        vertex_glsl.splitlines().count("layout(location = 1) in vec4 VSIn_Color;") == 1
+    )
+    # COLOR0 links by its GLSL location on both sides of the interface.
+    assert (
+        vertex_glsl.splitlines().count("layout(location = 13) out vec4 PSIn_Color;")
+        == 1
+    )
+    assert (
+        fragment_glsl.splitlines().count("layout(location = 13) in vec4 PSIn_Color;")
+        == 1
+    )
     assert "layout(location = 0) out vec4 fragColor;" in fragment_glsl
     assert "fragColor = Color;" in fragment_glsl
 
@@ -7969,7 +7907,7 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
     assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
     assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in vertex_metal
     assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
     assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
 
@@ -8111,7 +8049,7 @@ def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
     assert texture_binding.group(1) != sampler_binding.group(1)
     assert "return textureSample(g_texture, g_sampler, input.uv);" in wgsl
 
-    assert "@ register(t0)\n    sampler2D g_texture;" in cgl
+    assert "@ register(t0)\n    texture2D g_texture;" in cgl
     assert "@ register(s0)\n    sampler g_sampler;" in cgl
 
     artifacts_by_target = {
@@ -8262,7 +8200,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     assert "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
     assert (
         "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
-        "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
+        "vec4<u32>(rgbBlock, alphaBlock));"
     ) in wgsl
     assert "uimage2D" not in wgsl
     assert "imageStore" not in wgsl
@@ -11329,7 +11267,7 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     ]
 
 
-def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic(
+def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -11374,28 +11312,15 @@ def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic
 
     assert output.exists()
     rust_code = output.read_text(encoding="utf-8")
-    assert "CrossGL Rust limitation: resource values" in rust_code
-    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in rust_code
-    assert len(placeholder_diagnostics) == 1
-    assert placeholder_diagnostics[0]["location"]["file"] == (
-        "translated/rust/shaders/storage.rs"
-    )
-    assert "rust-gpu resource binding" in placeholder_diagnostics[0]["message"]
-    assert validate_project_report(report_path)["success"] is True
-
-    missing_payload = copy.deepcopy(payload)
-    _clear_report_diagnostics(missing_payload)
-    missing_report_path = repo / "translated" / "missing-storage-diagnostic.json"
-    missing_report_path.write_text(json.dumps(missing_payload), encoding="utf-8")
-    missing_validation = validate_project_report(missing_report_path)
-
-    assert missing_validation["success"] is False
+    # The buffer is an entry parameter with its binding, not a default-valued static under a placeholder comment.
+    assert "CrossGL Rust limitation" not in rust_code
+    assert "static VALUES" not in rust_code
     assert (
-        missing_validation["diagnosticsByCode"][
-            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
-        ]
-        == 1
-    )
+        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
+        "binding = 0))] values: RWStructuredBuffer<i32>"
+    ) in rust_code
+    assert placeholder_diagnostics == []
+    assert validate_project_report(report_path)["success"] is True
 
 
 def test_translate_project_filters_invalid_include_dirs_before_frontend(
@@ -14001,13 +13926,17 @@ def test_translate_project_matches_direct_metal_materialized_signatures(
         encoding="utf-8",
     )
 
+    # Both translations state the threadgroup size the host dispatches the kernel with.
     direct_output = crosstl_cli.translate(
-        str(source_path), backend=target, format_output=False
+        str(source_path),
+        backend=target,
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
     payload = translate_project(
-        repo,
-        targets=[target],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo, targets=(target,), output_dir="out", workgroup_size=(32, 1, 1)
+        ),
         format_output=False,
     ).to_json()
 
@@ -16825,9 +16754,12 @@ def test_translate_project_folds_concrete_metal_sizeof_across_targets(tmp_path):
     )
 
     payload = translate_project(
-        repo,
-        targets=["directx", "opengl", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("directx", "opengl", "vulkan"),
+            output_dir="out",
+            workgroup_size=(64, 1, 1),
+        ),
         format_output=False,
     ).to_json()
 
@@ -16854,8 +16786,8 @@ def test_translate_project_reports_unsupported_concrete_metal_sizeof(tmp_path):
     repo.mkdir()
     (repo / "aggregate_size.metal").write_text(
         textwrap.dedent("""
-            struct alignas(16) Payload {
-                float value;
+            struct Payload {
+                alignas(16) float value;
             };
 
             kernel void payload_size(device int* output [[buffer(0)]]) {
@@ -17167,6 +17099,7 @@ def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -17671,8 +17604,8 @@ def test_translate_project_resolves_scalar_alias_from_partial_specialization(
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
     }
-    assert "uint value = uint(" in outputs["directx"]
-    assert "uint value = uint(" in outputs["opengl"]
+    assert "uint value = cgl_rule_sat_ftou(" in outputs["directx"]
+    assert "uint value = cgl_rule_sat_ftou(" in outputs["opengl"]
     assert "OpConvertFToU" in outputs["vulkan"]
     assert "OpConvertUToF" in outputs["vulkan"]
     assert "W_T" not in "\n".join(outputs.values())
@@ -18602,6 +18535,7 @@ def test_translate_project_materializes_masked_gemv_local_kernel_alias(
             source_roots = ["shaders"]
             targets = ["{target}"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -23529,7 +23463,9 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
 
 def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
     support_manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     manifest_entry = next(
         entry
@@ -34993,7 +34929,7 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     translate_diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
-        if diagnostic["code"] == "project.translate.failed"
+        if diagnostic["code"] == "project.translate.registry-refused"
     )
     assert translate_diagnostic["severity"] == "error"
     assert translate_diagnostic["target"] == "not-a-backend"
@@ -35789,7 +35725,11 @@ def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_ove
 
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "elem_to_loc_broadcast" not in generated
-    assert "OpFunctionCall" not in generated
+    # The overloads are inlined; the only calls left are the two uint(float) conversions, which Metal defines for
+    # NaN (ftoi_nan) and which call the one rule helper beside the entry point.
+    assert generated.count(" OpFunction ") == 2
+    calls = re.findall(r"OpFunctionCall %\w+ %(\w+)", generated)
+    assert len(calls) == 2 and len(set(calls)) == 1
     assert "storage-buffer-function-overload" not in generated
     assert "WARNING" not in generated
     assert "DescriptorSet 0" in generated
@@ -41754,7 +41694,9 @@ def test_metal_project_canonicalizes_leading_zero_function_constant_ids(
         ]
         assert "layout(constant_id = 0) const int first = 0;" in generated
         assert "layout(constant_id = 1) const int second = 0;" in generated
-        GLSLParser(GLSLLexer(generated).tokenize()).parse()
+        # A required constant exists only in a SPIR-V compile; any other compile stops at #error.
+        assert '#error "specialization constant first has no default' in generated
+        GLSLParser(GLSLLexer(generated, defines={"GL_SPIRV": "100"}).tokenize()).parse()
         if shutil.which("glslangValidator"):
             toolchain_runs = project_pipeline._run_toolchain_smoke([artifact], tmp_path)
             assert len(toolchain_runs) == 1
@@ -41841,7 +41783,9 @@ def test_metal_project_canonicalizes_suffixed_function_constant_ids(tmp_path):
     opengl_source = (tmp_path / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
     for _name, constant_id, _spelling in expected_ids:
         assert f"layout(constant_id = {constant_id})" in opengl_source
-    GLSLParser(GLSLLexer(opengl_source).tokenize()).parse()
+    # The constants are required overrides: they exist only in a SPIR-V compile.
+    assert '#error "specialization constant decimal has no default' in opengl_source
+    GLSLParser(GLSLLexer(opengl_source, defines={"GL_SPIRV": "100"}).tokenize()).parse()
     if shutil.which("glslangValidator"):
         toolchain_runs = project_pipeline._run_toolchain_smoke(
             [artifacts["opengl"]], tmp_path
@@ -42617,7 +42561,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "kind": "texture",
             "type": "sampler2D",
             "set": 0,
-            "binding": 1026,
+            "binding": 2,
             "access": "read",
         },
     ]
@@ -48556,7 +48500,7 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "uint i = gl_GlobalInvocationID.x;" in outputs["opengl"]
     assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
 
-    assert "RWStructuredBuffer<float> out : register(u0);" in outputs["directx"]
+    assert "RWStructuredBuffer<float> out_ : register(u0);" in outputs["directx"]
     assert "StructuredBuffer<float> in_ : register(t1);" in outputs["directx"]
     assert "RWStructuredBuffer<float> in_" not in outputs["directx"]
     assert "cbuffer scale_Args : register(b2)" in outputs["directx"]
@@ -48699,11 +48643,8 @@ def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
 
     assert "RWStructuredBuffer<float> A : register(u0);" in output
     assert "StructuredBuffer<float> B : register(t1);" in output
-    assert (
-        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
-        "uint3 groupID : SV_GroupID)"
-    ) in output
-    assert "int i = ((uint3(1, 1, 1).x * groupID.x) + groupThreadID.x);" in output
+    assert "void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "int i = dispatchThreadID.x;" in output
     assert "A[i] += B[i];" in output
     assert "float A[] : group" not in output
     assert "float B[] : group" not in output
@@ -52136,7 +52077,9 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["location"]["file"] == "budgeted_implicit.metal"
-    assert diagnostic["location"]["line"] == 10
+    # The work item is the declaration `ValueT a = 1.0;`; its location is the
+    # statement's first token, not the whitespace after the previous `;`.
+    assert diagnostic["location"]["line"] == 11
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
@@ -53114,9 +53057,9 @@ def test_translate_project_preserves_qualified_metal_storage_pointer_view(tmp_pa
     assert_metal_validates_if_available(generated, tmp_path)
 
 
-@pytest.mark.parametrize(
-    "target", ["cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"]
-)
+# WebGL refuses this compute kernel for its stage before the pointer is reached
+# (tests/test_translator/test_webgl_stage_precheck.py).
+@pytest.mark.parametrize("target", ["cuda", "hip", "mojo", "rust", "slang", "wgsl"])
 def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering(
     tmp_path, target
 ):
@@ -54261,7 +54204,7 @@ def test_translate_project_rejects_unresolved_empty_spirv_initializer(tmp_path):
         textwrap.dedent("""
             shader EmptyInitializer {
                 void exercise() {
-                    unresolved({});
+                    abs({});
                 }
             }
             """).strip(),
@@ -55716,10 +55659,14 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
         encoding="utf-8",
     )
 
+    # The host picks the reduction's work-group size; the project names it.
     payload = translate_project(
-        repo,
-        targets=["cgl", "opengl", "metal", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("cgl", "opengl", "metal", "vulkan"),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
         validate=True,
     ).to_json()
 
@@ -55849,10 +55796,14 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
         encoding="utf-8",
     )
 
+    # The host picks the reduction's work-group size; the project names it.
     payload = translate_project(
-        repo,
-        targets=["cgl", "opengl", "metal", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("cgl", "opengl", "metal", "vulkan"),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
         validate=True,
     ).to_json()
 
@@ -55921,9 +55872,12 @@ def test_translate_project_opencl_reduce_get_num_groups_directx_uses_cbuffer_inp
     )
 
     payload = translate_project(
-        repo,
-        targets=["directx"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
     ).to_json()
 
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
@@ -56125,14 +56079,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
             comptime float_dtype = DType.float32
             comptime vector_size = 4
 
-            def vector_addition(
-                lhs_tensor: UnsafePointer[Float32],
-                rhs_tensor: UnsafePointer[Float32],
-                out_tensor: UnsafePointer[Float32],
-            ):
-                var tid = block_idx.x * block_dim.x + thread_idx.x
+            def vector_addition(scale: Float32):
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
                 if tid < vector_size:
-                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+                    var value: Float32 = scale * 2.0
 
             def main() raises:
                 if not has_accelerator():
@@ -56156,11 +56106,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
-    # Metal output is scanned for leaked Mojo host constructs; the SPIR-V
-    # emitter refuses the unresolved host call itself, before any output exists.
+    # The host query is a call to a function the kernel program never declares, so every target refuses it
+    # before any output exists.
     assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1,
-        "project.translate.vulkan-builtin-unsupported": 1,
+        "project.translate.undeclared-function": 2,
     }
 
     for artifact in payload["artifacts"]:
@@ -56170,17 +56119,9 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert "generatedSizeBytes" not in artifact
         assert "sourceMap" not in artifact
         assert "sourceRemap" not in artifact
-    artifacts_by_target = {
-        artifact["target"]: artifact for artifact in payload["artifacts"]
-    }
-    assert (
-        "unresolved Mojo host/runtime constructs" in artifacts_by_target["metal"][
-            "error"
-        ]
-    )
-    assert artifacts_by_target["vulkan"]["error"].startswith(
-        "Cannot lower call to 'has_accelerator' to SPIR-V"
-    )
+        assert artifact["error"].startswith(
+            "function 'has_accelerator' is not declared"
+        )
 
     diagnostics_by_target = {
         diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
@@ -56189,23 +56130,74 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     for diagnostic in diagnostics_by_target.values():
         assert diagnostic["severity"] == "error"
         assert diagnostic["sourceBackend"] == "mojo"
+        assert diagnostic["location"]["file"] == "vector_addition.mojo"
 
-    metal = diagnostics_by_target["metal"]
-    assert (
-        metal["code"]
-        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+
+def test_translate_project_mojo_pointer_parameters_are_refused_by_metal(tmp_path):
+    # The Mojo importer keeps `UnsafePointer[Float32]` as a plain type name, which
+    # the Metal emitter used to copy into the output as
+    # `UnsafePointer lhs_tensor[Float32]`. It is refused with the typed refusal.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            comptime vector_size = 4
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                rhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+            """).strip(),
+        encoding="utf-8",
     )
-    assert metal["location"]["file"].startswith("out/metal/")
-    assert metal["originalLocation"]["file"] == "vector_addition.mojo"
-    assert metal["checkKind"] == "artifact"
-    assert metal["missingCapabilities"] == [
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-    ]
 
-    vulkan = diagnostics_by_target["vulkan"]
-    assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
-    assert vulkan["location"]["file"] == "vector_addition.mojo"
-    assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    (artifact,) = payload["artifacts"]
+    assert artifact["status"] == "failed"
+    assert (
+        "the built-in type 'UnsafePointer' has no Metal spelling" in artifact["error"]
+    )
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
+
+
+def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
+    tmp_path,
+):
+    # `var tid = <unresolved host expression>` has no written type and no inferable one; Metal used to declare it
+    # `float`. It is now refused with a typed lowering diagnostic.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                out_tensor[tid] = lhs_tensor[tid]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    assert [artifact["status"] for artifact in payload["artifacts"]] == ["failed"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
+    (diagnostic,) = payload["diagnostics"]
+    assert "the type of 'tid' is not written" in diagnostic["message"]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
@@ -56334,13 +56326,9 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            [
-                "global_idx_uint: SIMD[DType.uint32, 4]",
-                "thread_idx_uint: SIMD[DType.uint32, 4]",
-                "block_idx_uint: SIMD[DType.uint32, 4]",
-                "block_dim_uint: SIMD[DType.uint32, 4]",
-            ],
-            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+            # The grid index imports as the global invocation id.
+            ["global_idx_uint: SIMD[DType.uint32, 4]"],
+            "var i: Int32 = global_idx_uint[0]",
         ),
         (
             "add_kernel.hip",
@@ -56357,12 +56345,8 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            [
-                "thread_idx_uint: SIMD[DType.uint32, 4]",
-                "block_idx_uint: SIMD[DType.uint32, 4]",
-                "block_dim_uint: SIMD[DType.uint32, 4]",
-            ],
-            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+            ["global_idx_uint: SIMD[DType.uint32, 4]"],
+            "var i: Int32 = global_idx_uint[0]",
         ),
     ],
 )
@@ -56437,10 +56421,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         for artifact in payload["artifacts"]
     }
 
-    assert (
-        "var i: i32 = ((gl_WorkGroupSize.x * gl_WorkGroupID.x) + "
-        "gl_LocalInvocationID.x);"
-    ) in outputs["cgl"]
+    # The grid index imports as the global invocation id, which needs no block size.
+    assert "var i: i32 = gl_GlobalInvocationID.x;" in outputs["cgl"]
 
     metal_output = outputs["metal"]
     assert "kernel void kernel_vectorAdd(" in metal_output
@@ -56448,13 +56430,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "device float* A [[buffer(1)]]" in metal_output
     assert "device float* B [[buffer(2)]]" in metal_output
     assert "constant vectorAdd_Args& vectorAdd_Args [[buffer(3)]]" in metal_output
-    assert "thread_position_in_threadgroup" in metal_output
-    assert "threadgroup_position_in_grid" in metal_output
-    assert "threads_per_threadgroup" in metal_output
-    assert (
-        "int i = threads_per_threadgroup.x * threadgroup_position_in_grid.x + "
-        "thread_position_in_threadgroup.x;"
-    ) in metal_output
+    assert "int i = thread_position_in_grid.x;" in metal_output
+    assert "threads_per_threadgroup" not in metal_output
     assert "if (i < vectorAdd_Args.N)" in metal_output
     assert "[[group]]" not in metal_output
     for gl_builtin in [
@@ -56470,9 +56447,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "RWStructuredBuffer<float> A : register(u1);" in directx_output
     assert "RWStructuredBuffer<float> B : register(u2);" in directx_output
     assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
-    assert "uint3 groupID : SV_GroupID" in directx_output
-    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
-    assert "SV_DispatchThreadID" not in directx_output
+    assert "uint3 dispatchThreadID : SV_DispatchThreadID" in directx_output
+    assert "SV_GroupID" not in directx_output
     assert "float A[]" not in directx_output
     assert "float B[]" not in directx_output
     assert "float C[]" not in directx_output
@@ -56495,8 +56471,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "DescriptorSet 0" in spirv_output
     for binding in ("Binding 0", "Binding 1", "Binding 2", "Binding 3"):
         assert binding in spirv_output
-    assert "WorkgroupId" in spirv_output
-    assert "LocalInvocationId" in spirv_output
+    assert "GlobalInvocationId" in spirv_output
+    assert "WorkgroupId" not in spirv_output
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
 
     wgsl_output = outputs["wgsl"]
@@ -56504,10 +56480,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         "fn compute_main(@builtin(global_invocation_id) "
         "global_invocation_id: vec3<u32>"
     ) in wgsl_output
-    assert "var thread_id: vec3<u32> = global_invocation_id;" in wgsl_output
-    assert "var block_id: vec3<u32> = workgroup_id;" in wgsl_output
-    assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
-    assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
+    assert "var i: i32 = i32(global_invocation_id.x);" in wgsl_output
+    assert "workgroup_id" not in wgsl_output
     assert ": void" not in wgsl_output
 
 
@@ -56636,8 +56610,7 @@ def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
     assert "RWStructuredBuffer<float> B : register(u1);" in directx_output
     assert "RWStructuredBuffer<float> C : register(u2);" in directx_output
     assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
-    assert "uint3 groupID : SV_GroupID" in directx_output
-    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "uint3 dispatchThreadID : SV_DispatchThreadID" in directx_output
     assert "float A[]" not in directx_output
     assert "float B[]" not in directx_output
     assert "float C[]" not in directx_output
@@ -56829,7 +56802,7 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     cuda = outputs["cuda"]
     assert "__device__ float4 main_fs()" in cuda
     assert "float4 output;" in cuda
-    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in cuda
+    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in cuda
     assert "return output;" in cuda
     assert "main_fs(float4 output" not in cuda
     assert "CrossGL parameter semantic: output" not in cuda
@@ -56837,7 +56810,7 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     hip = outputs["hip"]
     assert "__device__ float4 main_fs()" in hip
     assert "float4 output;" in hip
-    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in hip
+    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in hip
     assert "return output;" in hip
     assert "main_fs(float4 output" not in hip
     assert "CrossGL parameter semantic: output" not in hip
@@ -57049,6 +57022,7 @@ def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> P
             include = ["kernels/*.metal"]
             targets = ["directx"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip(),
         encoding="utf-8",
     )
@@ -57061,7 +57035,10 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
     shader_path = shader_dir / "reduce_kernel.metal"
     shader_path.write_text(METAL_SIMD_SHUFFLE_DOWN_KERNEL, encoding="utf-8")
     generated_hlsl = project_pipeline.translate(
-        str(shader_path), backend="directx", source_backend="metal"
+        str(shader_path),
+        backend="directx",
+        source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
     assert "simd_shuffle_down" not in generated_hlsl
     assert (
@@ -58754,7 +58731,7 @@ def test_translate_project_reports_non_bitcast_compile_time_global_contract(
         textwrap.dedent("""
             shader RuntimeCompileTimeCall {
                 float buildValue() {
-                    return 2.0;
+                    return sin(2.0);
                 }
 
                 constant float invalidValue = buildValue();

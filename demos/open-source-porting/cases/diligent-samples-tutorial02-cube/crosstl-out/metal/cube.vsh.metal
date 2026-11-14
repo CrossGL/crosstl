@@ -14,7 +14,7 @@ struct vertex_main_Input {
 
 struct vertex_main_Return {
     float4 PSIn_Pos [[position]];
-    float4 PSIn_Color [[user(Color0)]];
+    float4 PSIn_Color [[user(COLOR0)]];
 };
 
 vertex vertex_main_Return vertex_main(vertex_main_Input _crossglInput [[stage_in]], constant Constants& constants [[buffer(0)]]) {

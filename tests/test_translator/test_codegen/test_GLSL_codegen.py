@@ -58,6 +58,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
+    OpenGLPreciseQualifierError,
     OpenGLPrivatePointerParameterError,
     OpenGLRecursiveFunctionError,
     OpenGLReferenceParameterError,
@@ -76,6 +77,9 @@ from crosstl.translator.codegen.GLSL_codegen import (
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
+from crosstl.translator.codegen.resource_array_bounds import (
+    ResourceArrayIndexUnboundedError,
+)
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -84,6 +88,14 @@ from tests.lowering_refusal_helpers import (
     refused_glsl,
     shared_refusal,
 )
+
+
+def glsl_body_identifiers(code):
+    """GLSL identifiers outside the leading ``// crosstl-*`` artifact-contract records."""
+    body = "\n".join(
+        line for line in code.splitlines() if not line.startswith("// crosstl-")
+    )
+    return set(re.findall(r"[A-Za-z_]\w*", body))
 
 
 def tokenize_code(code: str) -> List:
@@ -262,12 +274,16 @@ def test_glsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows(
     }
     """
 
-    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    # Calling the parameter ``__builtin_ctzl`` calls no function: GLSL has no function values, so the call is
+    # refused rather than written against a name the output does not declare. It is not the clang built-in either.
+    generated, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to '__builtin_ctzl'" in message
     assert "int builtin_ctz(uint value)" in generated
     assert "return builtin_ctz(value);" in generated
     assert "int callLexicalShadow(uint builtin_ctzl, uint value)" in generated
-    assert "return __builtin_ctzl(value);" in generated
     assert "crossgl_ctz_" not in generated
     assert "findLSB(" not in generated
 
@@ -2409,7 +2425,8 @@ def test_glsl_global_function_constants_emit_scalar_specializations_and_validate
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in generated
     assert "layout(constant_id = 20) const bool has_w = false;" in generated
     assert "layout(constant_id = 21) const int mode = 2;" in generated
@@ -4468,9 +4485,10 @@ def test_opengl_fixed_array_mutation_analysis_uses_for_in_lexical_call_type(
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main() {{
-                float values[1] = {{1.0}};
-                forward(values);
-                output[0] = values[0];
+                // &value is caller-visible storage, so the writes forward makes reach it.
+                float value = 1.0;
+                forward(&value);
+                output[0] = value;
             }}
         }}
     }}
@@ -6326,11 +6344,11 @@ def test_structured_buffer_fixed_width_aliases_lower_to_standard_ssbo_types():
         in generated
     )
     assert (
-        "layout(std430, binding = 5) buffer offsetsBuffer { uint offsets[]; };"
+        "layout(std430, binding = 5) buffer offsetsBuffer { uint64_t offsets[]; };"
         in generated
     )
     assert generated.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
-    assert "uint64_t offset = uint64_t(offsets[index]);" in generated
+    assert "uint64_t offset = offsets[index];" in generated
     assert "uint count = bitfieldExtract(counts[index], 0, 16);" in generated
     assert "int64_t signedValue = signedValues[index];" in generated
     assert (
@@ -6745,7 +6763,7 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "layout(std430, binding = 5) readonly buffer offsetsBuffer { uint data[]; } offsets[2];"
+        "layout(std430, binding = 5) readonly buffer offsetsBuffer { uint64_t data[]; } offsets[2];"
         in generated
     )
     assert (
@@ -6757,8 +6775,8 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "uint64_t readOffset(uint localOffsets_0[], uint localOffsets_1[], uint which, uint index)"
-        in generated
+        "uint64_t readOffset(uint64_t localOffsets_0[], uint64_t localOffsets_1[], "
+        "uint which, uint index)" in generated
     )
     assert (
         "len = ((which == 0u) ? localOffsets_0.length() : localOffsets_1.length());"
@@ -6816,34 +6834,9 @@ def test_unsized_structured_buffer_array_helper_emits_diagnostic_fallback():
     }
     """
 
-    generated, generated_refusal = glsl_partial_output(
-        generate_code, parse_code(tokenize_code(code))
-    )
-
-    assert (
-        "layout(std430, binding = 3) buffer buffersBuffer { uint data[]; } buffers[];"
-        in generated
-    )
-    assert "uint readOne(uint which, uint index)" in generated
-    assert "void writeOne(uint which, uint index, uint value)" in generated
-    assert "structured buffer array parameter readOne.localBuffers" in generated_refusal
-    assert (
-        "structured buffer array parameter writeOne.localBuffers" in generated_refusal
-    )
-    assert "return 0u;" in generated
-    assert "uint value = readOne(which, index);" in generated
-    assert (
-        "writeOne(which, index, "
-        "bitfieldExtract(uint((int(value) + "
-        "int(bitfieldExtract(uint(1u), 0, 16)))), 0, 16));" in generated
-    )
-    assert "readOne(buffers, which, index)" not in generated
-    assert "writeOne(buffers, which, index" not in generated
-    assert "localBuffers[which][index]" not in generated
-    assert "uint localBuffers[]" not in generated
-    assert "buffer_load" not in generated
-    assert "buffer_store" not in generated
-    assert "uint16_t" not in generated
+    # No call bounds ``which``, so no size of ``buffers`` is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="buffers"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_unsized_global_structured_buffer_arrays_infer_static_sizes():
@@ -6904,7 +6897,7 @@ def test_unsized_global_structured_buffer_direct_index_sizes_dynamic_helper():
         }
 
         uint combine(uint which, uint index) {
-            return buffer_load(counts[2], index) + readDynamic(counts, which, index) + buffer_load(afterCounts, index);
+            return buffer_load(counts[2], index) + readDynamic(counts, min(which, 2u), index) + buffer_load(afterCounts, index);
         }
     }
     """
@@ -6934,8 +6927,8 @@ def test_unsized_global_structured_buffer_direct_index_sizes_dynamic_helper():
         in generated
     )
     assert (
-        "readDynamic(counts[0].data, counts[1].data, counts[2].data, which, index)"
-        in generated
+        "readDynamic(counts[0].data, counts[1].data, counts[2].data, "
+        "min(which, 2u), index)" in generated
     )
     assert "unsupported GLSL structured buffer array parameter" not in generated
     assert "readLeaf(localCounts, which, index)" not in generated
@@ -7376,7 +7369,7 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
-def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
+def test_glsl_buffer_pointer_helper_parameters_specialize_per_buffer():
     code = """
     shader BufferPointerHelperParameter {
         float readValue(buffer float* values, int index) {
@@ -7400,9 +7393,363 @@ def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
         "layout(std430, binding = 0) buffer valuesBuffer { float values[]; };"
         in generated
     )
-    assert "float readValue(float values[], int index)" in generated
-    assert "float value = readValue(values, 0);" in generated
+    # GLSL 4.60 section 6.1: an array parameter must be explicitly sized, so the
+    # helper is specialized for the buffer it reads and takes an element offset.
+    assert "float readValue(float values[]" not in generated
+    assert (
+        "float readValue_glsl_values_values_float(int index, int values_offset) {"
+        in generated
+    )
+    assert "return values[(values_offset + index)];" in generated
+    assert "float value = readValue_glsl_values_values_float(0, int(0));" in generated
     assert "PointerType" not in generated
+
+
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_glsl_structured_buffer_helper_parameter_length_reads_buffer_length(
+    buffer_type, tmp_path
+):
+    code = f"""
+    shader Probe {{
+        {buffer_type}<float> values;
+        RWStructuredBuffer<float> outp;
+        int count({buffer_type}<float> v) {{
+            return v.length();
+        }}
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                outp[0] = float(count(values));
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (values.length() - int(v_offset));" in generated
+    assert "values[v_offset].length()" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"helper_parameter_length_{buffer_type}"
+    )
+
+
+def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_path):
+    # v[k] reads data[v_offset + k], so the view holds the elements from the
+    # offset it is passed to the end of the buffer.
+    code = """
+    shader Probe {
+        buffer float* data;
+        RWStructuredBuffer<float> outp;
+        int count(buffer float* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count(data + 2));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (data.length() - int(v_offset));" in generated
+    assert "count_glsl_v_data_float(int(2))" in generated
+    assert "data[v_offset].length()" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "buffer_view_helper_parameter_length"
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            "const device uint16_t* v = (uint16_t*)words;\n"
+            "outp[0] = float(v.length());",
+            "((words.length() * 2) - int(v_offset))",
+        ),
+        (
+            "const device float* v = (float*)words;\n" "outp[0] = float(v.length());",
+            "(words.length() - int(v_offset))",
+        ),
+        (
+            "const device float2* v = (float2*)words;\n" "outp[0] = float(v.length());",
+            "((words.length() / 2) - int(v_offset))",
+        ),
+        (
+            "const device float* v = (float*)(words + 2);\n"
+            "outp[0] = float(v.length());",
+            "((((words.length() * 4) - int((2 * 4))) / 4) - int(v_offset))",
+        ),
+        (
+            "const device uint16_t* v = (uint16_t*)words + 1;\n"
+            "outp[0] = float(v.length());",
+            "((words.length() * 2) - int(v_offset))",
+        ),
+        (
+            "outp[0] = float(((float*)words).length());",
+            "float(words.length());",
+        ),
+        (
+            "outp[0] = float(((uint16_t*)words).length());",
+            "float((words.length() * 2));",
+        ),
+    ],
+    ids=[
+        "local-uint16",
+        "local-float",
+        "local-float2",
+        "offset-source",
+        "offset-view",
+        "inline-float",
+        "inline-uint16",
+    ],
+)
+def test_glsl_reinterpreted_view_length_computes_element_count(
+    body, expected, tmp_path
+):
+    code = f"""
+    shader Probe {{
+        buffer uint* words;
+        RWStructuredBuffer<float> outp;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert expected in generated
+    assert "uintBitsToFloat(" not in generated
+    assert "bitfieldExtract(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reinterpreted_view_length"
+    )
+
+
+def test_glsl_reinterpreted_helper_parameter_length_counts_from_offsets(tmp_path):
+    code = """
+    shader Probe {
+        buffer uint* words;
+        RWStructuredBuffer<float> outp;
+        int count(const device uint16_t* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count((uint16_t*)(words + 2))) + float(count((uint16_t*)words + 1));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "return ((((words.length() * 4) - int(v_byte_offset)) / 2) - int(v_offset));"
+        in generated
+    )
+    assert (
+        "count_glsl_v_words_uint_view_uint_to_uint16(int(0), int((2 * 4)))" in generated
+    )
+    assert "(int(1), int(0))" in generated
+    assert "bitfieldExtract(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reinterpreted_helper_parameter_length"
+    )
+
+
+def test_glsl_reinterpreted_view_length_refuses_unknown_byte_offset_layout():
+    codegen = GLSLCodeGen()
+    with pytest.raises(
+        OpenGLStoragePointerError,
+        match="byte-offset view without element layout",
+    ):
+        codegen.glsl_reinterpreted_storage_length_expression(
+            "words",
+            {"root": "words", "byte_offset": "8"},
+        )
+
+
+def test_glsl_lane_gather_local_view_length_computes_element_count(tmp_path):
+    code = """
+    shader LaneGatherLocal {
+        buffer uint16_t* values;
+        RWStructuredBuffer<float> results;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                const device vec<uint16_t, 4>* v = (vec<uint16_t, 4>*)(values + 1);
+                results[0] = float(v.length());
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "((((values.length() * 2) - int((1 * 2))) / 8) - int(v_offset))" in generated
+    assert "uvec4(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "lane_gather_local_view_length"
+    )
+
+
+def test_glsl_lane_gather_helper_parameter_length_computes_element_count(tmp_path):
+    code = """
+    shader LaneGatherHelper {
+        buffer uint16_t* values;
+        RWStructuredBuffer<float> results;
+        int count(const device vec<uint16_t, 4>* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                results[0] = float(count((vec<uint16_t, 4>*)(values + 1)));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "return ((((values.length() * 2) - int(v_byte_offset)) / 8) - int(v_offset));"
+        in generated
+    )
+    assert (
+        "count_glsl_v_values_uvec4_view_uint16_to_uint16(int(0), int((1 * 2)))"
+        in generated
+    )
+    assert "uvec4(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "lane_gather_helper_parameter_length"
+    )
+
+
+@pytest.mark.parametrize(
+    ("element", "stride"),
+    # An unmarked buffer is laid out by std430, so a vec3 element takes 16 bytes,
+    # not the 12 of an HLSL structured buffer.
+    [("float", "4u"), ("vec2", "8u"), ("vec3", "16u"), ("vec4", "16u")],
+)
+def test_glsl_structured_buffer_get_dimensions_writes_count_and_std430_stride(
+    element, stride, tmp_path
+):
+    code = f"""
+    shader Probe {{
+        StructuredBuffer<{element}> values;
+        RWStructuredBuffer<float> outp;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                uint n;
+                uint s;
+                values.GetDimensions(n, s);
+                outp[0] = float(n) + float(s);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert f"n = uint(values.length()), s = {stride};" in generated
+    assert "GetDimensions" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"structured_buffer_get_dimensions_{element}"
+    )
+
+
+def test_glsl_structured_buffer_get_dimensions_refuses_an_unknown_stride():
+    code = """
+    shader Probe {
+        struct Pair { float a; float b; };
+        StructuredBuffer<Pair> values;
+        RWStructuredBuffer<float> outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint n;
+                uint s;
+                values.GetDimensions(n, s);
+                outp[0] = float(n) + float(s);
+            }
+        }
+    }
+    """
+
+    refusal = refused_glsl(generate_code, parse_code(tokenize_code(code)))
+    assert "StructuredBuffer.GetDimensions" in refusal
+
+
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_glsl_structured_buffer_helper_get_dimensions_counts_from_its_offset(
+    buffer_type, tmp_path
+):
+    # The specialized helper reads values[v_offset + k], so its count is the
+    # buffer's length less the offset, as for v.length().
+    code = f"""
+    shader Probe {{
+        {buffer_type}<vec3> values;
+        RWStructuredBuffer<float> outp;
+        uint dims({buffer_type}<vec3> v) {{
+            uint c;
+            uint t;
+            v.GetDimensions(c, t);
+            return c * 100u + t;
+        }}
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                outp[0] = float(dims(values + 2));
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "c = uint((values.length() - int(v_offset))), t = 16u;" in generated
+    assert "dims_glsl_v_values_vec3(int(2))" in generated
+    assert "GetDimensions" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"helper_get_dimensions_{buffer_type}"
+    )
+
+
+def test_glsl_structured_buffer_helper_get_dimensions_refuses_an_unknown_stride():
+    code = """
+    shader Probe {
+        struct Pair { float a; float b; };
+        StructuredBuffer<Pair> values;
+        RWStructuredBuffer<float> outp;
+        uint dims(StructuredBuffer<Pair> v) {
+            uint c;
+            uint t;
+            v.GetDimensions(c, t);
+            return c + t;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(dims(values));
+            }
+        }
+    }
+    """
+
+    refusal = refused_glsl(generate_code, parse_code(tokenize_code(code)))
+    assert "element type 'Pair' of 'v'" in refusal
 
 
 def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
@@ -10064,11 +10411,18 @@ def test_glsl_private_pointer_view_rejects_unresolved_address_base():
 
         void dispatch() {
             float backing[2][3];
-            fill(&backing[1][0]);
+            fill(&backing[ROW][0]);
         }
     }
     """
 
+    # An element of an existing row is a view into that row's fixed array.
+    generated = GLSLCodeGen().generate(
+        crosstl.translator.parse(code.replace("ROW", "1"))
+    )
+    assert "fill(backing[1], int(0));" in generated
+    # A row outside the array has no fixed backing array to pass.
+    code = code.replace("ROW", "2")
     with pytest.raises(
         OpenGLPrivatePointerParameterError,
         match="private pointer view 'fill.values' has no concrete fixed backing array",
@@ -10528,7 +10882,7 @@ def test_glsl_storage_pointer_reinterpret_reads_float_vectors(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
-    assert "vec4 packed = vec4(" in generated
+    assert "vec4 packed_ = vec4(" in generated
     assert generated.count("uintBitsToFloat(floatBitsToUint(values[int(") == 4
     assert "_Args_base * 4" in generated
     assert "* 16" in generated
@@ -11281,6 +11635,7 @@ def test_glsl_metal_storage_to_workgroup_byte_array_copy(tmp_path):
         backend="opengl",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "copy_values_shared[0] = input_[0];" in generated
@@ -11325,6 +11680,7 @@ def test_glsl_storage_to_workgroup_byte_array_copy_checks_expanded_bounds(tmp_pa
             backend="opengl",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     diagnostic = exc_info.value
@@ -11363,6 +11719,7 @@ def test_glsl_storage_to_workgroup_byte_array_copy_rejects_mismatched_backings(
             backend="opengl",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     diagnostic = exc_info.value
@@ -15507,7 +15864,9 @@ def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_pat
 
 
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
-    # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
+    # OpenGL has no descriptor sets: set 0 keeps its bindings, and a resource of another set keeps its binding
+    # when that is free in its class (uniform blocks, storage blocks, texture units), else takes the lowest free one.
+    # A resource of another set names its Vulkan set and binding and its OpenGL binding through CROSSGL_BINDING.
     code = """
     shader DescriptorSetFlatteningGLSL {
         struct Params {
@@ -15535,9 +15894,12 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
 
     assert "layout(std140, binding = 0) uniform Params {" in generated
     assert "} frameParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params_materialParams {" in generated
+    assert (
+        "layout(std140, CROSSGL_BINDING(1, 0, 1)) uniform Params_materialParams {"
+        in generated
+    )
     assert "} materialParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params {" not in generated
+    assert "layout(std140, binding = 1) uniform Params {" not in generated
     assert "frameParams.color" in generated
     assert "materialParams.color" in generated
     assert (
@@ -15545,11 +15907,15 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
         in generated
     )
     assert (
-        "layout(std430, binding = 2049) buffer historyBuffer { float history[]; };"
-        in generated
+        "layout(std430, CROSSGL_BINDING(2, 1, 0)) buffer historyBuffer "
+        "{ float history[]; };" in generated
     )
     assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
-    assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+    assert "layout(CROSSGL_BINDING(1, 4, 0)) uniform sampler2D detailMap;" in generated
+    assert (
+        "#ifdef VULKAN\n#define CROSSGL_BINDING(s, vulkan, opengl) set = s, "
+        "binding = vulkan\n" in generated
+    )
 
 
 def test_glsl_struct_uniform_derived_block_name_collision_uses_stable_suffix(
@@ -15696,7 +16062,7 @@ def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(CROSSGL_BINDING(1, 2, 2)) uniform sampler2D tex;" in generated
 
 
 def test_glsl_register_space_flattens_to_opengl_binding():
@@ -15714,7 +16080,7 @@ def test_glsl_register_space_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(rgba32f, binding = 2051) uniform image2D img;" in generated
+    assert "layout(rgba32f, CROSSGL_BINDING(2, 3, 3)) uniform image2D img;" in generated
 
 
 def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
@@ -15736,7 +16102,7 @@ def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(std140, binding = 1026) uniform Params {" in generated
+    assert "layout(std140, CROSSGL_BINDING(1, 2, 2)) uniform Params {" in generated
     assert "} materialParams;" in generated
 
 
@@ -15753,7 +16119,7 @@ def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(CROSSGL_BINDING(1, 2, 2)) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(
@@ -16306,6 +16672,63 @@ def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
         assert "NoContraction" in disassembly.stdout
 
 
+def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_path):
+    # precise orders the floating-point operations that produce a value, so a
+    # local is precise only when a float operation can reach it.
+    code = """
+    shader PreciseIntegerLocals {
+        @precise
+        float stableBits(float value, float scale) {
+            uint bits = floatBitsToUint(value);
+            uint magnitude = bits & 2147483647u;
+            int rounded = int(value * scale + 0.5);
+            uint counter = 0u;
+            counter = counter + 1u;
+            uint masked = bits;
+            masked &= 2147483648u;
+            int accumulated = 0;
+            accumulated = accumulated + int(value * scale);
+            float positive = uintBitsToFloat(magnitude);
+            float rebuilt = uintBitsToFloat(floatBitsToUint(value * scale));
+            float adjusted = uintBitsToFloat(masked);
+            adjusted = adjusted * scale;
+            bool large = magnitude > 1065353216u;
+            float total = positive + rebuilt + adjusted;
+            return large ? float(rounded + int(counter) + accumulated) : total;
+        }
+
+        compute {
+            void main() {
+                float stable = stableBits(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "    uint bits = floatBitsToUint(value);" in generated_code
+    assert "    uint magnitude = (bits & 2147483647u);" in generated_code
+    assert "    bool large = (magnitude > 1065353216u);" in generated_code
+    assert "precise int rounded = " in generated_code
+    # Integer-only writes add no floating-point operation.
+    assert "    uint counter = 0u;" in generated_code
+    assert "    uint masked = bits;" in generated_code
+    assert "precise int accumulated = 0;" in generated_code
+    # A bit reinterpretation is exact unless its operand has float arithmetic.
+    assert "    float positive = uintBitsToFloat(magnitude);" in generated_code
+    assert "precise float rebuilt = " in generated_code
+    assert "precise float adjusted = " in generated_code
+    assert "precise float total = " in generated_code
+    assert "precise float crossglPreciseReturn = " in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-integer-locals",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_path):
     code = """
     shader PreciseReturnNames {
@@ -16348,6 +16771,65 @@ def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_pa
         "precise-return-names",
         validate_spirv=True,
     )
+
+
+# A fragment stage with only a uniform and an output keeps every other construct within
+# GLSL 3.30, so the profile changes only for the precise qualifier.
+PRECISE_PROFILE_SHADER = """
+#version {version}
+shader PreciseProfile {{
+    out vec4 fragColor @location(0);
+    @precise
+    float stable(float a, float b, float c) {{
+        // A comment that mentions precise does not need the qualifier.
+        return a * b + c;
+    }}
+    fragment {{
+        uniform vec3 operands;
+        void main() {{
+            fragColor = vec4(stable(operands.x, operands.y, operands.z));
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("330 core", "#version 400 core"),
+        ("430 core", "#version 430 core"),
+        ("320 es", "#version 320 es"),
+    ],
+)
+def test_glsl_precise_output_selects_a_profile_with_the_qualifier(version, expected):
+    generated_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version=version))
+    )
+
+    assert generated_code.splitlines()[0] == expected
+    assert "precise float crossglPreciseReturn = ((a * b) + c);" in generated_code
+
+
+def test_glsl_profile_is_unchanged_without_precise_output():
+    source = PRECISE_PROFILE_SHADER.format(version="330 core").replace("@precise\n", "")
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert generated_code.splitlines()[0] == "#version 330 core"
+    assert "precise" not in generated_code.replace("mentions precise", "")
+
+
+def test_glsl_es_profile_without_precise_is_rejected():
+    with pytest.raises(OpenGLPreciseQualifierError) as exc_info:
+        GLSLCodeGen().generate(
+            crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
+        )
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.opengl-precise-unsupported"
+    )
+    assert exc_info.value.version_line == "#version 310 es"
+    assert "GLSL ES 3.20 or desktop GLSL 4.00" in str(exc_info.value)
 
 
 def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
@@ -18651,11 +19133,12 @@ def test_glsl_fragment_stage_declares_shared_vertex_fragment_output_struct():
     combined_code = GLSLCodeGen().generate(ast)
     fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
 
+    # Each guarded stage section is its own compilation unit, so the fragment input keeps the vertex output's name.
     assert "layout(location = 13) out vec4 color;" in combined_code
-    assert "layout(location = 13) in vec4 in_color;" in combined_code
+    assert "layout(location = 13) in vec4 color;" in combined_code
     assert "layout(location = 13) out vec4 out_color;" in combined_code
-    assert "out_color = in_color;" in combined_code
-    assert "layout(location = 13) in vec4 color;" not in combined_code
+    assert "out_color = color;" in combined_code
+    assert "in_color" not in combined_code
 
     assert "layout(location = 13) in vec4 color;" in fragment_code
     assert "layout(location = 13) out vec4 out_color;" in fragment_code
@@ -20615,6 +21098,75 @@ def test_glsl_user_defined_mul_function_is_preserved():
     assert "vec3 color = (vec3(0.25) * vec3(2.0));" not in generated_code
 
 
+def test_translate_hlsl_8bit_pack_intrinsics_to_glsl_byte_operations(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    assert "packUnorm4x8(vec4(uvec4(a) & uvec4(255u)) / 255.0)" in generated
+    assert "packUnorm4x8(vec4(uvec4(b) & uvec4(255u)) / 255.0)" in generated
+    assert "(packUnorm4x8((vec4(a) + 128.0) / 255.0) ^ 0x80808080u)" in generated
+    assert "packUnorm4x8(vec4(a) / 255.0)" in generated
+    assert "((ivec4(int(r0)) << ivec4(24, 16, 8, 0)) >> ivec4(24))" in generated
+    assert "((uvec4(uint(r1)) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))" in generated
+    for name in ("pack_s8", "pack_u8", "pack_clamp_", "unpack_s8s32", "unpack_u8u32"):
+        assert f"{name}(" not in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "pack")
+
+
+def test_glsl_8bit_pack_intrinsics_round_trip_every_byte():
+    # packUnorm4x8 computes round(clamp(v, 0, 1) * 255.0) per lane; check in
+    # float32 that the emitted scaling packs every byte exactly.
+    np = pytest.importorskip("numpy")
+    bytes_ = np.arange(256, dtype=np.float32)
+    packed = np.round(np.clip(bytes_ / np.float32(255.0), 0, 1) * np.float32(255.0))
+    assert (packed == bytes_).all()
+
+    lanes = np.arange(-300, 300)
+    shifted = (lanes.astype(np.float32) + np.float32(128.0)) / np.float32(255.0)
+    clamped = np.round(np.clip(shifted, 0, 1) * np.float32(255.0)).astype(np.int64)
+    assert ((clamped ^ 0x80) == (np.clip(lanes, -128, 127) & 0xFF)).all()
+
+
+def test_glsl_8bit_pack_intrinsics_require_one_argument():
+    shader = """
+    shader PackBytes {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                ivec4 a = ivec4(1);
+                uint r = pack_s8(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="pack_s8 alias requires 1 argument"):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_glsl_hlsl_mad_alias_emits_multiply_add_expression():
     # Khronos GLSL 4.60 documents fma(x, y, z) as returning x * y + z;
     # shader ports commonly spell the non-fused source form as mad(x, y, z).
@@ -20659,6 +21211,61 @@ def test_glsl_user_defined_mad_function_is_preserved():
     assert "vec3 mad(vec3 value, vec3 scale, vec3 bias)" in generated_code
     assert "vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));" in generated_code
     assert "((vec3(0.25) * vec3(2.0)) + vec3(0.5))" not in generated_code
+
+
+def test_translate_hlsl_packed_dot4add_to_glsl_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    signed_lanes = "((ivec4(int({})) << ivec4(24, 16, 8, 0)) >> ivec4(24))"
+    unsigned_lanes = "((uvec4(uint({})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))"
+    a = "a[gl_GlobalInvocationID.x]"
+    b = "b[gl_GlobalInvocationID.x]"
+    assert (
+        f"(int(acc) + int(dot(vec4({signed_lanes.format(a)}), "
+        f"vec4({signed_lanes.format(b)}))))"
+    ) in generated
+    assert (
+        f"(uint(0u) + uint(dot(vec4({unsigned_lanes.format(a)}), "
+        f"vec4({unsigned_lanes.format(b)}))))"
+    ) in generated
+    assert "dot4add_" not in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "dot4add")
+
+
+def test_glsl_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint a = 1u;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
@@ -21116,10 +21723,10 @@ def test_glsl_fixed_width_scalar_aliases_lower_to_standard_glsl_scalars():
     assert "uint64_t unsignedLong(uint64_t input_)" in generated_code
     assert "int64_t signedLongT(int64_t input_)" in generated_code
     assert "uint64_t unsignedLongT(uint64_t input_)" in generated_code
-    assert "uint sizeValue(uint input_)" in generated_code
-    assert "int ptrDiff(int input_)" in generated_code
-    assert "int longValue(int input_)" in generated_code
-    assert "uint ulongValue(uint input_)" in generated_code
+    assert "uint64_t sizeValue(uint64_t input_)" in generated_code
+    assert "int64_t ptrDiff(int64_t input_)" in generated_code
+    assert "int64_t longValue(int64_t input_)" in generated_code
+    assert "uint64_t ulongValue(uint64_t input_)" in generated_code
     assert "int one = int(1);" in generated_code
     assert "uint one = uint(1u);" in generated_code
     assert "int64_t one = int64_t(1);" in generated_code
@@ -21175,12 +21782,12 @@ def test_glsl_fixed_width_scalar_array_aliases_lower_in_aggregate_declarations()
     assert "int bytes[2];" in generated_code
     assert "uint words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
-    assert "uint offsets[2];" in generated_code
+    assert "uint64_t offsets[2];" in generated_code
     assert "int globalBytes[2];" in generated_code
     assert "uint64_t globalCounters[2];" in generated_code
     assert "int smalls[2];" in generated_code
     assert "uint count;" in generated_code
-    assert "int delta;" in generated_code
+    assert "int64_t delta;" in generated_code
     assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
     assert "uint64_t localCounters[2];" in generated_code
     assert "uint64_t one = uint64_t(1u);" in generated_code
@@ -21229,20 +21836,21 @@ def test_glsl_fixed_width_nested_array_aliases_lower_to_standard_glsl_types():
 
     assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "int bytes[2][3];" in generated_code
-    assert "uint offsets[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
     assert "uint64_t[2] makeCounters()" in generated_code
     assert "uint64_t counters[2];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code
     assert (
-        "int readPayload(AliasGridPayload payload, int row, int col)" in generated_code
+        "int64_t readPayload(AliasGridPayload payload, int row, int col)"
+        in generated_code
     )
     assert "uint(1u)" in generated_code
     assert "uint64_t(2u)" in generated_code
-    assert "int(payload.bytes[row][col])" in generated_code
-    assert "int(payload.offsets[row][col])" in generated_code
+    assert "int64_t(payload.bytes[row][col])" in generated_code
+    assert "int64_t(payload.offsets[row][col])" in generated_code
     assert "int[2] bytes[3]" not in generated_code
-    assert "uint[2] offsets[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
     for invalid_pattern in (
         r"\bint8_t\b",
         r"\buint16_t\b",
@@ -21275,12 +21883,12 @@ def test_glsl_fixed_width_nested_cbuffer_array_aliases_lower_to_standard_types()
     assert "layout(std140, binding = 2) uniform AliasNestedConstants" in generated_code
     assert "int64_t signedGrid[2][3];" in generated_code
     assert "uint unsignedGrid[2][3];" in generated_code
-    assert "uint offsets[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
     assert "uint64_t readConstant(int row, int col)" in generated_code
     assert "uint64_t(offsets[row][col])" in generated_code
     assert "uint64_t(unsignedGrid[row][col])" in generated_code
     assert "int[2] signedGrid[3]" not in generated_code
-    assert "uint[2] offsets[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
     for invalid_pattern in (
         r"\buint16_t\b",
         r"\buint64\s",
@@ -21358,8 +21966,8 @@ def test_glsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "uvec4 mask2D = imageLoad(maskImage, pixel);" in generated_code
     assert "ivec4 label2D = imageLoad(labelImage, pixel).x;" not in generated_code
     assert "uvec4 mask2D = imageLoad(maskImage, pixel).x;" not in generated_code
-    assert "imageStore(labelImage, pixel, ivec4(label2D));" in generated_code
-    assert "imageStore(maskImage, pixel, uvec4(mask2D));" in generated_code
+    assert "imageStore(labelImage, pixel, label2D);" in generated_code
+    assert "imageStore(maskImage, pixel, mask2D);" in generated_code
 
 
 def test_glsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
@@ -21467,22 +22075,16 @@ def test_glsl_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = imageLoad(image, pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(image, pixel).x;" in generated_code
-    assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(image, pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(image, pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
 
 
@@ -21656,12 +22258,13 @@ def test_for_statement_preserves_declaration_initializers():
     assert "const float weights[2];" in generated_code
     assert "for (int i = 0; (i < 2); (i++))" in generated_code
     assert "for (i = 0; (i < 4); (i++))" in generated_code
+    # ``fixed`` is reserved for future use in GLSL and is escaped.
     assert "for (const int fixed_ = 0; (fixed_ < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
     assert "for (int i = 0;;" not in generated_code
-    assert "for (const int fixed = 0;;" not in generated_code
+    assert "for (const int fixed_ = 0;;" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
     assert "None" not in generated_code
@@ -22185,7 +22788,7 @@ def test_generate_stage_splits_combined_vertex_fragment_units():
     assert "input." not in fragment_code
 
 
-def test_glsl_combined_struct_io_renames_fragment_input_colliding_with_vertex_output():
+def test_glsl_combined_struct_io_fragment_input_keeps_renamed_vertex_output_name():
     shader = """
     shader CombinedStructIOAvoidsSameUnitInputOutputCollision {
         struct VSInput {
@@ -22214,10 +22817,12 @@ def test_glsl_combined_struct_io_renames_fragment_input_colliding_with_vertex_ou
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
+    # The vertex output is renamed away from the vertex input ``uv``; the fragment input, in its own guarded
+    # compilation unit, takes the same name so that it also links by name.
     assert "layout(location = 5) out vec2 out_uv;" in generated_code
-    assert "layout(location = 5) in vec2 in_out_uv;" in generated_code
-    assert "fragColor = vec4(in_out_uv, 0.0, 1.0);" in generated_code
-    assert "layout(location = 5) in vec2 out_uv;" not in generated_code
+    assert "layout(location = 5) in vec2 out_uv;" in generated_code
+    assert "fragColor = vec4(out_uv, 0.0, 1.0);" in generated_code
+    assert "in_out_uv" not in generated_code
 
 
 def test_glsl_combined_multi_stage_entries_use_distinct_names():
@@ -22365,6 +22970,7 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
         }
 
         tessellation_evaluation {
+            layout(triangles) in;
             void main() { }
         }
     }
@@ -24072,9 +24678,9 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
                 );
                 bool active = rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 uint primitiveIndex = rq.CandidatePrimitiveIndex();
-                uint instanceId = rq.CommittedInstanceID();
+                uint instanceId = rq.CommittedInstanceIndex();
                 uint geometryIndex = rq.CandidateGeometryIndex();
                 vec3 origin = rq.CommittedObjectRayOrigin();
                 vec3 direction = rq.CandidateObjectRayDirection();
@@ -24295,7 +24901,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         compute {
             void main() {
                 RayQuery<RAY_FLAG_NONE> rq;
-                rq.Initialize(
+                rq.TraceRayInline(
                     topLevelAS,
                     gl_RayFlagsNoneEXT,
                     255u,
@@ -24308,20 +24914,20 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 vec3 worldDirection = rq.WorldRayDirection();
                 uint rayFlags = rq.RayFlags();
                 float tMin = rq.RayTMin();
-                uint customIndex = rq.CommittedInstanceCustomIndex();
+                uint customIndex = rq.CommittedInstanceID();
                 uint sbtOffset =
-                    rq.CandidateInstanceShaderBindingTableRecordOffset();
+                    rq.CandidateInstanceContributionToHitGroupIndex();
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();
                 bool frontFace = rq.CommittedTriangleFrontFace();
-                bool aabbOpaque = rq.CandidateAABBOpaque();
-                mat3x4 objectToWorld = rq.CommittedObjectToWorld();
-                mat3x4 worldToObject = rq.CandidateWorldToObject3x4();
+                bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
+                mat4x3 objectToWorld = rq.CommittedObjectToWorld();
+                mat4x3 worldToObject = rq.CandidateWorldToObject3x4();
                 vec3 trianglePositions[3];
                 rq.CandidateTriangleVertexPositions(trianglePositions);
                 rq.CommittedTriangleVertexPositions(trianglePositions);
-                rq.GenerateIntersection(1.0);
-                rq.ConfirmIntersection();
-                rq.Terminate();
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
             }
         }
     }
@@ -24359,7 +24965,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         in generated_code
     )
     assert (
-        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);"
+        "bool nonOpaque = (!rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq));"
         in generated_code
     )
     assert (
@@ -24384,8 +24990,8 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
     assert "rayQueryTerminateEXT(rq);" in generated_code
     assert ".WorldRayOrigin(" not in generated_code
     assert ".CandidateTriangleVertexPositions(" not in generated_code
-    assert ".GenerateIntersection(" not in generated_code
-    assert ".ConfirmIntersection(" not in generated_code
+    assert ".CommitProceduralPrimitiveHit(" not in generated_code
+    assert ".CommitNonOpaqueTriangleHit(" not in generated_code
 
 
 def test_glsl_ray_query_member_calls_reject_invalid_arities():
@@ -24395,8 +25001,8 @@ def test_glsl_ray_query_member_calls_reject_invalid_arities():
             r"GLSL ray query Proceed expects 0 arguments, got 1",
         ),
         (
-            "rq.Initialize(topLevelAS, gl_RayFlagsNoneEXT);",
-            r"GLSL ray query Initialize expects 4 or 7 arguments, got 2",
+            "rq.TraceRayInline(topLevelAS, gl_RayFlagsNoneEXT);",
+            r"GLSL ray query TraceRayInline expects 4 or 7 arguments, got 2",
         ),
         (
             "vec3 position = rq.CandidateTriangleVertexPositions();",
@@ -26012,7 +26618,9 @@ def test_stage_tail_struct_constructor_returns_stage_output():
     assert "struct VertexInput {" not in generated_code
     assert "struct VertexOutput {" not in generated_code
     assert "void main()" in generated_code
-    assert "out_position = vec4(position, 1.0);" in generated_code
+    # ``position`` is a float4 without a semantic, so it carries the clip position, as in HLSL and Metal.
+    assert "gl_Position = vec4(position, 1.0);" in generated_code
+    assert "out_position" not in generated_code
     assert "out_color = color;" in generated_code
     assert "return;" in generated_code
     assert "ConstructorNode(" not in generated_code
@@ -26042,7 +26650,8 @@ def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
 
     assert "struct VertexOutput {" in generated_code
     assert "float readColor(VertexOutput value)" in generated_code
-    assert "position = vec4(1.0);" in generated_code
+    assert "gl_Position = vec4(1.0);" in generated_code
+    assert "out vec4 position;" not in generated_code
     assert "color = vec4(0.25);" in generated_code
     assert "return VertexOutput" not in generated_code
 
@@ -32212,7 +32821,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, clamp(layer, 0, 3), uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -32228,7 +32837,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(textures[layer], uv)" in generated_code
     assert "texture(textures[3], uv)" in generated_code
-    assert "sampleLayer(textures, layer, uv)" in generated_code
+    assert "sampleLayer(textures, clamp(layer, 0, 3), uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -32280,17 +32889,10 @@ def test_opengl_unsized_texture_array_ignores_unsupported_indices():
     }
     """
 
-    dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="textures"):
+        GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "layout(binding = 0) uniform sampler2D textures[1];" in dynamic_code
-    assert "layout(binding = 1) uniform sampler2D afterTexture;" in dynamic_code
-    assert "vec4 sampleLayer(sampler2D textures[1], int layer, vec2 uv)" in dynamic_code
-    assert "texture(textures[layer], uv)" in dynamic_code
-    assert "layout(binding = 0) uniform sampler2D textures[];" not in dynamic_code
-    assert "layout(binding = 2) uniform sampler2D afterTexture;" not in dynamic_code
-    assert "sampler samplers" not in dynamic_code
-    assert "samplers[layer]" not in dynamic_code
 
     assert "layout(binding = 0) uniform sampler2D textures[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" in negative_code
@@ -32396,7 +32998,7 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, clamp(layer, 0, 1), uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -32405,13 +33007,13 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const int LAYER = 3;" in generated_code
-    assert "layout(binding = 0) uniform sampler2D textures[1];" in generated_code
-    assert "layout(binding = 1) uniform sampler2D afterTexture;" in generated_code
+    assert "layout(binding = 0) uniform sampler2D textures[2];" in generated_code
+    assert "layout(binding = 2) uniform sampler2D afterTexture;" in generated_code
     assert (
-        "vec4 sampleLayer(sampler2D textures[1], int LAYER, vec2 uv)" in generated_code
+        "vec4 sampleLayer(sampler2D textures[2], int LAYER, vec2 uv)" in generated_code
     )
     assert "texture(textures[LAYER], uv)" in generated_code
-    assert "sampleLayer(textures, layer, uv)" in generated_code
+    assert "sampleLayer(textures, clamp(layer, 0, 1), uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[4];" not in generated_code
     assert "layout(binding = 4) uniform sampler2D afterTexture;" not in generated_code
@@ -33226,7 +33828,7 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
         "gatherOps(colorMap, layerMap, uv, uvLayer, offset, offset0, offset1, offset2, offset3, component)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
 
@@ -33450,7 +34052,7 @@ def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
         in generated_code
     )
     assert "textureGatherOffsets(" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uvLayer" not in generated_code
     # Literal and variable offsets both become one textureGatherOffset each.
     assert "textureGatherOffset(layers, uvLayer, ivec2((-1), 0), 0).w" in generated_code
@@ -33710,7 +34312,13 @@ def test_opengl_cube_texture_gather_offsets_emit_diagnostics():
     assert offsets_diagnostic in generated_code_refusal
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
-    assert "cubeSampler" not in generated_code
+    # The helpers sample through cubeSampler, which takes its own combined uniform per texture.
+    assert "cubeSampler" not in glsl_body_identifiers(generated_code)
+    assert (
+        "layout(binding = 2) uniform samplerCube cubeMap_cubeSampler;" in generated_code
+    )
+    assert "gatherCube(cubeMap_cubeSampler, direction," in generated_code
+    assert "gatherCubeArray(cubeArray_cubeSampler, cubeLayer," in generated_code
 
 
 def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
@@ -33763,7 +34371,11 @@ def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
     )
     assert diagnostic in generated_code_refusal
     assert "textureGather(" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
+    assert "gatherLine(lineMap_linearSampler, u, component)" in generated_code
+    assert (
+        "gatherVolume(volumeMap_linearSampler, volumeUv, component)" in generated_code
+    )
 
 
 def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
@@ -33849,7 +34461,7 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
         "offsetOps(colorMap, layerMap, uv, uvLayer, lod, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
     assert "textureOffset(" not in generated_code
@@ -33954,7 +34566,7 @@ def test_opengl_cube_texture_sample_offsets_emit_diagnostics():
         "layout(binding = 3) uniform samplerCubeArrayShadow shadowArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert (
         "vec4 cubeOffsets(samplerCube tex, vec3 direction, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
         in generated_code
@@ -34059,7 +34671,7 @@ def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_mem
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "input.uv" not in generated_code
     assert "input.pixel" not in generated_code
     assert "textureOffset(" not in generated_code
@@ -34168,7 +34780,7 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
         "projectedOps(colorMap, volumeMap, uvq, uvqw, xyzq, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uvq" not in generated_code
     assert ", s, uvqw" not in generated_code
     assert ", s, xyzq" not in generated_code
@@ -34218,7 +34830,7 @@ def test_opengl_texture_offset_non_const_extension_allows_dynamic_offsets():
         "vec4 projected = textureProjOffset(colorMap, uvq, offset);" in generated_code
     )
     assert "texel offsets must be compile-time integer constants" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
 
 
 def test_opengl_direct_projected_texture_stage_input_members():
@@ -34293,7 +34905,7 @@ def test_opengl_direct_projected_texture_stage_input_members():
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", input." not in generated_code
     assert "textureProjOffset(" not in generated_code
     assert "textureProjLodOffset(" not in generated_code
@@ -34359,7 +34971,7 @@ def test_opengl_direct_projected_array_texture_stage_input_members():
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", input." not in generated_code
     assert "textureProjOffset(" not in generated_code
     assert "textureProjLodOffset(" not in generated_code
@@ -34665,11 +35277,11 @@ def test_opengl_implicit_projected_stage_input_members_strip_samplers():
     assert "vec4 colorLod = textureProjLod(colorMap, uvqw, lod);" in generated_code
     assert "vec4 volume = textureProj(volumeMap, xyzq);" in generated_code
     assert (
-        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
-        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "unsupported GLSL texture compare" not in generated_code
@@ -34774,10 +35386,11 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth));" in generated_code
+        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth / uvq.z));"
+        in generated_code
     )
     assert (
-        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth));"
+        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth / uvqw.w));"
         in generated_code
     )
     assert (
@@ -34785,7 +35398,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth), lod);"
+        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -34795,7 +35408,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -34813,7 +35426,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -34827,7 +35440,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -34884,7 +35497,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -34892,7 +35505,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "compareSampler" not in generated_code
@@ -34993,7 +35606,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35001,7 +35614,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35011,7 +35624,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35019,7 +35632,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35129,7 +35742,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35137,7 +35750,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35147,7 +35760,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35155,7 +35768,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35272,7 +35885,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
         "vec3 uvq, vec4 uvLayerQ, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
     ) in generated_code
     assert (
-        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth));"
+        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35281,7 +35894,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
     )
     assert (
         "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
-        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
     ) in generated_code
     assert (
         "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
@@ -35452,7 +36065,7 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     expected_cube_diagnostics = {
@@ -35527,16 +36140,21 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCubeArray cubeArray;" in generated_code
+    # The explicit sampler and the cube's own sampler state are two pairs, so two texture units.
     assert (
-        "vec4 cubeProjected = texture(cubeMap, cubeProj.xyz / cubeProj.w);"
+        "layout(binding = 2) uniform samplerCube cubeMap_linearSampler;"
         in generated_code
     )
     assert (
-        "vec4 cubeLod = textureLod(cubeMap, cubeProj.xyz / cubeProj.w, lod);"
+        "vec4 cubeProjected = texture(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w);"
         in generated_code
     )
     assert (
-        "vec4 cubeGrad = textureGrad(cubeMap, cubeProj.xyz / cubeProj.w, ddx, ddy);"
+        "vec4 cubeLod = textureLod(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "vec4 cubeGrad = textureGrad(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35566,7 +36184,7 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
             f"projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates"
             in generated_code_refusal
         )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
 
@@ -35761,11 +36379,11 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
             in generated_code_refusal
         )
     assert (
-        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (
-        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (
@@ -35978,7 +36596,7 @@ def test_opengl_integer_projected_textures_lower_supported_forms_and_diagnose_cu
         "signedProjected(signedMap, signedCube, signedCubeArray, uvq, cubeProj, lod, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureProj(cube" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
 
@@ -36055,7 +36673,7 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
         "uvec4 gatheredCubeArray = textureGather(unsignedCubeArray, cubeLayer);"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", linearSampler" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -36265,11 +36883,33 @@ def test_opengl_cube_shadow_gather_compare_supports_cube_and_cube_array():
         "vec4 implicitCubeArrayShadow(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth)"
         in generated_code
     )
-    assert "gatherCubeShadow(cubeShadow, direction, depth)" in generated_code
-    assert "gatherCubeArrayShadow(cubeShadowArray, cubeLayer, depth)" in generated_code
+    # compareSampler and each texture's own sampler state are two pairs: two combined uniforms per texture.
+    assert (
+        "layout(binding = 2) uniform samplerCubeShadow cubeShadow_compareSampler;"
+        in generated_code
+    )
+    assert (
+        "gatherCubeShadow(cubeShadow_compareSampler, direction, depth)"
+        in generated_code
+    )
+    assert (
+        "gatherCubeArrayShadow(cubeShadowArray_compareSampler, cubeLayer, depth)"
+        in generated_code
+    )
+    assert "implicitCubeShadow(cubeShadow, direction, depth)" in generated_code
+    assert (
+        "implicitCubeArrayShadow(cubeShadowArray, cubeLayer, depth)" in generated_code
+    )
+    assert (
+        "textureGather(cubeShadow_compareSampler, direction, depth)" in generated_code
+    )
+    assert (
+        "textureGather(cubeShadowArray_compareSampler, cubeLayer, depth)"
+        in generated_code
+    )
     assert "textureGather(cubeShadow, direction, depth)" in generated_code
     assert "textureGather(cubeShadowArray, cubeLayer, depth)" in generated_code
-    assert "compareSampler" not in generated_code
+    assert "compareSampler" not in glsl_body_identifiers(generated_code)
     assert "unsupported GLSL texture gather compare" not in generated_code
     assert "textureGatherCompare(" not in generated_code
     assert "input." not in generated_code
@@ -36822,9 +37462,9 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "textureGradOffset(" not in generated_code
 
 
-def test_opengl_array_shadow_compare_lod_reports_unsupported():
+def test_opengl_array_shadow_compare_lod_requires_shadow_lod_extension():
     shader = """
-    shader ArrayShadowCompareLodUnsupported {
+    shader ArrayShadowCompareLod {
         sampler2DArrayShadow shadowArray;
         sampler compareSampler;
 
@@ -36841,8 +37481,8 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
             float depth,
             float lod
         ) {
-            float rejected = textureCompareLod(tex, s, uvLayer, depth, lod);
-            return rejected;
+            float sampled = textureCompareLod(tex, s, uvLayer, depth, lod);
+            return sampled;
         }
 
         fragment {
@@ -36860,15 +37500,14 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
     }
     """
 
-    generated_code, generated_code_refusal = glsl_partial_output(
-        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
     )
 
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float sampled = textureLod(tex, vec4(uvLayer, depth), lod);" in (
+        generated_code
     )
-    assert "textureLod(" not in generated_code
 
 
 def test_opengl_array_shadow_compare_lod_offset_reports_unsupported():
@@ -37007,9 +37646,17 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
+    # GL_EXT_texture_shadow_lod adds textureLod for cube and cube-array shadows, but no textureLodOffset.
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float lodRejected = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
+    )
+    assert "float lodRejected = textureLod(tex, cubeLayer, depth, lod);" in (
+        generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
@@ -37027,7 +37674,6 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
         in generated_code_refusal
     )
-    assert "textureLod(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
     assert "textureCompareLod(" not in generated_code
@@ -37179,9 +37825,14 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         )
         in generated_code_refusal
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float arrayLod = textureLod(shadowArrays[2], vec4(uvLayer, depth), lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
@@ -37270,9 +37921,18 @@ def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
         "float cubeShadowLayer(samplerCubeShadow cubeMaps[4], samplerCubeArrayShadow cubeArrays[4], int layer, vec3 direction, vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy)"
         in generated_code
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float cubeLod = textureLod(cubeMaps[layer], vec4(direction, depth), lod);"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayLod = textureLod(cubeArrays[2], cubeLayer, depth, lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "float cubeGrad = textureGrad(cubeMaps[1], vec4(direction, depth), ddx, ddy);"
@@ -37489,7 +38149,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 0.0));"
+        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -37497,7 +38157,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 0u));"
+        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -37732,8 +38392,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'colorOut': "
-            "format rgba64f is not a supported storage image format",
+            "Unsupported storage image format on global variable 'colorOut': "
+            "@format\\(rgba64f\\) is not a CrossGL storage image format",
         ),
         (
             """
@@ -37749,8 +38409,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'image': "
-            "format slot is not a supported storage image format",
+            "Unsupported storage image format on parameter 'image' of function "
+            "'loadColor': @format\\(slot\\) is not a CrossGL storage image format",
         ),
         (
             """
@@ -37891,14 +38551,14 @@ def test_opengl_explicit_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixelLayer).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "layout(rg32i, binding = 1) uniform image3D" not in generated_code
@@ -37980,18 +38640,18 @@ def test_opengl_explicit_narrow_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
     assert "layout(rg8i, binding = 5) uniform image2D" not in generated_code
     assert "layout(rg8ui, binding = 7) uniform image2D" not in generated_code
@@ -38137,7 +38797,7 @@ def test_opengl_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "vec4 oldValue = imageLoad(images[1], voxel);" in generated_code
@@ -38216,23 +38876,17 @@ def test_opengl_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[1], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel);" not in generated_code
@@ -38315,23 +38969,17 @@ def test_opengl_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -38445,20 +39093,14 @@ def test_opengl_transitive_rg_image_arrays_share_call_site_size():
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert "uint oldValue = imageLoad(images[3], pixel).x;" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
+    assert "imageStore(images[1], pixel, vec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
+    assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "vec2 vectorFloatDeep(image2D images[3]" not in generated_code
@@ -39158,14 +39800,8 @@ def test_opengl_shadowed_rg_image_array_constant_keeps_scalar_context():
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];"
         not in generated_code
@@ -39229,7 +39865,7 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39289,7 +39925,7 @@ def test_opengl_unsized_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[0], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "layout(r32ui, binding = 0) uniform image2D counters" not in generated_code
@@ -39350,7 +39986,7 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[LAYER], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39483,7 +40119,7 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
@@ -40430,7 +41066,7 @@ def test_opengl_texture_query_functions():
     assert "return textureSize(tex, 0);" in generated_code
     assert "ivec2 queryMs(sampler2DMS tex)" in generated_code
     assert "return textureSize(tex);" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureQueryLod(tex, s, uv)" not in generated_code
 
 
@@ -40649,6 +41285,57 @@ def test_opengl_multisample_image_samples_queries_use_texture_samples_builtin():
     assert "input." not in generated_code
 
 
+def test_opengl_multisample_storage_image_samples_queries_keep_image_samples_builtin(
+    tmp_path,
+):
+    shader = """
+    shader MultisampleStorageImageSamplesQuery {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* outp;
+            layout(rgba32f) uniform image2DMS u0;
+            layout(rgba32f) uniform image2DMSArray u1;
+            layout(r32i) uniform iimage2DMS u2;
+            layout(r32ui) uniform uimage2DMSArray u3;
+
+            void main() {
+                outp[0] = imageSamples(u0)
+                    + imageSamples(u1)
+                    + imageSamples(u2)
+                    + imageSamples(u3);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(rgba32f, binding = 0) uniform image2DMS u0;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image2DMSArray u1;" in generated_code
+    assert "layout(r32i, binding = 2) uniform iimage2DMS u2;" in generated_code
+    assert "layout(r32ui, binding = 3) uniform uimage2DMSArray u3;" in generated_code
+    assert "imageSamples(u0)" in generated_code
+    assert "imageSamples(u1)" in generated_code
+    assert "imageSamples(u2)" in generated_code
+    assert "imageSamples(u3)" in generated_code
+    assert "textureSamples(" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source_path = tmp_path / "storage_image_samples.comp"
+        source_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(source_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert (
+            result.returncode == 0
+        ), f"glslang failed:\n{result.stdout}\n{result.stderr}\nCode:\n{generated_code}"
+
+
 def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diagnostics():
     shader = """
     shader IntegerMultisampleDiagnostics {
@@ -40732,7 +41419,7 @@ def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diag
         "layout(binding = 1) uniform usampler2DMSArray unsignedMsArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "multisample texture call: texture on isampler2DMS" in generated_code_refusal
     assert (
         "multisample texture call: textureLod on isampler2DMS" in generated_code_refusal
@@ -41507,7 +42194,7 @@ def test_opengl_multisample_compare_operations_emit_diagnostics():
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
     assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
 
     for func_name in {
         "textureCompare",
@@ -41855,7 +42542,7 @@ def test_opengl_direct_stage_texture_queries_mix_size_levels_and_lod():
         "layout(binding = 5) uniform samplerCubeArrayShadow cubeShadowArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "ivec2 colorSize = textureSize(colorMap, 1);" in generated_code
     assert "ivec3 layerSize = textureSize(layerMap, 2);" in generated_code
     assert "ivec3 cubeSize = textureSize(cubeArray, 0);" in generated_code
@@ -41865,7 +42552,15 @@ def test_opengl_direct_stage_texture_queries_mix_size_levels_and_lod():
     assert "int colorLevels = textureQueryLevels(colorMap);" in generated_code
     assert "int shadowLevels = textureQueryLevels(shadowArray);" in generated_code
     assert "vec2 colorLod = textureQueryLod(colorMap, uv);" in generated_code
-    assert "vec2 layerLod = textureQueryLod(layerMap, uvLayer.xy);" in generated_code
+    # The level layerMap reports through linearSampler and through its own state may differ: two units.
+    assert (
+        "layout(binding = 6) uniform sampler2DArray layerMap_linearSampler;"
+        in generated_code
+    )
+    assert (
+        "vec2 layerLod = textureQueryLod(layerMap_linearSampler, uvLayer.xy);"
+        in generated_code
+    )
     assert "vec2 cubeLod = textureQueryLod(cubeArray, cubeLayer.xyz);" in generated_code
     assert (
         "vec2 implicitLayerLod = textureQueryLod(layerMap, uvLayer.xy);"
@@ -41951,7 +42646,7 @@ def test_opengl_array_texture_query_lod_uses_non_layer_coordinates():
     assert "queryCubeArrayLod(cubeArray, cubeLayer)" in generated_code
     assert "queryArrayElementLod(layerMaps, uvLayer)" in generated_code
     assert "queryCubeArrayElementLod(cubeArrays, cubeLayer)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
@@ -42106,7 +42801,7 @@ def test_opengl_shadow_array_texture_query_lod_uses_non_layer_coordinates():
     assert "queryCubeArrayLod(cubeShadowArray, cubeLayer)" in generated_code
     assert "queryArrayElementLod(shadowArrays, uvLayer)" in generated_code
     assert "queryCubeArrayElementLod(cubeShadowArrays, cubeLayer)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
@@ -42200,10 +42895,10 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     )
     assert "vec2 lodValue = textureQueryLod(tex, direction);" in generated_code
     assert "float cmp = texture(tex, vec4(direction, depth));" in generated_code
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "float cmpLod = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
     )
+    assert "float cmpLod = textureLod(tex, cubeLayer, depth, lod);" in generated_code
     assert (
         "float grad = textureGrad(tex, vec4(direction, depth), ddx, ddy);"
         in generated_code
@@ -42591,7 +43286,7 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "uint packed = floatBitsToUint(value);" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
     assert "int signedBits = floatBitsToInt(value);" in generated_code
     assert "float restored = uintBitsToFloat(bits);" in generated_code
     assert "uvec2 pairBits = floatBitsToUint(pair);" in generated_code
@@ -42818,7 +43513,9 @@ def test_opengl_explicit_as_type_result_inference_flows_through_nested_calls():
     assert "return uint64_t(shuffled);" not in nested_body
 
 
-def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
+def test_opengl_explicit_as_type_refuses_unlowered_mangled_metal_subgroup_call():
+    # ``metal::simd_shuffle_and_fill_up`` has no GLSL lowering, so its call is refused instead of being written
+    # under the importer's mangled name, which no GLSL program declares. The bitcasts around it still lower.
     shader = """
     shader OpenGLMangledMetalSubgroupBitcast {
         uint64 shuffleAndFill(uint64 data, uint64 filling, uint delta) {
@@ -42828,11 +43525,13 @@ def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to 'metal_u3a_u3asimd_shuffle_and_fill_up'" in message
     body = _opengl_function_body(generated_code, "shuffleAndFill")
     assert "return packUint2x32(" in body
-    assert "metal_u3a_u3asimd_shuffle_and_fill_up(" in body
     assert "unpackUint2x32(data)" in body
     assert "unpackUint2x32(filling)" in body
     assert "uvec2(0)" not in body
@@ -42871,6 +43570,45 @@ def test_opengl_explicit_as_type_rejects_mismatched_total_widths(
         ),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("target_type", "packed"),
+    [
+        pytest.param("long", "packInt2x32(ivec2(words))", id="long"),
+        pytest.param("ulong", "packUint2x32(words)", id="ulong"),
+    ],
+)
+def test_opengl_metal_long_as_type_keeps_64_bit_payload(tmp_path, target_type, packed):
+    source = tmp_path / "bits.metal"
+    source.write_text(f"""#include <metal_stdlib>
+using namespace metal;
+kernel void bits(device {target_type}* outputs [[buffer(0)]],
+                 uint index [[thread_position_in_grid]]) {{
+    uint2 words = uint2(index, 0x12345678u);
+    outputs[index] = as_type<{target_type}>(words);
+}}
+""")
+
+    generated_code = crosstl.translate(
+        str(source), backend="opengl", format_output=False
+    )
+
+    assert packed in generated_code
+    assert "as_type<" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        shader_path = tmp_path / "bits.comp"
+        shader_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(shader_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_opengl_explicit_as_type_scalar_vector_bitcasts_validate_with_glslang(
@@ -43261,11 +43999,12 @@ def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
     assert "Bundle result = Bundle(Pair(x, y), float[2](1.0, 2.0));" in generated_code
     assert "result = Bundle(Pair(y, x), float[2](3.0, 4.0));" in generated_code
     assert "vec2 direction = vec2(1.0, 2.0);" in generated_code
-    assert "mat2 basis = mat2(vec2(1.0, 3.0), vec2(2.0, 4.0));" in generated_code
-    assert "mat2 flatBasis = mat2(vec2(5.0, 7.0), vec2(6.0, 8.0));" in generated_code
+    # Nested lists are columns and flat lists fill columns in order (GLSL 4.60 4.1.11).
+    assert "mat2 basis = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0));" in generated_code
+    assert "mat2 flatBasis = mat2(vec2(5.0, 6.0), vec2(7.0, 8.0));" in generated_code
     assert (
-        "mat3x2 rectangular = mat3x2(vec2(1.0, 4.0), "
-        "vec2(2.0, 5.0), vec2(3.0, 6.0));" in generated_code
+        "mat2x3 rectangular = mat2x3(vec3(1.0, 2.0, 3.0), "
+        "vec3(4.0, 5.0, 6.0));" in generated_code
     )
     assert "return {" not in generated_code
     assert " = {{" not in generated_code
@@ -44867,7 +45606,7 @@ def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
     assert "return int(bitfieldExtract(uint(70000u), 0, 16));" in normalized
     assert "return (bitfieldExtract(uint(65536u), 0, 16) != 0u);" in normalized
     assert "return bitfieldExtract((-value), 0, 16);" in normalized
-    assert "return (~int(value));" in normalized
+    assert "return int(bitfieldExtract(uint((~int(value))), 0, 16));" in normalized
     assert "return (!(value != 0u));" in normalized
     assert "return (+int(value));" in normalized
     assert "value = bitfieldExtract((value + 1u), 0, 16);" in normalized
@@ -45439,8 +46178,8 @@ def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint floatBitsToUint_ = 1u;" in generated_code
-    assert "uint packed = floatBitsToUint(value);" in generated_code
-    assert "float((floatBitsToUint_ + packed))" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
+    assert "float((floatBitsToUint_ + packed_))" in generated_code
     assert "uint floatBitsToUint = 1u;" not in generated_code
     assert "asuint(" not in generated_code
 
@@ -45464,7 +46203,7 @@ def test_opengl_user_defined_bitcast_alias_function_is_preserved():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint asuint(float value)" in generated_code
-    assert "uint packed = asuint(value);" in generated_code
+    assert "uint packed_ = asuint(value);" in generated_code
     assert "floatBitsToUint" not in generated_code
 
 
@@ -45572,7 +46311,7 @@ def test_opengl_explicit_sampler_argument_is_dropped():
 
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCube envMap;" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "texture(colorMap, uv)" in generated_code
 
 
@@ -45604,7 +46343,7 @@ def test_opengl_sampler_parameter_is_dropped():
     assert "vec4 sampleColor(vec2 uv)" in generated_code
     assert "texture(colorMap, uv)" in generated_code
     assert "sampleColor(uv)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "sampleState" not in generated_code
 
 
@@ -45637,7 +46376,7 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
     assert "vec4 sampleColor(sampler2D tex, vec2 uv)" in generated_code
     assert "texture(tex, uv)" in generated_code
     assert "sampleColor(colorMap, uv)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "sampleState" not in generated_code
 
 
@@ -46157,7 +46896,7 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, layer, uv, depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, clamp(layer, 0, 3), uv, depth);
                 float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
@@ -46178,7 +46917,7 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(shadowMaps[layer], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[3], vec3(uv, depth))" in generated_code
-    assert "shadowLayer(shadowMaps, layer, uv, depth)" in generated_code
+    assert "shadowLayer(shadowMaps, clamp(layer, 0, 3), uv, depth)" in generated_code
     assert "texture(afterShadow, vec3(uv, depth))" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
@@ -46246,25 +46985,10 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
     }
     """
 
-    dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="shadowMaps"):
+        GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in dynamic_code
-    assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in dynamic_code
-    assert (
-        "float shadowLayer(sampler2DShadow shadowMaps[1], int layer, vec2 uv, float depth)"
-        in dynamic_code
-    )
-    assert "texture(shadowMaps[layer], vec3(uv, depth))" in dynamic_code
-    assert (
-        "layout(binding = 0) uniform sampler2DShadow shadowMaps[];" not in dynamic_code
-    )
-    assert (
-        "layout(binding = 2) uniform sampler2DShadow afterShadow;" not in dynamic_code
-    )
-    assert "sampler shadowSamplers" not in dynamic_code
-    assert "shadowSamplers[layer]" not in dynamic_code
-    assert "textureCompare(" not in dynamic_code
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in negative_code
@@ -48945,6 +49669,7 @@ def test_glsl_metal_half_storage_to_workgroup_byte_array_copy(tmp_path):
         backend="opengl",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     for index in range(4):
@@ -49095,3 +49820,150 @@ def test_glsl_storage_byte_view_rejects_mismatched_private_array_layout(tmp_path
     diagnostic = exc_info.value
     assert diagnostic.reason == "unsupported-storage-aggregate-source-layout"
     assert "does not exactly match" in str(diagnostic)
+
+
+def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
+    # CrossGL mat2x3 has two columns of three rows, like GLSL mat2x3 (ADR
+    # 0004), so a subscript selects a three-component column.
+    shader = """
+    shader main {
+        vec3 column(mat2x3 m, int i) {
+            return m[i];
+        }
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                mat2x3 m = mat2x3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));
+                float e = m[1][2];
+                vec3 c = column(m, 1) + vec3(e);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 column(mat2x3 m, int i)" in generated_code
+    assert (
+        "mat2x3 m = mat2x3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));" in generated_code
+    )
+    assert "float e = m[1][2];" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "non_square_matrix_subscripts"
+    )
+
+
+def test_opengl_verbatim_issue_3925_bounded_stage_texture_array():
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[0]) & 1;
+                outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "uniform sampler2D tex[2];" in code
+
+
+def stage_block_texture_array_shader(body):
+    return f"""
+    shader StageBlockTextureArray {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
+    ],
+    ids=["constant-index", "loop-index"],
+)
+def test_opengl_stage_block_texture_array_is_sized_from_its_indices(tmp_path, body):
+    code = GLSLCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
+    )
+
+    assert "uniform sampler2D tex[4];" in code
+    assert_glsl_compute_validates_if_available(
+        code, tmp_path, "stage_block_texture_array"
+    )
+
+
+def test_opengl_stage_block_texture_array_refuses_an_unbounded_index():
+    shader = stage_block_texture_array_shader(
+        "int k = int(fin[0]);"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+    )
+
+    # As for a shader-scope array, no bound reaches the index.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_glsl_shader_clock_builtins_request_their_extensions(tmp_path):
+    source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+    """
+    glsl_code = generate_code(parse_code(tokenize_code(source_code)))
+
+    assert "#extension GL_ARB_shader_clock : require" in glsl_code
+    assert "#extension GL_EXT_shader_realtime_clock : require" in glsl_code
+    assert_glsl_compute_validates_if_available(
+        glsl_code, tmp_path, "shader_clock_builtins"
+    )
+
+
+def test_glsl_shader_clock_extension_is_requested_only_for_the_clock_used():
+    source_code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            void main() {
+                out_buf[0] = clockRealtimeEXT();
+            }
+        }
+    }
+    """
+    glsl_code = generate_code(parse_code(tokenize_code(source_code)))
+
+    assert "#extension GL_EXT_shader_realtime_clock : require" in glsl_code
+    assert "GL_ARB_shader_clock" not in glsl_code

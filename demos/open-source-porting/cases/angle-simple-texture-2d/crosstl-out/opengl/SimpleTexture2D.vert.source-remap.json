@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 11,
-        "endOffset": 183,
+        "endOffset": 225,
         "file": "crosstl-out/opengl/SimpleTexture2D.vert.glsl",
-        "length": 183,
+        "length": 225,
         "line": 1,
         "offset": 0
       },

@@ -1,8 +1,9 @@
 SPHINXBUILD ?= sphinx-build
+SPHINXOPTS ?= -W --keep-going
 SOURCEDIR = source
 BUILDDIR = _build
 
-.PHONY: html clean linkcheck doxygen
+.PHONY: html clean linkcheck
 
 html:
 	$(SPHINXBUILD) -M html "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS)
@@ -10,8 +11,5 @@ html:
 linkcheck:
 	$(SPHINXBUILD) -M linkcheck "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS)
 
-doxygen:
-	./scripts/build-doxygen.sh
-
 clean:
-	rm -rf "$(BUILDDIR)" doxygen/build
+	rm -rf "$(BUILDDIR)"

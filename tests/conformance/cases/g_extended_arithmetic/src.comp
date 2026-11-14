@@ -1,0 +1,43 @@
+#version 450
+// uaddCarry, usubBorrow, umulExtended and imulExtended (GLSL 4.60 section 8.8) on edge and random words, scalar and
+// vector; every result is exact.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { uint a[]; };
+layout(std430, binding = 1) buffer Outp { uint o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint x = a[i];
+    uint y = a[i + 64u];
+    uint carry;
+    uint sum = uaddCarry(x, y, carry);
+    uint borrow;
+    uint difference = usubBorrow(x, y, borrow);
+    uint high;
+    uint low;
+    umulExtended(x, y, high, low);
+    int signedHigh;
+    int signedLow;
+    imulExtended(int(x), int(y), signedHigh, signedLow);
+    uvec2 carries;
+    uvec2 sums = uaddCarry(uvec2(x, y), uvec2(y, x ^ y), carries);
+    ivec2 highs;
+    ivec2 lows;
+    imulExtended(ivec2(x, y), ivec2(y, x), highs, lows);
+    uint base = 16u * i;
+    o[base] = sum;
+    o[base + 1u] = carry;
+    o[base + 2u] = difference;
+    o[base + 3u] = borrow;
+    o[base + 4u] = high;
+    o[base + 5u] = low;
+    o[base + 6u] = uint(signedHigh);
+    o[base + 7u] = uint(signedLow);
+    o[base + 8u] = sums.x;
+    o[base + 9u] = sums.y;
+    o[base + 10u] = carries.x;
+    o[base + 11u] = carries.y;
+    o[base + 12u] = uint(highs.x);
+    o[base + 13u] = uint(highs.y);
+    o[base + 14u] = uint(lows.x);
+    o[base + 15u] = uint(lows.y);
+}

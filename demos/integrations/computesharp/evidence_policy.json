@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.evidence-policy",
+  "capabilityQueries": {
+    "fp64": {
+      "capability": "fp64"
+    },
+    "rw-texture-rgb32": {
+      "capability": "texture",
+      "readWrite": true,
+      "elementType": [
+        "ComputeSharp.Float3",
+        "ComputeSharp.Int3",
+        "ComputeSharp.UInt3"
+      ]
+    }
+  },
+  "hostOnlyMethods": {
+    "ComputeSharp.Tests.BufferTests.Allocate_Uninitialized_Fail": "Every row passes a negative length; the constructor rejects it with ArgumentOutOfRangeException before it allocates, as the Direct3D 12 constructor does.",
+    "ComputeSharp.Tests.Texture1DTests.Allocate_Uninitialized_Fail": "Every row passes a width outside the Direct3D 12 1D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.Texture2DTests.Allocate_Uninitialized_Fail": "Every row passes a size outside the Direct3D 12 2D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.Texture3DTests.Allocate_Uninitialized_Fail": "Every row passes a size outside the Direct3D 12 3D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.TransferBufferTests.Allocate_Uninitialized_Fail": "Every row passes a negative length; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.TransferTexture1DTests.Allocate_Uninitialized_Fail": "Every row passes a width outside the Direct3D 12 1D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.TransferTexture2DTests.Allocate_Uninitialized_Fail": "Every row passes a size outside the Direct3D 12 2D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.TransferTexture3DTests.Allocate_Uninitialized_Fail": "Every row passes a size outside the Direct3D 12 3D texture limits; the constructor rejects it with ArgumentOutOfRangeException before it allocates.",
+    "ComputeSharp.Tests.ImagingTests.LoadAsRgba32_WithNullPath": "The texture loader rejects the null path with ArgumentNullException before it decodes the file or allocates a texture.",
+    "ComputeSharp.Tests.ImagingTests.LoadAsRgba32_WithNullStream": "The texture loader rejects the null stream with ArgumentNullException before it decodes the image or allocates a texture.",
+    "ComputeSharp.Tests.InitializationTests.IsSupported": "Asserts that GraphicsDevice.GetDefault() returns a device; the process-wide default device is created, and recorded, by the first case that uses it.",
+    "ComputeSharp.Tests.InitializationTests.QueryDevices": "Enumerates devices with at least 1 KiB of dedicated memory and runs its body once per match; the Metal and llvmpipe devices use shared system memory and report no dedicated memory, so the body does not run."
+  }
+}

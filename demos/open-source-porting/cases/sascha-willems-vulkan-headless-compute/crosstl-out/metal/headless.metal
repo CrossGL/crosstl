@@ -2,8 +2,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
-/* CrossGL fallback: Metal source output cannot preserve GLSL specialization constant id 0 for 'BUFFER_ELEMENTS'; using the default literal. */
-__attribute__((unused)) constant uint BUFFER_ELEMENTS = 32;
+__attribute__((unused)) constant uint __crossgl_function_constant_BUFFER_ELEMENTS [[function_constant(0)]];
+__attribute__((unused)) constant uint BUFFER_ELEMENTS = is_function_constant_defined(__crossgl_function_constant_BUFFER_ELEMENTS) ? __crossgl_function_constant_BUFFER_ELEMENTS : uint(32);
 
 uint fibonacci(uint n) {
     if (n <= 1) {

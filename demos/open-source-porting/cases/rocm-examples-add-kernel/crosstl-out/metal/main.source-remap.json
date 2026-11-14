@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 514,
+        "endLine": 11,
+        "endOffset": 337,
         "file": "crosstl-out/metal/main.metal",
-        "length": 514,
+        "length": 337,
         "line": 1,
         "offset": 0
       },

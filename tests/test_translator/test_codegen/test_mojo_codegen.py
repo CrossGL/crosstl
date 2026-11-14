@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,7 +51,11 @@ from crosstl.translator.ast import (
     WaveOpNode,
     WildcardPatternNode,
 )
-from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
+from crosstl.translator.codegen.mojo_codegen import (
+    MojoCodeGen,
+    MojoScalarConversionError,
+)
+from crosstl.translator.codegen.mojo_refusals import MojoLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -104,6 +109,12 @@ def find_mojo_compiler():
             f"mojo compiler is not installed or not executable ({mojo}): {output}"
         )
 
+    version = (result.stdout or result.stderr).strip()
+    if not re.match(r"mojo\s+1\.", version, re.IGNORECASE):
+        # Calendar-versioned Mojo (24.x, 25.x) predates `comptime`; like
+        # tools/coverage/validators.py, treat it as absent.
+        pytest.skip(f"mojo compiler predates Mojo 1.x ({mojo}): {version}")
+
     return mojo
 
 
@@ -119,6 +130,19 @@ def test_find_mojo_compiler_skips_non_compiler_on_path(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedProbe())
 
     with pytest.raises(pytest.skip.Exception):
+        find_mojo_compiler()
+
+
+def test_find_mojo_compiler_skips_calendar_versioned_mojo(monkeypatch):
+    class LegacyProbe:
+        returncode = 0
+        stdout = "mojo 24.4.0 (59977802)\n"
+        stderr = ""
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/mojo")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: LegacyProbe())
+
+    with pytest.raises(pytest.skip.Exception, match="predates Mojo 1.x"):
         find_mojo_compiler()
 
 
@@ -596,10 +620,10 @@ def test_unit_enums_lower_to_mojo_aliases():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Mode = Int32" in generated_code
-    assert "alias Mode_Add = 0" in generated_code
-    assert "alias Mode_Multiply = 4" in generated_code
-    assert "alias Mode_Screen = 5" in generated_code
+    assert "comptime Mode = Int32" in generated_code
+    assert "comptime Mode_Add = 0" in generated_code
+    assert "comptime Mode_Multiply = 4" in generated_code
+    assert "comptime Mode_Screen = 5" in generated_code
     assert "fn choose(mode: Mode) -> Int32:" in generated_code
     assert "if (mode == Mode_Multiply):" in generated_code
     assert "return Int32(Mode_Screen)" in generated_code
@@ -654,11 +678,11 @@ def test_enum_flag_values_reference_previous_aliases_and_auto_increment():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Flags = UInt32" in generated_code
-    assert "alias Flags_Read = (1 << 0)" in generated_code
-    assert "alias Flags_Write = (1 << 1)" in generated_code
-    assert "alias Flags_ReadWrite = (Flags_Read | Flags_Write)" in generated_code
-    assert "alias Flags_Next = 4" in generated_code
+    assert "comptime Flags = UInt32" in generated_code
+    assert "comptime Flags_Read = (1 << 0)" in generated_code
+    assert "comptime Flags_Write = (1 << 1)" in generated_code
+    assert "comptime Flags_ReadWrite = (Flags_Read | Flags_Write)" in generated_code
+    assert "comptime Flags_Next = 4" in generated_code
     assert "return UInt32((Flags_ReadWrite | Flags_Next))" in generated_code
     assert "Read | Write" not in generated_code
     assert "Flags::" not in generated_code
@@ -709,8 +733,8 @@ def test_integer_enum_underlying_types_are_preserved():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Small = UInt16" in generated_code
-    assert "alias Small_Auto = 3" in generated_code
+    assert "comptime Small = UInt16" in generated_code
+    assert "comptime Small_Auto = 3" in generated_code
     assert "fn pick() -> UInt16:" in generated_code
     assert "return UInt16(Small_Auto)" in generated_code
 
@@ -743,9 +767,9 @@ def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
     assert "var Some_0: Int32" in generated_code
     assert "var value: Float32" in generated_code
     assert "var flag: Bool" in generated_code
-    assert "alias MaybeInt_Some = 0" in generated_code
-    assert "alias MaybeInt_Named = 1" in generated_code
-    assert "alias MaybeInt_None = 2" in generated_code
+    assert "comptime MaybeInt_Some = 0" in generated_code
+    assert "comptime MaybeInt_Named = 1" in generated_code
+    assert "comptime MaybeInt_None = 2" in generated_code
     assert "fn MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
     assert (
         "return MaybeInt(variant=MaybeInt_Some, Some_0=payload0, value=0.0, flag=False)"
@@ -1591,9 +1615,9 @@ def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += "\nfn main():\n    print(readScale())\n"
 
-    assert "alias SCALE = 2.0" in generated_code
-    assert "alias LIMIT = 4" in generated_code
-    assert "alias UP = SIMD[DType.float32, 4](0.0, 1.0, 0.0, 0.0)" in generated_code
+    assert "comptime SCALE = 2.0" in generated_code
+    assert "comptime LIMIT = 4" in generated_code
+    assert "comptime UP = SIMD[DType.float32, 4](0.0, 1.0, 0.0, 0.0)" in generated_code
 
     source_path = tmp_path / "constants.mojo"
     source_path.write_text(generated_code)
@@ -1626,7 +1650,7 @@ def test_keyword_like_crossgl_bindings_are_escaped_for_mojo():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias alias_ = 2" in generated_code
+    assert "comptime alias_ = 2" in generated_code
     assert "    var return_: Int32" in generated_code
     assert "    var fn_: Int32" in generated_code
     assert "fn fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
@@ -5511,6 +5535,35 @@ def test_constructor_match_resource_size_target_shape_contexts_for_mojo_codegen(
     assert "textureSamples(" not in generated_code
 
 
+def test_mojo_float_vector_from_bool_uses_int_conversion():
+    # Mojo's Bool has no .cast method, so a bool scalar or bool vector
+    # component going into a numeric vector must go through Int first.
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(
+                "shader FB {\n"
+                "    vec2 v2(bool s) { return vec2(s); }\n"
+                "    vec2 v2m(bool s, float x) { return vec2(s, x); }\n"
+                "    vec2 vb(bvec2 b) { return vec2(b); }\n"
+                "    i8vec2 vi8(bool s) { return i8vec2(s); }\n"
+                "    u8vec2 vu8(bool s) { return u8vec2(s); }\n"
+                "}\n"
+            )
+        )
+    )
+
+    assert "return SIMD[DType.float32, 2](Float32(Int(s)))" in generated_code
+    assert "return SIMD[DType.float32, 2](Float32(Int(s)), x)" in generated_code
+    assert (
+        "return SIMD[DType.float32, 2](Float32(Int(b[0])), Float32(Int(b[1])))"
+        in generated_code
+    )
+    assert "return SIMD[DType.int8, 2](Int8(Int(s)))" in generated_code
+    assert "return SIMD[DType.uint8, 2](UInt8(Int(s)))" in generated_code
+    assert "(s).cast[" not in generated_code
+    assert "b[0].cast[DType.float32]()" not in generated_code
+
+
 def test_match_expression_requires_final_wildcard_for_mojo_codegen():
     code = """
     shader main {
@@ -5989,8 +6042,8 @@ def test_generic_payload_enum_variants_lower_to_specialized_mojo_structs():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "@value\nstruct Result_int_int:" in generated_code
-    assert "alias Result_Ok = 0" in generated_code
-    assert "alias Result_Err = 1" in generated_code
+    assert "comptime Result_Ok = 0" in generated_code
+    assert "comptime Result_Err = 1" in generated_code
     assert (
         "fn Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
         in generated_code
@@ -11762,7 +11815,7 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert "struct TextureBox[T: Copyable]:" in generated_code
     assert "struct BufferBox[T: Copyable]:" in generated_code
     assert "struct SamplerBox[T: Copyable]:" in generated_code
-    assert "alias TextureMode = Int32" in generated_code
+    assert "comptime TextureMode = Int32" in generated_code
     assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
     assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
     assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
@@ -17832,6 +17885,27 @@ def test_direct_literal_nodes_emit_mojo_escaping():
     )
 
 
+def test_scalar_bool_casts_to_float_route_through_int():
+    code = """
+    shader FB {
+        float f(bool s) { return float(s); }
+        float g(float x) { return float(x < 1.0); }
+        half h(bool s) { return half(s); }
+        double d(bool s) { return double(s); }
+        int i(bool s) { return int(s); }
+        uint u(bool s) { return uint(s); }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Float32(Int(s))" in generated_code
+    assert "return Float32(Int((x < 1.0)))" in generated_code
+    assert "return Float16(Int(s))" in generated_code
+    assert "return Float64(s)" in generated_code
+    assert "return Int32(s)" in generated_code
+    assert "return UInt32(s)" in generated_code
+
+
 def test_direct_cast_nodes_emit_mojo_casts_without_ast_repr():
     codegen = MojoCodeGen()
     scalar_expr = CastNode(
@@ -18872,29 +18946,34 @@ def test_lambda_call_materializes_local_mojo_functions_for_typed_parameters():
     assert "lambda(" not in generated_code
 
 
-def test_lambda_call_preserves_unsupported_mojo_lambda_shapes():
-    code = """
-    shader LambdaFallbackShader {
-        compute {
-            void main() {
-                let mapped = map(values, lambda(x, (x + 1)));
-                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
-                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
-                let qualified = map(values, lambda(const int value, value));
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "lambda_expression",
+    [
+        "lambda(x, (x + 1))",
+        "lambda(Result<i32, i32> value, { return value; })",
+        "lambda((i32, i32) pair, { return pair; })",
+        "lambda(const int value, value)",
+    ],
+)
+def test_lambda_call_refuses_unmaterializable_mojo_lambda_shapes(lambda_expression):
+    code = f"""
+    shader LambdaFallbackShader {{
+        compute {{
+            void main() {{
+                let mapped = map(values, {lambda_expression});
+            }}
+        }}
+    }}
     """
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(ast)
 
-    assert "lambda(x, (x + 1))" in generated_code
-    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
-    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
-    assert "lambda(const int value, value)" in generated_code
-    assert "_crossgl_lambda_" not in generated_code
+    assert "lambda whose parameter list or body cannot be materialized" in str(
+        refused.value
+    )
 
 
 def test_lambda_call_materializes_before_mojo_assignment_statement():
@@ -19631,7 +19710,7 @@ def test_frac_scalar_builtin_alias_lowers_to_fract_helper():
     assert "frac(" not in generated_code
 
 
-def test_saturate_integer_input_is_left_unmapped():
+def test_saturate_integer_input_clamps_to_zero_and_one():
     code = """
     shader main {
         compute {
@@ -19647,8 +19726,9 @@ def test_saturate_integer_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: Int32 = saturate(n)" in generated_code
+    assert "var x: Int32 = (n).clamp(0, 1)" in generated_code
     assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
@@ -19785,7 +19865,7 @@ def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding
     assert "saturate(" not in generated_code
 
 
-def test_saturate_integer_matrix_input_is_left_unmapped():
+def test_saturate_integer_matrix_input_is_refused():
     code = """
     shader main {
         compute {
@@ -19797,11 +19877,10 @@ def test_saturate_integer_matrix_input_is_left_unmapped():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(code)))
 
-    assert "var x: CrossGLMatrixI32C2R2 = saturate(n)" in generated_code
-    assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate of an integer matrix" in str(refused.value)
 
 
 def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
@@ -19837,7 +19916,7 @@ fn main():
     assert "[1.0, 0.0]" in result.stdout
 
 
-def test_saturate_integer_vector_input_is_left_unmapped():
+def test_saturate_integer_vector_input_clamps_each_component():
     code = """
     shader main {
         compute {
@@ -19853,9 +19932,9 @@ def test_saturate_integer_vector_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: SIMD[DType.int32, 2] = saturate(n)" in generated_code
+    assert "var x: SIMD[DType.int32, 2] = (n).clamp(0, 1)" in generated_code
     assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
@@ -24012,8 +24091,8 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
         "return SIMD[DType.int32, 4]((nextFloat()).cast[DType.int32]())"
         in generated_code
     )
-    assert "return SIMD[DType.bool, 2](nextBool())" in generated_code
-    assert "return SIMD[DType.bool, 4](nextBool())" in generated_code
+    assert "return SIMD[DType.bool, 2](fill=nextBool())" in generated_code
+    assert "return SIMD[DType.bool, 4](fill=nextBool())" in generated_code
     assert "fn _crossgl_vec3_splat" not in generated_code
 
 
@@ -27309,13 +27388,244 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias comptime_ = 2" in generated_code
+    assert "comptime comptime_ = 2" in generated_code
     assert "fn comptime_(var_: Int32) -> Int32:" in generated_code
     assert "var ref_: Int32 = (var_ + comptime_)" in generated_code
     assert "return ref_" in generated_code
-    assert "alias comptime = 2" not in generated_code
+    assert "comptime comptime = 2" not in generated_code
     assert "fn comptime(" not in generated_code
     assert "var ref:" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "source_type", "target_type", "context"),
+    [
+        (
+            "shader P { float f(vec3 v) { return v; } }",
+            "vec3",
+            "float",
+            "return value",
+        ),
+        (
+            "shader P { bool f(vec3 a, vec3 b) { return a == b; } }",
+            "bvec3",
+            "bool",
+            "return value",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ if (a == b) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "if condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ while (a != b) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "while condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ for (int i = 0; a == b; i++) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "for condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ float s = 0.0; do { s = s + 1.0; } while (a == b); return s; } }"
+            ),
+            "bvec2",
+            "bool",
+            "do-while condition",
+        ),
+        (
+            "shader P { float f(vec2 a, vec2 b) { return (a == b) ? 1.0 : 0.0; } }",
+            "bvec2",
+            "bool",
+            "ternary condition",
+        ),
+        (
+            "shader P { float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
+            "vec3",
+            "float",
+            "global declaration g",
+        ),
+        (
+            "shader P { float f(vec4 v) { float s = v; return s; } }",
+            "vec4",
+            "float",
+            "declaration s",
+        ),
+        (
+            "shader P { float f(vec2 v) { float s = 0.0; s = v; return s; } }",
+            "vec2",
+            "float",
+            "assignment target",
+        ),
+        (
+            "shader P { float f(bool c, vec3 v) { return c ? v : 1.0; } }",
+            "vec3",
+            "float",
+            "return value true branch",
+        ),
+    ],
+)
+def test_mojo_refuses_implicit_vector_to_scalar_conversion(
+    code, source_type, target_type, context
+):
+    with pytest.raises(MojoScalarConversionError) as raised:
+        generate_code(parse_code(tokenize_code(code)))
+
+    error = raised.value
+    assert isinstance(error, ValueError)
+    assert error.source_type == source_type
+    assert error.target_type == target_type
+    assert error.reason == "vector-to-scalar"
+    assert context in str(error)
+    assert error.project_diagnostic_code == (
+        "project.translate.mojo-scalar-conversion-unsupported"
+    )
+
+
+def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
+    code = """
+    shader P {
+        bool f(vec3 a, vec3 b) { return all(a == b); }
+        float g(vec3 v) {
+            float s = v.x;
+            if (any(v != v)) { return dot(v, v); }
+            return v.y > 0.0 ? s : length(v);
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert ".reduce_and()" in generated
+    assert ".reduce_or()" in generated
+    assert "var s: Float32 = v[0]" in generated
+    assert "return dot_product(v, v)" in generated
+
+
+def test_mojo_boolean_vector_logical_ops_use_bitwise_operators():
+    """&& and || on boolean vectors must be lane-wise (& / |) in Mojo.
+
+    Scalar bool keeps short-circuit and/or. See issue #3137.
+    """
+    code = """
+    shader P {
+        bvec2 both(bvec2 a, bvec2 b) { return a && b; }
+        bvec2 either(bvec2 a, bvec2 b) { return a || b; }
+        bvec3 cmp(vec3 x, vec3 y, vec3 z) { return (x < y) && (y < z); }
+        bvec2 mask_and_scalar(bvec2 a, bool s) { return a && s; }
+        bvec3 scalar_or_mask(bool s, bvec3 a) { return s || a; }
+        bool scalar_and(bool a, bool b) { return a && b; }
+        bool scalar_or(bool a, bool b) { return a || b; }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    # Vector forms use bitwise operators
+    assert "(a & b)" in generated
+    assert "(a | b)" in generated
+    # Comparison results are boolean vectors; the && between them should be &
+    assert "((x).lt(y) & (y).lt(z))" in generated
+    # A scalar bool operand of a mask is splatted to the mask's storage lanes
+    assert "(a & SIMD[DType.bool, 2](fill=s))" in generated
+    assert "(SIMD[DType.bool, 4](fill=s) | a)" in generated
+    # Scalar forms keep logical operators
+    assert "(a and b)" in generated
+    assert "(a or b)" in generated
+
+
+def test_mojo_bool_vector_splats_use_fill_keyword():
+    code = """
+    shader P {
+        bvec2 f(bool s) { return bvec2(s); }
+        bvec2 g() { return bvec2(true); }
+        bvec4 h(bool s) { return bvec4(s); }
+        bvec3 k(bool s) { return bvec3(s); }
+        bvec2 c(bool s, bvec2 b) { return s == b; }
+        bvec2 r(bvec2 b, bool s) { return b != s; }
+        bvec2 m(float x) { return bvec2(x < 1.0); }
+        vec2 v(float x) { return vec2(x); }
+        bvec2 lt(vec2 v, float x) { return v < x; }
+        bvec2 ac(bvec2 a, float x) { return a && (x < 1.0); }
+        bvec3 oc(bvec3 a, float x) { return (x < 1.0) || a; }
+        float sm(float a, float b, float x) { return mix(a, b, x < 0.5); }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return SIMD[DType.bool, 2](fill=s)" in generated
+    assert "return SIMD[DType.bool, 2](fill=True)" in generated
+    assert "return SIMD[DType.bool, 4](fill=s)" in generated
+    assert "return SIMD[DType.bool, 4](s, s, s, False)" in generated
+    assert "return (SIMD[DType.bool, 2](fill=s)).eq(b)" in generated
+    assert "return (b).ne(SIMD[DType.bool, 2](fill=s))" in generated
+    assert "return SIMD[DType.bool, 2](fill=(x < 1.0))" in generated
+    assert "cast[DType.bool]" not in generated
+    assert "return SIMD[DType.float32, 2](x)" in generated
+    assert "return (v).lt(x)" in generated
+    assert "return (a & SIMD[DType.bool, 2](fill=(x < 1.0)))" in generated
+    assert "return (SIMD[DType.bool, 4](fill=(x < 1.0)) | a)" in generated
+    assert "return (b if (x < 0.5) else a)" in generated
+
+
+def test_mojo_scalar_comparisons_and_logical_ops_are_typed_bool():
+    codegen = MojoCodeGen()
+
+    for op in ("<", "<=", ">", ">=", "==", "!="):
+        assert codegen.binary_expression_result_type(op, "float", "float") == "bool"
+    assert codegen.binary_expression_result_type("&&", "bool", "bool") == "bool"
+    assert codegen.binary_expression_result_type("||", "bool", "bool") == "bool"
+    assert codegen.binary_expression_result_type("+", "float", "float") == "float"
+
+
+def test_shader_clock_builtins_are_refused_for_mojo():
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            buffer uvec2* pair_buf;
+            void main() {
+                out_buf[0] = clockARB() + clockRealtimeEXT();
+                pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+            }
+        }
+    }
+"""
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(source_code)))
+    # The Mojo emitter refuses at the first site rather than collecting every one.
+    assert "'clockARB'" in str(refused.value)
+    assert "shader clock builtin" in str(refused.value)
+
+
+def test_user_function_named_like_a_shader_clock_is_kept_for_mojo():
+    source_code = """
+    shader Clock {
+        uint clockARB() { return 7u; }
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint* out_buf;
+            void main() {
+                out_buf[0] = clockARB();
+            }
+        }
+    }
+    """
+    assert "clockARB()" in generate_code(parse_code(tokenize_code(source_code)))
 
 
 if __name__ == "__main__":

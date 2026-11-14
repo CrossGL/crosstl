@@ -1,6 +1,7 @@
 """Check translated casts and mixed-type arithmetic with exact binary32 results."""
 
 import json
+import math
 
 from demos.integrations.mlx.portable_host.binary_workloads import LAYOUTS, mlx_operand
 from demos.integrations.mlx.portable_host.packages import CAST_ENTRIES, COPY_ENTRY
@@ -142,6 +143,23 @@ def validate(records):
         raise RuntimeError("Incomplete or incorrect cast readbacks")
 
 
+def contiguous_span(value):
+    """The element span MLX's AsStrided marks contiguous, or None.
+
+    AsType casts a contiguous span in place and keeps the input's strides, as
+    the Metal backend's vector copy does; other layouts are materialized first.
+    """
+    if value.flags.c_contiguous:
+        return value.size
+    shape = value.shape
+    strides = [step // value.itemsize for step in value.strides]
+    if any(step < 0 and size > 1 for step, size in zip(strides, shape)):
+        return None
+    span = sum(step * (size - 1) for step, size in zip(strides, shape)) + 1
+    dense = math.prod(size for step, size in zip(strides, shape) if step > 0)
+    return span if dense == span else None
+
+
 def dispatches():
     result = []
     for entry, (source, destination) in CAST_ENTRIES.items():
@@ -149,9 +167,11 @@ def dispatches():
             value = operand(source, destination, layout)
             if not value.size:
                 continue
-            if not value.flags.c_contiguous:
-                result.append((COPY_ENTRY, value.size))
-            result.append((entry, value.size))
+            span = contiguous_span(value)
+            if span is None:
+                result.extend(((COPY_ENTRY, value.size), (entry, value.size)))
+            else:
+                result.append((entry, span))
     for source in ("int32", "uint32"):
         result.extend([(f"v_copy{source}float32", 7), ("vv_Addfloat32", 7)])
     return result

@@ -1,3 +1,4 @@
+#pragma cgl_rules(udiv_zero, wrap)
 shader main {
     struct PSInput {
         vec4 position @ gl_Position;

@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-lock",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "contractSHA256": "dbbd2e039f6fbcafc969ffe0a0d6a833e11ecdc06317a5c62b0d5e1b5f0f0d69",
+  "testMethodCount": 19,
+  "caseCount": 43,
+  "allCasesDigest": "6d8252e2875732defd678840d0a47edcdb439f250a82d36dfebdf62f02524949",
+  "totals": {
+    "required-gpu": {
+      "methods": 0,
+      "cases": 0
+    },
+    "cpu-only": {
+      "methods": 0,
+      "cases": 0
+    },
+    "windows-specific": {
+      "methods": 19,
+      "cases": 43
+    }
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "execution": "software",
+      "expected": {
+        "pass": 23,
+        "inconclusive": 0,
+        "optional": 20,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 0,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_DisposedResourcesAfterDevice_ReferenceCounting(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 96
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "b6e6727f147d340055b41a8d02945931ca1748a144fdc96e7819ed56df2a6e47"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_DisposedResources_ReferenceCounting(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 72
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "bf3ab15e761412095a94fe93c1ca4102c1995fef31037897ab7cbc734f7b750d"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_GetDefault_ReferenceCounting()": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 30
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "ab7819724deed8d89a2b26d14d356b0f8b6553f274e9fd857cdbff9edc0a3114"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_InteropServicesThrowsObjectDisposedException(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 59
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "8946e07494f124b8e4dd8ed799514fea99fde3d9e054e5aba9894566867344b4"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_ReferenceCounting(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 44
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "d381a3f5f7dab1069b5ab8603f2bf78877fa4d41a3c92dd57b24961cae15d662"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_WithComputeShader_ReferenceCounting(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 128
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "aa8df6f6239019ad227c99d6cce46f0058ab62e4b9f54c36b5653b1cc1c65ef7"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceDisposalTests.DeviceDisposal_WithPixelShader_ReferenceCounting(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceDisposalTests.cs",
+        "line": 162
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "2d6098d024add3929252382926731eb2dea6569f5e9063cf1e29779a75613e0c"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_AllocateBuffer(ComputeSharp.Tests.Extensions.Device,System.Type)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 61
+      },
+      "cases": 6,
+      "devices": {
+        "Discrete": 3,
+        "Warp": 3
+      },
+      "caseDigest": "fc1da07792eeaef1789ef7102fb9daa1cbace2d488fa1803e270403d57831e73"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_AllocateTexture2D(ComputeSharp.Tests.Extensions.Device,System.Type)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 75
+      },
+      "cases": 4,
+      "devices": {
+        "Discrete": 2,
+        "Warp": 2
+      },
+      "caseDigest": "5d45e24d902e1feb675a7041440345d958192ab2efddd6083b1c444a531f6b3d"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_AllocateTexture3D(ComputeSharp.Tests.Extensions.Device,System.Type)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 89
+      },
+      "cases": 4,
+      "devices": {
+        "Discrete": 2,
+        "Warp": 2
+      },
+      "caseDigest": "ce8ff425526dbb8571de9980b429abc8bd8d0e3aae1a81ab817da7d4d35d8533"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_CreateComputeContext(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 161
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "9dbb8c788a7c76722033785f9f8483317b3a5dc06fe5c9b1f0a2700cc381aae0"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_IsDoublePrecisionSupportAvailable(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 101
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "0a2754fe874fb7a3f1b637f90aa9e03599d962f00d87fa4e7e9bce0ed3c9aa48"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_IsReadOnlyTexture2DSupportedForType(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 113
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "da10ebac47317dd968413f5f40729af6292353cbdaada2e443bc3e5a4e48bc33"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_IsReadOnlyTexture3DSupportedForType(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 137
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "ea0ee67a58cf649e9269f6ce1baea33742018e34676c25c5744dc0ed5966f159"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_IsReadWriteTexture2DSupportedForType(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 125
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "a4380afb208f22f58d83c08a55f6381ab21bafc5255e91dffe0a42904dbfd075"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_IsReadWriteTexture3DSupportedForType(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 149
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "fb7c1dd1fd70186ef6f31910606c5d964c9b7e7a6d8bad9250f0dcb1f23f9e3b"
+    },
+    "ComputeSharp.Tests.DeviceLost.DeviceLostTests.DeviceLost_RaiseEvent(ComputeSharp.Tests.Extensions.Device)": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/DeviceLostTests.cs",
+        "line": 20
+      },
+      "cases": 2,
+      "devices": {
+        "Discrete": 1,
+        "Warp": 1
+      },
+      "caseDigest": "7327dccf5fd8195a0baa0ba1c77f7df30639a622206aac8ca13c453672b00984"
+    },
+    "ComputeSharp.Tests.DeviceLost.GetDefaultDeviceTests.GetDefault_DisposeAndUseNewInstance()": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/GetDefaultDeviceTests.cs",
+        "line": 88
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a25452daa1e373f11735b5c761c6ea63257cb49007c533ab6f90d5fc75ef925b"
+    },
+    "ComputeSharp.Tests.DeviceLost.GetDefaultDeviceTests.GetDefault_VerifyContract()": {
+      "category": "windows-specific",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.DeviceLost/GetDefaultDeviceTests.cs",
+        "line": 16
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "abbf8a6b71b323af8209414c4d5cdc1aaa426b50f1677fa33f31e59098ef9453"
+    }
+  }
+}

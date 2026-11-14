@@ -1,0 +1,22 @@
+#version 450
+// A returned call copies its inout argument (shared memory, a vector component) back before the return.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { int a[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+shared int tile[64];
+int bump(inout int t) { t = t * 3 + 1; return t - 2; }
+int fromTile(uint l) { return bump(tile[l]); }
+int fromComponent(inout ivec2 v) { return bump(v.y) + v.x; }
+void main() {
+    uint l = gl_LocalInvocationIndex;
+    uint g = gl_GlobalInvocationID.x;
+    int x = a[g];
+    tile[l] = x;
+    int r = fromTile(l);
+    ivec2 v = ivec2(x, x + 5);
+    int s = fromComponent(v);
+    o[4u * g] = r;
+    o[4u * g + 1u] = tile[l];
+    o[4u * g + 2u] = s;
+    o[4u * g + 3u] = v.y;
+}

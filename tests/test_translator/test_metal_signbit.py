@@ -136,16 +136,16 @@ def test_signbit_executes_with_exact_signs(tmp_path, dtype, start):
 
 
 def test_signbit_native_gate_uses_existing_runners():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate Metal builtin ownership"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_metal_signbit.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 360" in step
     assert "continue-on-error" not in step

@@ -641,13 +641,13 @@ def test_conditional_calls_preserve_guarded_effects_on_device(
 
 
 def test_conditional_calls_share_the_required_native_gate():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate software subgroup products"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

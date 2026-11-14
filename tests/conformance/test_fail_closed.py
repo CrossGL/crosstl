@@ -13,6 +13,8 @@ def emit(name, out):
     """Docstrings that say ; WARNING are skipped too."""
     out.append("; WARNING: lowered to 0")
     out.append(f"{name} /* unsupported construct */")
+    out.append(f"(/* {name} not directly supported in CrossGL */ 0)")
+    out.append(f"(/* {name} lowered to atomicAdd; scope not preserved */ 0)")
     return MAP.get(name, name)
 
 
@@ -31,7 +33,7 @@ def refuse(name):
 def test_each_fail_open_shape_is_found_and_scoped():
     sites = scan_source(FAIL_OPEN)
     assert sites == {
-        ("emit", "fallback-text"): 2,
+        ("emit", "fallback-text"): 4,
         ("emit", "identity-fallback"): 1,
         ("parse", "empty-block-recovery"): 1,
     }
@@ -80,4 +82,5 @@ def test_translator_has_no_unrecorded_fail_open_sites():
     baseline = json.loads(fail_closed.BASELINE.read_text())
     current = scan()
     assert compare(baseline["sites"], current) == []
-    assert baseline["totals"] == totals(current)
+    # Totals are derived, never stored: two removals in different modules must not edit the same line.
+    assert set(baseline) == {"schemaVersion", "sites"}

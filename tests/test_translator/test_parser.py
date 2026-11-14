@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
@@ -78,9 +80,7 @@ def test_qualified_pointer_returns_preserve_contract(space, readonly, wrapper):
     declaration = (
         f"{const}{space} float* select_value({const}{space} float* p) {{ return p; }}"
     )
-    parser = Parser(
-        tokenize_code(wrapper.format(declaration)), strict_function_bodies=True
-    )
+    parser = Parser(tokenize_code(wrapper.format(declaration)))
     ast = parser.parse()
     function = next(f for f in ast.functions if f.name == "select_value")
     assert isinstance(function.return_type, PointerType)
@@ -111,7 +111,7 @@ def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     function = next(func for func in ast.functions if func.name == "unpack_words")
     declaration = function.body.statements[0]
 
@@ -147,7 +147,7 @@ def test_call_argument_pointer_reinterpretation_preserves_compute_body(
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     function = next(func for func in ast.functions if func.name == "unpack_block")
     body = function.body.statements
 
@@ -184,7 +184,7 @@ def test_call_argument_pointer_reinterpretation_requires_operand(cast_type):
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     error = exc_info.value
     assert error.function_name == "unpack_block"
@@ -202,7 +202,7 @@ def test_generic_c_style_pointer_cast_preserves_named_pointee_type():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     value = ast.functions[0].body.statements[0].initial_value
 
     assert isinstance(value, PointerReinterpretNode)
@@ -234,7 +234,7 @@ def test_nested_generic_c_style_pointer_cast_splits_combined_close_token():
     tokens = tokenize_code(code)
     assert ("BITWISE_SHIFT_RIGHT", ">>") in tokens
 
-    ast = Parser(tokens, strict_function_bodies=True).parse()
+    ast = Parser(tokens).parse()
     value = ast.functions[0].body.statements[0].initial_value
 
     assert isinstance(value, PointerReinterpretNode)
@@ -264,7 +264,7 @@ def test_parenthesized_comparison_and_multiplication_are_not_c_style_casts():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     ordered = ast.functions[0].body.statements[0].initial_value
     product = ast.functions[0].body.statements[1].initial_value
 
@@ -293,7 +293,7 @@ def test_non_entry_helper_malformed_body_raises_parse_error():
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     error = exc_info.value
     assert error.function_name == "malformed_helper"
@@ -314,7 +314,7 @@ def test_explicit_compute_stage_entry_preserves_pointer_dereference():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     function = next(func for func in ast.functions if func.name == "reduce_values")
     body = function.body.statements
     declaration = body[0]
@@ -720,9 +720,10 @@ def test_callable_type_values_accept_named_parameters():
 
 
 def test_parenthesized_tuple_and_square_list_literals_parse_as_array_literals():
+    # A tuple literal keeps a trailing comma: ``(32, 4)`` is the comma operator.
     code = """
     shader LiteralShapeShader {
-        let SF_ATOM_M = (32, 4);
+        let SF_ATOM_M = (32, 4,);
         List[Path] CUDA_CUDNN_LIBRARY_PATHS = ["libcudnn.so", "libcudnn.so.9"];
     }
     """
@@ -1988,16 +1989,17 @@ def test_nested_cbuffer_array_members_parse_as_nested_array_types():
     values = cbuffer.members[0].member_type
     offsets = cbuffer.members[1].member_type
 
+    # ``int values[2][3]`` is 2 arrays of 3: the first suffix is the outermost dimension.
     assert isinstance(values, ArrayType)
     assert isinstance(values.element_type, ArrayType)
-    assert values.size.value == 3
-    assert values.element_type.size.value == 2
+    assert values.size.value == 2
+    assert values.element_type.size.value == 3
     assert values.element_type.element_type.name == "int"
 
     assert isinstance(offsets, ArrayType)
     assert isinstance(offsets.element_type, ArrayType)
-    assert offsets.size.value == 5
-    assert offsets.element_type.size.value == 4
+    assert offsets.size.value == 4
+    assert offsets.element_type.size.value == 5
     assert offsets.element_type.element_type.name == "uint"
 
 
@@ -4102,6 +4104,79 @@ def test_unterminated_generic_value_expression_is_rejected():
         parser.parse_type()
 
 
+def test_complete_shader_declaration_still_parses():
+    code = """
+    shader Complete {
+        float identity(float value) { return value; }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [function.name for function in ast.functions] == ["identity"]
+
+
+@pytest.mark.parametrize(
+    "source,message",
+    [
+        pytest.param(
+            "shader Incomplete { float identity(float value) { return value; }",
+            "Unterminated shader declaration 'Incomplete'",
+            id="shader",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="stage-block",
+        ),
+        pytest.param(
+            "compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="top-level-stage-block",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { if (true) {",
+            "could not parse the body of function 'main' at EOF",
+            id="function-body",
+        ),
+        pytest.param(
+            "shader S { cbuffer Params { float scale;",
+            "Unterminated cbuffer 'Params'",
+            id="cbuffer",
+        ),
+        pytest.param(
+            "shader S { compute { layout(std430) buffer Data { float values[];",
+            "Unterminated buffer block 'Data'",
+            id="buffer-block",
+        ),
+    ],
+)
+def test_unterminated_declaration_fails_in_bounded_subprocess(source, message):
+    # Keep a regression in a child process so a parser hang cannot stall pytest.
+    script = (
+        "import sys\n"
+        "from crosstl.translator.lexer import Lexer\n"
+        "from crosstl.translator.parser import Parser\n"
+        "try:\n"
+        "    Parser(Lexer(sys.stdin.read()).tokens).parse()\n"
+        "except SyntaxError as exc:\n"
+        "    print(exc)\n"
+        "else:\n"
+        "    raise SystemExit('expected SyntaxError for unterminated input')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=source,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert message in result.stdout
+
+
 def test_nested_generic_type_close_does_not_eat_shift_operator():
     code = """
     shader NestedGenericClosers {
@@ -4198,6 +4273,42 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.name == "OutputPatch"
     assert patch_param.param_type.generic_args[0].name == "GSOutput"
     assert patch_param.param_type.generic_args[1].value == 3
+
+
+def test_struct_named_like_a_primitive_qualifier_is_a_type():
+    """Primitive qualifiers are lower-case keywords; ``Triangle`` and ``Point`` stay user type names."""
+    code = """
+    shader UserPrimitiveTypes {
+        struct Triangle {
+            vec3 normal;
+        };
+
+        struct Point {
+            vec3 position;
+        };
+
+        Triangle unpack(uint index, int vertexSize) {
+            Triangle tri;
+            tri.normal = vec3(float(index + uint(vertexSize)));
+            return tri;
+        }
+
+        Point lift(Point point, triangle Triangle prims[3]) {
+            return point;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    unpack, lift = ast.functions
+    assert unpack.name == "unpack"
+    assert unpack.return_type.name == "Triangle"
+    assert [param.name for param in unpack.parameters] == ["index", "vertexSize"]
+    point_param, prims_param = lift.parameters
+    assert point_param.qualifiers == []
+    assert point_param.param_type.name == "Point"
+    assert prims_param.qualifiers == ["triangle"]
+    assert prims_param.param_type.element_type.name == "Triangle"
 
 
 def test_backend_parameter_address_and_access_qualifiers_parse():
@@ -4630,7 +4741,7 @@ def test_mlx_shaped_generic_member_call_preserves_call_structure():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     statement = ast.functions[0].body.statements[0]
     call = statement.expression
 
@@ -4658,7 +4769,7 @@ def test_fp_quantized_generic_member_calls_preserve_ordered_arguments():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     calls = [statement.expression for statement in ast.functions[0].body.statements]
 
     assert [call.function.member for call in calls] == ["load", "load"]
@@ -4692,7 +4803,7 @@ def test_generic_member_call_parses_nested_type_and_value_arguments():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     call = ast.functions[0].body.statements[0].expression
     outer = call.generic_args[0]
 
@@ -4720,7 +4831,7 @@ def test_generic_pointer_member_call_preserves_pointer_access():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     call = ast.functions[0].body.statements[0].expression
 
     assert isinstance(call, FunctionCallNode)
@@ -4741,7 +4852,7 @@ def test_empty_generic_member_call_preserves_explicit_suffix():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     generic_call = ast.functions[0].body.statements[0].expression
     ordinary_call = ast.functions[0].body.statements[1].expression
 
@@ -4761,7 +4872,7 @@ def test_single_generic_parameter_member_call_uses_active_type_scope():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     call = ast.functions[0].body.statements[0].value
 
     assert isinstance(call, FunctionCallNode)
@@ -4781,7 +4892,7 @@ def test_single_declared_type_member_call_uses_type_declaration_context():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     call = ast.functions[0].body.statements[0].expression
 
     assert isinstance(call, FunctionCallNode)
@@ -4800,7 +4911,7 @@ def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     less = ast.functions[0].body.statements[0].initial_value
     ordered = ast.functions[0].body.statements[1].initial_value
     parenthesized = ast.functions[0].body.statements[2].initial_value
@@ -4820,6 +4931,81 @@ def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     assert isinstance(parenthesized.left.left, MemberAccessNode)
 
 
+def test_logical_operators_in_relational_chains_not_parsed_as_generic_calls():
+    code = """
+    shader RelationalChains {
+        void kernel() {
+            bool c1 = a < b && b > (c);
+            bool c2 = a < b || b > (c);
+            bool c3 = i < n && n > (i + 1);
+            bool c4 = object.member < b && b > (c);
+            auto c5 = f<(a && b)>(x);
+            auto c6 = f<T>(x);
+        }
+        void with_type_generic(Flag<A && B> param) {}
+    }
+    """
+
+    ast = Parser(tokenize_code(code)).parse()
+    statements = ast.functions[0].body.statements
+
+    c1 = statements[0].initial_value
+    assert isinstance(c1, BinaryOpNode)
+    assert c1.operator == "&&"
+    assert isinstance(c1.left, BinaryOpNode) and c1.left.operator == "<"
+    assert c1.left.left.name == "a" and c1.left.right.name == "b"
+    assert isinstance(c1.right, BinaryOpNode) and c1.right.operator == ">"
+    assert c1.right.left.name == "b" and c1.right.right.name == "c"
+
+    c2 = statements[1].initial_value
+    assert isinstance(c2, BinaryOpNode)
+    assert c2.operator == "||"
+    assert isinstance(c2.left, BinaryOpNode) and c2.left.operator == "<"
+    assert c2.left.left.name == "a" and c2.left.right.name == "b"
+    assert isinstance(c2.right, BinaryOpNode) and c2.right.operator == ">"
+    assert c2.right.left.name == "b" and c2.right.right.name == "c"
+
+    c3 = statements[2].initial_value
+    assert isinstance(c3, BinaryOpNode)
+    assert c3.operator == "&&"
+    assert isinstance(c3.left, BinaryOpNode) and c3.left.operator == "<"
+    assert c3.left.left.name == "i" and c3.left.right.name == "n"
+    assert isinstance(c3.right, BinaryOpNode) and c3.right.operator == ">"
+    assert c3.right.left.name == "n"
+    assert isinstance(c3.right.right, BinaryOpNode) and c3.right.right.operator == "+"
+    assert c3.right.right.left.name == "i" and c3.right.right.right.value == 1
+
+    c4 = statements[3].initial_value
+    assert isinstance(c4, BinaryOpNode)
+    assert c4.operator == "&&"
+    assert isinstance(c4.left, BinaryOpNode) and c4.left.operator == "<"
+    assert isinstance(c4.left.left, MemberAccessNode)
+    assert c4.left.left.object_expr.name == "object" and c4.left.left.member == "member"
+    assert c4.left.right.name == "b"
+    assert isinstance(c4.right, BinaryOpNode) and c4.right.operator == ">"
+    assert c4.right.left.name == "b" and c4.right.right.name == "c"
+
+    c5 = statements[4].initial_value
+    assert isinstance(c5, FunctionCallNode)
+    assert c5.function.name == "f<a && b>"
+    assert len(c5.arguments) == 1 and c5.arguments[0].name == "x"
+
+    c6 = statements[5].initial_value
+    assert isinstance(c6, FunctionCallNode)
+    assert c6.function.name == "f<T>"
+    assert len(c6.arguments) == 1 and c6.arguments[0].name == "x"
+
+    fn_with_type = ast.functions[1]
+    param_type = fn_with_type.parameters[0].param_type
+    assert isinstance(param_type, NamedType)
+    assert param_type.name == "Flag"
+    assert len(param_type.generic_args) == 1
+    assert isinstance(param_type.generic_args[0], BinaryOpNode)
+    assert param_type.generic_args[0].operator == "&&"
+    assert param_type.generic_args[0].left.name == "A"
+    assert param_type.generic_args[0].right.name == "B"
+
+
 def test_matrix_type_keywords_parse():
     code = """
     shader Matrices {
@@ -4837,11 +5023,12 @@ def test_matrix_type_keywords_parse():
     ast = parse_code(tokens)
     statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
 
+    # CrossGL follows GLSL: matCxR has C columns and R rows.
     affine = statements[0]
     assert isinstance(affine.var_type, MatrixType)
     assert affine.var_type.element_type.name == "float"
-    assert affine.var_type.rows == 3
-    assert affine.var_type.cols == 4
+    assert affine.var_type.cols == 3
+    assert affine.var_type.rows == 4
 
     precise = statements[1]
     assert isinstance(precise.var_type, MatrixType)
@@ -4854,8 +5041,8 @@ def test_matrix_type_keywords_parse():
     jacobian = statements[2]
     assert isinstance(jacobian.var_type, MatrixType)
     assert jacobian.var_type.element_type.name == "double"
-    assert jacobian.var_type.rows == 4
-    assert jacobian.var_type.cols == 3
+    assert jacobian.var_type.cols == 4
+    assert jacobian.var_type.rows == 3
 
 
 def test_sampler_type_keywords_parse():
@@ -5756,6 +5943,38 @@ def test_precise_variable_attribute_parse():
     assert [attr.name for attr in statements[0].attributes] == ["precise"]
 
 
+def test_precise_function_qualifier_parses_as_function_attribute():
+    code = """
+    shader Precise {
+        precise float stable(float a, float b, float c) {
+            return a * b + c;
+        }
+        @precise precise float twice(float a) {
+            return a * a + a;
+        }
+        float precise_value(float precise) {
+            return precise;
+        }
+        compute {
+            void main() {
+                float x = stable(1.0, 2.0, 3.0) + twice(2.0) + precise_value(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    functions = {function.name: function for function in ast.functions}
+
+    assert set(functions) == {"stable", "twice", "precise_value"}
+    assert [attr.name for attr in functions["stable"].attributes] == ["precise"]
+    assert functions["stable"].qualifiers == []
+    assert functions["stable"].return_type.name == "float"
+    assert [attr.name for attr in functions["twice"].attributes] == ["precise"]
+    assert functions["precise_value"].attributes == []
+    assert functions["precise_value"].parameters[0].name == "precise"
+
+
 def test_image_format_parameter_attributes_parse():
     code = """
     shader Resources {
@@ -6296,6 +6515,52 @@ def test_cooperative_matrix_type_round_trips_coordinate_mapping_contract():
     assert parser.format_type_argument(round_trip_type) == serialized_type
 
 
+def test_format_type_argument_renders_matrix_and_array_types():
+    # A generic call's matrix or array type argument keeps its CrossGL spelling
+    # instead of the parsed node's Python repr (#3643).
+    parser = Parser(tokenize_code("shader P { compute { void main() {} } }"))
+
+    square = MatrixType(PrimitiveType("float"), rows=4, cols=4)
+    assert parser.format_type_argument(square) == "mat4"
+
+    rectangular = MatrixType(PrimitiveType("float"), rows=3, cols=2)
+    assert parser.format_type_argument(rectangular) == "mat2x3"
+
+    sized_array = ArrayType(
+        PrimitiveType("float"), LiteralNode(2, PrimitiveType("int"))
+    )
+    assert parser.format_type_argument(sized_array) == "float[2]"
+
+    dynamic_array = ArrayType(PrimitiveType("float"), None)
+    assert parser.format_type_argument(dynamic_array) == "float[]"
+
+
+def test_format_type_argument_keeps_the_order_of_array_sizes():
+    # ``float[2][3]`` is two arrays of three floats, the first size outermost.
+    parser = Parser(tokenize_code("shader P { compute { void main() {} } }"))
+    nested = ArrayType(
+        ArrayType(PrimitiveType("float"), LiteralNode(3, PrimitiveType("int"))),
+        LiteralNode(2, PrimitiveType("int")),
+    )
+    assert parser.format_type_argument(nested) == "float[2][3]"
+
+    ast = Parser(tokenize_code("""
+        shader P {
+            T pick<T>(T x) { return x; }
+            void f(float a[2][3], mat3 b[4]) {
+                float c[2][3] = pick<float[2][3]>(a);
+                mat3 d[4] = pick<mat3[4]>(b);
+            }
+            compute { void main() {} }
+        }
+        """)).parse()
+    function = next(func for func in ast.functions if func.name == "f")
+    calls = [
+        statement.initial_value.function.name for statement in function.body.statements
+    ]
+    assert calls == ["pick<float[2][3]>", "pick<mat3[4]>"]
+
+
 def test_cooperative_matrix_type_preserves_unregistered_mapping_as_opaque():
     code = """
     shader CooperativeMatrixOpaqueCoordinateMapping {
@@ -6503,7 +6768,7 @@ def test_cooperative_matrix_intrinsics_parse_to_canonical_operations(
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     matrix_op = ast.functions[0].body.statements[0].initial_value
 
     assert isinstance(matrix_op, CooperativeMatrixOpNode)
@@ -6546,7 +6811,7 @@ def test_cooperative_matrix_element_has_scalar_expression_type_only():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     operation = ast.functions[0].body.statements[0].initial_value
 
     assert operation.operation == "element"
@@ -6592,7 +6857,7 @@ def test_cooperative_matrix_elementwise_operations_preserve_full_contract(
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     matrix_op = ast.functions[0].body.statements[0].initial_value
     result = matrix_op.result_type
 
@@ -6618,7 +6883,7 @@ def test_cooperative_matrix_multiply_preserves_symbolic_result_dimensions():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     result = ast.functions[0].body.statements[0].initial_value.result_type
 
     assert isinstance(result.element_type, PrimitiveType)
@@ -6642,7 +6907,7 @@ def test_cooperative_matrix_multiply_matches_symbolic_dimension_expressions():
     }}
     """
 
-    parser = Parser(tokenize_code(code), strict_function_bodies=True)
+    parser = Parser(tokenize_code(code))
     ast = parser.parse()
     result = ast.functions[0].body.statements[0].initial_value.result_type
 
@@ -6667,7 +6932,7 @@ def test_cooperative_matrix_multiply_preserves_compatible_fragment_metadata():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     result = ast.functions[0].body.statements[0].initial_value.result_type
 
     assert (result.rows, result.cols) == (8, 8)
@@ -6707,7 +6972,7 @@ def test_cooperative_matrix_multiply_accumulate_preserves_accumulator_contract(
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     result = ast.functions[0].body.statements[0].initial_value.result_type
 
     assert (result.rows.name, result.cols.name) == ("M", "N")
@@ -6739,7 +7004,7 @@ def test_cooperative_matrix_declaration_context_constrains_inferred_result():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     operation = ast.functions[0].body.statements[0].initial_value
 
     assert (operation.result_type.rows.name, operation.result_type.cols.name) == (
@@ -6767,7 +7032,7 @@ def test_cooperative_matrix_assignment_context_constrains_inferred_result():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     assignment = ast.functions[0].body.statements[1].expression
     result = assignment.value.result_type
 
@@ -6789,7 +7054,7 @@ def test_cooperative_matrix_return_context_constrains_inferred_result():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     result = ast.functions[0].body.statements[0].value.result_type
 
     assert (result.rows.name, result.cols.name) == ("M", "N")
@@ -6813,7 +7078,7 @@ def test_nested_cooperative_matrix_multiply_uses_inner_result_contract():
     }}
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     outer = ast.functions[0].body.statements[0].initial_value
     inner = outer.arguments[0]
 
@@ -6838,7 +7103,7 @@ def test_cooperative_matrix_type_binding_is_restored_after_for_loop():
     }
     """
 
-    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code)).parse()
     operation = ast.functions[0].body.statements[1].initial_value
 
     assert operation.operation == "negate"
@@ -6859,7 +7124,7 @@ def test_unknown_local_binding_shadows_outer_cooperative_matrix_type():
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     assert "operand matrix has no cooperative-matrix contract" in str(exc_info.value)
 
@@ -6876,7 +7141,7 @@ def test_for_in_binding_shadows_outer_cooperative_matrix_type():
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     assert "operand matrix has no cooperative-matrix contract" in str(exc_info.value)
 
@@ -6927,12 +7192,14 @@ def test_cooperative_matrix_inference_rejects_missing_or_incompatible_operands(
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     assert message in str(exc_info.value)
 
 
-def test_permissive_parser_preserves_invalid_cooperative_matrix_operation():
+def test_parser_refuses_invalid_cooperative_matrix_operation():
+    # The parser kept the operation without a result type, which let a target write a multiply of mismatched
+    # shapes; every parse now refuses it.
     code = """
     shader InvalidCooperativeMatrixOperation {
         void main(
@@ -6944,15 +7211,13 @@ def test_permissive_parser_preserves_invalid_cooperative_matrix_operation():
     }
     """
 
-    ast = Parser(tokenize_code(code)).parse()
-    operation = ast.functions[0].body.statements[0].initial_value
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code)).parse()
 
-    assert isinstance(operation, CooperativeMatrixOpNode)
-    assert operation.result_type is None
-    assert operation.annotations["cooperative_matrix_inference_errors"] == [
+    assert (
         "Cooperative matrix multiply has incompatible inner dimension: "
         "left columns are 4, but right rows are 5"
-    ]
+    ) in str(exc_info.value)
 
 
 def test_cooperative_matrix_explicit_result_disagreement_is_rejected():
@@ -6969,7 +7234,7 @@ def test_cooperative_matrix_explicit_result_disagreement_is_rejected():
     """
 
     with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+        Parser(tokenize_code(code)).parse()
 
     message = str(exc_info.value)
     assert "incompatible row count" in message

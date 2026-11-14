@@ -69,10 +69,12 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXEntryPointSelectionError,
     DirectXForInIterableError,
     DirectXInverseHyperbolicError,
+    DirectXMeshStageProfileError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXNative16BitArithmeticError,
     DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
+    DirectXRayTracingStageProfileError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
@@ -84,9 +86,13 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXTrailingZeroBuiltinError,
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
+    DirectXWaveSizeProfileError,
     DirectXWorkgroupPointerError,
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
+)
+from crosstl.translator.codegen.directx_pointer_alias_errors import (
+    DirectXResourcePointerAliasError,
 )
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
@@ -100,7 +106,6 @@ from crosstl.translator.semantics import UnsizedArrayUnsupportedError
 from tests.lowering_refusal_helpers import (
     emitter_refusal,
     hlsl_partial_output,
-    refused_hlsl,
 )
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -1637,7 +1642,7 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     source = """
     shader RequiredDirectXSpecialization {
         float runtime_state;
-        constant bool has_w @function_constant(20);
+        constant vec2 offsets @function_constant(20) = vec2(1.0);
     }
     """
     ast = crosstl.translator.parse(source)
@@ -1665,14 +1670,13 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     assert diagnostic.missing_capabilities == (
         "directx.specialization-constant-variant",
     )
-    assert diagnostic.constant_name == "has_w"
+    assert diagnostic.constant_name == "offsets"
     assert diagnostic.constant_id == 20
-    assert diagnostic.constant_type == "bool"
-    assert diagnostic.reason == "missing-required-value"
+    assert diagnostic.constant_type == "float2"
+    assert diagnostic.reason == "incompatible-type"
     assert diagnostic.source_location == source_location
-    assert "has_w" in str(diagnostic)
+    assert "offsets" in str(diagnostic)
     assert "id 20" in str(diagnostic)
-    assert "no concrete/default value" in str(diagnostic)
 
     invalid_initializers = (
         (
@@ -2945,6 +2949,59 @@ def test_hlsl_codegen_recursively_expands_partial_fixed_array_returns():
     assert ".value0.x = 3.0;" in generated
     assert ".value0.y = float(0);" in generated
     assert ".value1 = (Pair)0;" in generated
+
+
+def test_hlsl_codegen_disambiguates_colliding_fixed_array_return_struct_names():
+    pair_members = [
+        StructMemberNode("x", PrimitiveType("float")),
+        StructMemberNode("y", PrimitiveType("float")),
+    ]
+
+    def build_ast():
+        return ShaderNode(
+            "CollidingFixedArrayReturn",
+            ExecutionModel.COMPUTE_KERNEL,
+            structs=[
+                StructNode("Pair", list(pair_members)),
+                # A user struct that already owns the default lowering name.
+                StructNode("CrossGLFixedArray_Pair_2", list(pair_members)),
+            ],
+            functions=[
+                FunctionNode(
+                    "make_pairs",
+                    ArrayType(NamedType("Pair"), 2),
+                    [],
+                    BlockNode(
+                        [
+                            ReturnNode(
+                                ArrayLiteralNode(
+                                    [
+                                        ArrayLiteralNode(
+                                            [LiteralNode(3.0, PrimitiveType("float"))]
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    ),
+                ),
+            ],
+        )
+
+    generated = generate_code(build_ast())
+
+    match = re.search(
+        r"\b(CrossGLFixedArray_Pair_2_[0-9a-f]{8}) make_pairs\(\)", generated
+    )
+    assert match is not None
+    lowered_name = match.group(1)
+    assert f"struct {lowered_name} {{" in generated
+    assert "struct CrossGLFixedArray_Pair_2 {" in generated
+    # The suffix is a content digest, so repeated generation is stable.
+    assert generate_code(build_ast()).count(lowered_name) == generated.count(
+        lowered_name
+    )
+    assert lowered_name in generate_code(build_ast())
 
 
 def test_hlsl_codegen_rejects_excess_fixed_array_initializer_elements():
@@ -4750,7 +4807,7 @@ def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
 
     generated = generate_code(ast)
 
-    assert "out[uint(idx)] = keys.Load(int(key_index));" in generated
+    assert "out_[uint(idx)] = keys.Load(int(key_index));" in generated
 
 
 def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
@@ -5552,26 +5609,39 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert generated_code.count("GroupMemoryBarrier();") == 2
+    # GroupMemoryBarrier orders groupshared memory only, so groupMemoryBarrier (buffer, image and shared
+    # memory) needs AllMemoryBarrier.
+    assert generated_code.count("GroupMemoryBarrier();") == 1
     assert generated_code.count("DeviceMemoryBarrier();") == 3
-    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert generated_code.count("AllMemoryBarrier();") == 3
     assert "barrier();" not in generated_code
     assert "memoryBarrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
@@ -5830,7 +5900,7 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
-def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -5844,22 +5914,18 @@ def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_hlsl(
-        crosstl.translate,
+    hlsl = crosstl.translate(
         str(shader_path),
         backend="directx",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "DirectX cannot lower 2 constructs" in refusal
-    assert (
-        "input attachment declaration: 'sceneColor' uses subpassInput; "
-        "subpassInput resources require Vulkan subpass lowering"
-    ) in refusal
-    assert (
-        "input attachment load: subpassLoad requires Vulkan subpass input lowering"
-    ) in refusal
+    # Direct3D has no input attachments: the attachment is bound as a texture and read at the pixel.
+    assert "Texture2D sceneColor : register(t0);" in hlsl
+    assert re.search(r"float4 (\w+) : SV_Position", hlsl), hlsl
+    assert re.search(r"sceneColor\.Load\(int3\(int2\(\w+\.xy\), 0\)\)", hlsl), hlsl
+    assert "subpass" not in hlsl.lower()
 
 
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
@@ -6189,9 +6255,13 @@ def test_directx_device_memory_synchronization_builtins_allow_fragment_stage():
     shader FragmentDeviceMemorySynchronization {
         fragment {
             void main() {
+                int k = 0;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
             }
         }
     }
@@ -6286,7 +6356,7 @@ def test_directx_synchronization_helper_calls_remain_mesh_compatible():
     shader = """
     shader MeshSynchronizationHelper {
         void synchronize_workgroup() {
-            groupMemoryBarrier();
+            memoryBarrierShared();
         }
 
         mesh {
@@ -6585,6 +6655,97 @@ def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_directx_fine_and_coarse_fwidth_lower_to_hlsl_derivatives():
+    shader = """
+    shader FineCoarseFwidth {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 fine = fwidthFine(uv);
+                vec2 coarse = fwidthCoarse(uv * 2.0);
+                return vec4(fine, coarse);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 fine = (abs(ddx_fine(uv)) + abs(ddy_fine(uv)));" in generated_code
+    assert (
+        "float2 coarse = (abs(ddx_coarse((uv * 2.0))) + "
+        "abs(ddy_coarse((uv * 2.0))));"
+    ) in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fwidth_fine_name_is_not_lowered():
+    shader = """
+    shader FwidthFineShadowing {
+        float fwidthFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = fwidthFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fine = fwidthFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "declaration, call, reason",
+    [
+        (
+            "float abs = 1.0;",
+            "fwidthFine(uv) * abs",
+            "would name the shader's own 'abs'",
+        ),
+        (
+            "float ddy_coarse = 1.0;",
+            "fwidthCoarse(uv) * ddy_coarse",
+            "would name the shader's own 'ddy_coarse'",
+        ),
+        (
+            "int i = 0;",
+            "fwidthFine(uv * float(i++))",
+            "would evaluate an argument with side effects twice",
+        ),
+    ],
+)
+def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
+    declaration, call, reason
+):
+    shader = f"""
+    shader FineCoarseFwidthRefusal {{
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                {declaration}
+                vec2 r = {call};
+                return vec4(r, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated_code, message = hlsl_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
+
+    assert "HLSL has no fwidth" in message
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+    assert reason in message
+
+
 def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     shader = """
     shader FineDerivativeShadowing {
@@ -6618,6 +6779,10 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "dFdyFine",
         "dFdyCoarse",
         "fwidth",
+        "fwidthFine",
+        "fwidthCoarse",
+        "fwidth_fine",
+        "fwidth_coarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
@@ -7027,8 +7192,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
@@ -7417,9 +7585,10 @@ def test_hlsl_generic_vector_constructors_emit_hlsl_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    # 8-bit vectors widen to 32 bits and wrap like i8vec2 and u8vec4.
+    assert "return (int2(uint2((input + inc)) << 24u) >> 24);" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "return (uint4((input + inc)) & 255u);" in generated_code
     assert "int16_t3 signedShorts(int16_t3 input)" in generated_code
     assert "int16_t3 inc = int16_t3(1, 2, 3);" in generated_code
     assert "uint16_t2 unsignedShorts(uint16_t2 input)" in generated_code
@@ -7545,8 +7714,13 @@ def test_hlsl_glsl_matrix_constructors_emit_hlsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "float4x4 m = float4x4(1.0);" in generated_code
-    assert "return float3x3(x, y, z);" in generated_code
+    # mat4(1.0) is the identity, and CrossGL constructor arguments fill columns while
+    # HLSL ones fill rows (GLSL 4.60 section 5.4.2).
+    assert (
+        "float4x4 m = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, "
+        "0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert "return transpose(float3x3(x, y, z));" in generated_code
     assert "mat4(" not in generated_code
     assert "mat3(" not in generated_code
 
@@ -8377,10 +8551,13 @@ def test_hlsl_compute_subgroup_id_body_reference_allocates_physical_wave_id(
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert ": SV_GroupIndex" in generated_code
-    assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated_code
+    assert "groupshared uint __crossgl_physical_subgroup_leaders[32];" in generated_code
     assert "uint __crossgl_physical_subgroup_id(uint groupIndex)" in generated_code
-    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
-    assert "subgroupIndex = WaveReadLaneFirst(subgroupIndex);" in generated_code
+    assert (
+        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
+        in generated_code
+    )
+    assert "uint leader = WaveActiveMin(groupIndex);" in generated_code
     assert (
         "uint crossglPhysicalSubgroupID = "
         "__crossgl_physical_subgroup_id(groupIndex);" in generated_code
@@ -8527,12 +8704,12 @@ def test_hlsl_compute_subgroup_id_helper_names_are_collision_safe_and_reused():
             layout(local_size_x = 32, local_size_y = 2) in;
             layout(set = 0, binding = 0) buffer uint* output;
             void main() {
-                uint __crossgl_physical_subgroup_counter = 0u;
+                uint __crossgl_physical_subgroup_leaders = 0u;
                 uint __crossgl_physical_subgroup_id = 0u;
                 uint first = gl_SubgroupID;
                 uint second = gl_SubgroupID;
                 output[gl_LocalInvocationIndex] = first + second
-                    + __crossgl_physical_subgroup_counter
+                    + __crossgl_physical_subgroup_leaders
                     + __crossgl_physical_subgroup_id;
             }
         }
@@ -8541,7 +8718,9 @@ def test_hlsl_compute_subgroup_id_helper_names_are_collision_safe_and_reused():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "groupshared uint __crossgl_physical_subgroup_counter_;" in generated_code
+    assert (
+        "groupshared uint __crossgl_physical_subgroup_leaders_[32];" in generated_code
+    )
     assert "uint __crossgl_physical_subgroup_id_(uint groupIndex)" in generated_code
     assert generated_code.count("__crossgl_physical_subgroup_id_(groupIndex)") == 1
     assert "uint first = crossglPhysicalSubgroupID;" in generated_code
@@ -8784,7 +8963,10 @@ def test_hlsl_compute_unused_value_builtin_parameters_are_dropped(tmp_path):
     # gl_SubgroupID lowers to one workgroup-synchronized ID per physical wave;
     # no lane-varying SV_GroupIndex division may survive.
     assert "uint simd_group_id = crossglPhysicalSubgroupID;" in generated_code
-    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
+    assert (
+        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
+        in generated_code
+    )
     assert "/ WaveGetLaneCount()" not in generated_code
     assert ": SV_GroupIndex" in generated_code
     assert "__CROSSGL" not in generated_code
@@ -9631,7 +9813,9 @@ def test_hlsl_metal_const_auto_pointer_alias_preserves_readonly_access(tmp_path)
     shader_path = tmp_path / "const_auto_pointer_readonly.metal"
     shader_path.write_text(shader)
 
-    with pytest.raises(ValueError, match="does not provide writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="does not provide writable storage"
+    ):
         crosstl.translate(
             str(shader_path),
             backend="directx",
@@ -9656,7 +9840,7 @@ def test_hlsl_metal_explicit_pointer_alias_type_mismatch_still_rejects(tmp_path)
     shader_path.write_text(shader)
 
     with pytest.raises(
-        ValueError,
+        DirectXResourcePointerAliasError,
         match="changes element type from int64_t to float",
     ):
         crosstl.translate(
@@ -10207,6 +10391,7 @@ def test_hlsl_metal_device_pointer_array_offset_element_snapshots_per_iteration(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "int64_t xv_offsets[3];" in generated
@@ -11524,6 +11709,7 @@ def test_hlsl_metal_unsupported_address_space_pointer_arrays_fail_closed(
             backend="directx",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     assert excinfo.value.function_name == function_name
@@ -12422,6 +12608,7 @@ def test_hlsl_metal_nested_physical_storage_pointer_array_preserves_logical_type
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert (
@@ -13701,7 +13888,9 @@ def test_hlsl_resource_pointer_alias_rejects_readonly_write():
     }
     """
 
-    with pytest.raises(ValueError, match="requires writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="requires writable storage"
+    ):
         generate_code(parse_code(tokenize_code(shader)))
 
 
@@ -13831,12 +14020,12 @@ def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "RWTexture2D<int> labelImage : register(u0);" in generated_code
-    assert "RWTexture2D<uint> maskImage : register(u1);" in generated_code
-    assert "int4 label2D = ((int4)(labelImage[pixel]));" in generated_code
-    assert "uint4 mask2D = ((uint4)(maskImage[pixel]));" in generated_code
-    assert "labelImage[pixel] = (label2D).x" in generated_code
-    assert "maskImage[pixel] = (mask2D).x" in generated_code
+    assert "RWTexture2D<int4> labelImage : register(u0);" in generated_code
+    assert "RWTexture2D<uint4> maskImage : register(u1);" in generated_code
+    assert "int4 label2D = labelImage[pixel];" in generated_code
+    assert "uint4 mask2D = maskImage[pixel];" in generated_code
+    assert "labelImage[pixel] = label2D;" in generated_code
+    assert "maskImage[pixel] = mask2D;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -13871,9 +14060,9 @@ def test_hlsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
     assert "RWTexture2D<int> readLabel : register(u1);" in generated_code
     assert "RWTexture2D<uint> readMask : register(u2);" in generated_code
     assert "RWTexture2D<uint> writeMask : register(u3);" in generated_code
-    assert "float4 color = ((float4)(readColor[pixel]));" in generated_code
-    assert "int4 label = ((int4)(readLabel[pixel]));" in generated_code
-    assert "uint4 mask = ((uint4)(readMask[pixel]));" in generated_code
+    assert "float4 color = float4(readColor[pixel], 0.0, 0.0, 1.0);" in generated_code
+    assert "int4 label = int4(readLabel[pixel], 0, 0, 1);" in generated_code
+    assert "uint4 mask = uint4(readMask[pixel], 0u, 0u, 1u);" in generated_code
     assert "writeMask[pixel] = (mask).x" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -14317,15 +14506,15 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "RWByteAddressBuffer aliasBlock : register(u7);" in generated_code
-    assert "uint16_t word = aliasBlock.Load(4);" in generated_code
-    assert "uint64_t(aliasBlock.Load((8 + index * 4)))" in generated_code
+    assert "uint16_t word = aliasBlock.Load<uint16_t>(2);" in generated_code
+    assert "uint64_t(aliasBlock.Load((4 + index * 4)))" in generated_code
     assert (
         "void writeAlias(uint index, uint16_t word, uint64_t offset)" in generated_code
     )
-    assert "aliasBlock.Store(4, uint(word));" in generated_code
-    assert "aliasBlock.Store((8 + index * 4), uint(offset));" in generated_code
+    assert "aliasBlock.Store<uint16_t>(2, uint16_t(word));" in generated_code
+    assert "aliasBlock.Store((4 + index * 4), uint(offset));" in generated_code
     assert (
-        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + uint16_t(1u))));"
+        "aliasBlock.Store<uint16_t>(0, uint16_t((aliasBlock.Load<uint16_t>(0) + uint16_t(1u))));"
         in generated_code
     )
     assert "unsupported HLSL GLSL buffer block" not in generated_code
@@ -14711,14 +14900,52 @@ def test_directx_glsl_buffer_block_atomics_validate_return_result_contexts(
             "atomic 'atomicAdd' value argument must be scalar uint, got float",
         ),
         (
-            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
-            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got int",
+            "atomicCompSwap(atomicBlock.counter, 1u, 2.0)",
+            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got float",
+        ),
+        (
+            "atomicAdd(atomicBlock.signedCounter, 1u)",
+            "atomic 'atomicAdd' value argument must be scalar int, got uint",
         ),
     ],
 )
 def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     shader = f"""
     shader BadGlslBufferBlockAtomicHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+            int signedCounter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint update() {{
+            return uint({call});
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (
+            "atomicAdd(atomicBlock.counter, 1)",
+            "atomic_add_uint(atomicBlock, 0, uint(1))",
+        ),
+        (
+            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
+            "atomic_compare_exchange_uint(atomicBlock, 0, 1u, uint(-1))",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_convert_int_values_to_uint(call, expected):
+    # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10).
+    shader = f"""
+    shader IntValueGlslBufferBlockAtomicHLSL {{
         struct AtomicBlock {{
             uint counter;
         }};
@@ -14731,8 +14958,8 @@ def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     }}
     """
 
-    with pytest.raises(ValueError, match=match):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    assert expected in generated
 
 
 def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():
@@ -15896,6 +16123,118 @@ def test_directx_byte_address_interlocked_member_calls_are_preserved():
     )
 
 
+@pytest.mark.parametrize("method_name", ["InterlockedMax", "InterlockedMin"])
+def test_directx_byte_address_interlocked_min_max_accept_signed_value(method_name):
+    shader = f"""
+    shader ByteAddressSignedInterlockedHLSL {{
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                int value = signedValues[tid.x];
+                int original = 0;
+                rawBytes.{method_name}(0u, value);
+                rawBytes.{method_name}(4u, value, original);
+                signedValues[0] = original;
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert f"rawBytes.{method_name}(0u, value);" in generated_code
+    assert f"rawBytes.{method_name}(4u, value, original);" in generated_code
+
+
+def test_directx_byte_address_interlocked_add_rejects_signed_value():
+    shader = """
+    shader ByteAddressSignedInterlockedAddHLSL {
+        RWByteAddressBuffer rawBytes @register(u0);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                int value = -1;
+                rawBytes.InterlockedAdd(0u, value);
+            }
+        }
+    }
+    """
+
+    match = (
+        "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+        "value argument must be scalar uint, got int"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize("method_name", ["InterlockedMax", "InterlockedMin"])
+def test_directx_byte_address_interlocked_min_max_literal_value_stays_unsigned(
+    method_name,
+):
+    """DXC reads ``InterlockedMax(0, 5)`` as the unsigned UMax, so ``5`` is a uint
+    value: the call is written as before and an ``int`` original is refused."""
+    shader = f"""
+    shader ByteAddressLiteralInterlockedHLSL {{
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main() {{
+                int original = 0;
+                rawBytes.{method_name}(0u, 5);
+                rawBytes.{method_name}(4u, -1);
+                rawBytes.{method_name}(8u, 5, original);
+                signedValues[0] = original;
+            }}
+        }}
+    }}
+    """
+
+    match = (
+        f"DirectX ByteAddressBuffer interlocked member '{method_name}' "
+        "original argument must be scalar uint, got int"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+    accepted = shader.replace(f"rawBytes.{method_name}(8u, 5, original);", "")
+    generated_code = generate_code(parse_code(tokenize_code(accepted)))
+
+    assert f"rawBytes.{method_name}(0u, 5);" in generated_code
+    assert f"rawBytes.{method_name}(4u, -1);" in generated_code
+
+
+def test_directx_byte_address_interlocked_signed_max_names_int_original():
+    shader = """
+    shader ByteAddressSignedInterlockedOriginalHLSL {
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                int value = signedValues[tid.x];
+                float original = 0.0;
+                rawBytes.InterlockedMax(0u, value, original);
+            }
+        }
+    }
+    """
+
+    match = (
+        "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+        "original argument must be scalar int or uint, got float"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 @pytest.mark.parametrize(
     ("declaration", "call", "match"),
     [
@@ -15941,6 +16280,38 @@ def test_directx_byte_address_interlocked_member_calls_are_preserved():
             "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1.0, oldValue);",
             "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
             "value argument must be scalar uint, got float",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "int64_t wide = int64_t(5); rawBytes.InterlockedMax(0u, wide);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+            "value argument must be scalar uint, got int64_t",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "bool flag = true; rawBytes.InterlockedMax(0u, flag);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+            "value argument must be scalar uint, got bool",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint64_t wide = uint64_t(5); rawBytes.InterlockedAdd(0u, wide);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "value argument must be scalar uint, got uint64_t",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint oldValue = 0u; bool flag = true; "
+            "rawBytes.InterlockedCompareExchange(0u, flag, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member "
+            "'InterlockedCompareExchange' compare value argument must be scalar "
+            "uint, got bool",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "int64_t address = int64_t(0); rawBytes.InterlockedAdd(address, 1u);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "address argument must be scalar uint, got int64_t",
         ),
         (
             "RWByteAddressBuffer rawBytes @register(u3);",
@@ -16069,8 +16440,10 @@ def test_structured_buffer_dimensions_lower_to_get_dimensions():
 
     generated = generate_code(ast)
 
-    assert "values.GetDimensions(len);" in generated
-    assert "buffers[index].GetDimensions(arrayLen);" in generated
+    # StructuredBuffer::GetDimensions always writes the stride too, so a lone output takes the element count.
+    assert "len = cgl_buffer_count(values);" in generated
+    assert "arrayLen = cgl_buffer_count(buffers[index]);" in generated
+    assert ".GetDimensions(len)" not in generated
     assert "buffer_dimensions" not in generated
 
 
@@ -16696,7 +17069,7 @@ def test_hlsl_global_resource_register_spaces_keep_independent_cursors():
     assert "Texture2D otherSpaceTex : register(t5, space2);" in generated_code
     assert "Texture2D autoSpaceTex : register(t6, space2);" in generated_code
     assert "Texture2D defaultTex : register(t0);" in generated_code
-    assert "RWTexture2D<uint> spaceImage : register(u3, space1);" in generated_code
+    assert "RWTexture2D<uint4> spaceImage : register(u3, space1);" in generated_code
     assert (
         "RWTexture2D<float4> otherSpaceImage : register(u3, space2);" in generated_code
     )
@@ -17005,8 +17378,22 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
-        ("fragment", "float", "gl_FragColor", "0.0", "SV_TARGET", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
+        (
+            "fragment",
+            "bool",
+            "gl_FragColor",
+            "true",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
+        (
+            "fragment",
+            "mat2",
+            "gl_FragColor",
+            "mat2(1.0)",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         (
@@ -17448,7 +17835,11 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
     ("member_decl", "hlsl_semantic", "expected_type"),
     [
         ("float position @ gl_Position", "SV_POSITION", "float4"),
-        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
+        (
+            "bool color @ gl_FragColor",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         (
@@ -17748,8 +18139,14 @@ def test_hlsl_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = image[pixel].x;" in generated_code
     assert "uint oldValue = image[pixel].x;" in generated_code
-    assert "image[pixel] = float2((oldValue + value), 0.0);" in generated_code
-    assert "image[pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "image[pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert (
+        "image[pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = image[pixel];" in generated_code
     assert "uint2 oldValue = image[pixel];" in generated_code
     assert "image[pixel] = (oldValue + value);" in generated_code
@@ -20762,7 +21159,9 @@ def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
 
     # Microsoft HLSL docs list countbits(value) for uint scalar/vector inputs.
     # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/countbits
-    assert "uint3 vectorCounts = countbits(mask);" in generated_code
+    # CrossGL bitCount follows GLSL 4.60 section 8.8: `genIType bitCount(genUType)`,
+    # so the inferred local is signed even though countbits returns uint.
+    assert "int3 vectorCounts = countbits(mask);" in generated_code
     assert "uint countbits_ = tid.x;" in generated_code
     assert "uint scalarCount = (countbits(tid.x) + countbits_);" in generated_code
     assert "bitCount(" not in generated_code
@@ -20816,8 +21215,10 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
 
     # Microsoft HLSL exposes firstbitlow/firstbithigh for scalar and vector
     # integer operands, rather than GLSL's findLSB/findMSB spelling.
-    assert "uint3 lowBits = firstbitlow(mask);" in generated_code
-    assert "uint highBit = firstbithigh(tid.x);" in generated_code
+    # CrossGL findLSB/findMSB follow GLSL 4.60 section 8.8 (`genIType findLSB(genUType)`),
+    # so a zero input still reads as -1 through the signed local.
+    assert "int3 lowBits = firstbitlow(mask);" in generated_code
+    assert "int highBit = firstbithigh(tid.x);" in generated_code
     assert "int3 signedHighBits = firstbithigh(signedMask);" in generated_code
     assert "uint firstbitlow_ = tid.x;" in generated_code
     assert "uint firstbithigh_ = tid.y;" in generated_code
@@ -23472,10 +23873,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {
@@ -27448,7 +27851,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
 
         mesh {
             void main(
-                vec2 viewId @ gl_ViewID,
+                vec2 viewId @ gl_ViewIndex,
                 @vertices out MeshVertex verts[3],
                 @indices out uvec3 tris[1]
             ) @numthreads(32, 1, 1) @outputtopology(triangle) {
@@ -27463,7 +27866,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
     wrong_stage_code = """
     shader BadTaskViewID {
         task {
-            void main(uint viewId @ gl_ViewID) @numthreads(1, 1, 1) {
+            void main(uint viewId @ gl_ViewIndex) @numthreads(1, 1, 1) {
                 DispatchMesh(1, 1, 1);
             }
         }
@@ -27480,7 +27883,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
 
         mesh {
             void main(
-                uint viewId @ gl_ViewID,
+                uint viewId @ gl_ViewIndex,
                 @vertices out MeshVertex verts[3],
                 @indices out uvec3 tris[1]
             ) @numthreads(32, 1, 1) @outputtopology(triangle) {
@@ -27496,7 +27899,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
     )
 
     assert "uint viewId : SV_ViewID" in generated
-    assert "gl_ViewID" not in generated
+    assert "gl_ViewIndex" not in generated
 
 
 def test_wave_and_rayquery_intrinsics_codegen():
@@ -28403,7 +28806,7 @@ def test_directx_ray_query_result_methods_infer_all_hlsl_result_types():
         ("CandidateObjectRayDirection", "float3"),
         ("CommittedObjectRayOrigin", "float3"),
         ("CommittedObjectRayDirection", "float3"),
-        ("CandidateRayT", "float"),
+        ("CandidateTriangleRayT", "float"),
         ("CandidateObjectRayTMin", "float"),
         ("CommittedTriangleBarycentrics", "float2"),
         ("CandidateTriangleFrontFace", "bool"),
@@ -29340,7 +29743,7 @@ def test_multiview_and_viewport_semantics_roundtrip():
     shader ViewShader {
         struct VSOut {
             vec4 position @ gl_Position;
-            uint view @ gl_ViewID;
+            uint view @ gl_ViewIndex;
             uint layer @ gl_Layer;
             uint viewport @ gl_ViewportIndex;
         };
@@ -31602,10 +32005,11 @@ def test_directx_integer_image_dimension_atomics():
     generated_code = HLSLCodeGen().generate(ast)
 
     assert "RWTexture3D<uint> volumeCounters : register(u0);" in generated_code
-    assert "RWTexture3D<int> signedVolumeCounters : register(u1);" in generated_code
+    assert "RWTexture3D<int4> signedVolumeCounters : register(u1);" in generated_code
     assert "RWTexture2DArray<int> layerCounters : register(u2);" in generated_code
     assert (
-        "RWTexture2DArray<uint> unsignedLayerCounters : register(u3);" in generated_code
+        "RWTexture2DArray<uint4> unsignedLayerCounters : register(u3);"
+        in generated_code
     )
     assert (
         "uint imageAtomicAdd_uimage3D(RWTexture3D<uint> image, int3 coord, uint value)"
@@ -31682,15 +32086,24 @@ def test_directx_integer_image_scalar_load_store():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<uint> counters : register(u0);" in generated_code
-    assert "RWTexture3D<int> signedVolume : register(u1);" in generated_code
-    assert "RWTexture2DArray<uint> layerCounters : register(u2);" in generated_code
-    assert "uint oldValue = image[pixel];" in generated_code
-    assert "image[pixel] = (oldValue + value);" in generated_code
-    assert "int oldValue = image[voxel];" in generated_code
-    assert "image[voxel] = (oldValue + value);" in generated_code
-    assert "uint oldValue = image[pixelLayer];" in generated_code
-    assert "image[pixelLayer] = (oldValue + value);" in generated_code
+    assert "RWTexture2D<uint4> counters : register(u0);" in generated_code
+    assert "RWTexture3D<int4> signedVolume : register(u1);" in generated_code
+    assert "RWTexture2DArray<uint4> layerCounters : register(u2);" in generated_code
+    assert "uint oldValue = image[pixel].x;" in generated_code
+    assert (
+        "image[pixel] = uint4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert "int oldValue = image[voxel].x;" in generated_code
+    assert (
+        "image[voxel] = int4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert "uint oldValue = image[pixelLayer].x;" in generated_code
+    assert (
+        "image[pixelLayer] = uint4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -31859,17 +32272,17 @@ def test_directx_explicit_narrow_rg_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float2> rg8Float : register(u0);" in generated_code
-    assert "RWTexture2D<float2> rg8Snorm : register(u1);" in generated_code
-    assert "RWTexture3D<float2> rg16Float : register(u2);" in generated_code
-    assert "RWTexture2D<float2> rg16Snorm : register(u3);" in generated_code
+    assert "RWTexture2D<unorm float2> rg8Float : register(u0);" in generated_code
+    assert "RWTexture2D<snorm float2> rg8Snorm : register(u1);" in generated_code
+    assert "RWTexture3D<unorm float2> rg16Float : register(u2);" in generated_code
+    assert "RWTexture2D<snorm float2> rg16Snorm : register(u3);" in generated_code
     assert "RWTexture2DArray<float2> rg16Half : register(u4);" in generated_code
     assert "RWTexture2D<int2> rg8Signed : register(u5);" in generated_code
     assert "RWTexture3D<int2> rg16Signed : register(u6);" in generated_code
     assert "RWTexture2D<uint2> rg8Unsigned : register(u7);" in generated_code
     assert "RWTexture2DArray<uint2> rg16Unsigned : register(u8);" in generated_code
     assert (
-        "float2 touchFloat(RWTexture2D<float2> image, int2 pixel, float2 value)"
+        "float2 touchFloat(RWTexture2D<unorm float2> image, int2 pixel, float2 value)"
         in generated_code
     )
     assert (
@@ -31934,14 +32347,14 @@ def test_directx_explicit_rgba_float_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float4> rgba8Color : register(u0);" in generated_code
-    assert "RWTexture2D<float4> rgba8Snorm : register(u1);" in generated_code
-    assert "RWTexture3D<float4> rgba16Color : register(u2);" in generated_code
-    assert "RWTexture2D<float4> rgba16Snorm : register(u3);" in generated_code
+    assert "RWTexture2D<unorm float4> rgba8Color : register(u0);" in generated_code
+    assert "RWTexture2D<snorm float4> rgba8Snorm : register(u1);" in generated_code
+    assert "RWTexture3D<unorm float4> rgba16Color : register(u2);" in generated_code
+    assert "RWTexture2D<snorm float4> rgba16Snorm : register(u3);" in generated_code
     assert "RWTexture2DArray<float4> rgba16Half : register(u4);" in generated_code
     assert "RWTexture3D<float4> rgba32Float : register(u5);" in generated_code
     assert (
-        "float4 touchColor(RWTexture2D<float4> image, int2 pixel, float4 value)"
+        "float4 touchColor(RWTexture2D<unorm float4> image, int2 pixel, float4 value)"
         in generated_code
     )
     assert (
@@ -31994,7 +32407,7 @@ def test_directx_default_float4_image_allows_three_component_load_store():
         in generated_code
     )
     assert "float3 oldValue = image[pixel].xyz;" in generated_code
-    assert "image[pixel] = float4(value, 0.0);" in generated_code
+    assert "image[pixel] = float4(value, 1.0);" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -32270,11 +32683,17 @@ def test_directx_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = images[1][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[1][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[1][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[1][pixel];" in generated_code
     assert "float oldValue = images[1][pixel];" not in generated_code
     assert "uint oldValue = images[1][pixel];" not in generated_code
@@ -32354,11 +32773,17 @@ def test_directx_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[1][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[2][pixel];" in generated_code
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in generated_code
     assert "RWTexture2D<float2> afterImages : register(u3);" not in generated_code
@@ -32458,11 +32883,17 @@ def test_directx_transitive_rg_image_arrays_share_call_site_size():
         in generated_code
     )
     assert "float oldValue = images[3][pixel].x;" in generated_code
-    assert "images[1][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[1][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[0][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[3][pixel].x;" in generated_code
-    assert "images[1][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[1][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[2][pixel];" in generated_code
     assert "float2 vectorFloatDeep(RWTexture2D<float2> images[3]" not in generated_code
     assert "uint2 vectorUnsignedDeep(RWTexture2D<uint2> images[3]" not in generated_code
@@ -33129,9 +33560,15 @@ def test_directx_shadowed_rg_image_array_constant_keeps_scalar_context():
     )
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" not in generated_code
     assert "RWTexture2D<float2> afterImages : register(u4);" not in generated_code
     assert "float oldValue = images[LAYER][pixel];" not in generated_code
@@ -33608,16 +34045,16 @@ def test_directx_explicit_scalar_float_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float> normalized8 : register(u0);" in generated_code
-    assert "RWTexture3D<float> normalized16 : register(u1);" in generated_code
+    assert "RWTexture2D<unorm float> normalized8 : register(u0);" in generated_code
+    assert "RWTexture3D<unorm float> normalized16 : register(u1);" in generated_code
     assert "RWTexture2DArray<float> halfLayers : register(u2);" in generated_code
-    assert "RWTexture2D<float> signedNormalized : register(u3);" in generated_code
+    assert "RWTexture2D<snorm float> signedNormalized : register(u3);" in generated_code
     assert (
-        "float touchR8(RWTexture2D<float> image, int2 pixel, float value)"
+        "float touchR8(RWTexture2D<unorm float> image, int2 pixel, float value)"
         in generated_code
     )
     assert (
-        "float touchR16(RWTexture3D<float> image, int3 voxel, float value)"
+        "float touchR16(RWTexture3D<unorm float> image, int3 voxel, float value)"
         in generated_code
     )
     assert (
@@ -37266,11 +37703,11 @@ def test_directx_implicit_projected_stage_input_members_generate_samplers():
         in generated_code
     )
     assert (
-        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float shadowGrad = shadowArray.SampleCmpGrad(shadowArraySampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth, input.ddx, input.ddy);"
+        "float shadowGrad = shadowArray.SampleCmpGrad(shadowArraySampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth / input.uvLayerQ.w, input.ddx, input.ddy);"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -37404,19 +37841,19 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(texSampler, uvq.xy / uvq.z, depth);"
+        "float projected = tex.SampleCmp(texSampler, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(texSampler, uvq.xy / uvq.z, depth, lod, offset);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(texSampler, uvq.xy / uvq.z, depth / uvq.z, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth, ddx, ddy);"
+        "float gradProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float gradOffsetProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37424,30 +37861,31 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, uvq.xy / uvq.z, depth);" in generated_code
-    )
-    assert (
-        "float projectedW = tex.SampleCmp(s, uvqw.xy / uvqw.w, depth);"
+        "float projected = tex.SampleCmp(s, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float projectedW = tex.SampleCmp(s, uvqw.xy / uvqw.w, depth / uvqw.w);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth, lod);"
+        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth, lod, offset);"
+        "float lodProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth, ddx, ddy);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth / uvq.z, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float gradProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float gradOffsetProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37463,27 +37901,27 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float projected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, lod);"
+        "float lodProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, lod);"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, lod, offset);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float gradProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy, offset);"
+        "float gradOffsetProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37529,15 +37967,15 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
     assert "Texture2DArray shadowArray : register(t1);" in generated_code
     assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
     assert (
-        "float planar = shadowMap.SampleCmp(compareSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float planar = shadowMap.SampleCmp(compareSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, int2(1, -1));"
+        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth / input.uvqw.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArray.SampleCmpGrad(compareSampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth, input.ddx, input.ddy);"
+        "float arrayGrad = shadowArray.SampleCmpGrad(compareSampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth / input.uvLayerQ.w, input.ddx, input.ddy);"
         in generated_code
     )
     assert "unsupported DirectX texture compare" not in generated_code
@@ -37631,31 +38069,31 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].SampleCmp(shadowSamplers[layer], uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].SampleCmp(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowSamplers[2], uvq.xy / uvq.z, depth, lod);"
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowSamplers[2], uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowSamplers[layer], uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].SampleCmp(shadowSamplers[2], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowSamplers[2], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowSamplers[1], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowSamplers[1], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -37759,31 +38197,31 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowMapsSampler, uvq.xy / uvq.z, depth, lod);"
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowMapsSampler, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -37890,19 +38328,19 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float planarHigh = shadowMaps[LAYER].SampleCmp(shadowSamplers[LAYER], uvq.xy / uvq.z, depth);"
+        "float planarHigh = shadowMaps[LAYER].SampleCmp(shadowSamplers[LAYER], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayHigh = shadowArrays[(2 * 2)].SampleCmpGrad(shadowSamplers[(2 * 2)], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayHigh = shadowArrays[(2 * 2)].SampleCmpGrad(shadowSamplers[(2 * 2)], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -38020,7 +38458,7 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.SampleCmp(s, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     for func_name in {
@@ -38143,15 +38581,15 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(texSampler, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.SampleCmp(texSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(texSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        "float lodProjected = tex.SampleCmpLevel(texSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, lod);"
         in generated_code
     )
     assert (
-        "float globalProjected = cubeMap.SampleCmp(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        "float globalProjected = cubeMap.SampleCmp(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -38274,15 +38712,15 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
         in generated_code
     )
     assert (
-        "float fixedProjected = maps[2].SampleCmp(mapsSampler, cubeProj.xyz / cubeProj.w, depth);"
+        "float fixedProjected = maps[2].SampleCmp(mapsSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float dynamicLodProjected = maps[layer].SampleCmpLevel(mapsSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        "float dynamicLodProjected = maps[layer].SampleCmpLevel(mapsSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, lod);"
         in generated_code
     )
     assert (
-        "float globalProjected = cubeMaps[input.layer].SampleCmp(cubeMapsSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        "float globalProjected = cubeMaps[input.layer].SampleCmp(cubeMapsSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -38619,7 +39057,8 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
     )
     assert (
         "cubeShadow.SampleCmp(sharedSampler_cglComparison, "
-        "input.cubeProj.xyz / input.cubeProj.w, input.depth)" in comparison_code
+        "input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w)"
+        in comparison_code
     )
     assert "colorMap.Sample(sharedSampler, input.uv)" in comparison_code
 
@@ -40476,12 +40915,12 @@ def test_directx_storage_image_size_queries_use_get_dimensions_helpers():
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
-    assert "RWTexture2D<uint> uintImage : register(u3);" in generated_code
-    assert "RWTexture3D<int> intVolume : register(u4);" in generated_code
+    assert "RWTexture2D<uint4> uintImage : register(u3);" in generated_code
+    assert "RWTexture3D<int4> intVolume : register(u4);" in generated_code
     assert "int2 imageSize(RWTexture2D<float4> image)" in generated_code
-    assert "int2 imageSize(RWTexture2D<uint> image)" in generated_code
+    assert "int2 imageSize(RWTexture2D<uint4> image)" in generated_code
     assert "int3 imageSize(RWTexture3D<float4> image)" in generated_code
-    assert "int3 imageSize(RWTexture3D<int> image)" in generated_code
+    assert "int3 imageSize(RWTexture3D<int4> image)" in generated_code
     assert "int3 imageSize(RWTexture2DArray<float4> image)" in generated_code
     assert "image.GetDimensions(width, height);" in generated_code
     assert "image.GetDimensions(width, height, depth);" in generated_code
@@ -40553,8 +40992,8 @@ def test_directx_storage_image_levels_and_lod_queries_emit_diagnostics():
     assert "texture query: textureQueryLevels on RWTexture2D<float4>" in refusal
     assert "texture query: textureQueryLevels on RWTexture3D<float4>" in refusal
     assert "texture query: textureQueryLevels on RWTexture2DArray<float4>" in refusal
-    assert "texture query: textureQueryLevels on RWTexture2D<uint>" in refusal
-    assert "texture query: textureQueryLevels on RWTexture3D<int>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture2D<uint4>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture3D<int4>" in refusal
     assert "texture query: textureQueryLod on RWTexture2D<float4>" in refusal
     assert "texture query: textureQueryLod on RWTexture3D<float4>" in refusal
     assert "textureQueryLevels(" not in generated_code
@@ -41368,8 +41807,8 @@ def test_directx_storage_image_samples_queries_emit_diagnostics():
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
-    assert "RWTexture2D<uint> uintImage : register(u3);" in generated_code
-    assert "RWTexture3D<int> intVolume : register(u4);" in generated_code
+    assert "RWTexture2D<uint4> uintImage : register(u3);" in generated_code
+    assert "RWTexture3D<int4> intVolume : register(u4);" in generated_code
     assert diagnostic in refusal
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
@@ -44898,6 +45337,75 @@ def test_directx_shadow_texture_and_sampler_parameters():
     assert "shadowMapSampler" not in generated_code
 
 
+def test_directx_shadow_texture_with_explicit_comparison_sampler_uses_compare_samples():
+    shader = """
+    shader ExplicitShadowSampler {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float sampled = texture(t, s, coord);
+                float lod = textureLod(t, s, coord, 0.0);
+                float offset = textureOffset(t, s, coord, ivec2(1, 1));
+                return vec4(sampled + lod + offset);
+            }
+        }
+    }
+    """
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "t.SampleCmp(s, coord.xy, coord.z)" in generated_code
+    assert "t.SampleCmpLevelZero(s, coord.xy, coord.z)" in generated_code
+    assert "t.SampleCmp(s, coord.xy, coord.z, int2(1, 1))" in generated_code
+
+
+def test_directx_shadow_texture_with_inline_vec3_coordinate_uses_compare_samples():
+    shader = """
+    shader InlineExplicitShadowSampler {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float sampled = texture(t, s, vec3(uv, 0.5));
+                float lod = textureLod(t, s, vec3(uv, 0.5), 0.0);
+                float offset = textureOffset(t, s, vec3(uv, 0.5), ivec2(1, 0));
+                return vec4(sampled + lod + offset);
+            }
+        }
+    }
+    """
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "t.SampleCmp(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z)" in generated_code
+    assert (
+        "t.SampleCmpLevelZero(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z)"
+        in generated_code
+    )
+    assert (
+        "t.SampleCmp(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z, int2(1, 0))"
+        in generated_code
+    )
+    assert "DirectX cannot lower" not in generated_code
+
+
+def test_directx_shadow_texture_explicit_nonzero_lod_uses_sample_cmp_level():
+    shader = """
+    shader ExplicitShadowNonzeroLod {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float lod = textureLod(t, s, coord, 1.0);
+                return vec4(lod);
+            }
+        }
+    }
+    """
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "t.SampleCmpLevel(s, coord.xy, coord.z, 1.0)" in generated_code
+    assert "SampleCmpLevelZero" not in generated_code
+
+
 def test_directx_implicit_comparison_sampler_for_shadow_texture_parameter():
     shader = """
     shader ShadowParameter {
@@ -45093,7 +45601,7 @@ def test_directx_image_1d_and_1d_array_storage_operations():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture1D<float4> line : register(u0);" in generated_code
+    assert "RWTexture1D<float4> line_ : register(u0);" in generated_code
     assert "RWTexture1DArray<float4> layers : register(u1);" in generated_code
     assert "RWTexture1D<uint> counters : register(u2);" in generated_code
     assert "RWTexture1DArray<uint> layerCounters : register(u3);" in generated_code
@@ -45529,6 +46037,7 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
                 write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
                 write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
                 write_sampler_feedback_level(feedbackUsed, pairedLayers, pairedSampler, uvLayer, 1.0);
+                write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);
             }
         }
     }
@@ -45563,6 +46072,11 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
     assert (
         "feedbackUsed.WriteSamplerFeedbackLevel("
         "pairedLayers, pairedSampler, uvLayer, 1.0);" in generated_code
+    )
+    # Array gradients stay float2; only the location gains the slice.
+    assert (
+        "feedbackUsed.WriteSamplerFeedbackGrad("
+        "pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);" in generated_code
     )
     assert "write_sampler_feedback" not in generated_code
 
@@ -45689,6 +46203,10 @@ def test_directx_feedback_texture_pixel_only_helpers_reject_transitive_compute_c
             "ddx argument must be float2",
         ),
         (
+            "write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxLayer, ddyLayer);",
+            "ddx argument must be float2, got",
+        ),
+        (
             "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv);",
             "requires 5 or 6 argument",
         ),
@@ -45701,6 +46219,7 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
         sampler2DArray pairedLayers;
         sampler pairedSampler;
         feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+        feedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP> feedbackUsed;
 
         fragment {{
             void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {{
@@ -46499,7 +47018,7 @@ def test_directx_ray_query_inline_tracing():
                 RayQuery rq;
                 rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 rq.Abort();
                 rq.CommitNonOpaqueTriangleHit();
             }
@@ -46513,7 +47032,7 @@ def test_directx_ray_query_inline_tracing():
     assert "RayQuery" in generated
     assert "rq.Proceed()" in generated
     assert "rq.CandidateType()" in generated
-    assert "rq.CommittedType()" in generated
+    assert "rq.CommittedStatus()" in generated
     assert "rq.Abort()" in generated
     assert "rq.CommitNonOpaqueTriangleHit()" in generated
 
@@ -48108,7 +48627,8 @@ def test_hlsl_private_pointer_rejects_unprovable_rebase(body, detail):
 
             void main() {{
                 float backing[8];
-                write_values(backing, 2);
+                // A count no call bounds: a bounded one seeds the analysis.
+                write_values(backing, next_offset());
             }}
         }}
     }}
@@ -49444,6 +49964,7 @@ def test_hlsl_metal_bfloat_workgroup_pointer_preserves_logical_pointee_alias(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "groupshared uint16_t bfloat_workgroup_alias_shared_vals[32];" in generated
@@ -49498,6 +50019,7 @@ def test_hlsl_metal_bfloat_groupshared_arrays_of_arrays_store_16_bit_payloads(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "groupshared uint16_t bfloat_tiles_tile[2][4][32];" in generated
@@ -51111,15 +51633,24 @@ def test_hlsl_software_subgroup_requires_workgroup_uniform_returns(tmp_path, gro
         relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
     )
     ast = parse_code(tokenize_code(code))
-    if groups > 1:
-        with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
-            codegen.generate(ast)
-        assert excinfo.value.reason == "early-return-unproven"
-        return
     generated = codegen.generate(ast)
+    assert "for (uint offset = (width / 2u);" in generated
+    if groups > 1:
+        # The return is uniform only within each subgroup, so it is
+        # predicated: every invocation halves the counter and shuffles, and
+        # only the first subgroup stores (see test_subgroup_exit_value_shuffles).
+        active = re.search(r"bool (__crossgl_subgroup_active\w*) = ", generated)
+        assert active is not None
+        assert "return;" not in generated
+        loop = generated.index("for (uint offset = (width / 2u);")
+        assert generated.index(f"if ({active.group(1)})", loop) > loop
+        assert "WaveReadLaneAt" not in generated
+        assert_directx_warnings_clean_if_available(
+            generated, tmp_path, profile="cs_6_6"
+        )
+        return
     assert "if (subgroup != 0u)" in generated
     assert "return;" in generated
-    assert "for (uint offset = (width / 2u);" in generated
     assert "WaveReadLaneAt" not in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
 
@@ -51274,7 +51805,7 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
     assert excinfo.value.operation == "WaveActiveBitOr"
 
 
-def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():
+def test_hlsl_software_subgroup_lowers_mixed_metal_shuffle_operations():
     code = """
     shader HLSLSoftwareSubgroupMixedMetalShuffles {
         compute {
@@ -51293,14 +51824,15 @@ def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():
         software_subgroup_width=32,
     )
 
-    with pytest.raises(
-        DirectXSoftwareSubgroupError,
-        match="does not support 'WaveShuffleUp'",
-    ) as excinfo:
-        codegen.generate(parse_code(tokenize_code(code)))
+    generated = codegen.generate(parse_code(tokenize_code(code)))
 
-    assert excinfo.value.reason == "operation-unsupported"
-    assert excinfo.value.operation == "WaveShuffleUp"
+    # Both plain Metal shuffles exchange through the logical subgroup scratch.
+    assert "__crossgl_software_subgroup_shuffle_down_uint(" in generated
+    assert "__crossgl_software_subgroup_shuffle_up_uint(" in generated
+    assert "bool sourceValid = delta <= lane;" in generated
+    assert "uint sourceLane = sourceValid ? lane - delta : lane;" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveGetLaneIndex" not in generated
 
 
 def test_hlsl_software_subgroup_rejects_short_circuit_shuffle_control_flow():
@@ -51651,3 +52183,222 @@ def test_hlsl_hip_unsafe_record_layouts_fail_closed(
             format_output=False,
             source_backend="hip",
         )
+
+
+def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "(abs(ddx_fine(input.uv)) + abs(ddy_fine(input.uv)))" in generated_code
+    assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
+    assert "fwidth_fine(" not in generated_code
+    assert "fwidth_coarse(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "shader_attribute",
+    ["raygeneration", "intersection", "anyhit", "closesthit", "miss", "callable"],
+)
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_ray_tracing_stages(
+    tmp_path, backend, shader_attribute
+):
+    source = tmp_path / "stage.hlsl"
+    source.write_text(f"""
+RWStructuredBuffer<uint> outp : register(u0);
+[shader("{shader_attribute}")]
+void main() {{
+    uint index = 3u;
+    outp[0] = index;
+}}
+""")
+
+    with pytest.raises(DirectXRayTracingStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_attribute == shader_attribute
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-ray-tracing-stage-unsupported"
+    )
+    assert "Shader Model 6.3" in str(error)
+
+    if shader_attribute == "raygeneration":
+        generated = crosstl.translate(str(source), backend="directx")
+        assert '[shader("raygeneration")]' in generated
+
+
+def test_directx_dx10_profile_rejects_ray_tracing_stages():
+    code = """
+    shader Dx10RayGeneration {
+        ray_generation {
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXRayTracingStageProfileError,
+        match="DirectX profile dx10 does not support the 'raygeneration'",
+    ):
+        HLSLCodeGen(target_profile="dx10").generate(crosstl.translator.parse(code))
+
+
+MESH_STAGE_HLSL = """
+struct VertexOut { float4 pos : SV_Position; };
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(out indices uint3 tris[1], out vertices VertexOut verts[3]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(0.0, 0.0, 0.0, 1.0);
+    verts[1].pos = float4(1.0, 0.0, 0.0, 1.0);
+    verts[2].pos = float4(0.0, 1.0, 0.0, 1.0);
+    tris[0] = uint3(0, 1, 2);
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_mesh_stage(tmp_path, backend):
+    source = tmp_path / "mesh.hlsl"
+    source.write_text(MESH_STAGE_HLSL)
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_type == "mesh"
+    assert error.shader_attribute == "mesh"
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-mesh-stage-unsupported"
+    )
+    assert "Shader Model 6.5" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert '[shader("mesh")]' in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+@pytest.mark.parametrize(
+    ("stage", "shader_attribute"),
+    [
+        ("task", "amplification"),
+        ("amplification", "amplification"),
+        ("object", "amplification"),
+        ("mesh", "mesh"),
+    ],
+)
+def test_directx_legacy_profiles_reject_crossgl_mesh_shading_stages(
+    target_profile, stage, shader_attribute
+):
+    code = f"""
+    shader LegacyMeshShading {{
+        {stage} {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    error = exc_info.value
+    assert error.target_profile == target_profile
+    assert error.shader_type == stage
+    assert error.shader_attribute == shader_attribute
+    assert (
+        f"DirectX profile {target_profile} does not support the "
+        f"'{shader_attribute}' stage"
+    ) in str(error)
+
+
+WAVE_SIZE_HLSL = """
+RWStructuredBuffer<uint> outp : register(u0);
+[WaveSize({arguments})]
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {{ outp[id.x] = id.x; }}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+@pytest.mark.parametrize(
+    ("arguments", "wave_size", "shader_model"),
+    [
+        ("32", (32,), "6.6"),
+        ("16, 64", (16, 64), "6.8"),
+        ("16, 64, 32", (16, 64, 32), "6.8"),
+    ],
+)
+def test_directx_dx11_profile_rejects_wave_size_attribute(
+    tmp_path, backend, arguments, wave_size, shader_model
+):
+    source = tmp_path / "wave_size.hlsl"
+    source.write_text(WAVE_SIZE_HLSL.format(arguments=arguments))
+
+    with pytest.raises(DirectXWaveSizeProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.wave_size == wave_size
+    assert error.shader_model == shader_model
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-wave-size-unsupported"
+    )
+    assert f"Shader Model {shader_model}" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert f"[WaveSize({arguments})]" in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+def test_directx_legacy_profiles_reject_crossgl_wave_size_attribute(target_profile):
+    code = """
+    shader LegacyWaveSize {
+        compute {
+            void main() @ WaveSize(32) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWaveSizeProfileError,
+        match=(
+            f"DirectX profile {target_profile} does not support the "
+            "WaveSize attribute"
+        ),
+    ):
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+    assert "[WaveSize(32)]" in generated

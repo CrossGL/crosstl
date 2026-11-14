@@ -1,0 +1,53 @@
+#version 450
+// S11: a matCxR has C columns of R rows; constructors fill columns, m[i] is column i,
+// m * v takes a column vector, v * m a row vector, mat3(s) is s times the identity and
+// matrixCompMult, outerProduct and matrix resizing keep the column-major layout.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { float a[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint b = i * 6u;
+    uint w = i * 24u;
+    int k = int(i & 1u);
+    mat2x3 m = mat2x3(a[b], a[b + 1u], a[b + 2u], a[b + 3u], a[b + 4u], a[b + 5u]);
+    vec3 mv = m * vec2(1.0, 10.0);
+    vec2 vm = vec3(1.0, 10.0, 100.0) * m;
+    vec3 c1 = m[1];
+    vec3 ck = m[k];
+    mat3 d = mat3(a[b]);
+    vec3 dm = d * mv;
+    o[w + 0u] = mv.x;
+    o[w + 1u] = mv.y;
+    o[w + 2u] = mv.z;
+    o[w + 3u] = vm.x;
+    o[w + 4u] = vm.y;
+    o[w + 5u] = c1.x;
+    o[w + 6u] = c1.z;
+    o[w + 7u] = m[0][2];
+    o[w + 8u] = dm.x;
+    o[w + 9u] = dm.z + d[0][1];
+    o[w + 10u] = ck.y;
+    m[1] = m[0] + c1;
+    m[0][1] = 7.0;
+    o[w + 11u] = m[1].x;
+    o[w + 12u] = m[1].z;
+    o[w + 13u] = m[0].y;
+    mat2 s = mat2(m[0].xy, m[1].yz);
+    vec2 sv = s * vec2(1.0, 1000.0);
+    o[w + 14u] = sv.x;
+    mat3x2 t = transpose(m);
+    o[w + 15u] = t[2][1] + float(m.length()) * 100.0;
+    o[w + 16u] = (m * t)[2][0];
+    o[w + 17u] = (t * m)[1][0];
+    m[k] = vec3(a[b + 5u], 2.0, 3.0);
+    o[w + 18u] = m[1].x + m[0].y * 10.0;
+    m[k] += vec3(1.0, 20.0, 300.0);
+    o[w + 19u] = m[k].x + m[k].z;
+    mat2x3 cm = matrixCompMult(m, m);
+    mat2x3 op = outerProduct(m[0], vec2(1.0, 10.0));
+    o[w + 20u] = cm[1][2];
+    o[w + 21u] = op[1][2];
+    o[w + 22u] = op[0][1];
+    o[w + 23u] = mat2(m)[1][1] + mat4(mat3(a[b]))[3][3] * 1000.0;
+}

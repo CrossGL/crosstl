@@ -25,6 +25,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
@@ -33,8 +34,8 @@ MLX_QUANTIZED_SHA256 = (
 )
 MLX_QUANTIZED_ENTRY = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_OPENGL_ARTIFACT = {
-    "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
-    "sizeBytes": 7949,
+    "sha256": "5a4651bf695dfd37e2c4a15630cb97075b1b50fc599a8d43c13a212079650fbd",
+    "sizeBytes": 8501,
 }
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER"
 
@@ -147,12 +148,10 @@ def _translate_affine_artifact(mlx_root: Path, work_dir: Path) -> Path:
         "algorithm": "sha256",
         "value": MLX_QUANTIZED_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": MLX_QUANTIZED_OPENGL_ARTIFACT["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == (
-        MLX_QUANTIZED_OPENGL_ARTIFACT["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=MLX_QUANTIZED_OPENGL_ARTIFACT["sha256"],
+        size_bytes=(MLX_QUANTIZED_OPENGL_ARTIFACT["sizeBytes"]),
     )
     assert artifact["entryPoint"] == {
         "source": MLX_QUANTIZED_ENTRY,

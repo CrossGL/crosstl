@@ -284,13 +284,13 @@ def test_workgroup_helper_bounds_native_readbacks(tmp_path, size, offset):
 
 
 def test_workgroup_range_gate_is_required_on_every_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert "test_software_subgroup_workgroup_ranges.py" in step
@@ -300,6 +300,6 @@ def test_workgroup_range_gate_is_required_on_every_target():
     assert "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_software_subgroup_workgroup_ranges.py",
         )

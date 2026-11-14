@@ -242,14 +242,14 @@ def test_driver_observations_preserve_access_constraints(target, damage):
 def test_input_observations_are_required_in_native_ci():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    job = ci_coverage.workflow_job_text(workflow, "portable-host")
-    step = ci_coverage.workflow_step_section(
+    job = workflow_text.workflow_job_text(workflow, "portable-host")
+    step = workflow_text.workflow_step_section(
         job, "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

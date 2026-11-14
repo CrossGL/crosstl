@@ -2,13 +2,19 @@
 
 import re
 
+from crosstl.translator.renames import renamed
+
+from ..comma_expressions import crossgl_tuple_literal
+from ..import_refusals import ImportRefusalMixin, MojoImportRefused
 from .MojoAst import *
 from .MojoLexer import *
 from .MojoParser import *
 
 
-class MojoToCrossGLConverter:
+class MojoToCrossGLConverter(ImportRefusalMixin):
     """Serialize Mojo backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = MojoImportRefused
 
     VERTEX_ATTRIBUTES = {"vertex", "vertex_main", "vertex_shader"}
     FRAGMENT_ATTRIBUTES = {"fragment", "fragment_main", "fragment_shader"}
@@ -311,6 +317,10 @@ class MojoToCrossGLConverter:
         }
 
     def generate(self, ast):
+        """Render ``ast`` as CrossGL; raise :class:`MojoImportRefused` if a construct has no CrossGL form."""
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         self.user_function_arities = self.collect_user_function_arities(ast)
         self.user_function_names = set(self.user_function_arities)
         self.imported_module_aliases = self.collect_imported_module_aliases(ast)
@@ -736,12 +746,34 @@ class MojoToCrossGLConverter:
         if not global_variables:
             return ""
 
+        emitted = [
+            variable
+            for variable in global_variables
+            if isinstance(variable, VariableDeclarationNode)
+            and not self.is_comptime_dtype_alias(variable)
+        ]
+        if not emitted:
+            return ""
+
         code = "    // Global Variables\n"
-        for variable in global_variables:
-            if not isinstance(variable, VariableDeclarationNode):
-                continue
+        for variable in emitted:
             code += f"    {self.generate_variable_declaration(variable)};\n"
         return code + "\n"
+
+    def is_comptime_dtype_alias(self, variable):
+        """Return True for `comptime name = DType.x` (or `alias`) declarations.
+
+        These name a Mojo element type, not a value. Type positions already
+        resolve them through ``dtype_aliases``, so they have no CrossGL value
+        to declare.
+        """
+        if not (
+            getattr(variable, "is_comptime", False)
+            or getattr(variable, "is_alias", False)
+        ):
+            return False
+        name = getattr(variable, "name", None)
+        return isinstance(name, str) and name in self.dtype_aliases
 
     def generate_selected_gpu_kernel_global_variables(self, ast, kernel_names):
         if not kernel_names:
@@ -1515,8 +1547,9 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)
         elif isinstance(expr, TupleNode):
-            elements = ", ".join(self.generate_expression(e) for e in expr.elements)
-            return f"({elements})"
+            return crossgl_tuple_literal(
+                self.generate_expression(e) for e in expr.elements
+            )
         elif isinstance(expr, ListLiteralNode):
             elements = ", ".join(self.generate_expression(e) for e in expr.elements)
             return f"[{elements}]"
@@ -1615,6 +1648,14 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, ArrayAccessNode):
             if self.should_elide_empty_postfix_access(expr):
                 return self.generate_expression(expr.array)
+            if self.is_empty_array_access(expr):
+                # ``p[]`` calls ``__getitem__()`` with no index: a pointer dereference, or another type's own
+                # operation. The importer does not know which, and writing ``p`` would copy the pointer.
+                return self.refuse_import(
+                    f"the empty subscript '{self.generate_expression(expr.array)}[]' has no CrossGL form: "
+                    "the importer cannot tell a pointer dereference from another type's __getitem__()",
+                    placeholder="0",
+                )
             if self.is_mlir_type_literal_access(expr):
                 return self.generate_mlir_type_literal_expression(expr)
             array = self.generate_expression(expr.array)
@@ -1666,12 +1707,11 @@ class MojoToCrossGLConverter:
         return f"{func_name}({', '.join(args)})"
 
     def should_elide_empty_postfix_access(self, expr):
+        """``Type[]`` names ``Type`` with its default parameters, so the brackets can go; a value's ``[]`` cannot."""
         if not self.is_empty_array_access(expr):
             return False
 
         array = expr.array
-        if isinstance(array, MemberAccessNode):
-            return True
         if isinstance(array, VariableNode) and array.name:
             return array.name[0].isupper()
         return False
@@ -1780,6 +1820,13 @@ class MojoToCrossGLConverter:
         return self.generate_expression(pattern)
 
     def generate_slice_index(self, index):
+        """Refuse a slice: CrossGL has no slice values, and ``a[i:]`` is not a CrossGL index."""
+        return self.refuse_import(
+            f"the slice '{self.render_slice_text(index)}' has no CrossGL form: CrossGL has no slice values",
+            placeholder="0",
+        )
+
+    def render_slice_text(self, index):
         start = self.generate_expression(index.start) if index.start is not None else ""
         stop = self.generate_expression(index.stop) if index.stop is not None else ""
         if index.has_step:
@@ -1836,7 +1883,8 @@ class MojoToCrossGLConverter:
 
     def resolve_mojo_dtype_type(self, dtype_expr):
         dtype_expr = dtype_expr.strip()
-        dtype_name = self.dtype_aliases.get(dtype_expr, dtype_expr)
+        # ``dtype_aliases`` holds the program's ``alias X = DType.y`` declarations; any other text is a DType itself.
+        dtype_name = renamed(self.dtype_aliases, dtype_expr)
         mapped = self.MOJO_DTYPE_TYPE_MAP.get(dtype_name)
         if mapped:
             return mapped
@@ -2302,7 +2350,9 @@ class MojoToCrossGLConverter:
         return " ".join(mapped_attributes)
 
     def map_attribute(self, attr):
-        name = self.map_identifier_name(self.semantic_map.get(attr.name, attr.name))
+        # ``semantic_map`` renames the Mojo spellings of CrossGL semantics (``vertex_id`` is ``gl_VertexID``); any
+        # other attribute is written under its own name, as CrossGL spells it too.
+        name = self.map_identifier_name(renamed(self.semantic_map, attr.name))
         args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
         if not args:
             return f"@ {name}"

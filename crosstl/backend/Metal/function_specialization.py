@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Container, Iterable, Mapping, Sequence
+
+from .scalar_type_identity import canonical_scalar_type_spelling
 
 
 def _strip_metal_attribute_blocks(text: str) -> str:
@@ -183,7 +185,9 @@ def _explicit_template_function_specialization_for_selected_overload(
             excluded_aliases=excluded_aliases,
         )
         if canonical is not None:
-            return _normalize_metal_type_text(canonical)
+            # ``uchar`` and ``uint8_t`` name one type (MSL table 2.1), so a
+            # deduced ``uchar`` selects the ``uint8_t`` specialization.
+            return canonical_scalar_type_spelling(_normalize_metal_type_text(canonical))
 
         suggested_action = (
             "declare every type alias before the specialization use, remove "
@@ -558,3 +562,52 @@ def _explicit_template_function_specialization_for_selected_overload(
         value[:-3] if value.endswith("...") else value for value in selected_signature
     )
     return canonical_specialization
+
+
+def deducible_template_parameters(preprocessor: Any, template: Any) -> set[str]:
+    """Template parameters of ``template`` that its function parameter types can deduce.
+
+    A parameter counts when it is named in a parameter's type outside a nested-name qualifier (``Owner::member``)
+    and outside the parameter's default argument. A call that names fewer template arguments deduces these from its
+    arguments before any default applies.
+    """
+    source = str(getattr(template, "source", "") or "")
+    body = source.find("{")
+    header = source if body == -1 else source[:body]
+    span = preprocessor._function_parameter_list_span(header)
+    if span is None:
+        return set()
+    names = set(getattr(template, "template_parameters", ()) or ())
+    deducible: set[str] = set()
+    for parameter in preprocessor._split_top_level_commas(
+        header[span[0] + 1 : span[1]]
+    ):
+        declaration = _strip_metal_attribute_blocks(parameter).split("=", 1)[0]
+        for match in re.finditer(r"[A-Za-z_]\w*", declaration):
+            token = match.group(0)
+            if token not in names:
+                continue
+            qualified = declaration[match.end() :].lstrip().startswith("::") or (
+                declaration[: match.start()].rstrip().endswith("::")
+            )
+            if not qualified:
+                deducible.add(token)
+    return deducible
+
+
+def unique_specialization_identifier(
+    preferred: str, source_identifiers: Container[str], generated: Iterable[str]
+) -> str:
+    """Name a new concrete specialization without reusing an identifier already taken.
+
+    The readable name drops punctuation from the template arguments, so ``f<(N > 2)>`` and
+    ``f<(N < 2)>`` both read ``f_N_2``, and ``f<int>`` reads like an ordinary function
+    ``f_int``. ``source_identifiers`` holds the names in the translation unit and ``generated``
+    the names earlier specializations own; a taken name gets the first free numbered suffix.
+    """
+    generated = set(generated)
+    candidate, suffix = preferred, 2
+    while candidate in source_identifiers or candidate in generated:
+        candidate = f"{preferred}_{suffix}"
+        suffix += 1
+    return candidate

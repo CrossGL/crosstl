@@ -26,13 +26,21 @@ from .hub_types import (
     is_pure_callee,
     iter_functions,
 )
-from .rewrite import child_slots, get_child, set_child
+from .nan_conversions import (
+    carry_conversion,
+    destination_type,
+    explicit_conversion,
+    implicit_conversion,
+)
+from .rewrite import child_slots, field_slots, get_child, set_child
 from .rule_table import (
     BINARY_UDIV_ZERO_INTRINSIC,
     BINARY_WRAP_INTRINSIC,
     CONVERT_SAT,
     CONVERT_SAT_GENERIC,
+    FTOI_NAN,
     INTRINSIC_FAMILY,
+    PROGRAM_FAMILIES,
     UDIV_ZERO,
     WRAP,
     source_families,
@@ -49,13 +57,14 @@ class RuleStatement:
     """A statement-shaped operation that carries a rule: ``x op= e``, ``++x`` or ``--x``.
 
     ``conversions`` convert the target and the value to ``result_type`` before the polyfill; ``back_conversion``
-    converts the result to the target's type.
+    converts the result to the target's type. ``value_type`` is the type of a compound assignment's value.
     """
 
     intrinsic: str
     conversions: tuple[HubType | None, HubType | None] = (None, None)
     result_type: HubType | None = None
     back_conversion: HubType | None = None
+    value_type: HubType | None = None
 
 
 def is_int32(value) -> bool:
@@ -79,9 +88,13 @@ def wrap32(value: int) -> int:
 
 
 class Annotator:
-    def __init__(self, program, source, report):
+    def __init__(self, program, source, report, declared_families=frozenset()):
         self.program = program
-        self.families = source_families(source)
+        # A CrossGL program declares the families of the language it was imported from (rule_pragmas.py).
+        # Families discharged for the whole program annotate no operation (program_families.py).
+        self.families = (
+            source_families(source) | frozenset(declared_families)
+        ) - PROGRAM_FAMILIES
         self.scope = TypeScope(program)
         self.report = report
         self.constants: dict[str, int] = {}
@@ -145,6 +158,8 @@ class Annotator:
             return self.visit_for(node)
         if isinstance(node, A.VariableNode):
             self.visit_children(node)
+            if FTOI_NAN in self.families:
+                self.carry_stored_conversion(node, "var_type", "initial_value")
             self.scope.declare(node.name, node.var_type)
             return node
         self.visit_children(node)
@@ -159,19 +174,21 @@ class Annotator:
 
     def visit_for(self, node):
         self.scope.push()
-        if node.init is not None:
-            replacement = self.visit(node.init)
-            if replacement is not node.init:
-                set_child(node, "init", None, replacement)
+        # ``int i = 0, j = n`` and ``k = 0, m = 3`` are lists, visited in source order.
+        for slot in field_slots(node, "init"):
+            child = get_child(node, *slot)
+            replacement = self.visit(child)
+            if replacement is not child:
+                set_child(node, *slot, replacement)
         proven = self.counter_update_cannot_overflow(node)
         if proven is not None:
             self._proven.add(id(proven))
         for field in ("condition", "update", "body"):
-            child = getattr(node, field)
-            if child is not None:
+            for slot in field_slots(node, field):
+                child = get_child(node, *slot)
                 replacement = self.visit(child)
                 if replacement is not child:
-                    set_child(node, field, None, replacement)
+                    set_child(node, *slot, replacement)
         self.scope.pop()
         return node
 
@@ -192,13 +209,45 @@ class Annotator:
             if wrap and node.op in ("++", "--"):
                 self.annotate_step(node)
         elif isinstance(node, A.AssignmentNode):
+            if FTOI_NAN in self.families and node.operator == "=":
+                self.carry_stored_conversion(node, None, "value")
             if wrap and node.operator in _COMPOUND:
                 self.annotate_compound(node)
             elif udiv_zero and node.operator in _DIVISION_COMPOUND:
                 self.annotate_division_compound(node)
         elif isinstance(node, A.FunctionCallNode):
-            return self.type_intrinsic(node)
+            carried = self.carry_explicit_conversion(node)
+            return carried if carried is not node else self.type_intrinsic(node)
+        elif isinstance(node, A.CastNode):
+            return self.carry_explicit_conversion(node)
         return node
+
+    def carry_explicit_conversion(self, node):
+        """``T(x)`` or ``(T)x`` of a floating ``x`` to an integer type, when the source defines ``ftoi_nan``."""
+        if FTOI_NAN not in self.families:
+            return node
+        conversion = explicit_conversion(node)
+        if conversion is None:
+            return node
+        operand, destination = conversion
+        return carry_conversion(self.scope, node, operand, destination, self.report)
+
+    def carry_stored_conversion(self, node, type_field, value_field):
+        """The implicit conversion of a floating value stored to an integer variable, made explicit and carried."""
+        value = getattr(node, value_field, None)
+        if value is None:
+            return
+        declared = (
+            self.scope.infer(node.target)
+            if type_field is None
+            else getattr(node, type_field, None)
+        )
+        destination = destination_type(declared)
+        if destination is None:
+            return
+        carried = implicit_conversion(self.scope, value, destination, self.report)
+        if carried is not value:
+            set_child(node, value_field, None, carried)
 
     def type_intrinsic(self, node):
         """A rule intrinsic written in the source text gets its result type, which helper lowering needs.
@@ -290,7 +339,7 @@ class Annotator:
         self.report.count(WRAP)
         intrinsic = BINARY_WRAP_INTRINSIC[_COMPOUND[node.operator]]
         node.annotations["cgl_rule_statement"] = RuleStatement(
-            intrinsic, (None, _conversion(value)), target
+            intrinsic, (None, _conversion(value)), target, value_type=value
         )
 
     def rewrite_division(self, node):

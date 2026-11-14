@@ -22,6 +22,10 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     assert_deferred_metal_compiler_diagnostics,
     corpus_workspace,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -39,7 +43,7 @@ COPY_METAL_CONTRACT_PATH = (
 )
 # Pinned after the exhaustive compiler-gated reference refresh.
 COPY_METAL_CONTRACT_SHA256 = (
-    "f528bbe9630004507c62be42aa08afaeda307caf6b5ea2ee802d6eb7f6609eaa"
+    "093ddfb508674c5b4d990eccf101e32cfbc616d6efad43631f5a0aef7775c168"
 )
 
 
@@ -967,11 +971,9 @@ def _translate_copy_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_COPY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,
@@ -1067,6 +1069,7 @@ def _roundtrip_pinned_mlx_copy_through_metal(
                 COPY_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

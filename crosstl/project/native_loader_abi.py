@@ -299,6 +299,15 @@ def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
             "C execution wrappers do not yet enforce checked metadata preconditions.",
             path="$.bindings",
         )
+    if any(
+        "immutableStorage" in binding.get("provenance", {})
+        for binding in normalized["bindings"]
+    ):
+        raise NativeLoaderABIError(
+            "execution-immutable-storage-unsupported",
+            "C execution wrappers do not yet enforce immutable storage contracts.",
+            path="$.bindings",
+        )
     symbol = _descriptor_symbol(normalized)
     guard = f"{symbol.upper()}_EXECUTION_H"
     bindings = normalized["bindings"]

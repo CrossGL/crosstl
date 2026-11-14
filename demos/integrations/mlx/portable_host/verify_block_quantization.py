@@ -248,10 +248,16 @@ def verify(root, packages, output):
 def compile_entry(target, entry, descriptor, package, output):
     """Validate the exact packaged artifact before executing the public API."""
     output.mkdir(parents=True, exist_ok=True)
-    source = package / descriptor["artifact"]["packagePath"]
+    packaged = package / descriptor["artifact"]["packagePath"]
     expected = descriptor["artifact"]["hash"]["value"]
-    if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+    data = packaged.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
         raise ValueError("Block compilation source identity differs")
+    # Compile a copy of the verified bytes under a short name: package paths
+    # nest the translation layout below a content hash and exceed the
+    # 260-character limit that DXC on Windows still enforces.
+    source = output / (entry + packaged.suffix)
+    source.write_bytes(data)
     module = output / (
         entry + {"metal": ".air", "opengl": ".spv", "directx": ".dxil"}[target]
     )
@@ -324,7 +330,10 @@ def compile_entry(target, entry, descriptor, package, output):
                 raise RuntimeError(f"Block toolchain validation failed: {entry}")
         if not module.is_file() or not module.stat().st_size:
             raise RuntimeError("Block compiler did not produce a module")
-        if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+        if any(
+            hashlib.sha256(path.read_bytes()).hexdigest() != expected
+            for path in (source, packaged)
+        ):
             raise ValueError("Block compilation source changed")
         record.update(
             status="passed",

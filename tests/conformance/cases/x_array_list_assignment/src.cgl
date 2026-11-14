@@ -1,0 +1,37 @@
+// A brace list assigned to an array is evaluated in full before the array is written, so a list that reads the
+// array it replaces sees the old elements: rotating, swapping struct elements and swapping the rows of a nested
+// array must not observe partly written arrays.
+shader ArrayListAssignment {
+    struct Pair {
+        int v;
+        int w;
+    }
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        buffer int* inp;
+        buffer int* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int x = inp[i];
+            int a[3] = {x, x + 1, x + 2};
+            a = {a[2], a[0], a[1]};
+            Pair q[2] = {{x, 1}, {x + 5, 2}};
+            q = {{q[1].v, q[0].w}, q[0]};
+            int g[2][2] = {{x, 1}, {2, 3}};
+            g = {g[1], g[0]};
+            int b[2] = {x * 2, x * 3};
+            b = {x * 4, b[0] + b[1]};
+            outp[i * 8u] = a[0];
+            outp[i * 8u + 1u] = a[1];
+            outp[i * 8u + 2u] = a[2];
+            outp[i * 8u + 3u] = q[0].v * 100 + q[0].w;
+            outp[i * 8u + 4u] = q[1].v * 100 + q[1].w;
+            outp[i * 8u + 5u] = g[0][0] * 1000 + g[0][1] * 100 + g[1][0] * 10 + g[1][1];
+            outp[i * 8u + 6u] = b[0];
+            outp[i * 8u + 7u] = b[1];
+        }
+    }
+}

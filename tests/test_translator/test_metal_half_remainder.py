@@ -354,13 +354,13 @@ def test_half_remainder_profile_executes(tmp_path, monkeypatch, original):
 
 
 def test_ci_requires_half_remainder_in_existing_math_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Validate binary32 arithmetic"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

@@ -46,6 +46,7 @@ from demos.integrations.mlx.tests.kernels.test_current_ternary import (
     _operand_offsets,
     _runtime_value,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -1203,11 +1204,9 @@ def test_current_mlx_binary_two_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": record["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+            check_generated_artifact(
+                artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
+            )
             for option, value in PROFILES.get(dtype, ()):
                 assert artifact["provenance"][PROVENANCE_FIELDS[option]] == value
             (execution,) = artifact["execution"]["entryPoints"]

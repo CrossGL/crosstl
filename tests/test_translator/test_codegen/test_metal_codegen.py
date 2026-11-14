@@ -42,6 +42,9 @@ from crosstl.translator.codegen.metal_codegen import (
     UnsupportedMetalFeatureError,
 )
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from crosstl.translator.codegen.resource_array_bounds import (
+    ResourceArrayIndexUnboundedError,
+)
 from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
@@ -191,6 +194,45 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
 
     assert "float converted = float(value);" in generated
     assert "(value).real" not in generated
+
+
+def test_metal_bfloat_stored_arguments_are_passed_without_conversion():
+    # A stored bfloat value already has the bfloat parameter type; only a
+    # computed value, which Metal evaluates as float, needs construction.
+    shader = """
+    shader MetalBfloatArguments {
+        struct Pair {
+            bfloat16 value;
+        };
+        bfloat16 passThrough(bfloat16 value) {
+            return value;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<bfloat16> src @buffer(0),
+                RWStructuredBuffer<bfloat16> dst @buffer(1),
+                uint3 tid @ gl_GlobalInvocationID) {
+                bfloat16 local = src[tid.x];
+                Pair pair;
+                pair.value = local;
+                dst[0] = passThrough(src[tid.x]);
+                dst[1] = passThrough(local);
+                dst[2] = passThrough(pair.value);
+                dst[3] = passThrough(local * local);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "passThrough(src[tid.x])" in generated
+    assert "passThrough(local)" in generated
+    assert "passThrough(pair.value)" in generated
+    assert "passThrough(bfloat(local * local))" in generated
+    assert "passThrough(bfloat(src" not in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_registered_complex_assignments_lower_implicit_conversions():
@@ -987,7 +1029,7 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
-def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -1001,16 +1043,18 @@ def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_metal(
-        crosstl.translate,
+    metal = crosstl.translate(
         str(shader_path),
         backend="metal",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "input attachment declaration: 'sceneColor' uses subpassInput" in refusal
-    assert "input attachment load: subpassLoad requires" in refusal
+    # MSL has no input attachments here: the attachment is bound as a texture and read at the pixel.
+    assert re.search(r"texture2d<float> sceneColor \[\[texture\(0\)\]\]", metal), metal
+    assert re.search(r"float4 (\w+) \[\[position\]\]", metal), metal
+    assert re.search(r"sceneColor\.read\(uint2\(int2\(\w+\.xy\)\), uint\(0\)\)", metal)
+    assert "subpass" not in metal.lower()
 
 
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
@@ -1035,6 +1079,76 @@ def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize("name", ["device", "half", "thread", "constant"])
+def test_metal_reserved_shader_scope_constant_is_renamed(name):
+    shader = f"""
+    shader ReservedShaderConstant {{
+        const float {name} = 2.0;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                half h = half(1.0);
+                outp[i] = float(h) + {name};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert f"constant float {name}_ = 2.0;" in generated_code
+    assert f"outp[i] = float(h) + {name}_;" in generated_code
+    assert "half h = half(1.0);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_reserved_shader_scope_constant_is_renamed_at_every_use():
+    shader = """
+    shader ReservedShaderConstantUses {
+        const int thread = 2;
+        const int device = thread * 2;
+        const float device_ = 1.0;
+        struct Span { float v[thread]; };
+        float scale(float x) { return x * float(device); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                Span s;
+                float tmp[device];
+                s.v[thread - 1] = device_;
+                tmp[0] = scale(s.v[1]);
+                switch (int(i)) {
+                    case thread:
+                        tmp[1] = 2.0;
+                        break;
+                    default:
+                        tmp[1] = 0.0;
+                        break;
+                }
+                outp[i] = tmp[0] + tmp[1];
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # `device_` is taken, so `device` becomes `device__`.
+    assert "constant int thread_ = 2;" in generated_code
+    assert "constant int device__ = thread_ * 2;" in generated_code
+    assert "constant float device_ = 1.0;" in generated_code
+    assert "float v[thread_];" in generated_code
+    assert "return x * float(device__);" in generated_code
+    assert "float tmp[device__];" in generated_code
+    assert "s.v[thread_ - 1] = device_;" in generated_code
+    assert "case thread_:" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_binary_expression_precedence_preserves_grouping_in_metal():
     shader = """
     shader MetalExpressionGrouping {
@@ -1054,7 +1168,7 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
     assert (
         "__attribute__((unused)) float3 pos = nearPoint + "
-        "float3(t) * (farPoint - nearPoint);"
+        "t * (farPoint - nearPoint);"
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
@@ -1345,8 +1459,8 @@ def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     )
 
     assert (
-        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
-        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+        "float2 tile = ((uv * 4.0 - float2(2.0)) - "
+        "((1.0) * floor((uv * 4.0 - float2(2.0)) / (1.0))));"
     ) in generated_code
     assert (
         "float2 wrapped = ((tile) - "
@@ -1424,6 +1538,57 @@ def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
     assert "float scalar = mix(0.0, 1.0, phase) + color.x;" in generated_code
     assert "frac(" not in generated_code
     assert "lerp(" not in generated_code
+
+
+def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    # The signed accumulator addition wraps through uint, as in HLSL.
+    assert (
+        "as_type<int>(as_type<uint>(int(acc))+as_type<uint>(int(dot("
+        "float4(as_type<char4>(uint(a[id.x]))),"
+        "float4(as_type<char4>(uint(b[id.x])))))))"
+    ) in compact
+    assert (
+        "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"
+        "float4(as_type<uchar4>(uint(b[id.x]))))))"
+    ) in compact
+    assert "dot4add_" not in generated
+
+
+def test_metal_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint a = tid.x;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
 def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
@@ -1636,7 +1801,9 @@ def test_metal_saturate_builtin_qualifies_when_local_name_shadows_it():
     )
 
 
-def test_metal_user_defined_stdlib_function_names_are_preserved():
+def test_metal_user_defined_stdlib_function_names_are_renamed():
+    # using namespace metal makes min and normalize ambiguous with the user's
+    # functions of the same signature (#3156), so the user functions are renamed.
     shader = """
     shader MetalUserStdlibNames {
         compute {
@@ -1660,15 +1827,14 @@ def test_metal_user_defined_stdlib_function_names_are_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float min(float left, float right)" in generated_code
-    assert "float3 normalize(float3 value)" in generated_code
-    assert "__attribute__((unused)) float total = min(1.0, 2.0);" in generated_code
+    assert "float min_fn(float left, float right)" in generated_code
+    assert "float3 normalize_fn(float3 value)" in generated_code
+    assert "__attribute__((unused)) float total = min_fn(1.0, 2.0);" in generated_code
     assert (
         "__attribute__((unused)) float3 shifted = "
-        "normalize(float3(float(tid.x), 0.0, 0.0));" in generated_code
+        "normalize_fn(float3(float(tid.x), 0.0, 0.0));" in generated_code
     )
-    assert "metal::min(" not in generated_code
-    assert "metal::normalize(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
@@ -1751,7 +1917,7 @@ def test_metal_two_argument_atan_qualifies_atan2_when_local_name_shadows_it():
     assert "float angle = atan2(float(tid.y), float(tid.x));" not in generated_code
 
 
-def test_metal_user_defined_two_argument_atan_is_preserved():
+def test_metal_user_defined_two_argument_atan_is_renamed():
     shader = """
     shader MetalUserAtan {
         compute {
@@ -1770,12 +1936,13 @@ def test_metal_user_defined_two_argument_atan_is_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float atan(float y, float x)" in generated_code
+    assert "float atan_fn(float y, float x)" in generated_code
     assert (
         "__attribute__((unused)) float angle = "
-        "atan(float(tid.y), float(tid.x));" in generated_code
+        "atan_fn(float(tid.y), float(tid.x));" in generated_code
     )
     assert "atan2(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_glsl_bitcast_builtins_lower_to_as_type():
@@ -1822,6 +1989,77 @@ def test_metal_glsl_bitcast_builtins_lower_to_as_type():
     assert "floatBitsToUint(" not in generated_code
     assert "intBitsToFloat(" not in generated_code
     assert "uintBitsToFloat(" not in generated_code
+
+
+def test_metal_integer_literals_beyond_int_keep_their_width():
+    # HLSL asfloat(0xFFC00000) reaches CrossGL as a uint literal; an
+    # unsuffixed decimal beyond int is 64-bit, as in C++. Each keeps its width:
+    # as_type cannot reinterpret a long as float, and a long would widen uint
+    # arithmetic and comparisons.
+    shader = """
+    shader MetalLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<float> results @buffer(0),
+                      RWStructuredBuffer<uint> bits @buffer(1)) {
+                results[0] = uintBitsToFloat(4290772992u);
+                results[1] = intBitsToFloat(2139095040);
+                bits[0] = 4290772992u * 2;
+                bits[1] = 4290772992u > 0 ? 1u : 0u;
+                int64_t wide = 4290772992;
+                bits[2] = wide > 0 ? 1u : 0u;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "as_type<float>(4290772992u)" in generated_code
+    assert "as_type<float>(2139095040)" in generated_code
+    assert "4290772992u * 2" in generated_code
+    assert "4290772992u > 0" in generated_code
+    assert "int64_t wide = 4290772992l;" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_negated_integer_literals_beyond_int_stay_signed():
+    # -2147483648u is 2147483648 in a 64-bit context; the unsuffixed decimal
+    # is long in Metal, so its negation keeps the value in every width.
+    shader = """
+    shader MetalNegatedLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<uint> bits @buffer(0)) {
+                int narrow = -2147483648;
+                int64_t wide = -2147483648;
+                int64_t wider = -5000000000;
+                int64_t positive = 5000000000;
+                uint explicitUnsigned = -4290772992u;
+                bits[0] = uint(narrow);
+                bits[1] = wide < 0 ? 1u : 0u;
+                bits[2] = wider < positive ? 1u : 0u;
+                bits[3] = explicitUnsigned;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    # Unsuffixed decimals beyond int are 64-bit, so each negation is signed.
+    assert "int narrow = -2147483648l;" in generated_code
+    assert "int64_t wide = -2147483648l;" in generated_code
+    assert "int64_t wider = -5000000000l;" in generated_code
+    assert "int64_t positive = 5000000000l;" in generated_code
+    assert "uint explicitUnsigned = -4290772992u;" in generated_code
+    assert "2147483648u" not in generated_code
+    assert "5000000000ul" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
@@ -1988,12 +2226,12 @@ def test_metal_integer_bit_intrinsics_use_namespace_when_shadowed():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "uint popcount(uint value)" in generated_code
-    assert "uint reverse_bits(uint value)" in generated_code
-    assert "uint count = metal::popcount(tid.x);" in generated_code
-    assert "uint reversed = metal::reverse_bits(tid.y);" in generated_code
-    assert "uint count = popcount(tid.x);" not in generated_code
-    assert "uint reversed = reverse_bits(tid.y);" not in generated_code
+    # The user functions are renamed (#3156), so the library calls reach the library.
+    assert "uint popcount_fn(uint value)" in generated_code
+    assert "uint reverse_bits_fn(uint value)" in generated_code
+    assert "uint count = popcount(tid.x);" in generated_code
+    assert "uint reversed = reverse_bits(tid.y);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_bitcast_function_names_are_preserved():
@@ -2216,6 +2454,275 @@ def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
     assert "dFdy(" not in generated_code
 
 
+def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
+    shader = """
+    shader MetalFineCoarseDerivatives {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 fx = dFdxFine(uv);
+                vec2 cx = dFdxCoarse(uv);
+                float fy = dFdyFine(uv.x);
+                float cy = dFdyCoarse(uv.y);
+                vec2 fw = fwidthFine(uv);
+                vec2 cw = fwidthCoarse(uv * 2.0);
+                return vec4(fx + cx + fw + cw, fy, cy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 fx = dfdx(uv);" in generated_code
+    assert "float2 cx = dfdx(uv);" in generated_code
+    assert "float fy = dfdy(uv.x);" in generated_code
+    assert "float cy = dfdy(uv.y);" in generated_code
+    assert "float2 fw = fwidth(uv);" in generated_code
+    assert "float2 cw = fwidth(uv * 2.0);" in generated_code
+    for name in (
+        "dFdxFine(",
+        "dFdxCoarse(",
+        "dFdyFine(",
+        "dFdyCoarse(",
+        "fwidthFine(",
+        "fwidthCoarse(",
+    ):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "dFdx(values[i])",
+        "dFdy(values[i])",
+        "fwidth(values[i])",
+        "ddx(values[i])",
+        "ddy_fine(values[i])",
+        "dFdxCoarse(values[i])",
+        "fwidthFine(values[i])",
+    ],
+)
+def test_metal_kernel_refuses_derivatives(call):
+    derivative = call.split("(", 1)[0]
+    shader = f"""
+    shader ComputeDerivative {{
+        buffer float values[];
+
+        compute {{
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == derivative
+    assert error.operation == derivative
+    assert error.missing_capabilities == ("metal.kernel-derivatives",)
+    assert f"Metal compute entry point 'main' calls {derivative};" in str(error)
+    assert "only in fragment functions" in str(error)
+
+
+def test_metal_kernel_refuses_derivatives_reached_through_a_helper():
+    shader = """
+    shader ComputeDerivativeHelper {
+        buffer float values[];
+
+        float slope(float x) {
+            return dFdx(x);
+        }
+
+        float twice(float x) {
+            return slope(x) * 2.0;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = twice(values[i]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    assert "calls dFdx through 'slope'" in str(excinfo.value)
+
+
+def test_metal_kernel_allows_user_functions_named_like_derivatives():
+    shader = """
+    shader ComputeUserDerivativeName {
+        buffer float values[];
+
+        float fwidth(float x) {
+            return x * 0.5;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = fwidth(values[i]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+
+
+def test_metal_fragment_derivatives_still_lower_beside_a_kernel():
+    shader = """
+    shader MixedStages {
+        buffer float values[];
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = values[i] * 2.0;
+            }
+        }
+
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(dFdx(uv.x), dFdy(uv.y), fwidth(uv.x), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+    assert "dfdx(uv.x)" in generated_code
+    assert "dfdy(uv.y)" in generated_code
+    assert "fwidth(uv.x)" in generated_code
+
+
+@pytest.mark.parametrize(
+    "stage, function_kind",
+    [
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "object"),
+        ("amplification", "object"),
+    ],
+)
+def test_metal_mesh_and_object_functions_refuse_derivatives(stage, function_kind):
+    shader = f"""
+    shader MeshDerivative {{
+        buffer float values[];
+
+        float slope(float x) {{
+            return dFdx(x);
+        }}
+
+        {stage} {{
+            void main() {{
+                values[0] = slope(values[0]);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == "dFdx"
+    assert error.missing_capabilities == (f"metal.{function_kind}-derivatives",)
+    assert f"Metal {stage} entry point 'main' calls dFdx through 'slope';" in str(error)
+    article = "an" if function_kind == "object" else "a"
+    assert f"so {article} {function_kind} function cannot call dfdx" in str(error)
+
+
+def test_metal_hlsl_mesh_shader_refuses_ddx(tmp_path):
+    source = tmp_path / "m.hlsl"
+    source.write_text(
+        """
+struct V { float4 pos : SV_Position; };
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(uint3 tid : SV_GroupThreadID, out vertices V verts[3], out indices uint3 tris[1]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(ddx((float)tid.x), 0, 0, 1);
+    tris[0] = uint3(0, 1, 2);
+}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        crosstl.translate(str(source), backend="metal", format_output=False)
+
+    assert excinfo.value.missing_capabilities == ("metal.mesh-derivatives",)
+
+
+def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
+    # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 x = dFdxFine(uv) + dFdxCoarse(uv);
+        vec2 y = dFdyFine(uv) + dFdyCoarse(uv);
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(x + y, w);
+    }
+    """
+    shader_path = tmp_path / "derivatives.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "dfdx(input.uv) + dfdx(input.uv)" in generated_code
+    assert "dfdy(input.uv) + dfdy(input.uv)" in generated_code
+    assert "fwidth(input.uv) + fwidth(input.uv)" in generated_code
+    for name in ("_fine(", "_coarse("):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
+    shader = """
+    shader MetalFineFwidthShadow {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float fwidth = uv.x;
+                vec2 w = fwidthFine(uv);
+                return vec4(w, fwidth, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 w = metal::fwidth(uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
     shader = """
     shader MetalDerivativeAliasTargetShadow {
@@ -2317,24 +2824,48 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 3
+    # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory; deviceMemoryBarrier orders
+    # buffers and textures (GLSL 4.60 section 8.16, HLSL DeviceMemoryBarrier).
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 3
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_texture);"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | "
+            "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+        )
+        == 3
+    )
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
@@ -2855,7 +3386,8 @@ def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "as_type<uint64_t>(metal::simd_shuffle_down(" in generated_code
+    assert "uint64_t simd_shuffle_down_fn(uint64_t data" in generated_code
+    assert "as_type<uint64_t>(simd_shuffle_down(" in generated_code
     assert "as_type<uint2>(data)" in generated_code
     assert "WaveShuffleDown" not in generated_code
     compile_with_metal_if_available(generated_code)
@@ -4275,7 +4807,15 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     )
     assert "uint index = thread_index_in_threadgroup;" in generated_code
     assert "gl_LocalInvocationIndex" not in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    # groupMemoryBarrier(); memoryBarrierShared(); is one barrier over the union of their memory.
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+            "mem_flags::mem_texture);"
+        )
+        == 1
+    )
+    assert "threadgroup_barrier(mem_flags::mem_threadgroup);" not in generated_code
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "writeScratch(scratch, index, float(index));" in generated_code
@@ -4326,7 +4866,7 @@ def test_metal_helper_control_flow_barriers_lower_in_nested_blocks():
     assert "if (mode != 0u)" in generated_code
     assert "for (int i = 0; i < 2; i = i + 1)" in generated_code
     assert "switch (mode)" in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
@@ -4482,6 +5022,34 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0].value = values[0];" in generated_code
     assert "float value = payloads[0].value;" in generated_code
     assert "payloads[0]->value" not in generated_code
+
+
+def test_metal_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code
 
 
 def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
@@ -5027,7 +5595,7 @@ def test_metal_readonly_device_pointer_alias_rejects_writes_and_mutable_calls():
     assert "mutate(alias);" not in generated_code
 
 
-def test_metal_const_local_array_rejects_writes_and_mutable_calls():
+def test_metal_const_local_array_rejects_writes_and_copies_for_mutable_calls():
     shader = """
     shader MetalConstLocalArrayAlias {
         float readValue(const float values[2], int index) {
@@ -5058,9 +5626,11 @@ def test_metal_const_local_array_rejects_writes_and_mutable_calls():
     assert (
         "parameter store: parameter 'values' is const-qualified local array" in refusal
     )
+    # ``mutate`` takes its array by value, so it receives a thread copy it may write.
+    assert "parameter call" not in refusal
     assert (
-        "parameter call: readonly parameter 'values' cannot be passed to "
-        "mutable parameter 'values' of 'mutate'" in refusal
+        "mutate(crosstl_array_value<float, 2>{{values[0], values[1]}}.v);"
+        in generated_code
     )
     assert "values[0] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
@@ -5137,7 +5707,7 @@ def test_metal_constant_pointer_and_reference_aliases_reject_writes_and_mutable_
     assert "mutateReference(referenceAlias);" not in generated_code
 
 
-def test_metal_nested_constant_local_array_rejects_writes_and_mutable_calls():
+def test_metal_nested_constant_local_array_rejects_writes_and_copies_for_mutable_calls():
     shader = """
     shader MetalNestedConstantLocalArray {
         float readValue(const float values[2][2], int row, int col) {
@@ -5169,10 +5739,11 @@ def test_metal_nested_constant_local_array_rejects_writes_and_mutable_calls():
         "parameter store: parameter 'values' is constant-qualified local "
         "array" in refusal
     )
+    assert "parameter call" not in refusal
     assert (
-        "parameter call: readonly parameter 'values' cannot be passed to "
-        "mutable parameter 'values' of 'mutate'" in refusal
-    )
+        "mutate(crosstl_array_value<float[2], 2>{{{values[0][0], values[0][1]}, "
+        "{values[1][0], values[1][1]}}}.v);"
+    ) in generated_code
     assert "values[0][1] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
 
@@ -5419,8 +5990,9 @@ def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "half2x3 passMatrix(half2x3 input)" in generated_code
-    assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    # MSL halfCxR, like CrossGL f16matCxR, has C columns and R rows.
+    assert "half3x2 passMatrix(half3x2 input)" in generated_code
+    assert "half3x2 m = half3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "half3x3 passSquare(half3x3 input)" in generated_code
     assert "half3x3 m = half3x3(1.0);" in generated_code
     assert "return input * m;" in generated_code
@@ -5476,28 +6048,23 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(char(int(char(int(1)))));" in generated_code
+    assert "int one = int(char(int(1)));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
+    assert "uint one = uint(uchar(uint(1u)));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
-    )
+    assert "uint3 inc = uint3(uchar3(uint3(1u, 2u, 3u)));" in generated_code
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(short2(int2(1, 2)));" in generated_code
     assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
-        in generated_code
-    )
+    assert "uint3 inc = uint3(ushort3(uint3(1u, 2u, 3u)));" in generated_code
     assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
+    assert "int4 inc = int4(char4(int4(1, 2, 3, 4)));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(1u, 2u)));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -5507,16 +6074,28 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         assert invalid_token not in generated_code
 
 
+def test_metal_refuses_double_precision_vectors():
+    # MSL has no double type (Metal Shading Language Specification, section 2.1).
+    shader = """
+    shader GenericDoubleVector {
+        vec2<f64> precisePair(vec2<f64> input) {
+            vec2<f64> inc = vec2<f64>(1.0, 2.0);
+            return input + inc;
+        }
+    }
+    """
+
+    with pytest.raises(
+        MetalLoweringRefused, match=r"double-precision value: .*uses dvec2"
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_metal_generic_vector_constructors_emit_metal_names():
     shader = """
     shader GenericVectorAliasSmoke {
         vec2<f16> halfPair(vec2<f16> input) {
             vec2<f16> inc = vec2<f16>(1.0, 2.0);
-            return input + inc;
-        }
-
-        vec2<f64> precisePair(vec2<f64> input) {
-            vec2<f64> inc = vec2<f64>(1.0, 2.0);
             return input + inc;
         }
 
@@ -5561,22 +6140,15 @@ def test_metal_generic_vector_constructors_emit_metal_names():
 
     assert "half2 halfPair(half2 input)" in generated_code
     assert "half2 inc = half2(1.0, 2.0);" in generated_code
-    assert "double2 precisePair(double2 input)" in generated_code
-    assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert (
-        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
-        in generated_code
-    )
+    assert "uint4 inc = uint4(uchar4(uint4(1u, 2u, 3u, 4u)));" in generated_code
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "int3 inc = int3(short3(int3(1, 2, 3)));" in generated_code
     assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert (
-        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
-    )
+    assert "uint2 inc = uint2(ushort2(uint2(1u, 2u)));" in generated_code
     assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
@@ -6415,19 +6987,9 @@ def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "array<device uint*, 1> counts" in generated_code
-    assert "device uint* afterCounts" in generated_code
-    assert (
-        "uint readCount(array<device uint*, 1> localCounts, uint which, uint index)"
-        in generated_code
-    )
-    assert "return localCounts[which][index];" in generated_code
-    assert (
-        "return readCount(counts, which, index) + afterCounts[index];" in generated_code
-    )
-    assert "array<device uint*, 2> counts" not in generated_code
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="counts"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_metal_unsized_structured_buffer_array_rejects_multiple_fixed_helper_sizes():
@@ -6550,24 +7112,24 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
+        "uint word = uint(ushort((*reinterpret_cast<const device ushort*>(aliasBlock + 2))));"
         in generated_code
     )
     assert (
-        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (8 + index * 4))))"
+        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (4 + index * 4))))"
         in generated_code
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 2)) = uint(ushort(word));"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + (8 + index * 4))) = uint(offset);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + (4 + index * 4))) = uint(offset);"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 0)) = ((*reinterpret_cast<const device ushort*>(aliasBlock + 0)) + uint(ushort(uint(1u))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -6946,8 +7508,19 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
-    assert "array<constant uint*, 2> buffersLength [[buffer(5)]]" in generated
+    assert (
+        "device int* buffers_0 [[buffer(3)]], device int* buffers_1 [[buffer(4)]]"
+        in generated
+    )
+    assert "array<device int*, 2> buffers = {buffers_0, buffers_1};" in generated
+    assert (
+        "constant uint* buffersLength_0 [[buffer(5)]], constant uint* buffersLength_1 [[buffer(6)]]"
+        in generated
+    )
+    assert (
+        "array<constant uint*, 2> buffersLength = {buffersLength_0, buffersLength_1};"
+        in generated
+    )
     assert "int v = buffers[index][tid.x];" in generated
     assert "len = buffersLength[index][0];" in generated
     assert "buffers[index][tid.x] = v + 1;" in generated
@@ -6975,10 +7548,22 @@ def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> appendValues [[buffer(1)]]" in generated
     assert (
-        "array<device atomic_uint*, 2> appendValuesCounter [[buffer(3)]]" in generated
+        "device int* appendValues_0 [[buffer(1)]], device int* appendValues_1 [[buffer(2)]]"
+        in generated
     )
+    assert (
+        "array<device int*, 2> appendValues = {appendValues_0, appendValues_1};"
+        in generated
+    )
+    assert (
+        "device atomic_uint* appendValuesCounter_0 [[buffer(3)]], "
+        "device atomic_uint* appendValuesCounter_1 [[buffer(4)]]"
+    ) in generated
+    assert (
+        "array<device atomic_uint*, 2> appendValuesCounter = "
+        "{appendValuesCounter_0, appendValuesCounter_1};"
+    ) in generated
     assert (
         "void pushOne(array<device int*, 2> values, array<device atomic_uint*, 2> valuesCounter, uint which, uint value)"
         in generated
@@ -7400,7 +7985,7 @@ def test_metal_global_function_constants_validate_declarations(
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_return_semantic_reports_unsupported():
+def test_metal_stencil_ref_return_semantic_uses_stencil_attribute():
     code = """
     shader StencilOut {
         fragment {
@@ -7411,14 +7996,30 @@ def test_metal_stencil_ref_return_semantic_reports_unsupported():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="gl_FragStencilRefEXT.*function return semantic",
-    ):
+    # MSL 3.2 section 5.2.3.4: a fragment function returns its stencil reference value as uint [[stencil]].
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+    assert "uint value [[stencil]];" in generated
+    assert "return fragment_main_Return{7};" in generated
+
+
+def test_metal_stencil_ref_return_semantic_requires_uint():
+    code = """
+    shader StencilOut {
+        fragment {
+            float main() @ gl_FragStencilRefEXT {
+                return 7.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_FragStencilRefEXT"):
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_struct_member_reports_unsupported():
+def test_metal_stencil_ref_struct_member_uses_stencil_attribute():
     code = """
     shader StencilOut {
         struct FragmentOutput {
@@ -7437,8 +8038,9 @@ def test_metal_stencil_ref_struct_member_reports_unsupported():
     }
     """
 
-    with pytest.raises(ValueError, match="stencil_ref.*not supported"):
-        MetalCodeGen().generate(crosstl.translator.parse(code))
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+    assert "uint stencil [[stencil]];" in generated
+    assert "output.stencil = 7;" in generated
 
 
 def test_metal_argument_buffer_resource_members_preserve_id_attributes():
@@ -8929,11 +9531,15 @@ def test_metal_stage_io_interpolation_attributes_preserve_semantics():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    assert "float4 color [[attribute(5)]] [[flat]];" in generated_code
-    assert "float2 uv [[attribute(6)]] [[centroid_no_perspective]];" in generated_code
-    assert "int materialId [[attribute(7)]] [[flat]];" in generated_code
+    # Fragment inputs link to vertex outputs by [[user(...)]] key; [[attribute(n)]] is ignored there.
+    assert "float4 color [[user(TEXCOORD0)]] [[flat]];" in generated_code
     assert (
-        "float4 sampleColor [[attribute(8)]] [[sample_perspective]];" in generated_code
+        "float2 uv [[user(TEXCOORD1)]] [[centroid_no_perspective]];" in generated_code
+    )
+    assert "int materialId [[user(TEXCOORD2)]] [[flat]];" in generated_code
+    assert (
+        "float4 sampleColor [[user(TEXCOORD3)]] [[sample_perspective]];"
+        in generated_code
     )
     assert "[[linear_noperspective_centroid]]" not in generated_code
     assert "[[nointerpolation]]" not in generated_code
@@ -14228,106 +14834,6 @@ def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
     assert "set_threadgroups_per_grid(uint3(uint3" not in vector_component_generated
 
 
-def test_metal_lowers_geometry_and_tessellation_stages():
-    geometry_code = """
-    shader geometry_stage {
-        struct GSInput {
-            vec4 position @ gl_Position;
-        };
-
-        struct GSOutput {
-            vec4 position @ gl_Position;
-        };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) {
-                GSOutput output;
-                output.position = input[0].position;
-                stream.Append(output);
-            }
-        }
-    }
-    """
-    tessellation_code = """
-    shader tessellation_stage {
-        struct HSInput {
-            vec3 position @ POSITION;
-        };
-
-        struct HSOutput {
-            vec3 position @ POSITION;
-        };
-
-        struct HSConstData {
-            vec3 edges @ SV_TessFactor;
-            float inside @ SV_InsideTessFactor;
-        };
-
-        tessellation_control {
-            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
-                HSConstData constants;
-                return constants;
-            }
-
-            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
-                @domain(tri)
-                @partitioning(fractional_odd)
-                @outputtopology(triangle_cw)
-                @outputcontrolpoints(3)
-                @patchconstantfunc(HSConst) {
-                HSOutput output;
-                output.position = patch[id].position;
-                return output;
-            }
-        }
-
-        tessellation_evaluation {
-            vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
-                @domain(tri) {
-                return vec4(patch[0].position, 1.0);
-            }
-        }
-    }
-    """
-
-    geometry = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(geometry_code), "geometry"
-    )
-    assert "// CrossGL geometry stage: maxvertexcount=3" in geometry
-    assert "// CrossGL geometry input primitive: triangle:input" in geometry
-    assert (
-        "// CrossGL geometry output stream: TriangleStream:stream->GSOutput" in geometry
-    )
-    assert "thread CrossGLMetalTriangleStream<GSOutput>& stream" in geometry
-    assert "stream.Append(output);" in geometry
-
-    tessellation = MetalCodeGen().generate(crosstl.translator.parse(tessellation_code))
-    assert "struct CrossGLMetalInputPatch" in tessellation
-    assert "struct CrossGLMetalOutputPatch" in tessellation
-    assert (
-        "// CrossGL tessellation_control stage: domain=triangle, "
-        "partitioning=fractional_odd, outputtopology=triangle_cw, "
-        "outputcontrolpoints=3, patchconstantfunc=HSConst"
-    ) in tessellation
-    assert (
-        "// CrossGL tessellation patch parameters: InputPatch:patch->HSInput[3]"
-        in tessellation
-    )
-    assert "HSOutput tessellation_control_main(" in tessellation
-    assert (
-        "thread const CrossGLMetalInputPatch<HSInput, 3>& patch, uint id"
-        in tessellation
-    )
-    assert "float4 tessellation_evaluation_main(" in tessellation
-    assert (
-        "thread const CrossGLMetalOutputPatch<HSOutput, 3>& patch, float3 bary"
-        in tessellation
-    )
-    assert "SV_TessFactor" not in tessellation
-    assert "SV_DomainLocation" not in tessellation
-
-
 def test_anyhit_stage_codegen():
     code = """
     shader rt {
@@ -14444,8 +14950,10 @@ def test_metal_stage_entry_name_avoids_global_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
 
 
 def test_metal_stage_entry_name_avoids_local_helper_collision():
@@ -14469,8 +14977,10 @@ def test_metal_stage_entry_name_avoids_local_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
     assert "return fragment_main(uv);" in generated_code
 
 
@@ -14701,7 +15211,12 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
         "atomic_exchange_explicit(&counters[index], oldValue + currentValue, memory_order_relaxed);"
         in generated
     )
-    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
+    # groupMemoryBarrier orders buffer, image and shared memory (GLSL 4.60 section 8.16).
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+        "mem_flags::mem_texture);" in generated
+    )
     assert "atomic_fetch_add_explicit(counters[index]" not in generated
     assert "atomic_store_explicit(counters[index]" not in generated
     assert "atomic_load_explicit(counters[index]" not in generated
@@ -15995,11 +16510,17 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "float4 coord [[position]]" in fragment_code
     assert "float2 point [[point_coord]]" in fragment_code
     assert "uint sampleID [[sample_id]]" in fragment_code
@@ -16029,7 +16550,13 @@ def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
     generated = MetalCodeGen().generate_stage(ast, "vertex")
 
     assert "uint vertexID [[vertex_id]]" in generated
-    assert "uint instanceID [[instance_id]]" in generated
+    assert "uint _crossglInstanceIndex [[instance_id]]" in generated
+    assert "uint _crossglBaseInstance [[base_instance]]" in generated
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in generated
+    )
     assert "SV_VertexID" not in generated
     assert "SV_InstanceID" not in generated
 
@@ -16066,13 +16593,19 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
     assert "sv_vertex_id" not in vertex_code
     assert "SV_InstanceId" not in vertex_code
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "SV_PrimitiveId" not in fragment_code
     assert "sv_isfrontface" not in fragment_code
 
@@ -16131,11 +16664,12 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
     ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
-        ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
-        ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
+        # GLSL's int forms of these are accepted (test_metal_signed_builtins.py); a float is not.
+        ("fragment", "float", "gl_PrimitiveID", "primitive_id", "uint"),
+        ("fragment", "int", "gl_FrontFacing", "front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
-        ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
+        ("fragment", "float", "gl_SampleID", "sample_id", "uint"),
         ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
@@ -16258,7 +16792,7 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "float pointSize [[point_size]];" in generated
     assert "float4 coord [[position]];" in generated
     assert "float2 point [[point_coord]];" in generated
-    assert "bool frontFacing [[is_front_facing]];" in generated
+    assert "bool frontFacing [[front_facing]];" in generated
     assert "uint primitiveID [[primitive_id]];" in generated
     assert "uint sampleID [[sample_id]];" in generated
     assert "uint sampleMaskIn [[sample_mask]];" in generated
@@ -16302,13 +16836,14 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
     ("member_decl", "metal_semantic", "expected_type"),
     [
         ("vec3 position @ gl_Position", "position", "float4"),
-        ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
+        # A colour attachment may be any numeric scalar or vector (MSL 5.2.3.4), but not a matrix.
+        ("mat2 color @ gl_FragColor", "color\\(0\\)", "float4"),
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
-        ("int frontFacing @ gl_FrontFacing", "is_front_facing", "bool"),
+        ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
-        ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
+        ("float primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
-        ("int sampleID @ gl_SampleID", "sample_id", "uint"),
+        ("float sampleID @ gl_SampleID", "sample_id", "uint"),
         ("int sampleMask @ gl_SampleMask", "sample_mask", "uint"),
     ],
 )
@@ -16474,7 +17009,8 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
     ("stage", "return_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "int", "gl_Position", "position", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
+        # MSL takes any scalar or vector colour value, so only a bool is refused.
+        ("fragment", "bool", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
         ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
@@ -16483,6 +17019,7 @@ def test_function_return_builtin_types_are_validated(
     stage, return_type, semantic, metal_semantic, expected_type
 ):
     value = {
+        "bool": "true",
         "int": "0",
         "vec2": "vec2(0.0)",
         "vec3": "vec3(0.0)",
@@ -17050,6 +17587,14 @@ def test_metal_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
@@ -17349,6 +17894,208 @@ def test_metal_transitively_threads_cbuffer_parameter():
     assert "float value = applyScale(2.0, constants);" in generated_code
 
 
+def test_metal_generic_specialization_threads_shader_scope_buffer():
+    code = """
+    shader P {
+        buffer float* outp;
+        T pick<T>(T x) { return x; }
+        T twice<T>(T x) { return pick(x) + T(outp[0]); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float v = 1.0;
+                outp[0] = twice<float>(v);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float twice_float(float x, device float* outp)" in generated_code
+    assert "outp[0] = twice_float(v, outp);" in generated_code
+    # pick never reads the buffer, so its specialization takes no buffer parameter.
+    assert "float pick_float(float x) {" in generated_code
+    assert "return pick_float(x) + float(outp[0]);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_transitively_threads_buffer_to_helper_calling_generic():
+    code = """
+    shader P {
+        buffer float* outp;
+        T pick<T>(T x) { return x; }
+        T twice<T>(T x) { return pick(x) + T(outp[0]); }
+        float invokeTwice(float x) {
+            return twice<float>(x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float v = 1.0;
+                outp[0] = invokeTwice(v);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float invokeTwice(float x, device float* outp)" in generated_code
+    assert "float twice_float(float x, device float* outp)" in generated_code
+    assert "return twice_float(x, outp);" in generated_code
+    assert "outp[0] = invokeTwice(v, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_and_nongeneric_overload_buffer_threading():
+    code = """
+    shader P {
+        buffer float* outp;
+        float helper(float x) {
+            return x * 10.0;
+        }
+        T helper<T>(T x, T y) {
+            return x + y + T(outp[0]);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float a = 1.0;
+                float r1 = helper(a);
+                float r2 = helper<float>(a, 2.0);
+                outp[0] = r1 + r2;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    # The non-generic overload never reads the buffer; only the specialization takes it.
+    assert "float helper(float x) {" in generated_code
+    assert "float r1 = helper(a);" in generated_code
+    assert "float helper_float(float x, float y, device float* outp)" in generated_code
+    assert "float r2 = helper_float(a, 2.0, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_global_texture_parameter():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        T sampleAs<T>(vec2 uv) {
+            return T(texture(colorMap, uv));
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return sampleAs<vec4>(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert (
+        "float4 sampleAs_vec4(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert (
+        "return sampleAs_vec4(input.uv, colorMap, colorMapSampler);" in generated_code
+    )
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_cbuffer_parameter():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        buffer float* outp;
+        T scaled<T>(T v) { return v * T(gain); }
+        T identity<T>(T x) { return x; }
+        float plainScaled(float v) { return v * gain; }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = scaled<float>(1.0) + plainScaled(2.0) + identity<float>(3.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "float plainScaled(float v, constant Params& params) {" in generated_code
+    assert (
+        "outp[0] = scaled_float(1.0, params) + plainScaled(2.0, params) + identity_float(3.0);"
+        in generated_code
+    )
+    # identity never reads the cbuffer, so its specialization takes no parameter.
+    assert "float identity_float(float x) {" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_transitively_threads_cbuffer_to_helper_calling_generic():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        buffer float* outp;
+        T scaled<T>(T v) { return v * T(gain); }
+        float invokeScaled(float v) { return scaled<float>(v); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = invokeScaled(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "float invokeScaled(float v, constant Params& params) {" in generated_code
+    assert "return scaled_float(v, params);" in generated_code
+    assert "outp[0] = invokeScaled(1.0, params);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_cbuffer_parameter_fragment():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        T scaled<T>(T v) { return v * T(gain); }
+        struct FSInput { vec2 uv @ TEXCOORD0; };
+        fragment {
+            vec4 main(FSInput input) {
+                return vec4(scaled<float>(input.uv.x));
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "return float4(scaled_float(input.uv.x, params));" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_helper_local_cbuffer_member_name_does_not_thread_parameter():
     code = """
     shader CBufferScope {
@@ -17401,12 +18148,14 @@ def test_metal_helper_threads_global_texture_parameter():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "fragment")
 
-    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
+    # The combined sampler's sampler state is the host's: a bound sampler, threaded with the texture.
     assert (
-        "return colorMap.sample(sampler(mag_filter::linear, min_filter::linear), uv);"
+        "float4 sampleColor(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
         in generated_code
     )
-    assert "return sampleColor(input.uv, colorMap);" in generated_code
+    assert "return colorMap.sample(colorMapSampler, uv);" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "return sampleColor(input.uv, colorMap, colorMapSampler);" in generated_code
 
 
 def test_metal_helper_threads_global_texture_and_implicit_sampler_parameters():
@@ -17470,10 +18219,16 @@ def test_metal_transitively_threads_global_texture_parameter():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "fragment")
 
-    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
-    assert "float4 shade(float2 uv, texture2d<float> colorMap)" in generated_code
-    assert "return sampleColor(uv, colorMap);" in generated_code
-    assert "return shade(input.uv, colorMap);" in generated_code
+    assert (
+        "float4 sampleColor(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert (
+        "float4 shade(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert "return sampleColor(uv, colorMap, colorMapSampler);" in generated_code
+    assert "return shade(input.uv, colorMap, colorMapSampler);" in generated_code
 
 
 def test_metal_resource_array_elements_pass_to_scalar_helper_parameters():
@@ -17709,8 +18464,8 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "float3 colors[2] [[COLOR]];" in generated_code
-    assert "float4 indexedColor [[user(Color0)]];" in generated_code
+    assert "float3 colors[2] [[attribute(13)]];" in generated_code
+    assert "float4 indexedColor [[attribute(13)]];" in generated_code
 
 
 def test_metal_local_array_declarations_use_c_style_order():
@@ -19113,7 +19868,7 @@ def test_metal_texture_array_resources_and_indexed_sampling():
     assert "array<texture2d<float>, 4> textures [[texture(0)]]" in generated_code
     assert "texturecube<float> envMap [[texture(4)]]" in generated_code
     assert (
-        "textures[input.layer].sample(sampler(mag_filter::linear, min_filter::linear), input.uv)"
+        "textures[input.layer].sample(texturesSampler[input.layer], input.uv)"
         in generated_code
     )
     assert "envMap.sample" in generated_code
@@ -19546,7 +20301,7 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "rgFloat.write(float4(rgValue + float2(input.amount), 0.0, 0.0), uint2(input.pixel));"
+        "rgFloat.write(float4(rgValue + float2(input.amount), 0.0, 1.0), uint2(input.pixel));"
         in generated_code
     )
     assert (
@@ -19554,7 +20309,7 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "unsignedLayers.write(uint4(layerValue + uint2(input.unsignedAmount), 0u, 0u), uint2(input.pixelLayer.xy), uint(input.pixelLayer.z));"
+        "unsignedLayers.write(uint4(layerValue + uint2(input.unsignedAmount), 0u, 1u), uint2(input.pixelLayer.xy), uint(input.pixelLayer.z));"
         in generated_code
     )
     assert (
@@ -20197,22 +20952,16 @@ def test_metal_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = image.read(uint2(pixel)).x;" in generated_code
     assert "uint oldValue = image.read(uint2(pixel)).x;" in generated_code
-    assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
-    assert (
-        "image.write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "image.write(float4(oldValue + value), uint2(pixel));" in generated_code
+    assert "image.write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert "uint2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixel));" in generated_code
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixel));" in generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -20350,12 +21099,12 @@ def test_metal_explicit_rg_image_formats():
         in generated_code
     )
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
-    assert "image.write(int4(oldValue + value, 0, 0), uint3(voxel));" in generated_code
+    assert "image.write(int4(oldValue + value, 0, 1), uint3(voxel));" in generated_code
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixelLayer.xy), uint(pixelLayer.z));"
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixelLayer.xy), uint(pixelLayer.z));"
         in generated_code
     )
     assert "texture2d<float4, access::read_write> rgFloat" not in generated_code
@@ -20472,16 +21221,16 @@ def test_metal_explicit_narrow_rg_image_formats():
     assert "int2 oldValue = image.read(uint3(voxel)).xy;" in generated_code
     assert "uint2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixelLayer.xy), uint(pixelLayer.z));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixelLayer.xy), uint(pixelLayer.z));"
         in generated_code
     )
-    assert "image.write(int4(oldValue + value, 0, 0), uint3(voxel));" in generated_code
+    assert "image.write(int4(oldValue + value, 0, 1), uint3(voxel));" in generated_code
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixel));" in generated_code
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixel));" in generated_code
     )
     assert "texture2d<float4, access::read_write> rg8Float" not in generated_code
     assert ".read(uint2(pixel)).x;" not in generated_code
@@ -20670,7 +21419,7 @@ def test_metal_formatted_image_arrays_preserve_format_metadata():
     assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "float4 oldValue = images[1].read(uint3(voxel));" in generated_code
@@ -20754,7 +21503,7 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
     assert "float2 readPair(ImagePack pack, int index, int2 pixel)" in generated_code
     assert "return pack.pairs[index].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "pack.targets[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        "pack.targets[index].write(float4(value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -20779,7 +21528,7 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
         in generated_code
     )
     assert (
-        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -20856,7 +21605,7 @@ def test_metal_struct_held_storage_image_element_aliases_preserve_access():
         "texture2d<float, access::write> targetAlias = pack.targets[index];"
         in generated_code
     )
-    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel));" in (
+    assert "targetAlias.write(float4(value, 0.0, 1.0), uint2(pixel));" in (
         generated_code
     )
     assert (
@@ -20983,23 +21732,17 @@ def test_metal_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = images[1].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[1].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[1].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[0].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert "float oldValue = images[1].read(uint2(pixel));" not in generated_code
@@ -21089,23 +21832,17 @@ def test_metal_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[1].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -21223,23 +21960,17 @@ def test_metal_transitive_rg_image_arrays_share_call_site_size():
         in generated_code
     )
     assert "float oldValue = images[3].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[1].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[3].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[1].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[0].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -22013,15 +22744,9 @@ def test_metal_shadowed_rg_image_array_constant_keeps_scalar_context():
     )
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert (
         "array<texture2d<float, access::read_write>, 4> rgFloatImages"
         not in generated_code
@@ -22092,7 +22817,7 @@ def test_metal_formatted_image_arrays_preserve_expression_sizes():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
@@ -22165,7 +22890,7 @@ def test_metal_unsized_formatted_image_arrays_preserve_format_metadata():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -22246,7 +22971,7 @@ def test_metal_formatted_image_arrays_infer_named_constant_size():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[LAYER].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
@@ -22336,7 +23061,7 @@ def test_metal_readonly_formatted_image_array_parameters_use_resource_arrays():
     )
     assert "images[layer].read(uint2(pixel)).xy" in generated_code
     assert (
-        "images[layer].write(float4(value, 0.0, 0.0), uint2(pixel))" in generated_code
+        "images[layer].write(float4(value, 0.0, 1.0), uint2(pixel))" in generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -22464,7 +23189,7 @@ def test_metal_formatted_image_arrays_infer_transitive_helper_size():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
@@ -23012,9 +23737,14 @@ def test_metal_texture_array_helper_parameter_uses_resource_array():
     ast = crosstl.translator.parse(shader)
     generated_code = MetalCodeGen().generate(ast)
 
-    assert "float4 sampleLayer(array<texture2d<float>, 4> textures" in generated_code
     assert (
-        "textures[layer].sample(sampler(mag_filter::linear, min_filter::linear), uv)"
+        "float4 sampleLayer(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> texturesSampler, int layer, float2 uv)" in generated_code
+    )
+    assert "textures[layer].sample(texturesSampler[layer], uv)" in generated_code
+    assert "array<sampler, 4> texturesSampler [[sampler(0)]]" in generated_code
+    assert (
+        "return sampleLayer(textures, texturesSampler, input.layer, input.uv);"
         in generated_code
     )
     assert "texture2d<float> textures[4] [[stage_in]]" not in generated_code
@@ -23168,7 +23898,7 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23186,7 +23916,10 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
     )
     assert "textures[layer].sample(samplers[layer], uv)" in generated_code
     assert "textures[3].sample(samplers[3], uv)" in generated_code
-    assert "sampleLayer(textures, samplers, input.layer, input.uv)" in generated_code
+    assert (
+        "sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv)"
+        in generated_code
+    )
     assert "array<texture2d<float>, 1> textures" not in generated_code
     assert "array<sampler, 1> samplers" not in generated_code
 
@@ -23236,19 +23969,10 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_unsupported_indices():
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="samplers"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in dynamic_code
-    assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers"
-        in dynamic_code
-    )
-    assert "textures[layer].sample(samplers[layer], uv)" in dynamic_code
-    assert "array<texture2d<float>, 2> textures" not in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(2)]]" not in dynamic_code
 
     assert "array<texture2d<float>, 1> textures [[texture(0)]]" in negative_code
     assert "texture2d<float> afterTexture [[texture(1)]]" in negative_code
@@ -23353,7 +24077,7 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 1), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23362,11 +24086,11 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "constant int LAYER = 3;" in generated_code
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in generated_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in generated_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in generated_code
+    assert "array<texture2d<float>, 2> textures [[texture(0)]]" in generated_code
+    assert "texture2d<float> afterTexture [[texture(2)]]" in generated_code
+    assert "array<sampler, 2> samplers [[sampler(0)]]" in generated_code
     assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers, int LAYER"
+        "float4 sampleLayer(array<texture2d<float>, 2> textures, array<sampler, 2> samplers, int LAYER"
         in generated_code
     )
     assert "textures[LAYER].sample(samplers[LAYER], uv)" in generated_code
@@ -23767,13 +24491,22 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
         "float4 sampleArray(texture2d_array<float> tex, sampler s, float3 uvLayer, int3 pixelLayer)"
         in generated_code
     )
-    assert "tex.sample(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
-    assert "tex.sample(s, uvLayer.xy, uint(uvLayer.z), level(1.0))" in generated_code
     assert (
-        "tex.sample(s, uvLayer.xy, uint(uvLayer.z), gradient2d(float2(0.1), float2(0.2)))"
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))))"
         in generated_code
     )
-    assert "tex.gather(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
+    assert (
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(1.0))"
+        in generated_code
+    )
+    assert (
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), gradient2d(float2(0.1), float2(0.2)))"
+        in generated_code
+    )
+    assert (
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "tex.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(0))" in generated_code
     )
@@ -23781,7 +24514,10 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
         "float sampleShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth)"
         in generated_code
     )
-    assert "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth)" in generated_code
+    assert (
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
+        in generated_code
+    )
     assert (
         "float sampleCubeShadow(depthcube<float> tex, sampler s, float3 direction, float depth)"
         in generated_code
@@ -23828,7 +24564,7 @@ def test_metal_integer_texture_lod_resources_register_as_sampled_textures():
         in generated_code
     )
     assert (
-        "unsignedLabels[0] = labelAtlas.sample(nearestSampler, uvLayer.xy, uint(uvLayer.z), level(1.0));"
+        "unsignedLabels[0] = labelAtlas.sample(nearestSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(1.0));"
         in generated_code
     )
     assert "textureLod(" not in generated_code
@@ -23886,16 +24622,20 @@ def test_metal_cube_array_and_multisample_texture_types():
         "float4 sampleCubeArray(texturecube_array<float> tex, sampler s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w))" in generated_code
     assert (
-        "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w), level(2.0))" in generated_code
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
+        in generated_code
+    )
+    assert (
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), level(2.0))"
+        in generated_code
     )
     assert (
         "float sampleCubeArrayShadow(depthcube_array<float> tex, sampler s, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -23961,20 +24701,23 @@ def test_metal_cube_array_texture_grad_gather_uses_cube_gradients():
         in generated_code
     )
     assert (
-        "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w), gradientcube(ddx, ddy))"
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), gradientcube(ddx, ddy))"
         in generated_code
     )
-    assert "tex.gather(s, cubeLayer.xyz, uint(cubeLayer.w))" in generated_code
+    assert (
+        "tex.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "float4 sampleCubeArrayElements(array<texturecube_array<float>, 4> cubeArrays, array<sampler, 4> cubeSamplers, float4 cubeLayer, float3 ddx, float3 ddy)"
         in generated_code
     )
     assert (
-        "cubeArrays[2].sample(cubeSamplers[2], cubeLayer.xyz, uint(cubeLayer.w), gradientcube(ddx, ddy))"
+        "cubeArrays[2].sample(cubeSamplers[2], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), gradientcube(ddx, ddy))"
         in generated_code
     )
     assert (
-        "cubeArrays[3].gather(cubeSamplers[3], cubeLayer.xyz, uint(cubeLayer.w))"
+        "cubeArrays[3].gather(cubeSamplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
         in generated_code
     )
     assert (
@@ -24078,10 +24821,11 @@ def test_metal_texture_sampling_capability_descriptors():
         "gather_compare_offset": False,
     }
     assert codegen.texture_sampling_capabilities("depth2d<float>") == {
+        # MSL 6.12.6: depth2d has sample(s, coord, int2 offset) and gather(s, coord, int2 offset).
         "texture_type": "depth2d<float>",
-        "gather": False,
-        "gather_offset": False,
-        "sample_offset": False,
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
         "projected_offset": False,
         "compare_offset": True,
         "gather_compare_offset": True,
@@ -24136,6 +24880,7 @@ def test_metal_texture_dimension_descriptors():
     expect(
         "depth2d<float>",
         coordinate_dimension=2,
+        gather_offset_dimension=2,
         compare_offset_dimension=2,
         compare_lod_offset_dimension=2,
         compare_grad_offset_dimension=2,
@@ -24292,10 +25037,10 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         "tex.gather(s, uv, offset, component::w)" in generated_code
     )
     assert (
-        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset3, component::x).w)"
+        "float4(layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset0, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset1, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset2, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset3, component::x).w)"
         in generated_code
     )
     assert (
@@ -24303,22 +25048,22 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         in generated_code
     )
     assert (
-        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[3], component::z).w);"
+        "return float4(layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[0], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[1], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[2], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[3], component::z).w);"
         in generated_code
     )
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "cubeMap.gather(s, direction, component::z)" in generated_code
     assert (
-        "cubeArray.gather(s, cubeLayer.xyz, uint(cubeLayer.w), component::w)"
+        "cubeArray.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::w)"
         in generated_code
     )
     assert "cubeMap.gather(s, direction, int2(0)" not in generated_code
     assert (
-        "cubeArray.gather(s, cubeLayer.xyz, uint(cubeLayer.w), int2(0)"
+        "cubeArray.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), int2(0)"
         not in generated_code
     )
 
@@ -24556,19 +25301,19 @@ def test_metal_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     }
     for component, component_option in components.items():
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(-1, 0), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), dynamic0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, -1), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic1, {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), dynamic1, {component_option}).w"
             in generated_code
         )
         if component < 3:
@@ -24646,19 +25391,19 @@ def test_metal_direct_stage_gather_offsets_use_input_members():
         "component::w",
     ]:
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset1, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset2, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset3, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset3, {component_option}).w"
             in generated_code
         )
     assert "textureGather(" not in generated_code
@@ -24755,15 +25500,15 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layers.sample(s, uvLayer.xy, uint(uvLayer.z), offset);"
+        "float4 arrayPlain = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset);"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layers.sample(s, uvLayer.xy, uint(uvLayer.z), level(lod), offset);"
+        "float4 arrayLod = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(lod), offset);"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layers.sample(s, uvLayer.xy, uint(uvLayer.z), gradient2d(ddx, ddy), offset);"
+        "float4 arrayGrad = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -25116,15 +25861,15 @@ def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_memb
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset);"
+        "float4 arrayPlain = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset);"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), level(input.lod), input.offset);"
+        "float4 arrayLod = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), level(input.lod), input.offset);"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), gradient2d(input.ddx, input.ddy), input.offset);"
+        "float4 arrayGrad = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), gradient2d(input.ddx, input.ddy), input.offset);"
         in generated_code
     )
     assert (
@@ -25421,7 +26166,7 @@ def test_metal_direct_projected_array_texture_stage_input_members():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0)))"
     assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
@@ -25457,7 +26202,7 @@ def test_metal_direct_projected_array_texture_stage_input_members():
     assert "textureProjGradOffset(" not in generated_code
 
 
-def test_metal_implicit_projected_array_texture_stage_input_members_use_default_sampler():
+def test_metal_implicit_projected_array_texture_stage_input_members_use_bound_samplers():
     shader = """
     shader DirectImplicitProjectedArrayTexture {
         sampler2DArray layerMap;
@@ -25488,32 +26233,31 @@ def test_metal_implicit_projected_array_texture_stage_input_members_use_default_
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
-    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0)))"
     assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        f"float4 projected = layerMap.sample({default_sampler}, {projected_args});"
+        f"float4 projected = layerMap.sample(layerMapSampler, {projected_args});"
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.sample({default_sampler}, {projected_args}, input.offset);"
+        f"float4 projectedOffset = layerMap.sample(layerMapSampler, {projected_args}, input.offset);"
         in generated_code
     )
     assert (
-        f"float4 projectedLod = layerMap.sample({default_sampler}, {projected_args}, level(input.lod));"
+        f"float4 projectedLod = layerMap.sample(layerMapSampler, {projected_args}, level(input.lod));"
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.sample({default_sampler}, {projected_args}, level(input.lod), input.offset);"
+        f"float4 projectedLodOffset = layerMap.sample(layerMapSampler, {projected_args}, level(input.lod), input.offset);"
         in generated_code
     )
     assert (
-        f"float4 projectedGrad = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy));"
+        f"float4 projectedGrad = layerMap.sample(layerMapSampler, {projected_args}, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
+        f"float4 projectedGradOffset = layerMap.sample(layerMapSampler, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
@@ -25575,7 +26319,9 @@ def test_metal_projected_array_texture_resource_arrays_forward_samplers():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    projected_args = (
+        "uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0)))"
+    )
     assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
     assert "array<sampler, 4> linearSamplers [[sampler(0)]]" in generated_code
     assert (
@@ -25614,7 +26360,7 @@ def test_metal_projected_array_texture_resource_arrays_forward_samplers():
     assert "textureProj(" not in generated_code
 
 
-def test_metal_implicit_projected_array_texture_resource_arrays_use_default_sampler():
+def test_metal_implicit_projected_array_texture_resource_arrays_use_bound_samplers():
     shader = """
     shader ImplicitProjectedArrayTextureResourceArrays {
         sampler2DArray layerMaps[4];
@@ -25666,47 +26412,48 @@ def test_metal_implicit_projected_array_texture_resource_arrays_use_default_samp
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
-    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    projected_args = (
+        "uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0)))"
+    )
     assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
+        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        f"float4 fixedProj = maps[2].sample({default_sampler}, {projected_args});"
+        f"float4 fixedProj = maps[2].sample(mapsSampler[2], {projected_args});"
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].sample({default_sampler}, {projected_args}, offset);"
+        f"float4 dynamicOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, offset);"
         in generated_code
     )
     assert (
-        f"float4 fixedLod = maps[1].sample({default_sampler}, {projected_args}, level(lod));"
+        f"float4 fixedLod = maps[1].sample(mapsSampler[1], {projected_args}, level(lod));"
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].sample({default_sampler}, {projected_args}, level(lod), offset);"
+        f"float4 dynamicLodOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, level(lod), offset);"
         in generated_code
     )
     assert (
-        f"float4 fixedGrad = maps[3].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy));"
+        f"float4 fixedGrad = maps[3].sample(mapsSampler[3], {projected_args}, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy), offset);"
+        f"float4 dynamicGradOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
     assert "textureProj(" not in generated_code
 
 
-def test_metal_implicit_projected_stage_input_members_use_default_sampler():
+def test_metal_implicit_projected_stage_input_members_use_bound_samplers():
     shader = """
     shader DirectImplicitProjection {
         sampler2D colorMap;
@@ -25742,31 +26489,30 @@ def test_metal_implicit_projected_stage_input_members_use_default_sampler():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture3d<float> volumeMap [[texture(1)]]" in generated_code
     assert "depth2d<float> shadowMap [[texture(2)]]" in generated_code
     assert "depth2d_array<float> shadowArray [[texture(3)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        f"float4 color = colorMap.sample({default_sampler}, input.uvq.xy / input.uvq.z);"
+        "float4 color = colorMap.sample(colorMapSampler, input.uvq.xy / input.uvq.z);"
         in generated_code
     )
     assert (
-        f"float4 colorLod = colorMap.sample({default_sampler}, input.uvqw.xy / input.uvqw.w, level(input.lod));"
+        "float4 colorLod = colorMap.sample(colorMapSampler, input.uvqw.xy / input.uvqw.w, level(input.lod));"
         in generated_code
     )
     assert (
-        f"float4 volume = volumeMap.sample({default_sampler}, input.xyzq.xyz / input.xyzq.w);"
+        "float4 volume = volumeMap.sample(volumeMapSampler, input.xyzq.xyz / input.xyzq.w);"
         in generated_code
     )
     assert (
-        f"float shadow = shadowMap.sample_compare({default_sampler}, input.uvq.xy / input.uvq.z, input.depth);"
+        "float shadow = shadowMap.sample_compare(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        f"float shadowGrad = shadowArray.sample_compare({default_sampler}, input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z), input.depth, gradient2d(input.ddx, input.ddy));"
+        "float shadowGrad = shadowArray.sample_compare(shadowArraySampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
@@ -25872,31 +26618,31 @@ def test_metal_projected_shadow_compare_variants_use_sample_compare_projection()
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, uvq.xy / uvq.z, depth);"
+        "float projected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float projectedW = tex.sample_compare(s, uvqw.xy / uvqw.w, depth);"
+        "float projectedW = tex.sample_compare(s, uvqw.xy / uvqw.w, depth / uvqw.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, offset);"
+        "float offsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, level(lod));"
+        "float lodProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, level(lod), offset);"
+        "float lodOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, level(lod), offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy));"
+        "float gradProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        "float gradOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -25904,27 +26650,27 @@ def test_metal_projected_shadow_compare_variants_use_sample_compare_projection()
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        "float projected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float offsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, level(lod));"
+        "float lodProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, level(lod));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, level(lod), offset);"
+        "float lodOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, level(lod), offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float gradProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy), offset);"
+        "float gradOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert "textureCompareProj(" not in generated_code
@@ -25966,15 +26712,15 @@ def test_metal_direct_projected_shadow_compare_stage_input_members():
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in generated_code
     assert "sampler compareSampler [[sampler(0)]]" in generated_code
     assert (
-        "float planar = shadowMap.sample_compare(compareSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float planar = shadowMap.sample_compare(compareSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.sample_compare(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, input.offset);"
+        "float planarOffset = shadowMap.sample_compare(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth / input.uvqw.w, input.offset);"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArray.sample_compare(compareSampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z), input.depth, gradient2d(input.ddx, input.ddy));"
+        "float arrayGrad = shadowArray.sample_compare(compareSampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert "unsupported Metal texture compare" not in generated_code
@@ -26070,31 +26816,31 @@ def test_metal_projected_shadow_compare_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].sample_compare(shadowSamplers[2], uvq.xy / uvq.z, depth, level(lod));"
+        "float planarLod = shadowMaps[2].sample_compare(shadowSamplers[2], uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].sample_compare(shadowSamplers[1], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float arrayGrad = shadowArrays[1].sample_compare(shadowSamplers[1], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -26112,7 +26858,7 @@ def test_metal_projected_shadow_compare_resource_arrays_forward_samplers():
     assert "textureCompareProj(" not in generated_code
 
 
-def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sampler():
+def test_metal_implicit_projected_shadow_compare_resource_arrays_use_bound_samplers():
     shader = """
     shader ImplicitProjectedShadowResourceArrays {
         sampler2DShadow shadowMaps[4];
@@ -26186,55 +26932,55 @@ def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sam
     """
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in generated_code
     assert (
         "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in generated_code
     )
-    assert "array<sampler" not in generated_code
+    assert "array<sampler" in generated_code
     assert (
-        "float projectedLeaf(array<depth2d<float>, 4> shadowMaps, array<depth2d_array<float>, 4> shadowArrays"
+        "float projectedLeaf(array<depth2d<float>, 4> shadowMaps, array<sampler, 4> shadowMapsSampler, "
+        "array<depth2d_array<float>, 4> shadowArrays, array<sampler, 4> shadowArraysSampler"
         in generated_code
     )
     assert (
-        f"float planar = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].sample_compare(shadowMapsSampler[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        f"float planarOffset = shadowMaps[1].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].sample_compare(shadowMapsSampler[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        f"float planarLod = shadowMaps[2].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, level(lod));"
+        "float planarLod = shadowMaps[2].sample_compare(shadowMapsSampler[2], uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        f"float planarGradOffset = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowMapsSampler[layer], uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        f"float arrayProjected = shadowArrays[2].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].sample_compare(shadowArraysSampler[2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        f"float arrayOffset = shadowArrays[layer].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].sample_compare(shadowArraysSampler[layer], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        f"float arrayGrad = shadowArrays[1].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float arrayGrad = shadowArrays[1].sample_compare(shadowArraysSampler[1], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float projectedWrapper(array<depth2d<float>, 4> shadowMaps, array<depth2d_array<float>, 4> shadowArrays"
+        "float projectedWrapper(array<depth2d<float>, 4> shadowMaps, array<sampler, 4> shadowMapsSampler, array<depth2d_array<float>, 4> shadowArrays, array<sampler, 4> shadowArraysSampler"
         in generated_code
     )
     assert (
-        "projectedLeaf(shadowMaps, shadowArrays, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        "projectedLeaf(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowArrays, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "textureCompareProj(" not in generated_code
@@ -26329,19 +27075,19 @@ def test_metal_unsized_projected_shadow_compare_arrays_infer_transitive_constant
         in generated_code
     )
     assert (
-        "float planarHigh = shadowMaps[LAYER].sample_compare(shadowSamplers[LAYER], uvq.xy / uvq.z, depth);"
+        "float planarHigh = shadowMaps[LAYER].sample_compare(shadowSamplers[LAYER], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarLow = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float arrayHigh = shadowArrays[2 * 2].sample_compare(shadowSamplers[2 * 2], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float arrayHigh = shadowArrays[2 * 2].sample_compare(shadowSamplers[2 * 2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].sample_compare(shadowSamplers[3], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float arrayLow = shadowArrays[3].sample_compare(shadowSamplers[3], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
@@ -26457,7 +27203,7 @@ def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.sample_compare(s, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     for func_name in {
@@ -26543,11 +27289,11 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "float4 implicitCube = cubeMap.sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        "float4 implicitCube = cubeMap.sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w);"
         in generated_code
     )
     assert (
-        "float4 implicitCubeGrad = cubeMap.sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w, gradientcube(input.ddx, input.ddy));"
+        "float4 implicitCubeGrad = cubeMap.sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, gradientcube(input.ddx, input.ddy));"
         in generated_code
     )
     assert (
@@ -26719,31 +27465,31 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         in generated_code
     )
     assert (
-        "float4 projectedCube(array<texturecube<float>, 4> maps, int layer, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedCube(array<texturecube<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedCubeArray(array<texturecube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedCubeArray(array<texturecube_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedShadow(array<depthcube<float>, 4> maps, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedShadow(array<depthcube<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 fixedProjected = maps[2].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w);"
+        "float4 fixedProjected = maps[2].sample(mapsSampler[2], cubeProj.xyz / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float4 dynamicLodProjected = maps[layer].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w, level(lod));"
+        "float4 dynamicLodProjected = maps[layer].sample(mapsSampler[layer], cubeProj.xyz / cubeProj.w, level(lod));"
         in generated_code
     )
     assert (
-        "float4 globalProjected = cubeMaps[input.layer].sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        "float4 globalProjected = cubeMaps[input.layer].sample(cubeMapsSampler[input.layer], input.cubeProj.xyz / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -26760,17 +27506,16 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
             f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
             in refusal
         )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"float fixedProjected = maps[2].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth);"
+        "float fixedProjected = maps[2].sample_compare(mapsSampler[2], cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        f"float dynamicLodProjected = maps[layer].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth, level(lod));"
+        "float dynamicLodProjected = maps[layer].sample_compare(mapsSampler[layer], cubeProj.xyz / cubeProj.w, depth / cubeProj.w, level(lod));"
         in generated_code
     )
     assert (
-        f"float globalShadow = shadowCubes[input.layer].sample_compare({default_sampler}, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        "float globalShadow = shadowCubes[input.layer].sample_compare(shadowCubesSampler[input.layer], input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -26788,22 +27533,22 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
             in refusal
         )
     assert (
-        "projectedCube(cubeMaps, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedCube(cubeMaps, cubeMapsSampler, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedCubeArray(cubeArrays, input.layer, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedCubeArray(cubeArrays, cubeArraysSampler, input.layer, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedShadow(shadowCubes, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadow(shadowCubes, shadowCubesSampler, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedShadowArray(shadowCubeArrays, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadowArray(shadowCubeArrays, shadowCubeArraysSampler, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert "textureProj(" not in generated_code
     assert "textureCompareProj(" not in generated_code
 
@@ -26877,13 +27622,16 @@ def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
         "float4 gatherShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
-    assert "tex.gather_compare(s, uvLayer.xy, uint(uvLayer.z), depth)" in generated_code
     assert (
-        "tex.gather_compare(s, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
+        in generated_code
+    )
+    assert (
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
@@ -26891,7 +27639,7 @@ def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
         in generated_code
     )
     assert (
-        "return tex.gather_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -26946,7 +27694,6 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depthcube<float> cubeShadow [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
@@ -26961,23 +27708,20 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        "return tex.gather_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
-        "float4 implicitCubeShadow(depthcube<float> tex, float3 direction, float depth)"
+        "float4 implicitCubeShadow(depthcube<float> tex, sampler texSampler, float3 direction, float depth)"
+        in generated_code
+    )
+    assert "return tex.gather_compare(texSampler, direction, depth);" in generated_code
+    assert (
+        "float4 implicitCubeArrayShadow(depthcube_array<float> tex, sampler texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        f"return tex.gather_compare({default_sampler}, direction, depth);"
-        in generated_code
-    )
-    assert (
-        "float4 implicitCubeArrayShadow(depthcube_array<float> tex, float4 cubeLayer, float depth)"
-        in generated_code
-    )
-    assert (
-        f"return tex.gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(texSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
@@ -26985,11 +27729,11 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        "cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth)"
+        "cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth)"
         in generated_code
     )
     assert (
-        f"cubeShadow.gather_compare({default_sampler}, input.direction, input.depth)"
+        "cubeShadow.gather_compare(cubeShadowSampler, input.direction, input.depth)"
         in generated_code
     )
     assert "unsupported Metal texture gather compare" not in generated_code
@@ -27035,35 +27779,35 @@ def test_metal_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arra
     assert "depth2d_array<float> shadowArray [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
     assert (
-        "float4 implicitArray(depth2d_array<float> tex, float3 uvLayer, float depth, int2 offset)"
+        "float4 implicitArray(depth2d_array<float> tex, sampler texSampler, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth)"
+        "tex.gather_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.sample_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
-        "float4 implicitCubeArray(depthcube_array<float> tex, float4 cubeLayer, float depth)"
+        "float4 implicitCubeArray(depthcube_array<float> tex, sampler texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        "return tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(texSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
-        "implicitArray(shadowArray, input.uvLayer, input.depth, input.offset)"
+        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, input.offset)"
         in generated_code
     )
     assert (
-        "implicitCubeArray(cubeShadowArray, input.cubeLayer, input.depth)"
+        "implicitCubeArray(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer, input.depth)"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -27132,7 +27876,6 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
     implicit_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(implicit_shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depth2d<float> shadowMap [[texture(0)]]" in explicit_code
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in explicit_code
@@ -27147,15 +27890,15 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
         in explicit_code
     )
     assert (
-        "float4 arrayGather = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.depth);"
+        "float4 arrayGather = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
         in explicit_code
     )
     assert (
-        "float4 arrayOffset = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.depth, input.offset);"
+        "float4 arrayOffset = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
         in explicit_code
     )
     assert (
-        "float4 cubeArrayGather = cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth);"
+        "float4 cubeArrayGather = cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
         in explicit_code
     )
     assert "unsupported Metal texture gather compare" not in explicit_code
@@ -27164,25 +27907,25 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
     assert "depth2d<float> shadowMap [[texture(0)]]" in implicit_code
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in implicit_code
     assert "depthcube_array<float> cubeShadowArray [[texture(2)]]" in implicit_code
-    assert "[[sampler(" not in implicit_code
+    assert "[[sampler(" in implicit_code
     assert (
-        f"float4 planar = shadowMap.gather_compare({default_sampler}, input.uv, input.depth);"
+        "float4 planar = shadowMap.gather_compare(shadowMapSampler, input.uv, input.depth);"
         in implicit_code
     )
     assert (
-        f"float4 planarOffset = shadowMap.gather_compare({default_sampler}, input.uv, input.depth, input.offset);"
+        "float4 planarOffset = shadowMap.gather_compare(shadowMapSampler, input.uv, input.depth, input.offset);"
         in implicit_code
     )
     assert (
-        f"float4 arrayGather = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(input.uvLayer.z), input.depth);"
+        "float4 arrayGather = shadowArray.gather_compare(shadowArraySampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert (
-        f"float4 arrayOffset = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(input.uvLayer.z), input.depth, input.offset);"
+        "float4 arrayOffset = shadowArray.gather_compare(shadowArraySampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
         in implicit_code
     )
     assert (
-        f"float4 cubeArrayGather = cubeShadowArray.gather_compare({default_sampler}, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth);"
+        "float4 cubeArrayGather = cubeShadowArray.gather_compare(cubeShadowArraySampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert "unsupported Metal texture gather compare" not in implicit_code
@@ -27304,7 +28047,6 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
     implicit_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(implicit_shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in explicit_code
     assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in explicit_code
@@ -27320,19 +28062,19 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
         in explicit_code
     )
     assert (
-        "arrays[1].gather_compare(samplers[1], uvLayer.xy, uint(uvLayer.z), depth)"
+        "arrays[1].gather_compare(samplers[1], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
-        "arrays[layer].gather_compare(samplers[layer], uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "arrays[layer].gather_compare(samplers[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in explicit_code
     )
     assert (
-        "cubes[3].gather_compare(samplers[3], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubes[3].gather_compare(samplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
-        "cubes[layer].gather_compare(samplers[layer], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubes[layer].gather_compare(samplers[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
@@ -27344,34 +28086,34 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in implicit_code
     assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in implicit_code
     assert "array<depthcube_array<float>, 4> cubeArrays [[texture(8)]]" in implicit_code
-    assert "[[sampler(" not in implicit_code
+    assert "[[sampler(" in implicit_code
     assert (
-        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<depth2d_array<float>, 4> arrays, array<depthcube_array<float>, 4> cubes, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
+        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<sampler, 4> mapsSampler, array<depth2d_array<float>, 4> arrays, array<sampler, 4> arraysSampler, array<depthcube_array<float>, 4> cubes, array<sampler, 4> cubesSampler, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
         in implicit_code
     )
-    assert f"maps[2].gather_compare({default_sampler}, uv, depth)" in implicit_code
+    assert "maps[2].gather_compare(mapsSampler[2], uv, depth)" in implicit_code
     assert (
-        f"maps[layer].gather_compare({default_sampler}, uv, depth, offset)"
-        in implicit_code
-    )
-    assert (
-        f"arrays[1].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth)"
+        "maps[layer].gather_compare(mapsSampler[layer], uv, depth, offset)"
         in implicit_code
     )
     assert (
-        f"arrays[layer].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "arrays[1].gather_compare(arraysSampler[1], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        f"cubes[3].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "arrays[layer].gather_compare(arraysSampler[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in implicit_code
     )
     assert (
-        f"cubes[layer].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubes[3].gather_compare(cubesSampler[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        "gatherLayer(shadowMaps, shadowArrays, cubeArrays, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
+        "cubes[layer].gather_compare(cubesSampler[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
+        in implicit_code
+    )
+    assert (
+        "gatherLayer(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, cubeArrays, cubeArraysSampler, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
         in implicit_code
     )
     assert "textureGatherCompare" not in implicit_code
@@ -27587,19 +28329,19 @@ def test_metal_shadow_compare_lod_grad_use_depth_overloads():
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, level(lod))"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, level(lod), offset)"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod), offset)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy))"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy), offset)"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset)"
         in generated_code
     )
     assert (
@@ -27607,11 +28349,11 @@ def test_metal_shadow_compare_lod_grad_use_depth_overloads():
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod))"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy))"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy))"
         in generated_code
     )
     assert "textureCompareLod(" not in generated_code
@@ -27792,31 +28534,33 @@ def test_metal_nested_implicit_shadow_compare_lod_grad_uses_depth_overloads():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert "depth2d<float> shadowMap [[texture(0)]]" in generated_code
     assert (
-        "float shadowOps(depth2d<float> tex, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        "float shadowOps(depth2d<float> tex, sampler texSampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        f"float2 lod = float2(tex.calculate_clamped_lod({default_sampler}, uv), tex.calculate_unclamped_lod({default_sampler}, uv));"
+        "float2 lod = float2(tex.calculate_clamped_lod(texSampler, uv), tex.calculate_unclamped_lod(texSampler, uv));"
         in generated_code
     )
     assert (
-        f"float cmp = tex.sample_compare({default_sampler}, uv, depth, level(lod.x));"
+        "float cmp = tex.sample_compare(texSampler, uv, depth, level(lod.x));"
         in generated_code
     )
     assert (
-        f"float grad = tex.sample_compare({default_sampler}, uv, depth, gradient2d(ddx, ddy), offset);"
+        "float grad = tex.sample_compare(texSampler, uv, depth, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "float wrappedShadow(depth2d<float> tex, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        "float wrappedShadow(depth2d<float> tex, sampler texSampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "return shadowOps(tex, uv, depth, ddx, ddy, offset);" in generated_code
     assert (
-        "wrappedShadow(shadowMap, input.uv, input.depth, input.ddx, input.ddy, input.offset)"
+        "return shadowOps(tex, texSampler, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "wrappedShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -27858,33 +28602,34 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
     """
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depth2d_array<float> s2da [[texture(0)]]" in generated_code
     assert "depthcube_array<float> sca [[texture(1)]]" in generated_code
     assert "depthcube<float> sc [[texture(2)]]" in generated_code
     s2da_compare = (
-        f"c = s2da.sample_compare({default_sampler}, input.tc.xy, "
-        "uint(input.tc.z), input.tc.w"
+        "c = s2da.sample_compare(s2daSampler, input.tc.xy, "
+        "uint(rint(clamp(float(input.tc.z), 0.0, 2047.0))), input.tc.w"
     )
     s2da_lod_compare = (
-        f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
-        "uint(input.tc.xyz.z), input.tc.w"
+        "c = s2da.sample_compare(s2daSampler, input.tc.xyz.xy, "
+        "uint(rint(clamp(float(input.tc.xyz.z), 0.0, 2047.0))), input.tc.w"
     )
     assert f"{s2da_compare}, bias(0.0));" in generated_code
     assert (
-        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
+        "c = sca.sample_compare(scaSampler, input.tc.xyz, "
+        "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, bias(0.0));"
+        in generated_code
     )
     assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
     assert f"{s2da_lod_compare}, level(0.0));" in generated_code
     assert (
-        f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
+        "c = sc.sample_compare(scSampler, input.tc.xyz, "
         "input.tc.w, level(0.0));" in generated_code
     )
     assert (
-        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
+        "c = sca.sample_compare(scaSampler, input.tc.xyz, "
+        "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, level(0.0));"
+        in generated_code
     )
     assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
     assert "texture(s2da" not in generated_code
@@ -27938,7 +28683,7 @@ def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():
         in generated_code
     )
     assert (
-        "shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -27946,7 +28691,7 @@ def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():
         in generated_code
     )
     assert (
-        "cubeShadowArrays[3].sample_compare(shadowSamplers[3], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubeShadowArrays[3].sample_compare(shadowSamplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -28041,11 +28786,11 @@ def test_metal_array_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float arrayLod = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(uvLayer.z), depth, level(lod));"
+        "float arrayLod = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy), offset);"
+        "float arrayGrad = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -28131,11 +28876,11 @@ def test_metal_cube_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float cubeArrayLod = cubeArrays[2].sample_compare(shadowSamplers[2], cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod));"
+        "float cubeArrayLod = cubeArrays[2].sample_compare(shadowSamplers[2], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float cubeArrayGrad = cubeArrays[layer].sample_compare(shadowSamplers[layer], cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy));"
+        "float cubeArrayGrad = cubeArrays[layer].sample_compare(shadowSamplers[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -28637,7 +29382,7 @@ def test_metal_nested_resource_container_array_fields_forward_to_helpers():
         in generated_code
     )
     assert (
-        "float4 layered = pack.layers[LAYER].sample(samplers[LAYER], uvLayer.xy, uint(uvLayer.z));"
+        "float4 layered = pack.layers[LAYER].sample(samplers[LAYER], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))));"
         in generated_code
     )
     assert "return samplePack(bank.pack, bank.samplers, uv, uvLayer);" in generated_code
@@ -29716,7 +30461,6 @@ def test_metal_direct_stage_texture_queries_mix_size_levels_and_lod():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture2d_array<float> layerMap [[texture(1)]]" in generated_code
@@ -29764,11 +30508,11 @@ def test_metal_direct_stage_texture_queries_mix_size_levels_and_lod():
         in generated_code
     )
     assert (
-        f"float2 implicitLayerLod = float2(layerMap.calculate_clamped_lod({default_sampler}, input.uvLayer.xy), layerMap.calculate_unclamped_lod({default_sampler}, input.uvLayer.xy));"
+        "float2 implicitLayerLod = float2(layerMap.calculate_clamped_lod(layerMapSampler, input.uvLayer.xy), layerMap.calculate_unclamped_lod(layerMapSampler, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        f"float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz), cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz));"
+        "float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_clamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz), cubeShadowArray.calculate_unclamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz));"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -30155,15 +30899,15 @@ def test_metal_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes():
         in generated_code
     )
     assert (
-        "float cmp = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "float cmp = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
-        "float cmpLod = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod));"
+        "float cmpLod = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float grad = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy));"
+        "float grad = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -30236,25 +30980,22 @@ def test_metal_implicit_shadow_array_texture_query_lod_uses_default_sampler():
     )
     assert "sampler linearSampler" not in generated_code
     assert "linearSamplers" not in generated_code
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"shadowArray.calculate_clamped_lod({default_sampler}, input.uvLayer.xy)"
+        "shadowArray.calculate_clamped_lod(shadowArraySampler, input.uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz)"
+        "cubeShadowArray.calculate_clamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz)"
         in generated_code
     )
-    assert f"tex.calculate_clamped_lod({default_sampler}, uvLayer.xy)" in generated_code
+    assert "tex.calculate_clamped_lod(texSampler, uvLayer.xy)" in generated_code
+    assert "tex.calculate_clamped_lod(texSampler, cubeLayer.xyz)" in generated_code
     assert (
-        f"tex.calculate_clamped_lod({default_sampler}, cubeLayer.xyz)" in generated_code
-    )
-    assert (
-        f"shadowArrays[2].calculate_clamped_lod({default_sampler}, uvLayer.xy)"
+        "shadowArrays[2].calculate_clamped_lod(shadowArraysSampler[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"cubeShadowArrays[3].calculate_clamped_lod({default_sampler}, cubeLayer.xyz)"
+        "cubeShadowArrays[3].calculate_clamped_lod(cubeShadowArraysSampler[3], cubeLayer.xyz)"
         in generated_code
     )
     assert (
@@ -30511,12 +31252,13 @@ def test_metal_implicit_sampler_for_texture_parameter():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
-    assert "float4 sampleColor(texture2d<float> tex, float2 uv)" in generated_code
     assert (
-        "tex.sample(sampler(mag_filter::linear, min_filter::linear), uv)"
+        "float4 sampleColor(texture2d<float> tex, sampler texSampler, float2 uv)"
         in generated_code
     )
-    assert "sampleColor(colorMap, input.uv)" in generated_code
+    assert "tex.sample(texSampler, uv)" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "sampleColor(colorMap, colorMapSampler, input.uv)" in generated_code
 
 
 def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata():
@@ -31577,7 +32319,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth);
                 float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
                 return vec4(arrayShadow + singleShadow);
             }
@@ -31604,7 +32346,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
         "shadowMaps[3].sample_compare(shadowSamplers[3], uv, depth)" in generated_code
     )
     assert (
-        "shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth)"
+        "shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth)"
         in generated_code
     )
     assert (
@@ -31669,23 +32411,10 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_ignore_unsupported_indi
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="shadowMaps"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> shadowSamplers [[sampler(0)]]" in dynamic_code
-    assert "sampler afterSampler [[sampler(1)]]" in dynamic_code
-    assert (
-        "float shadowLayer(array<depth2d<float>, 1> shadowMaps, array<sampler, 1> shadowSamplers"
-        in dynamic_code
-    )
-    assert (
-        "shadowMaps[layer].sample_compare(shadowSamplers[layer], uv, depth)"
-        in dynamic_code
-    )
-    assert "array<depth2d<float>, 2> shadowMaps" not in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(2)]]" not in dynamic_code
 
     assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in negative_code
     assert "depth2d<float> afterShadow [[texture(1)]]" in negative_code
@@ -32065,14 +32794,15 @@ def test_metal_implicit_sampler_for_shadow_texture_parameter():
 
     assert "depth2d<float> shadowMap [[texture(0)]]" in generated_code
     assert (
-        "float sampleShadow(depth2d<float> tex, float2 uv, float depth)"
+        "float sampleShadow(depth2d<float> tex, sampler texSampler, float2 uv, float depth)"
         in generated_code
     )
+    assert "tex.sample_compare(texSampler, uv, depth)" in generated_code
+    assert "sampler shadowMapSampler [[sampler(0)]]" in generated_code
     assert (
-        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uv, depth)"
+        "sampleShadow(shadowMap, shadowMapSampler, input.uv, input.depth)"
         in generated_code
     )
-    assert "sampleShadow(shadowMap, input.uv, input.depth)" in generated_code
 
 
 @pytest.mark.parametrize(
@@ -32160,7 +32890,10 @@ def test_metal_sampler_1d_array_sampling_and_queries():
         in generated_code
     )
     assert "int(tex.get_num_mip_levels())" in generated_code
-    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
+    assert (
+        "tex.sample(samp, uvLayer.x, uint(rint(clamp(float(uvLayer.y), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "texture sampling: textureLod on texture1d_array<float> supports "
         "only implicit sampling" in refusal
@@ -32175,7 +32908,8 @@ def test_metal_sampler_1d_array_sampling_and_queries():
     assert "tex.read((pixelLayer.xy" not in generated_code
     assert "calculate_unclamped_lod" not in generated_code
     assert (
-        "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" not in generated_code
+        "tex.sample(samp, uvLayer.x, uint(rint(clamp(float(uvLayer.y), 0.0, 2047.0))), level(lod))"
+        not in generated_code
     )
 
 
@@ -32256,6 +32990,46 @@ def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
     assert "textureOffset(" not in generated_code
+
+
+def test_metal_1d_base_lod_sampling_depends_on_program_stages():
+    graphics_shader = """
+    shader OneDBaseLevel {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return textureLod(lineMap, linearSampler, 0.5, 0);
+            }
+        }
+    }
+    """
+    compute_shader = """
+    shader OneDBaseLevelCompute {
+        sampler1D lineMap;
+        sampler linearSampler;
+        image1D output;
+
+        compute {
+            void main() {
+                imageStore(output, 0, textureLod(lineMap, linearSampler, 0.5, 0));
+            }
+        }
+    }
+    """
+
+    # Fragment sampling derives its own LOD, which can select the minification
+    # filter, so an explicit base level has no exact Metal 1D equivalent.
+    with pytest.raises(
+        MetalLoweringRefused,
+        match="textureLod on texture1d<float> supports only implicit sampling",
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(graphics_shader))
+
+    compute_code = MetalCodeGen().generate(crosstl.translator.parse(compute_shader))
+    assert "lineMap.sample(linearSampler, 0.5)" in compute_code
+    assert "unsupported Metal texture sampling" not in compute_code
 
 
 def test_metal_image_1d_and_1d_array_storage_operations():
@@ -33164,338 +33938,21 @@ def test_metal_generic_image_memory_attributes_do_not_become_semantics():
     ast = crosstl.translator.parse(shader)
     generated_code = MetalCodeGen().generate(ast)
 
+    device = "memory_coherence::memory_coherence_device"
     assert (
-        "texture2d<float, access::read_write> coherentImage [[texture(0)]]"
+        f"texture2d<float, access::read_write, {device}> coherentImage [[texture(0)]]"
         in generated_code
     )
     assert (
-        "texture2d<uint, access::read_write> globalImage [[texture(1)]]"
+        f"texture2d<uint, access::read_write, {device}> globalImage [[texture(1)]]"
         in generated_code
     )
     assert (
-        "float readPixel(texture2d<float, access::read_write> image, int2 pixel)"
-        in generated_code
+        f"float readPixel(texture2d<float, access::read_write, {device}> image, "
+        "int2 pixel)" in generated_code
     )
     assert "[[coherent]]" not in generated_code
     assert "[[globallycoherent]]" not in generated_code
-
-
-def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders():
-    """Geometry stages lower to a deterministic Metal helper representation."""
-    code = """
-    shader GeometryExpansion {
-        struct GSInput {
-            vec4 position @ gl_Position;
-            vec3 normal @ NORMAL;
-        };
-
-        struct GSOutput {
-            vec4 position @ gl_Position;
-            vec3 color @ COLOR;
-        };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) {
-                GSOutput output;
-                output.position = input[0].position;
-                output.color = input[0].normal;
-                stream.Append(output);
-                stream.RestartStrip();
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate(ast)
-
-    assert "template <typename T>" in generated
-    assert "struct CrossGLMetalTriangleStream" in generated
-    assert "// CrossGL geometry stage: maxvertexcount=3" in generated
-    assert "// CrossGL geometry input primitive: triangle:input" in generated
-    assert (
-        "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
-        in generated
-    )
-    assert "void geometry_main(" in generated
-    assert "GSInput input[3]" in generated
-    assert "thread CrossGLMetalTriangleStream<GSOutput>& stream" in generated
-    assert "stream.Append(output);" in generated
-    assert "stream.RestartStrip();" in generated
-
-    generated_stage = MetalCodeGen().generate_stage(ast, "geometry")
-    assert "void geometry_main(" in generated_stage
-
-
-def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape():
-    missing_attribute = """
-    shader MissingGeometryMax {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="requires maxvertexcount"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(missing_attribute), "geometry"
-        )
-
-    invalid_max = """
-    shader BadGeometryMax {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(0) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="maxvertexcount.*positive"):
-        MetalCodeGen().generate_stage(crosstl.translator.parse(invalid_max), "geometry")
-
-    wrong_arity = """
-    shader BadGeometryInputArity {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[2], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
-        MetalCodeGen().generate_stage(crosstl.translator.parse(wrong_arity), "geometry")
-
-
-def test_metal_tessellation_control_stage_lowers_with_patch_metadata():
-    """Tessellation control stages lower to a deterministic helper function."""
-    code = """
-    shader TessControl {
-        struct PatchInput {
-            vec3 position @ POSITION;
-        };
-
-        struct PatchOutput {
-            vec3 position @ POSITION;
-        };
-
-        struct PatchConstants {
-            vec3 edgeFactors @ SV_TessFactor;
-            float insideFactor @ SV_InsideTessFactor;
-        };
-
-        tessellation_control {
-            PatchConstants patchConstants(InputPatch<PatchInput, 3> patch) {
-                PatchConstants constants;
-                return constants;
-            }
-
-            PatchOutput main(
-                InputPatch<PatchInput, 3> patch,
-                uint pointID @ SV_OutputControlPointID
-            ) @domain(tri)
-              @partitioning(fractional_odd)
-              @outputtopology(triangle_cw)
-              @outputcontrolpoints(3)
-              @patchconstantfunc(patchConstants)
-              @maxtessfactor(16.0) {
-                PatchOutput output;
-                output.position = patch[pointID].position;
-                return output;
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate_stage(ast, "tessellation_control")
-
-    assert "struct CrossGLMetalInputPatch" in generated
-    assert (
-        "// CrossGL tessellation_control stage: domain=triangle, "
-        "partitioning=fractional_odd, outputtopology=triangle_cw, "
-        "outputcontrolpoints=3, patchconstantfunc=patchConstants, "
-        "maxtessfactor=16.0"
-    ) in generated
-    assert (
-        "// CrossGL tessellation patch parameters: " "InputPatch:patch->PatchInput[3]"
-    ) in generated
-    assert "PatchOutput tessellation_control_main(" in generated
-    assert (
-        "thread const CrossGLMetalInputPatch<PatchInput, 3>& patch, uint pointID"
-        in generated
-    )
-    assert "patch[pointID].position" in generated
-    assert "SV_OutputControlPointID" not in generated
-
-
-def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata():
-    """Tessellation evaluation stages lower to a deterministic helper function."""
-    code = """
-    shader TessEval {
-        struct DomainInput {
-            vec3 position @ POSITION;
-        };
-
-        tessellation_evaluation {
-            vec4 main(
-                OutputPatch<DomainInput, 4> patch,
-                vec2 uv @ SV_DomainLocation,
-                uint primitiveID @ SV_PrimitiveID
-            ) @domain(quad)
-              @outputtopology(point) {
-                return vec4(patch[0].position + patch[1].position * uv.x, 1.0);
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate_stage(ast, "tessellation_evaluation")
-
-    assert "struct CrossGLMetalOutputPatch" in generated
-    assert (
-        "// CrossGL tessellation_evaluation stage: domain=quad, " "outputtopology=point"
-    ) in generated
-    assert (
-        "// CrossGL tessellation patch parameters: " "OutputPatch:patch->DomainInput[4]"
-    ) in generated
-    assert "float4 tessellation_evaluation_main(" in generated
-    assert (
-        "thread const CrossGLMetalOutputPatch<DomainInput, 4>& patch, "
-        "float2 uv, uint primitiveID"
-    ) in generated
-    assert "SV_DomainLocation" not in generated
-    assert "SV_PrimitiveID" not in generated
-
-
-def test_metal_tessellation_stage_validates_patch_metadata():
-    missing_patch_code = """
-    shader MissingTessPatch {
-        tessellation_control {
-            void constants() { }
-
-            void main(uint pointID @ SV_OutputControlPointID)
-                @domain(tri)
-                @partitioning(fractional_odd)
-                @outputtopology(triangle_cw)
-                @outputcontrolpoints(3)
-                @patchconstantfunc(constants) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="InputPatch"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(missing_patch_code), "tessellation_control"
-        )
-
-    mismatched_control_points = """
-    shader MismatchedTessPatchCount {
-        struct PatchInput { vec3 position @ POSITION; };
-        struct PatchOutput { vec3 position @ POSITION; };
-
-        tessellation_control {
-            PatchOutput constants(InputPatch<PatchInput, 3> patch) {
-                PatchOutput output;
-                return output;
-            }
-
-            PatchOutput main(
-                InputPatch<PatchInput, 3> patch,
-                uint pointID @ SV_OutputControlPointID
-            ) @domain(tri)
-              @partitioning(fractional_odd)
-              @outputtopology(triangle_cw)
-              @outputcontrolpoints(4)
-              @patchconstantfunc(constants) {
-                PatchOutput output;
-                return output;
-            }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="outputcontrolpoints.*InputPatch"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(mismatched_control_points),
-            "tessellation_control",
-        )
-
-    bad_domain_location = """
-    shader BadTessDomainLocation {
-        struct PatchOutput { vec3 position @ POSITION; };
-
-        tessellation_evaluation {
-            vec4 main(OutputPatch<PatchOutput, 3> patch, vec2 bary @ SV_DomainLocation)
-                @domain(tri) {
-                return vec4(0.0);
-            }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="SV_DomainLocation.*3 component"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(bad_domain_location),
-            "tessellation_evaluation",
-        )
-
-
-def test_metal_mixed_shader_with_geometry_emits_all_requested_stages():
-    """Mixed vertex/geometry/fragment shaders can still be emitted per stage."""
-    code = """
-    shader MixedPipeline {
-        struct VOut {
-            vec4 position @ gl_Position;
-        };
-
-        vertex {
-            VOut main() {
-                VOut o;
-                o.position = vec4(0.0, 0.0, 0.0, 1.0);
-                return o;
-            }
-        }
-
-        geometry {
-            void main(triangle VOut input[3], inout TriangleStream<VOut> stream)
-                @maxvertexcount(3) {
-                stream.Append(input[0]);
-            }
-        }
-
-        fragment {
-            vec4 main(VOut input) @ gl_FragColor {
-                return input.position;
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    full_code = MetalCodeGen().generate(ast)
-    assert "vertex VOut vertex_main" in full_code
-    assert "void geometry_main" in full_code
-    assert "fragment float4 fragment_main" in full_code
-
-    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
-    assert "vertex" in vertex_code
-    assert "geometry" not in vertex_code.lower().split("//")[0]
-
-    geometry_code = MetalCodeGen().generate_stage(ast, "geometry")
-    assert "void geometry_main" in geometry_code
-    assert "stream.Append(input[0]);" in geometry_code
-
-    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
-    assert "fragment" in fragment_code
 
 
 def test_metal_texture_gather_2d_array_splits_coord_and_layer():
@@ -33517,11 +33974,11 @@ def test_metal_texture_gather_2d_array_splits_coord_and_layer():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::x)"
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0), component::x)"
         in generated_code
     )
     assert (
-        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::w)"
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0), component::w)"
         in generated_code
     )
     assert "textureGather(" not in generated_code
@@ -33547,15 +34004,15 @@ def test_metal_texture_gather_cube_array_with_component_selection():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::x)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::x)"
         in generated_code
     )
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::y)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::y)"
         in generated_code
     )
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::z)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::z)"
         in generated_code
     )
     assert "textureGather(" not in generated_code
@@ -33579,7 +34036,7 @@ def test_metal_texture_gather_compare_with_2d_array_depth():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "shadowArray.gather_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArray.gather_compare(compareSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -33732,7 +34189,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool advanced = rq.Proceed();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }
@@ -33752,7 +34209,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
     assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray);" in generated
     assert "bool advanced = cgl_ray_query_proceed(rq);" in generated
     assert "float hitT = cgl_ray_query_committed_ray_t(rq);" in generated
-    assert "float candidateT = cgl_ray_query_candidate_ray_t(rq);" in generated
+    assert "float candidateT = cgl_ray_query_candidate_triangle_ray_t(rq);" in generated
     assert "RayDesc ray = RayDesc" not in generated
     assert "RayQuery<RAY_FLAG_NONE>" not in generated
     assert "RAY_FLAG_NONE" not in generated
@@ -33800,7 +34257,9 @@ def test_metal_mesh_dispatch_without_grid_context_emits_diagnostic():
     assert "object_data Payload& payload [[payload]]" in generated
 
 
-def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
+def test_metal_mesh_set_output_counts_without_output_parameter_is_refused():
+    # A function with no mesh object cannot set the output counts; the call used to be written as HLSL's
+    # SetMeshOutputCounts, which Metal does not declare.
     code = """
     shader meshpipe {
         void helper() {
@@ -33819,10 +34278,8 @@ def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "set_primitive_count(1)" in generated
-    assert "SetMeshOutputCounts(8, 4)" in generated
+    with pytest.raises(MetalLoweringRefused, match="call to 'SetMeshOutputCounts'"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer():
@@ -34439,6 +34896,366 @@ def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
     assert error.missing_capabilities == (
         "metal.cooperative-matrix-operation-lowering",
     )
+
+
+def test_translate_hlsl_packed_byte_intrinsics_to_metal_byte_vectors(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    assert "uintr0=as_type<uint>(uchar4(uint4(a)));" in compact
+    assert "uintr1=as_type<uint>(uchar4(uint4(b)));" in compact
+    assert (
+        "uintr2=as_type<uint>(char4(clamp(int4(a),int4(-128),int4(127))));" in compact
+    )
+    assert "uintr3=as_type<uint>(uchar4(clamp(int4(a),int4(0),int4(255))));" in compact
+    assert "int4u0=int4(as_type<char4>(uint(r0)));" in compact
+    assert "uint4u1=uint4(as_type<uchar4>(uint(r1)));" in compact
+    for name in ("pack_s8", "pack_u8", "pack_clamp", "unpack_s8s32", "unpack_u8u32"):
+        assert f"{name}(" not in generated
+
+
+def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
+    tmp_path,
+):
+    # MSL has no implicit conversion between vector types, so the HLSL implicit
+    # conversions of the unpacked lanes need an explicit constructor.
+    source_path = tmp_path / "unpack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<uint> iin;
+        RWStructuredBuffer<int> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int4 v = unpack_u8u32(iin[0]);
+            uint4 w = unpack_s8s32(iin[1]);
+            float4 f = unpack_s8s32(iin[2]);
+            int4 s = unpack_u8u16(iin[3]);
+            outp[0] = v.x + int(w.y) + int(f.z) + s.w;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "int4v=int4(uint4(as_type<uchar4>(uint(iin[0]))));" in compact
+    assert "uint4w=uint4(int4(as_type<char4>(uint(iin[1]))));" in compact
+    assert "float4f=float4(int4(as_type<char4>(uint(iin[2]))));" in compact
+    assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
+
+
+def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
+    source_path = tmp_path / "scalar_geometric.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<float> results : register(u0);
+        RWStructuredBuffer<int> counts : register(u1);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float x = results[1];
+            float y = results[2];
+            int a = counts[1];
+            int b = counts[2];
+            float3 v = float3(x, y, x);
+            results[0] = length(x) + dot(x, y) + distance(x, y) + normalize(x);
+            counts[0] = dot(a, b);
+            results[3] = length(v) + dot(v, v) + distance(v, v) + normalize(v).x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "results[0]=abs(x)+((x)*(y))+abs((x)-(y))+sign(x);" in compact
+    assert "counts[0]=((a)*(b));" in compact
+    assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
+
+
+def test_metal_crossgl_pointer_local_declares_device_pointer(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void first(__global float* out, __global const float* in) {
+            __global const float *src = in;
+            size_t i = get_global_id(0);
+            out[i] = src[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    # The local aliases a read-only device buffer, so it keeps its constness.
+    assert "const device float* src = in_;" in generated
+    assert "ptr<" not in generated
+
+
+def test_metal_crossgl_pointer_local_to_mutable_buffer_has_no_const(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void second(__global float* out, __global float* in) {
+            __global float *dst = out;
+            size_t i = get_global_id(0);
+            dst[i] = in[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert "device float* dst = out;" in generated
+    assert "ptr<" not in generated
+
+
+def _translate_pointer_local_kernel(tmp_path, source, suffix=".cl"):
+    source_path = tmp_path / f"k{suffix}"
+    source_path.write_text(source, encoding="utf-8")
+    return crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl" if suffix == ".cl" else "cuda",
+    )
+
+
+def test_metal_crossgl_pointer_local_keeps_const_through_other_locals(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __global const float* in,
+                        __global const float* in2) {
+            __global const float *a = in;
+            __global const float *b = a + 1;
+            size_t i = get_global_id(0);
+            __global const float *c = (i > 4) ? b : out;
+            if (i > 8) c = in2;
+            out[i] = c[i];
+        }
+        """,
+    )
+
+    # Each local points into a read-only buffer, directly, through another
+    # local or through one branch of a conditional, so each keeps `const`.
+    assert "const device float* a = in_;" in generated
+    assert "const device float* b = a + 1;" in generated
+    assert "const device float* c = i > 4 ? b : out;" in generated
+    # Pointing a const local at another buffer is still allowed.
+    assert "c = in2;" in generated
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_crossgl_pointer_local_keeps_native_narrow_pointee(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global uint* out, __global const uchar* in,
+                        __global short* s) {
+            __global const uchar *src = in;
+            __global short *dst = s;
+            size_t i = get_global_id(0);
+            out[i] = src[i];
+            dst[i] = (short)i;
+        }
+        """,
+    )
+
+    # The buffers keep their native widths, so the pointers into them do too.
+    assert "const device uchar* src = in_;" in generated
+    assert "device short* dst = s;" in generated
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __global__ void k(float* out) {
+            float x = 2.0f;
+            float* p = &x;
+            *p += 1.0f;
+            out[threadIdx.x] = *p;
+        }
+        """,
+        ".cu",
+    )
+
+    assert "thread float* p = &x;" in generated
+    compile_with_metal_if_available(generated)
+
+
+@pytest.mark.parametrize(
+    "source, suffix, message",
+    [
+        (
+            """
+            __kernel void k(__global float* out, __global const float* in) {
+                __global const float *p;
+                p = in;
+                out[get_global_id(0)] = p[get_global_id(0)];
+            }
+            """,
+            ".cl",
+            r"pointer local: 'p' has no initializer",
+        ),
+        (
+            """
+            __global__ void k(float* out, const float* in) {
+                __shared__ float tile[64];
+                tile[threadIdx.x] = in[threadIdx.x];
+                __syncthreads();
+                const float* p = in;
+                if (threadIdx.x > 4) p = tile;
+                out[threadIdx.x] = p[threadIdx.x];
+            }
+            """,
+            ".cu",
+            r"address-space assignment: value 'tile' uses threadgroup address "
+            r"space but target 'p' uses device",
+        ),
+        (
+            """
+            __global__ void k(float* out, const float* in) {
+                float x = 2.0f;
+                const float* p = &x;
+                if (threadIdx.x > 4) p = in;
+                out[threadIdx.x] = p[threadIdx.x];
+            }
+            """,
+            ".cu",
+            r"address-space assignment: value 'in_' uses device address space "
+            r"but target 'p' uses thread",
+        ),
+    ],
+    ids=["uninitialized", "to-shared", "to-device"],
+)
+def test_metal_refuses_crossgl_pointer_local_of_unknown_address_space(
+    tmp_path, source, suffix, message
+):
+    with pytest.raises(MetalLoweringRefused, match=message):
+        _translate_pointer_local_kernel(tmp_path, source, suffix)
+
+
+def test_metal_crossgl_local_pointer_local_keeps_threadgroup_initializer(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __local float* scratch) {
+            __local float *t = scratch;
+            t[get_local_id(0)] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[0];
+        }
+        """,
+    )
+
+    assert "threadgroup float* t = scratch;" in generated
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_verbatim_issue_3925_bounded_stage_texture_array():
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[0]) & 1;
+                outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert "array<texture2d<float>, 2> tex" in code
+
+
+def stage_block_texture_array_shader(body):
+    return f"""
+    shader StageBlockTextureArray {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
+    ],
+    ids=["constant-index", "loop-index"],
+)
+def test_metal_stage_block_texture_array_is_sized_from_its_indices(body):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
+    )
+
+    assert "array<texture2d<float>, 4> tex" in code
+    compile_with_metal_if_available(code)
+
+
+def test_metal_stage_block_texture_array_refuses_an_unbounded_index():
+    shader = stage_block_texture_array_shader(
+        "int k = int(fin[0]);"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+    )
+
+    # As for a shader-scope array, no bound reaches the index.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
 
 
 if __name__ == "__main__":

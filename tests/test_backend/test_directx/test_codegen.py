@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateInitializerError,
@@ -14,7 +15,10 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -813,7 +817,12 @@ def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():
             }
         """).strip()
 
-    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    # Under a declared zero base vertex SV_VertexID is gl_VertexID; the default, gl_RelativeVertexID, is spelled
+    # for each target by the semantic passes (tests/test_translator/test_relative_vertex_ids.py).
+    tokens = HLSLLexer(hlsl).tokenize()
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter(zero_base_vertex=True)
+    crossgl = converter.generate(HLSLParser(tokens).parse())
+    generated = GLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "uint VertID = uint(gl_VertexID);" in generated
     assert "gl_Position = vec4(float(VertID), 0.0, 0.0, 1.0);" in generated
@@ -1250,7 +1259,8 @@ def test_codegen_canonicalizes_fragment_barycentric_semantics():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "float3 bary : SV_Barycentrics" in regenerated_hlsl
-    assert "noperspective float3 affineBary : SV_Barycentrics" in regenerated_hlsl
+    # Index 1: DXC rejects two SV_Barycentrics inputs with the same semantic index.
+    assert "noperspective float3 affineBary : SV_Barycentrics1" in regenerated_hlsl
     assert "gl_BaryCoord" not in regenerated_hlsl
 
 
@@ -1339,8 +1349,8 @@ def test_codegen_preserves_contextual_shared_storage_modifier():
     """)
 
     assert "shared float cachedWeight;" in crossgl
-    assert "sampler2D shared;" in crossgl
-    assert "shared sampler2D shared;" not in crossgl
+    assert "texture2D shared;" in crossgl
+    assert "shared texture2D shared;" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -1393,7 +1403,8 @@ def test_codegen_clip_identifier_from_vkd3d_clip_distance_sample():
     """)
 
     assert "float clip @ gl_ClipDistance;" in crossgl
-    assert "float cull @ gl_CullDistance;" in crossgl
+    # The semantic index orders the value in the cull distance array.
+    assert "float cull @ gl_CullDistance1;" in crossgl
     assert "outputVertex.clip = position.y;" in crossgl
     assert "outputVertex.cull = position.x;" in crossgl
     assert "if ((outputVertex.clip - 0.5) < 0.0) {" in crossgl
@@ -1414,6 +1425,321 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     assert "*(viewProj" not in crossgl
     assert "mul(" not in crossgl
     parse_crossgl(crossgl)
+
+
+MIXED_REGISTER_CLASS_HLSL = textwrap.dedent("""
+    cbuffer _ : register(b0)
+    {
+        uint count;
+        float scale;
+    }
+
+    StructuredBuffer<float> source : register(t0);
+    Texture2D<float4> image : register(t1);
+    RWStructuredBuffer<float> destination : register(u0);
+    RWTexture2D<float4> target : register(u1);
+
+    [NumThreads(64, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        if (ThreadIds.x < count)
+        {
+            destination[ThreadIds.x] = source[ThreadIds.x] * scale + image[uint2(ThreadIds.x, 0)].x;
+            target[uint2(ThreadIds.x, 0)] = float4(1, 2, 3, 4);
+        }
+    }
+""").strip()
+
+
+def test_codegen_hlsl_register_classes_share_metal_argument_tables():
+    # Reduced from ComputeSharp generated compute shaders, which number each
+    # register class from zero (b0, t0, u0) in the same kernel.
+    codegen = MetalCodeGen()
+    metal = codegen.generate(parse_crossgl(generate_crossgl(MIXED_REGISTER_CLASS_HLSL)))
+
+    assert "constant _& _ [[buffer(0)]]" in metal
+    assert "const device float* source [[buffer(1)]]" in metal
+    assert "device float* destination [[buffer(2)]]" in metal
+    assert "texture2d<float> image [[texture(1)]]" in metal
+    assert "texture2d<float, access::read_write> target [[texture(2)]]" in metal
+    records = {
+        record["register"]: (record["name"], record["namespace"], record["binding"])
+        for record in codegen.resource_binding_records()
+    }
+    assert records == {
+        "b0": ("_", "buffer", 0),
+        "t0": ("source", "buffer", 1),
+        "u0": ("destination", "buffer", 2),
+        "t1": ("image", "texture", 1),
+        "u1": ("target", "texture", 2),
+    }
+
+
+def test_codegen_hlsl_register_mapping_does_not_depend_on_declaration_order():
+    reordered = textwrap.dedent("""
+        RWStructuredBuffer<float> destination : register(u0);
+        StructuredBuffer<float> source : register(t0);
+        cbuffer _ : register(b0) { uint count; }
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            if (ThreadIds.x < count) { destination[ThreadIds.x] = source[ThreadIds.x]; }
+        }
+    """).strip()
+    codegen = MetalCodeGen()
+    codegen.generate(parse_crossgl(generate_crossgl(reordered)))
+
+    assert {
+        record["register"]: record["binding"]
+        for record in codegen.resource_binding_records()
+    } == {"b0": 0, "t0": 1, "u0": 2}
+
+
+def test_codegen_hlsl_same_class_register_overlap_is_rejected_for_metal():
+    overlapping = textwrap.dedent("""
+        StructuredBuffer<float> first : register(t0);
+        StructuredBuffer<float> second : register(t0);
+        RWStructuredBuffer<float> destination : register(u0);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            destination[ThreadIds.x] = first[ThreadIds.x] + second[ThreadIds.x];
+        }
+    """).strip()
+
+    with pytest.raises(
+        ValueError, match="Conflicting Metal source resource binding for 'second'"
+    ):
+        MetalCodeGen().generate(parse_crossgl(generate_crossgl(overlapping)))
+
+
+def test_metal_explicit_slots_keep_exact_meaning_next_to_hlsl_registers():
+    code = """
+    shader ExplicitAndRegisterSlots {
+        RWStructuredBuffer<float> exact @buffer(0);
+        RWStructuredBuffer<float> registered @register(u0);
+
+        compute {
+            void main(uvec3 id @ gl_GlobalInvocationID) {
+                exact[id.x] = registered[id.x];
+            }
+        }
+    }
+    """
+    codegen = MetalCodeGen()
+    metal = codegen.generate(parse_crossgl(code))
+
+    assert "device float* exact [[buffer(0)]]" in metal
+    assert "device float* registered [[buffer(1)]]" in metal
+    records = {record["name"]: record for record in codegen.resource_binding_records()}
+    assert records["exact"]["binding"] == 0
+    assert records["exact"]["register"] is None
+    assert records["registered"]["binding"] == 1
+    assert records["registered"]["register"] == "u0"
+
+
+def test_codegen_hlsl_function_prototypes_are_not_emitted_as_definitions():
+    crossgl = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        float Twice(float value);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            values[ThreadIds.x] = Twice(values[ThreadIds.x]);
+        }
+
+        float Twice(float value)
+        {
+            return value * 2.0;
+        }
+    """).strip())
+
+    assert crossgl.count("float Twice(float value)") == 1
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "return value * 2.0;" in metal
+    definitions = [
+        line for line in metal.splitlines() if line.startswith("float Twice(")
+    ]
+    assert len([line for line in definitions if line.rstrip().endswith("{")]) == 1
+
+
+STRUCT_METHOD_HLSL = textwrap.dedent("""
+    struct Counter;
+    struct Counter
+    {
+        int value;
+        float scale;
+        int AddAndGetSum(int x);
+        float Scaled();
+        static Counter Create();
+        void __ctor__init();
+    };
+
+    cbuffer _ : register(b0)
+    {
+        Counter constants;
+    }
+
+    RWStructuredBuffer<Counter> counters : register(u0);
+    RWStructuredBuffer<float> results : register(u1);
+
+    int Counter::AddAndGetSum(int x)
+    {
+        this.value += x;
+        return value;
+    }
+
+    float Counter::Scaled()
+    {
+        return value * this.scale;
+    }
+
+    static Counter Counter::Create()
+    {
+        Counter __this = (Counter)0;
+        __this.__ctor__init();
+        return __this;
+    }
+
+    void Counter::__ctor__init()
+    {
+        value = 42;
+        this.scale = 0.5;
+    }
+
+    [NumThreads(64, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        Counter local = Counter::Create();
+        results[ThreadIds.x] = counters[ThreadIds.x].AddAndGetSum(1)
+            + local.Scaled() + constants.Scaled();
+    }
+""").strip()
+
+
+def test_codegen_hlsl_struct_member_functions_lower_to_free_functions():
+    # Reduced from ComputeSharp generated shaders, which emit C# instance
+    # methods and constructors as HLSL struct member functions.
+    crossgl = generate_crossgl(STRUCT_METHOD_HLSL)
+
+    assert "int Counter_AddAndGetSum(inout Counter __this, int x) {" in crossgl
+    assert "__this.value += x;" in crossgl
+    assert "return __this.value;" in crossgl
+    assert "float Counter_Scaled(in Counter __this) {" in crossgl
+    assert "return __this.value * __this.scale;" in crossgl
+    assert "Counter Counter_Create() {" in crossgl
+    assert "Counter __this = Counter(0, 0.0);" in crossgl
+    assert "Counter___ctor__init(__this);" in crossgl
+    assert "void Counter___ctor__init(inout Counter __this) {" in crossgl
+    assert "Counter local = Counter_Create();" in crossgl
+    assert "Counter_AddAndGetSum(counters[ThreadIds.x], 1)" in crossgl
+    assert "Counter_Scaled(local)" in crossgl
+    assert "Counter_Scaled(constants)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_metal_copies_buffer_elements_through_reference_parameters():
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(STRUCT_METHOD_HLSL)))
+
+    assert "thread Counter& __this" in metal
+    lines = [line.strip() for line in metal.splitlines()]
+    copy_in = lines.index("Counter __crossgl_ref1 = counters[ThreadIds.x];")
+    call = next(
+        index
+        for index, line in enumerate(lines)
+        if "Counter_AddAndGetSum(__crossgl_ref1, 1)" in line
+    )
+    copy_out = lines.index("counters[ThreadIds.x] = __crossgl_ref1;")
+    assert copy_in < call < copy_out
+    assert "Counter_Scaled(_.constants)" in metal
+
+
+def test_metal_reference_argument_copy_in_a_short_circuit_operand_is_made_in_place():
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        bool Bump(inout float value)
+        {
+            value += 1.0;
+            return value > 2.0;
+        }
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            bool done = ThreadIds.x > 3 && Bump(values[ThreadIds.x]);
+            values[0] = done ? 1.0 : 0.0;
+        }
+    """).strip()
+
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    assert (
+        "bool done = ThreadIds.x > 3 && (__crossgl_ref1 = values[ThreadIds.x], "
+        "__crossgl_call2 = Bump(__crossgl_ref1), values[ThreadIds.x] = __crossgl_ref1, "
+        "__crossgl_call2);"
+    ) in metal
+
+
+def test_metal_unifies_mixed_numeric_builtin_arguments():
+    # Reduced from ComputeSharp generated shaders: HLSL converts integer
+    # operands implicitly, while Metal overloads are ambiguous for them.
+    hlsl = textwrap.dedent("""
+        cbuffer _ : register(b0)
+        {
+            int count;
+        }
+
+        RWStructuredBuffer<float> values : register(u0);
+        RWStructuredBuffer<int> integers : register(u1);
+        static const float Combo = abs(clamp(min(max(3.14, 2), 10), 0, 42));
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            values[0] = Combo + sin(2) + pow(2, 3);
+            values[1] = clamp(ThreadIds.x, 0, count);
+            values[2] = min(values[0], integers[0]);
+            values[3] = dot(int2(4, 15), float2(1.0, 1.0));
+            integers[1] = dot(int3(1, 2, 3), int3(4, 5, 6));
+            values[4] = radians(180.0) + degrees(1);
+        }
+    """).strip()
+
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+    assert "abs(clamp(min(max(3.14, 2.0), 10.0), 0.0, 42.0))" in metal
+    assert "sin(2.0)" in metal
+    assert "pow(2.0, 3.0)" in metal
+    assert "clamp(ThreadIds.x, 0u, uint(_.count))" in metal
+    assert "min(values[0], float(integers[0]))" in metal
+    assert "dot(float2(int2(4, 15)), float2(1.0, 1.0))" in metal
+    assert "__crossgl_integer_dot(int3(1, 2, 3), int3(4, 5, 6))" in metal
+    assert "static inline T __crossgl_integer_dot(vec<T, N> a, vec<T, N> b)" in metal
+    assert "((180.0) * 0.017453292519943295)" in metal
+    assert "((float(1)) * 57.29577951308232)" in metal
+    assert "radians(" not in metal
+    assert "degrees(" not in metal
+
+
+def test_metal_member_access_keeps_compound_operand_grouping():
+    crossgl = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            float2 uv = float2(values[0], values[1]);
+            values[2] = (uv * 2.0 + 1.0).x;
+        }
+    """).strip())
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "(uv * 2.0 + 1.0).x" in metal
 
 
 def test_codegen_hlsl_program_scope_constants_lower_to_metal_cbuffer():
@@ -1696,8 +2022,10 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
         }
     """)
 
-    assert "float Weight(float value)" in crossgl
-    assert "CrossBilateral::Weight(value)" in crossgl
+    # The namespaced declaration and its qualified call share one flat CrossGL name.
+    assert "float CrossBilateral_Weight(float value)" in crossgl
+    assert "return CrossBilateral_Weight(value);" in crossgl
+    assert "::" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -2017,7 +2345,8 @@ def test_codegen_min_precision_vector_and_matrix_types():
 
     assert "f16vec3 hdr @ Color0;" in output
     assert "f16vec2 uv @ TexCoord0;" in output
-    assert "f16mat2x3 colorMatrix;" in output
+    # HLSL min16float2x3 has two rows of three: CrossGL f16mat3x2 (ADR 0004).
+    assert "f16mat3x2 colorMatrix;" in output
     assert "f16vec3 Shade(" in output
     assert "f16vec3 color @ Color0" in output
     assert "i16vec2 offset @ TexCoord1" in output
@@ -2052,7 +2381,7 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     assert "vec3 normal @ Normal;" in output
     assert "mat3 basis;" in output
     assert "dvec4 MakeTemplateVector(vec3 input @ TexCoord0) @ gl_FragData[0]" in output
-    assert "mat2x3 localBasis;" in output
+    assert "mat3x2 localBasis;" in output
     assert "vec4 defaultWidth = vec4(1.0, 2.0, 3.0, 4.0);" in output
     assert "return dvec4(input.x, input.y, input.z, 1.0);" in output
     assert "vector<" not in output
@@ -2096,7 +2425,8 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
 
     output = generate_crossgl(hlsl)
 
-    assert "return buffer_load(BAB, offset);" in output
+    # Load<T> moves sizeof(T) bytes as they are: four words, reinterpreted as floats.
+    assert "return uintBitsToFloat(buffer_load4(BAB, offset));" in output
     parse_crossgl(output)
 
 
@@ -2157,8 +2487,9 @@ def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     output = generate_crossgl(hlsl)
 
     assert "MOD" not in output
-    assert "void MakeNop(dx_HitObject obj[2])" in output
-    assert "dx_HitObject obj[2]" in output
+    assert "void MakeNop(in dx::HitObject obj[2])" in output
+    assert "dx::HitObject obj[2]" in output
+    assert "dx_HitObject" not in output
     parse_crossgl(output)
 
 
@@ -2247,6 +2578,29 @@ def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_packed_8bit_alias_structured_buffer_element_reparse():
+    # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+    # buffer of them is a structured buffer of uint in CrossGL.
+    hlsl = textwrap.dedent("""
+        StructuredBuffer<uint8_t4_packed> pin;
+        RWStructuredBuffer<int8_t4_packed> pout;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            pout[id.x] = pin[id.x];
+            outp[id.x] = pin[id.x];
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "StructuredBuffer<uint> pin;" in output
+    assert "RWStructuredBuffer<uint> pout;" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
     hlsl = textwrap.dedent("""
@@ -2286,9 +2640,9 @@ def test_codegen_pre_2018_fixed_width_typedef_names_from_dxc_reparse():
 
     output = generate_crossgl(hlsl)
 
-    assert "type uint16_t = uint;" in output
-    assert "type int16_t = int;" in output
-    assert "type float64_t = float;" in output
+    assert "typedef uint uint16_t;" in output
+    assert "typedef int int16_t;" in output
+    assert "typedef float float64_t;" in output
     assert "uint16 unsignedValue;" in output
     assert "int16 signedValue;" in output
     assert "double floatValue;" in output
@@ -2300,7 +2654,7 @@ def test_codegen_const_incomplete_array_typedef_from_dxc_reparse():
     # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
     output = generate_crossgl("typedef const int inta[];")
 
-    assert "type inta = [int];" in output
+    assert "typedef int inta[];" in output
     parse_crossgl(output)
 
 
@@ -2437,7 +2791,7 @@ def test_codegen_function_array_return_from_dxc_longvec_decls():
 
     output = generate_crossgl(hlsl)
 
-    assert "vec4[10] lv_param_arr_passthru(vec4 vec[10])" in output
+    assert "vec4[10] lv_param_arr_passthru(in vec4 vec[10])" in output
     assert "return vec;" in output
 
     shader_ast = parse_crossgl(output)
@@ -2500,7 +2854,8 @@ def test_codegen_geometry_primitive_before_direction_from_dxc_spirv():
     assert "geometry {" in output
     assert "@ maxvertexcount(3)" in output
     assert (
-        "void main(in point uint id[1] @ VertexID, inout lineStream outData)" in output
+        "void main(in point uint id[1] @ VertexID, inout LineStream<S> outData)"
+        in output
     )
     parse_crossgl(output)
 
@@ -2800,12 +3155,12 @@ def test_codegen_mesh_view_id_semantic_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "uint viewId @ gl_ViewID" in crossgl
+    assert "uint viewId @ gl_ViewIndex" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "uint viewId : SV_ViewID" in hlsl
-    assert "gl_ViewID" not in hlsl
+    assert "gl_ViewIndex" not in hlsl
 
 
 def test_codegen_raytracing_stage():
@@ -2818,7 +3173,8 @@ def test_codegen_rayquery_stage_roundtrip_drops_native_shader_attribute():
 
     assert "ray_generation" in output.lower()
     assert "@ shader" not in output
-    assert "rayQuery rq;" in output
+    # The query keeps its DXR type and flags in CrossGL.
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in output
     assert "rq.TraceRayInline(accel, RAY_FLAG_NONE, 255, ray);" in output
     assert "rq.Proceed()" in output
     assert "rq.CommitNonOpaqueTriangleHit();" in output
@@ -2847,7 +3203,7 @@ def test_codegen_unity_urp_texture_macros_default_to_native_sampling():
         }
     """)
 
-    assert "sampler2D _BaseMap;" in output
+    assert "texture2D _BaseMap;" in output
     assert "sampler sampler_BaseMap;" in output
     assert "texture(_BaseMap, sampler_BaseMap, IN.uv)" in output
     assert "TEXTURE2D" not in output
@@ -3043,7 +3399,7 @@ def test_codegen_numthreads_attribute_emitted():
 def test_codegen_enum_and_typedef():
     output = generate_crossgl(ENUM_TYPEDEF_HLSL)
     assert "enum BlendMode" in output
-    assert "type Color = vec4;" in output
+    assert "typedef vec4 Color;" in output
     parse_crossgl(output)
 
 
@@ -3062,9 +3418,9 @@ def test_codegen_using_alias_declarations_from_hlsl_spec():
 
     output = generate_crossgl(hlsl)
 
-    assert "type Float = float;" in output
-    assert "type Color = vec4;" in output
-    assert "type IndexPair = int[2];" in output
+    assert "typedef float Float;" in output
+    assert "typedef vec4 Color;" in output
+    assert "typedef int IndexPair[2];" in output
     assert "Color main(Color input) @ gl_FragData[0]" in output
     parse_crossgl(output)
 
@@ -3080,11 +3436,38 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
         }
     """)
 
+    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes.
+    with pytest.raises(
+        DirectXImportRefused, match=r"vector<half, 16> has 16 components"
+    ):
+        generate_crossgl(hlsl)
+
+
+def test_codegen_block_scope_type_aliases_stay_typedefs():
+    # Reproducer from #3309, extended with block-scope ``typedef`` and ``using``.
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> outp : register(u0);
+        typedef float real;
+
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            typedef float2 pair;
+            using count = uint;
+            real x = real(outp[id.x]);
+            pair p = pair(x, 2.0);
+            count n = (count)p.y;
+            outp[id.x] = x * p.y + n;
+        }
+    """)
+
     output = generate_crossgl(hlsl)
 
-    assert "type half16" not in output
-    assert "vec4 srcF16" not in output
-    assert "half16 srcF16 = buffer_load(BAB, 128);" in output
+    assert "typedef float real;" in output
+    assert "type real" not in output
+    assert "        typedef vec2 pair;\n" in output
+    assert "        typedef uint count;\n" in output
+    assert "real x = real(outp[id.x]);" in output
+    assert "pair p = pair(x, 2.0);" in output
     parse_crossgl(output)
 
 
@@ -3125,7 +3508,7 @@ def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
 
     output = generate_crossgl(hlsl)
 
-    assert "type type = AnonymousStruct_type[3];" in output
+    assert "typedef AnonymousStruct_type type[3];" in output
     assert "struct AnonymousStruct_type" in output
     parse_crossgl(output)
 
@@ -3149,7 +3532,7 @@ def test_codegen_directx_samples_alias_and_scoped_types_parse_crossgl():
 
     output = generate_crossgl(hlsl)
 
-    assert "type MyAttributes = BuiltInTriangleIntersectionAttributes;" in output
+    assert "typedef BuiltInTriangleIntersectionAttributes MyAttributes;" in output
     assert "SignedDistancePrimitive_Enum primitiveType" in output
     assert "SignedDistancePrimitive_Enum localPrimitive" in output
     assert "SignedDistancePrimitive_Enum(primitiveType)" in output
@@ -3164,7 +3547,9 @@ def test_codegen_attributes_emitted():
     assert "@ outputtopology" in lowered
     assert "@ outputcontrolpoints" in lowered
     assert "@ patchconstantfunc" in lowered
-    assert "@ earlydepthstencil" in lowered
+    # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, not a function attribute.
+    assert "layout(early_fragment_tests) in;" in lowered
+    assert "@ earlydepthstencil" not in lowered
 
 
 def test_codegen_extra_attributes_emitted():
@@ -3190,7 +3575,7 @@ def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
 
     assert "@ vk_binding(3, 1)" in output
     assert "@ register(t0, space0)" in output
-    assert "sampler2D texture2;" in output
+    assert "texture2D texture2;" in output
 
 
 def test_codegen_subpass_input_globals_reparse_crossgl():
@@ -3214,7 +3599,8 @@ def test_codegen_subpass_input_globals_reparse_crossgl():
 
     assert "@ input_attachment_index(0)" in output
     assert "@ binding(0)" in output
-    assert "sampler2d in_color_r;" in output
+    # A subpass input is an input attachment, not a sampled texture.
+    assert "subpassInput in_color_r;" in output
     assert "vec4 color_r = subpassLoad(in_color_r);" in output
     assert reparsed.global_variables[0].name == "in_color_r"
     assert reparsed.global_variables[0].attributes[0].name == "input_attachment_index"
@@ -3252,7 +3638,7 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk_push_constant" in output
+    assert "@ push_constant" in output
     assert "@ register(b0, space1)" in output
     assert "cbuffer PushConstants" in output
     assert "vec4 tint;" in output
@@ -3354,13 +3740,14 @@ def test_codegen_matrix_layout_qualifiers_from_hlsl_variable_syntax():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ row_major\n    mat2x3 g_row;" in output
-    assert "@ column_major\n    mat3x2 g_col;" in output
+    assert "@ row_major\n    mat3x2 g_row;" in output
+    assert "@ column_major\n    mat2x3 g_col;" in output
     assert "@ row_major\n        mat4 transform;" in output
     assert (
-        "vec3 UseLayout(@ row_major mat2x3 input, " "@ column_major mat2x3 fallback)"
+        "vec3 UseLayout(@ row_major mat3x2 input, " "@ column_major mat3x2 fallback)"
     ) in output
-    assert "@ row_major\n        mat2x3 local = input;" in output
+    assert "@ row_major\n        mat3x2 local = input;" in output
+    assert "return transpose(local)[0] + transpose(fallback)[0];" in output
 
     shader_ast = parse_crossgl(output)
     assert [attr.name for attr in shader_ast.global_variables[0].attributes] == [
@@ -3615,6 +4002,32 @@ def test_codegen_is_helper_lane_intrinsic_from_sm66_imports_fragment_builtin():
     assert "IsHelperLane(" not in glsl
 
 
+def test_codegen_is_helper_lane_round_trips_to_hlsl():
+    # gl_HelperInvocation has no HLSL variable; DXC rejects it as undeclared, so the
+    # HLSL generator has to emit the Shader Model 6.6 intrinsic again.
+    fragment = generate_crossgl("""
+        float4 main(float4 color : COLOR0) : SV_Target0 {
+            bool helper = IsHelperLane();
+            return helper ? float4(0.0) : color;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(fragment))
+    assert "bool helper = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
+
+    compute = generate_crossgl("""
+        RWStructuredBuffer<int> outp : register(u1);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            bool r = IsHelperLane();
+            outp[id.x] = r ? 1 : 0;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
+    assert "bool r = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output
@@ -3795,21 +4208,32 @@ def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
     code = textwrap.dedent("""
         [numthreads(1, 1, 1)]
         void CSMain(uint3 tid : SV_DispatchThreadID) {
+            uint k = 0;
             GroupMemoryBarrierWithGroupSync();
+            k = k + 1;
             GroupMemoryBarrier();
+            k = k + 1;
             DeviceMemoryBarrier();
+            k = k + 1;
             AllMemoryBarrier();
+            k = k + 1;
             DeviceMemoryBarrierWithGroupSync();
+            k = k + 1;
             AllMemoryBarrierWithGroupSync();
         }
     """).strip()
 
     crossgl = generate_crossgl(code)
 
-    assert crossgl.count("workgroupBarrier();") == 3
-    assert crossgl.count("groupMemoryBarrier();") == 1
-    assert crossgl.count("deviceMemoryBarrier();") == 2
-    assert crossgl.count("allMemoryBarrier();") == 2
+    # The WithGroupSync barriers that order device memory become fence, execution barrier, fence;
+    # DeviceMemoryBarrierWithGroupSync does not order groupshared memory.
+    assert crossgl.count("workgroupBarrier();") == 2
+    assert crossgl.count("workgroupExecutionBarrier();") == 1
+    # GroupMemoryBarrier orders groupshared memory only: CrossGL's memoryBarrierShared.
+    assert crossgl.count("memoryBarrierShared();") == 1
+    assert "groupMemoryBarrier();" not in crossgl
+    assert crossgl.count("deviceMemoryBarrier();") == 3
+    assert crossgl.count("allMemoryBarrier();") == 3
     assert "GroupMemoryBarrierWithGroupSync();" not in crossgl
     assert "GroupMemoryBarrier();" not in crossgl
     assert "DeviceMemoryBarrier();" not in crossgl
@@ -3817,17 +4241,22 @@ def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
     assert "DeviceMemoryBarrierWithGroupSync();" not in crossgl
     assert "AllMemoryBarrierWithGroupSync();" not in crossgl
 
+    # Each barrier round-trips to itself: the emitter merges the fences around an execution barrier back
+    # into the WithGroupSync form.
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert regenerated_hlsl.count("GroupMemoryBarrierWithGroupSync();") == 3
-    assert regenerated_hlsl.count("GroupMemoryBarrier();") == 1
-    assert regenerated_hlsl.count("DeviceMemoryBarrier();") == 2
-    assert regenerated_hlsl.count("AllMemoryBarrier();") == 2
+    for intrinsic in (
+        "GroupMemoryBarrierWithGroupSync();",
+        "GroupMemoryBarrier();",
+        "DeviceMemoryBarrier();",
+        "AllMemoryBarrier();",
+        "DeviceMemoryBarrierWithGroupSync();",
+        "AllMemoryBarrierWithGroupSync();",
+    ):
+        assert regenerated_hlsl.count(intrinsic) == 1, intrinsic
     assert "workgroupBarrier();" not in regenerated_hlsl
     assert "groupMemoryBarrier();" not in regenerated_hlsl
     assert "deviceMemoryBarrier();" not in regenerated_hlsl
     assert "allMemoryBarrier();" not in regenerated_hlsl
-    assert "DeviceMemoryBarrierWithGroupSync();" not in regenerated_hlsl
-    assert "AllMemoryBarrierWithGroupSync();" not in regenerated_hlsl
 
 
 def test_codegen_resource_arrays_and_spaces():
@@ -3886,10 +4315,10 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     output = generate_crossgl(code)
     assert "vec4 c = imageLoad(line, tid.x);" in output
     assert "imageStore(line, tid.x, c);" in output
-    assert "uint v = imageLoad(counters, uvec2(tid.x, 0));" in output
+    assert "uint v = imageLoad(counters, uvec2(tid.x, 0)).x;" in output
     assert (
         "imageStore(counters, uvec2(tid.x, 0), "
-        "imageLoad(counters, uvec2(tid.x, 0)) + 1u);"
+        "uvec4(imageLoad(counters, uvec2(tid.x, 0)).x + 1u, 0u, 0u, 1u));"
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
@@ -3931,7 +4360,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     assert "image2D outImage;" in output
     assert "@ register(u6, space2)" in output
     assert "RWStructuredBuffer<int> values;" in output
-    assert "uint value = imageLoad(counters, tid.xy);" in output
+    assert "uint value = imageLoad(counters, tid.xy).x;" in output
     assert "buffer_store(values, 0, int(value));" in output
     assert "imageStore(outImage, tid.xy, vec4(value, 0, 0, 1));" in output
 
@@ -3968,7 +4397,7 @@ def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
     output = generate_crossgl(code)
 
     assert (
-        "void CoherentStore(@ globallycoherent "
+        "void CoherentStore(@ globallycoherent @ buffer_layout(hlsl_structured) "
         "RWStructuredBuffer<Payload> data, uint index)" in output
     )
     assert "data[index].value = 1u;" in output
@@ -4027,12 +4456,12 @@ def test_codegen_rasterizer_ordered_resources_roundtrip():
     assert "@ register(u0, space1)" in output
     assert "uimage2D pixelCounts;" in output
     assert "image2DArray layers;" in output
-    assert "RWBuffer<uint> bins;" in output
+    assert "uimageBuffer bins;" in output
     assert "RWStructuredBuffer<int> values;" in output
     assert "RWByteAddressBuffer rawBytes;" in output
     assert "oldCount = imageAtomicAdd(pixelCounts, pixel, 1u);" in output
     assert "imageStore(layers, uvec3(pixel, layer), vec4(oldCount, 0, 0, 1));" in output
-    assert "oldBin = atomicAdd(bins[0], oldCount);" in output
+    assert "oldBin = imageAtomicAdd(bins, 0, oldCount);" in output
     assert "oldValue = atomicMax(values[0], int(oldBin));" in output
     assert "buffer_store(rawBytes, 0, oldBin);" in output
 
@@ -4094,18 +4523,26 @@ def test_codegen_texture_method_descriptors():
     )
     assert converter.texture_method_descriptor("Sample", 5) == {
         "member": "Sample",
-        "function": "textureOffset",
-        "texture_function": "textureOffset",
+        "function": "textureOffsetClamp",
+        "texture_function": "textureOffsetClamp",
         "buffer_function": None,
         "component": None,
         "usage": "regular",
         "buffer_when_max_args": None,
-        "drop_trailing_args": 2,
-        "dropped_parameters": ["LOD clamp", "status output"],
+        "drop_trailing_args": 1,
+        "dropped_parameters": ["status output"],
     }
+    assert (
+        converter.texture_method_descriptor("Sample", 4)["function"]
+        == "textureOffsetClamp"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleBias", 5)["function"]
+        == "textureOffsetClamp"
+    )
     assert converter.texture_method_descriptor("SampleBias", 6)[
         "dropped_parameters"
-    ] == ["LOD clamp", "status output"]
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("SampleLevel", 5)["function"]
         == "textureLodOffset"
@@ -4114,19 +4551,27 @@ def test_codegen_texture_method_descriptors():
         "dropped_parameters"
     ] == ["status output"]
     assert (
+        converter.texture_method_descriptor("SampleGrad", 6)["function"]
+        == "textureGradOffsetClamp"
+    )
+    assert (
         converter.texture_method_descriptor("SampleGrad", 7)["function"]
-        == "textureGradOffset"
+        == "textureGradOffsetClamp"
     )
     assert converter.texture_method_descriptor("SampleGrad", 7)[
         "dropped_parameters"
-    ] == ["LOD clamp", "status output"]
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("SampleCmp", 4)["function"]
         == "textureCompareOffset"
     )
+    assert (
+        converter.texture_method_descriptor("SampleCmp", 5)["function"]
+        == "textureCompareOffsetClamp"
+    )
     assert converter.texture_method_descriptor("SampleCmp", 6)[
         "dropped_parameters"
-    ] == ["LOD clamp", "status output"]
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("SampleCmpLevel", 4)["function"]
         == "textureCompareLod"
@@ -4146,9 +4591,13 @@ def test_codegen_texture_method_descriptors():
         converter.texture_method_descriptor("SampleCmpGrad", 6)["function"]
         == "textureCompareGradOffset"
     )
+    assert (
+        converter.texture_method_descriptor("SampleCmpGrad", 7)["function"]
+        == "textureCompareGradOffsetClamp"
+    )
     assert converter.texture_method_descriptor("SampleCmpGrad", 8)[
         "dropped_parameters"
-    ] == ["LOD clamp", "status output"]
+    ] == ["status output"]
     sample_cmp_bias = converter.texture_method_descriptor(
         "SampleCmpBias", 4, "Texture2D<float>"
     )
@@ -4180,7 +4629,7 @@ def test_codegen_texture_method_descriptors():
     ]
     assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
-        == "textureCompareOffset"
+        == "textureCompareLodOffset"
     )
     assert converter.texture_method_descriptor("SampleCmpLevelZero", 5)[
         "dropped_parameters"
@@ -4238,14 +4687,12 @@ def test_codegen_texture_method_descriptors():
     ] == ["status output"]
     assert converter.texture_method_descriptor("Sample", 3, "TextureCube") == {
         "member": "Sample",
-        "function": "texture",
-        "texture_function": "texture",
+        "function": "textureClamp",
+        "texture_function": "textureClamp",
         "buffer_function": None,
         "component": None,
         "usage": "regular",
         "buffer_when_max_args": None,
-        "drop_trailing_args": 1,
-        "dropped_parameters": ["LOD clamp"],
     }
     assert (
         converter.texture_method_descriptor("SampleLevel", 4, "TextureCube")["function"]
@@ -4255,11 +4702,11 @@ def test_codegen_texture_method_descriptors():
         converter.texture_method_descriptor("SampleGrad", 6, "TextureCubeArray")[
             "function"
         ]
-        == "textureGrad"
+        == "textureGradClamp"
     )
     assert (
         converter.texture_method_descriptor("SampleCmp", 5, "TextureCube")["function"]
-        == "textureCompare"
+        == "textureCompareClamp"
     )
     assert (
         converter.texture_method_descriptor("SampleCmpLevel", 5, "TextureCube")[
@@ -4269,7 +4716,7 @@ def test_codegen_texture_method_descriptors():
     )
     assert converter.texture_method_descriptor("SampleCmpGrad", 7, "TextureCubeArray")[
         "dropped_parameters"
-    ] == ["LOD clamp", "status output"]
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("Gather", 3, "TextureCubeArray")["function"]
         == "textureGather"
@@ -4429,8 +4876,8 @@ def test_codegen_texture_method_descriptors():
 
 def test_codegen_texture_method_mappings():
     output = generate_crossgl(TEXTURE_METHODS_HLSL)
-    assert "sampler2D tex;" in output
-    assert "sampler2DShadow tex;" not in output
+    assert "texture2D tex;" in output
+    assert "texture2DShadow tex;" not in output
     assert "textureLod(tex, samp, uv, 0.0)" in output
     assert "textureCompare(tex, samp, uv, 0.5)" in output
     assert "textureGather(tex, samp, uv)" in output
@@ -4460,7 +4907,7 @@ def test_codegen_texture_methods_roundtrip_through_translator_codegen():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D tex;" in crossgl
+    assert "texture2D tex;" in crossgl
     assert "sampler samp;" in crossgl
     assert "texture(tex, samp, uv)" in crossgl
     assert "textureLod(tex, samp, uv, 1.0)" in crossgl
@@ -4631,8 +5078,8 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
     assert "textureGatherCompare(shadowMap, compareSampler, uv, depth)" in crossgl
     assert (
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
@@ -4728,8 +5175,8 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "textureCubeShadow cubeShadow;" in crossgl
     assert "textureCompareLod(shadowMap, compareSampler, uv, depth, lod)" in crossgl
     assert (
         "textureCompareLodOffset(shadowMap, compareSampler, uv, depth, lod, offset)"
@@ -4747,15 +5194,19 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         in crossgl
     )
     assert (
-        "textureCompareGrad("
-        "cubeShadow, compareSampler, direction, depth, ddx3, ddy3)" in crossgl
+        "textureCompareGradClamp("
+        "cubeShadow, compareSampler, direction, depth, ddx3, ddy3, 0.0)" in crossgl
+    )
+    assert (
+        "textureCompareGradOffsetClamp("
+        "shadowMap, compareSampler, uv, depth, ddx, ddy, offset, 0.0)" in crossgl
     )
     assert (
         "DirectX texture overload extras for SampleCmpLevel: CrossGL has no operand for status output"
         in message
     )
     assert (
-        "DirectX texture overload extras for SampleCmpGrad: CrossGL has no operand for LOD clamp, status output"
+        "DirectX texture overload extras for SampleCmpGrad: CrossGL has no operand for status output"
         in message
     )
     assert ".SampleCmpLevel(" not in crossgl
@@ -4769,8 +5220,9 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy, offset)" in hlsl
     )
     assert "cubeShadow.SampleCmpLevel(compareSampler, direction, depth, lod)" in hlsl
-    assert "cubeShadow.SampleCmpGrad(compareSampler, direction, depth, ddx3, ddy3)" in (
-        hlsl
+    assert (
+        "cubeShadow.SampleCmpGrad(compareSampler, direction, depth, ddx3, ddy3, 0.0)"
+        in hlsl
     )
     assert "lod, offset, status" not in hlsl
     assert "ddy, offset, 0.0, status" not in hlsl
@@ -4809,9 +5261,9 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
-    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
+    assert "textureCubeShadow cubeShadow;" in crossgl
     assert (
         "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias"
         in message
@@ -4895,7 +5347,7 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        "DirectX texture overload extras for Sample: CrossGL has no operand for LOD clamp, status output"
+        "DirectX texture overload extras for Sample: CrossGL has no operand for status output"
         in message
     )
     assert (
@@ -4906,12 +5358,18 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
         "DirectX texture overload extras for GatherRed: CrossGL has no operand for status output"
         in message
     )
-    assert "textureOffset(colorMap, linearSampler, uv, offset)" in crossgl
-    assert "textureOffset(colorMap, linearSampler, uv, offset, bias)" in crossgl
-    assert "textureLodOffset(colorMap, linearSampler, uv, lod, offset)" in crossgl
-    assert "textureGradOffset(colorMap, linearSampler, uv, ddx, ddy, offset)" in crossgl
+    assert "textureOffsetClamp(colorMap, linearSampler, uv, offset, 0.0)" in crossgl
     assert (
-        "textureCompareOffset(shadowMap, compareSampler, uv, depth, offset)" in crossgl
+        "textureOffsetClamp(colorMap, linearSampler, uv, offset, 0.0, bias)" in crossgl
+    )
+    assert "textureLodOffset(colorMap, linearSampler, uv, lod, offset)" in crossgl
+    assert (
+        "textureGradOffsetClamp(colorMap, linearSampler, uv, ddx, ddy, offset, 0.0)"
+        in crossgl
+    )
+    assert (
+        "textureCompareOffsetClamp(shadowMap, compareSampler, uv, depth, offset, 0.0)"
+        in crossgl
     )
     assert "textureGatherOffset(colorMap, linearSampler, uv, offset)" in crossgl
     assert "textureGatherOffset(colorMap, linearSampler, uv, offset, 0)" in crossgl
@@ -4980,18 +5438,23 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        "DirectX texture overload extras for Sample: CrossGL has no operand for LOD clamp, status output"
+        "DirectX texture overload extras for Sample: CrossGL has no operand for status output"
         in message
     )
     assert (
         "DirectX texture overload extras for Gather: CrossGL has no operand for status output"
         in message
     )
-    assert "texture(cubeMap, linearSampler, direction)" in crossgl
-    assert "texture(cubeMap, linearSampler, direction, bias)" in crossgl
+    assert "textureClamp(cubeMap, linearSampler, direction, 0.0)" in crossgl
+    assert "textureClamp(cubeMap, linearSampler, direction, 0.0, bias)" in crossgl
     assert "textureLod(cubeMap, linearSampler, direction, lod)" in crossgl
-    assert "textureGrad(cubeMap, linearSampler, direction, ddx, ddy)" in crossgl
-    assert "textureCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
+    assert "textureGradClamp(cubeMap, linearSampler, direction, ddx, ddy, 0.0)" in (
+        crossgl
+    )
+    assert (
+        "textureCompareClamp(cubeShadow, compareSampler, direction, depth, 0.0)"
+        in crossgl
+    )
     assert "textureGather(cubeMap, linearSampler, direction)" in crossgl
     assert "textureGather(cubeMap, linearSampler, direction, 0)" in crossgl
     assert (
@@ -5005,11 +5468,11 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
     assert "textureGatherCompareOffset(" not in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "cubeMap.Sample(linearSampler, direction)" in hlsl
-    assert "cubeMap.SampleBias(linearSampler, direction, bias)" in hlsl
+    assert "cubeMap.Sample(linearSampler, direction, 0.0)" in hlsl
+    assert "cubeMap.SampleBias(linearSampler, direction, bias, 0.0)" in hlsl
     assert "cubeMap.SampleLevel(linearSampler, direction, lod)" in hlsl
-    assert "cubeMap.SampleGrad(linearSampler, direction, ddx, ddy)" in hlsl
-    assert "cubeShadow.SampleCmp(compareSampler, direction, depth)" in hlsl
+    assert "cubeMap.SampleGrad(linearSampler, direction, ddx, ddy, 0.0)" in hlsl
+    assert "cubeShadow.SampleCmp(compareSampler, direction, depth, 0.0)" in hlsl
     assert "cubeMap.Gather(linearSampler, direction)" in hlsl
     assert "cubeMap.GatherRed(linearSampler, direction)" in hlsl
     assert "cubeShadow.GatherCmp(compareSampler, direction, depth)" in hlsl
@@ -5188,9 +5651,9 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
-    assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
+    assert "Texture2DMSArray<uint4> counters : register(t1);" in hlsl
     assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
-    assert "uint count = counters.Load(pixelLayer, sampleIndex);" in hlsl
+    assert "uint count = counters.Load(pixelLayer, sampleIndex).x;" in hlsl
     assert "RWTexture2DMS" not in hlsl
     assert "RWTexture2DMSArray" not in hlsl
     assert "CheckAccessFullyMapped(" not in hlsl
@@ -5263,7 +5726,7 @@ def test_codegen_resource_array_receivers_use_canonical_calls():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[2];" in crossgl
+    assert "texture2D textures[2];" in crossgl
     assert "image2D images[2];" in crossgl
     assert "RWStructuredBuffer<int> buffers[2];" in crossgl
     assert "texture(textures[index], samp, uv)" in crossgl
@@ -5307,7 +5770,7 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     crossgl = generate_crossgl(code)
 
     assert "@ register(t3, space1)" in crossgl
-    assert "sampler2D textures[2];" in crossgl
+    assert "texture2D textures[2];" in crossgl
     assert "@ register(s5, space1)" in crossgl
     assert "sampler samplers[2];" in crossgl
     assert "@ register(u4, space2)" in crossgl
@@ -5315,12 +5778,12 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "@ register(u6, space3)" in crossgl
     assert "RWStructuredBuffer<int> buffers[2];" in crossgl
     assert "@ register(u8, space4)" in crossgl
-    assert "RWBuffer<uint> counters[2];" in crossgl
+    assert "uimageBuffer counters[2];" in crossgl
     assert "texture(textures[index], samplers[index], uv)" in crossgl
     assert "imageStore(images[index], uvec2(1, 2), c);" in crossgl
     assert "buffer_store(buffers[index], 0, 7);" in crossgl
     assert "buffer_load(buffers[index], 0)" in crossgl
-    assert "oldValue = atomicAdd(counters[index][0], 1u);" in crossgl
+    assert "oldValue = imageAtomicAdd(counters[index], 0, 1u);" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
@@ -5334,7 +5797,11 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "buffers[index][0] = 7;" in hlsl
     assert "buffers[index].Store(" not in hlsl
     assert "buffers[index].Load(0)" in hlsl
-    assert "InterlockedAdd(counters[index][0], 1u, oldValue);" in hlsl
+    assert (
+        "oldValue = __crossgl_imageAtomicAdd_RWBuffer_uint(counters[index], 0, 1u);"
+        in hlsl
+    )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in hlsl
     assert "buffer_store(" not in hlsl
     assert "buffer_load(" not in hlsl
     assert "atomicAdd(counters" not in hlsl
@@ -5358,7 +5825,7 @@ def test_codegen_nonuniform_resource_index_descriptor_arrays_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[4];" in crossgl
+    assert "texture2D textures[4];" in crossgl
     assert "sampler samplers[4];" in crossgl
     assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in crossgl
     assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in crossgl
@@ -5397,7 +5864,7 @@ def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[][4];" in crossgl
+    assert "texture2D textures[][4];" in crossgl
     assert "sampler samplers[];" in crossgl
     assert (
         "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
@@ -5437,7 +5904,7 @@ def test_codegen_feedback_texture_arrays_preserve_feedback_kind_and_uav_register
     crossgl = generate_crossgl(code)
 
     assert "@ register(t0, space9)" in crossgl
-    assert "sampler2D pairedTextures[2];" in crossgl
+    assert "texture2D pairedTextures[2];" in crossgl
     assert "@ register(u0, space9)" in crossgl
     assert "feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2];" in crossgl
     assert "@ register(u2, space9)" in crossgl
@@ -5616,16 +6083,17 @@ def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_
 
     crossgl = generate_crossgl(code)
 
-    assert "Buffer<float4> coefficients[][2];" in crossgl
-    assert "RWBuffer<uint> counters[];" in crossgl
+    assert "samplerBuffer coefficients[][2];" in crossgl
+    assert "uimageBuffer counters[];" in crossgl
     assert (
         "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
     )
     assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
     assert (
-        "vec4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in crossgl
+        "vec4 value = texelFetch(coefficients[nonUniformMaterial][nonUniformTile], 0);"
+        in crossgl
     )
-    assert "oldValue = atomicAdd(counters[nonUniformMaterial][0], 1u);" in crossgl
+    assert "oldValue = imageAtomicAdd(counters[nonUniformMaterial], 0, 1u);" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
@@ -5633,10 +6101,15 @@ def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_
     assert "RWBuffer<uint> counters[] : register(u0, space4);" in hlsl
     assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
     assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
-    assert "float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in (
-        hlsl
+    assert (
+        "float4 value = coefficients[nonUniformMaterial][nonUniformTile].Load(0);"
+        in hlsl
     )
-    assert "InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);" in hlsl
+    assert (
+        "oldValue = __crossgl_imageAtomicAdd_RWBuffer_uint("
+        "counters[nonUniformMaterial], 0, 1u);" in hlsl
+    )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in hlsl
     assert "float nonUniformMaterial" not in hlsl
     assert "float nonUniformTile" not in hlsl
     assert "atomicAdd(" not in hlsl
@@ -5864,21 +6337,150 @@ def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
     assert "sampler compareSampler;" in crossgl
     assert "samplerShadow" not in crossgl
-    assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
+    assert "textureCompareLod(shadowMap, compareSampler, uv, depth, 0.0)" in crossgl
 
     ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(ast)
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in glsl
-    assert "texture(shadowMap, vec3(uv, depth))" in glsl
+    assert "textureLod(shadowMap, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "Texture2D shadowMap" in hlsl
     assert "SamplerComparisonState compareSampler" in hlsl
-    assert "shadowMap.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "shadowMap.SampleCmpLevelZero(compareSampler, uv, depth)" in hlsl
+
+
+def test_codegen_sample_cmp_infers_shadow_1d_textures_for_translator_roundtrip():
+    # Regression test for CrossGL/crosstl #2640 (also #2639, #2641): a
+    # Texture1D/Texture1DArray used only with SampleCmp* is imported as a
+    # 1D shadow texture, and the HLSL generator must recognise the combined
+    # sampler1DShadow/sampler1DArrayShadow resource type.
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2) : SV_Target {
+            float a = shadowLine.SampleCmp(compareSampler, coord, depth);
+            float b = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth);
+            return float4(a + b);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "texture1DShadow shadowLine;" in crossgl
+    assert "texture1DArrayShadow shadowLineArray;" in crossgl
+    assert "textureCompare(shadowLine, compareSampler, coord, depth)" in crossgl
+    assert (
+        "textureCompareLod(shadowLineArray, compareSampler, coordLayer, depth, 0.0)"
+        in crossgl
+    )
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture1D shadowLine" in hlsl
+    assert "Texture1DArray shadowLineArray" in hlsl
+    assert "SamplerComparisonState compareSampler" in hlsl
+    assert "shadowLine.SampleCmp(compareSampler, coord, depth)" in hlsl
+    assert (
+        "shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth)" in hlsl
+    )
+
+
+def test_codegen_sample_cmp_1d_shadow_textures_translate_to_glsl_and_metal_refuses():
+    # Regression test for CrossGL/crosstl #4428: the HLSL fix in #4421 left
+    # GLSL and Metal behind. GLSL must declare sampler1DShadow and
+    # sampler1DArrayShadow and emit texture, textureLod and textureGrad with
+    # the reference in the coordinate (GLSL 4.60 section 8.9.2; the 1D
+    # shadow coordinate is vec3(u, unused, Dref)). Metal has no
+    # one-dimensional depth texture, so it refuses with a typed diagnostic
+    # naming the type.
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float lookup(Texture1D<float> t, SamplerComparisonState s, float u, float ref) {
+            return t.SampleCmp(s, u, ref);
+        }
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2, float ddx : TEXCOORD3, float ddy : TEXCOORD4) : SV_Target {
+            float a = lookup(shadowLine, compareSampler, coord, depth);
+            float b = shadowLine.SampleCmp(compareSampler, coord, depth);
+            float c = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth);
+            float g = shadowLine.SampleCmpGrad(compareSampler, coord, depth, ddx, ddy);
+            float h = shadowLineArray.SampleCmpGrad(compareSampler, coordLayer, depth, ddx, ddy);
+            return float4(a + b + c + g + h);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "texture1DShadow shadowLine;" in crossgl
+    assert "texture1DArrayShadow shadowLineArray;" in crossgl
+    assert "textureCompare(shadowLine, compareSampler, coord, depth)" in crossgl
+    assert (
+        "textureCompareLod(shadowLineArray, compareSampler, coordLayer, depth, 0.0)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad(shadowLine, compareSampler, coord, depth, ddx, ddy)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad(shadowLineArray, compareSampler, coordLayer, depth, ddx, ddy)"
+        in crossgl
+    )
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "layout(binding = 0) uniform sampler1DShadow shadowLine;" in glsl
+    assert "layout(binding = 1) uniform sampler1DArrayShadow shadowLineArray;" in glsl
+    assert "texture(shadowLine, vec3(coord, 0.0, depth))" in glsl
+    assert "textureLod(shadowLineArray, vec3(coordLayer, depth), 0.0)" in glsl
+    assert "textureGrad(shadowLine, vec3(coord, 0.0, depth), ddx, ddy)" in glsl
+    assert "textureGrad(shadowLineArray, vec3(coordLayer, depth), ddx, ddy)" in glsl
+    assert "lookup(shadowLine, coord, depth)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+    # Metal has no one-dimensional depth texture: the first compare the
+    # generator reaches (inside the helper, on its parameter `t`) refuses
+    # with a typed diagnostic naming the type.
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().generate(ast)
+    assert "one-dimensional depth texture" in str(exc_info.value)
+    assert "of type 'sampler1DShadow'" in str(exc_info.value)
+
+
+def test_codegen_sample_cmp_offsets_on_1d_shadow_textures_translate_to_glsl():
+    # GLSL 4.60 section 8.9.2 defines textureOffset and textureLodOffset for
+    # sampler1DShadow and sampler1DArrayShadow with an int offset (#4428).
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2) : SV_Target {
+            float a = shadowLine.SampleCmp(compareSampler, coord, depth, 1);
+            float b = shadowLineArray.SampleCmp(compareSampler, coordLayer, depth, 2);
+            float c = shadowLine.SampleCmpLevelZero(compareSampler, coord, depth, 3);
+            float d = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth, 4);
+            return float4(a + b + c + d);
+        }
+    """).strip()
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(code)))
+
+    assert "textureOffset(shadowLine, vec3(coord, 0.0, depth), 1)" in glsl
+    assert "textureOffset(shadowLineArray, vec3(coordLayer, depth), 2)" in glsl
+    assert "textureLodOffset(shadowLine, vec3(coord, 0.0, depth), 0.0, 3)" in glsl
+    assert "textureLodOffset(shadowLineArray, vec3(coordLayer, depth), 0.0, 4)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
 
 
 def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
@@ -5902,12 +6504,20 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
-    assert "samplerCubeShadow shadowCube;" in crossgl
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "float helper(sampler2DShadow localShadow, sampler localSampler" in crossgl
-    assert "textureCompare(shadowArray, compareSampler, uvLayer, depth)" in crossgl
-    assert "textureCompare(shadowCube, compareSampler, direction, depth)" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
+    assert "textureCubeShadow shadowCube;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert (
+        "float helper(texture2DShadow localShadow, comparison_sampler localSampler"
+        in crossgl
+    )
+    assert (
+        "textureCompareLod(shadowArray, compareSampler, uvLayer, depth, 0.0)" in crossgl
+    )
+    assert (
+        "textureCompareLod(shadowCube, compareSampler, direction, depth, 0.0)"
+        in crossgl
+    )
     assert "helper(shadowMap, compareSampler, uv, depth)" in crossgl
 
     ast = parse_crossgl(crossgl)
@@ -5915,8 +6525,12 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "layout(binding = 0) uniform sampler2DArrayShadow shadowArray;" in glsl
     assert "layout(binding = 1) uniform samplerCubeShadow shadowCube;" in glsl
     assert "layout(binding = 2) uniform sampler2DShadow shadowMap;" in glsl
-    assert "texture(shadowArray, vec4(uvLayer, depth))" in glsl
-    assert "texture(shadowCube, vec4(direction, depth))" in glsl
+    assert (
+        "textureGrad(shadowArray, vec4(uvLayer, depth), vec2(0.0), vec2(0.0))" in glsl
+    )
+    assert (
+        "textureGrad(shadowCube, vec4(direction, depth), vec3(0.0), vec3(0.0))" in glsl
+    )
     assert "helper(shadowMap, uv, depth)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
@@ -5924,20 +6538,23 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "Texture2DArray shadowArray" in hlsl
     assert "TextureCube shadowCube" in hlsl
     assert "Texture2D shadowMap" in hlsl
-    assert "shadowArray.SampleCmp(compareSampler, uvLayer, depth)" in hlsl
-    assert "shadowCube.SampleCmp(compareSampler, direction, depth)" in hlsl
-    assert "localShadow.SampleCmp(localSampler, uv, depth)" in hlsl
+    assert "shadowArray.SampleCmpLevelZero(compareSampler, uvLayer, depth)" in hlsl
+    assert "shadowCube.SampleCmpLevelZero(compareSampler, direction, depth)" in hlsl
+    assert "localShadow.SampleCmpLevelZero(localSampler, uv, depth)" in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert "depth2d_array<float> shadowArray" in metal
     assert "depthcube<float> shadowCube" in metal
     assert "depth2d<float> shadowMap" in metal
     assert (
-        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(0.0))"
         in metal
     )
-    assert "shadowCube.sample_compare(compareSampler, direction, depth)" in metal
-    assert "localShadow.sample_compare(localSampler, uv, depth)" in metal
+    assert (
+        "shadowCube.sample_compare(compareSampler, direction, depth, level(0.0))"
+        in metal
+    )
+    assert "localShadow.sample_compare(localSampler, uv, depth, level(0.0))" in metal
 
 
 def test_codegen_sample_cmp_infers_shadow_struct_members():
@@ -5962,24 +6579,26 @@ def test_codegen_sample_cmp_infers_shadow_struct_members():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadow;" in crossgl
-    assert "sampler2D color;" in crossgl
-    assert "sampler2DShadow color;" not in crossgl
-    assert "textureCompare(resources.shadow, compareSampler, uv, depth)" in crossgl
+    assert "texture2DShadow shadow;" in crossgl
+    assert "texture2D color;" in crossgl
+    assert "texture2DShadow color;" not in crossgl
+    assert (
+        "textureCompareLod(resources.shadow, compareSampler, uv, depth, 0.0)" in crossgl
+    )
     assert "texture(resources.color, linearSampler, uv)" in crossgl
 
     ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(ast)
     assert "sampler2DShadow shadow;" in glsl
     assert "sampler2D color;" in glsl
-    assert "texture(resources.shadow, vec3(uv, depth))" in glsl
+    assert "textureLod(resources.shadow, vec3(uv, depth), 0.0)" in glsl
     assert "texture(resources.color, uv)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "Texture2D shadow" in hlsl
     assert "Texture2D color" in hlsl
-    assert "resources.shadow.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "resources.shadow.SampleCmpLevelZero(compareSampler, uv, depth)" in hlsl
     assert "resources.color.Sample(linearSampler, uv)" in hlsl
     assert "textureCompare(" not in hlsl
 
@@ -6010,11 +6629,12 @@ def test_codegen_shadow_struct_member_inference_is_scoped_by_struct_type():
 
     crossgl = generate_crossgl(code)
 
-    assert "struct ShadowBundle {\n        sampler2DShadow texture;" in crossgl
-    assert "struct ColorBundle {\n        sampler2D texture;" in crossgl
-    assert "struct ColorBundle {\n        sampler2DShadow texture;" not in crossgl
-    assert "textureCompare(shadowResources.texture, compareSampler, uv, depth)" in (
-        crossgl
+    assert "struct ShadowBundle {\n        texture2DShadow texture;" in crossgl
+    assert "struct ColorBundle {\n        texture2D texture;" in crossgl
+    assert "struct ColorBundle {\n        texture2DShadow texture;" not in crossgl
+    assert (
+        "textureCompareLod(shadowResources.texture, compareSampler, uv, depth, 0.0)"
+        in (crossgl)
     )
     assert "texture(colorResources.texture, linearSampler, uv)" in crossgl
 
@@ -6067,12 +6687,12 @@ def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadow;" in crossgl
-    assert "sampler2D color;" in crossgl
-    assert "sampler2DShadow color;" not in crossgl
-    assert "float readShadow(sampler2DShadow source" in crossgl
-    assert "float readShadowWrapper(sampler2DShadow source" in crossgl
-    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "texture2DShadow shadow;" in crossgl
+    assert "texture2D color;" in crossgl
+    assert "texture2DShadow color;" not in crossgl
+    assert "float readShadow(texture2DShadow source" in crossgl
+    assert "float readShadowWrapper(texture2DShadow source" in crossgl
+    assert "vec4 readColor(texture2D source" in crossgl
     assert "readShadowWrapper(resources.shadow, compareSampler, uv, depth)" in crossgl
     assert "readColor(resources.color, linearSampler, uv)" in crossgl
 
@@ -6080,7 +6700,7 @@ def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
     assert "sampler2DShadow shadow;" in glsl
     assert "sampler2D color;" in glsl
     assert "readShadowWrapper(resources.shadow, uv, depth)" in glsl
-    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "textureLod(source, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
 
@@ -6123,11 +6743,11 @@ def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers()
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadows[2];" in crossgl
-    assert "sampler2D colors[2];" in crossgl
-    assert "sampler2DShadow colors[2];" not in crossgl
-    assert "float readShadow(sampler2DShadow source" in crossgl
-    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "texture2DShadow shadows[2];" in crossgl
+    assert "texture2D colors[2];" in crossgl
+    assert "texture2DShadow colors[2];" not in crossgl
+    assert "float readShadow(texture2DShadow source" in crossgl
+    assert "vec4 readColor(texture2D source" in crossgl
     assert "readShadow(resources.shadows[index], compareSampler, uv, depth)" in crossgl
     assert "readColor(resources.colors[index], linearSampler, uv)" in crossgl
 
@@ -6135,7 +6755,7 @@ def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers()
     assert "sampler2DShadow shadows[2];" in glsl
     assert "sampler2D colors[2];" in glsl
     assert "readShadow(resources.shadows[index], uv, depth)" in glsl
-    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "textureLod(source, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
 
@@ -6160,11 +6780,12 @@ def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D tex;" in crossgl
-    assert "sampler2DShadow tex;" not in crossgl
-    assert "vec4 readRegular(sampler2D regularSource, sampler localSampler" in crossgl
+    assert "texture2D tex;" in crossgl
+    assert "texture2DShadow tex;" not in crossgl
+    assert "vec4 readRegular(texture2D regularSource, sampler localSampler" in crossgl
     assert (
-        "float readShadow(sampler2DShadow shadowSource, sampler localSampler" in crossgl
+        "float readShadow(texture2DShadow shadowSource, comparison_sampler localSampler"
+        in crossgl
     )
     assert "readRegular(tex, samp, uv)" in crossgl
     assert "readShadow(tex, compareSampler, uv, depth)" in crossgl
@@ -6187,9 +6808,9 @@ def test_codegen_shadow_inference_keeps_parameter_names_scoped():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shared;" in crossgl
-    assert "vec4 readRegular(sampler2D shared_, sampler localSampler" in crossgl
-    assert "textureCompare(shared, compareSampler, uv, depth)" in crossgl
+    assert "texture2DShadow shared;" in crossgl
+    assert "vec4 readRegular(texture2D shared_, sampler localSampler" in crossgl
+    assert "textureCompareLod(shared, compareSampler, uv, depth, 0.0)" in crossgl
     assert "texture(shared_, localSampler, uv)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
@@ -6215,15 +6836,18 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
 
     crossgl = generate_crossgl(code)
 
-    assert "samplerCubeArrayShadow cubeShadowArray;" in crossgl
+    assert "textureCubeArrayShadow cubeShadowArray;" in crossgl
     assert (
-        "float leaf(samplerCubeArrayShadow leafShadow, sampler leafSampler" in crossgl
-    )
-    assert (
-        "float wrapper(samplerCubeArrayShadow wrappedShadow, sampler wrappedSampler"
+        "float leaf(textureCubeArrayShadow leafShadow, comparison_sampler leafSampler"
         in crossgl
     )
-    assert "textureCompare(leafShadow, leafSampler, cubeLayer, depth)" in crossgl
+    assert (
+        "float wrapper(textureCubeArrayShadow wrappedShadow, comparison_sampler wrappedSampler"
+        in crossgl
+    )
+    assert (
+        "textureCompareLod(leafShadow, leafSampler, cubeLayer, depth, 0.0)" in crossgl
+    )
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in crossgl
     assert "wrapper(cubeShadowArray, compareSampler, cubeLayer, depth)" in crossgl
 
@@ -6234,7 +6858,8 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
         "float leaf(samplerCubeArrayShadow leafShadow, vec4 cubeLayer, float depth)"
         in glsl
     )
-    assert "texture(leafShadow, cubeLayer, depth)" in glsl
+    assert "#extension GL_EXT_texture_shadow_lod : require" in glsl
+    assert "textureLod(leafShadow, cubeLayer, depth, 0.0)" in glsl
     assert "leaf(wrappedShadow, cubeLayer, depth)" in glsl
     assert "wrapper(cubeShadowArray, cubeLayer, depth)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
@@ -6245,14 +6870,14 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
         "float leaf(TextureCubeArray leafShadow, SamplerComparisonState leafSampler"
         in hlsl
     )
-    assert "leafShadow.SampleCmp(leafSampler, cubeLayer, depth)" in hlsl
+    assert "leafShadow.SampleCmpLevelZero(leafSampler, cubeLayer, depth)" in hlsl
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert "depthcube_array<float> cubeShadowArray" in metal
     assert "float leaf(depthcube_array<float> leafShadow, sampler leafSampler" in metal
     assert (
-        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(0.0))"
         in metal
     )
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in metal
@@ -6287,11 +6912,11 @@ def test_codegen_nested_cube_array_helper_mixed_use_stays_non_shadow():
 
     crossgl = generate_crossgl(code)
 
-    assert "samplerCubeArray cubeTex;" in crossgl
-    assert "samplerCubeArrayShadow cubeTex;" not in crossgl
-    assert "vec4 regularLeaf(samplerCubeArray source, sampler localSampler" in crossgl
+    assert "textureCubeArray cubeTex;" in crossgl
+    assert "textureCubeArrayShadow cubeTex;" not in crossgl
+    assert "vec4 regularLeaf(textureCubeArray source, sampler localSampler" in crossgl
     assert (
-        "float shadowLeaf(samplerCubeArrayShadow source, sampler localSampler"
+        "float shadowLeaf(textureCubeArrayShadow source, comparison_sampler localSampler"
         in crossgl
     )
     assert "regularWrapper(cubeTex, samp, cubeLayer)" in crossgl
@@ -6302,7 +6927,8 @@ def test_codegen_math_intrinsics_mapping():
     output = generate_crossgl(MATH_INTRINSICS_HLSL)
     assert "dot" in output
     assert "normalize" in output
-    assert "vec4 m = (a * b);" in output
+    # mul of two vectors is their inner product (DXC lowers it to Dot4).
+    assert "vec4 m = dot(a, b);" in output
     assert "mix" in output
     assert "clamp(" in output
 
@@ -6386,7 +7012,9 @@ def test_codegen_get_dimensions_mapping():
     assert "buffer_dimensions" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
-    assert "buf.GetDimensions(len);" in regenerated_hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload, so the lone count is assigned.
+    assert "len = cgl_buffer_count(buf);" in regenerated_hlsl
+    assert "buf.GetDimensions(len);" not in regenerated_hlsl
     assert "texture_dimensions" not in regenerated_hlsl
     assert "buffer_dimensions" not in regenerated_hlsl
 
@@ -6903,6 +7531,25 @@ def test_codegen_preserves_parentheses():
     assert "clamp((a - b) / c, 0.0, 1.0)" in output
 
 
+def test_codegen_subscripts_computed_values_as_a_whole():
+    output = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> results : register(u0);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float4 p = float4(id, 1);
+            int2 n = int2(id.xy);
+            results[0] = (p * 2.0 + 1.0)[1] + (-p)[2] + (n.x > 0 ? p : p.wzyx)[3];
+        }
+        """).strip())
+
+    assert "((p * 2.0) + 1.0)[1]" in output
+    assert "(-p)[2]" in output
+    assert "(n.x > 0 ? p : p.wzyx)[3]" in output
+    glsl = GLSLCodeGen().generate(parse_crossgl(output))
+    assert "((((p * 2.0) + 1.0)[1] + (-p)[2]) + ((n.x > 0) ? p : p.wzyx)[3])" in glsl
+
+
 def test_codegen_multiview_and_viewport_semantics():
     code = textwrap.dedent("""
         struct GSInput {
@@ -6926,7 +7573,7 @@ def test_codegen_multiview_and_viewport_semantics():
     """).strip()
 
     output = generate_crossgl(code)
-    for expected in ["gl_ViewID", "gl_Layer", "gl_ViewportIndex"]:
+    for expected in ["gl_ViewIndex", "gl_Layer", "gl_ViewportIndex"]:
         assert expected in output
 
 
@@ -6957,11 +7604,11 @@ def test_codegen_case_insensitive_raster_system_semantics_reparse():
 
     for expected in [
         "vec4 position @ gl_Position;",
-        "uint view @ gl_ViewID;",
+        "uint view @ gl_ViewIndex;",
         "uint layer @ gl_Layer;",
         "uint viewport @ gl_ViewportIndex;",
-        "float clip @ gl_ClipDistance;",
-        "float cull @ gl_CullDistance;",
+        "float clip @ gl_ClipDistance3;",
+        "float cull @ gl_CullDistance2;",
     ]:
         assert expected in output
     for raw_semantic in [
@@ -6991,13 +7638,18 @@ def test_codegen_interlocked_compare_exchange_mapping():
 
     output = generate_crossgl(code)
     assert "original = imageAtomicCompSwap(tex, dtid.xy, 1u, 0u);" in output
-    assert "RWBuffer<uint> buf;" in output
-    assert "original = atomicCompareExchange(buf[dtid.x], 2u, 1u);" in output
+    assert "uimageBuffer buf;" in output
+    assert "original = imageAtomicCompSwap(buf, dtid.x, 2u, 1u);" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "RWBuffer<uint> buf : register(u1);" in regenerated_hlsl
     assert (
-        "InterlockedCompareExchange(buf[dtid.x], 2u, 1u, original);" in regenerated_hlsl
+        "original = __crossgl_imageAtomicCompSwap_RWBuffer_uint(buf, dtid.x, 2u, 1u);"
+        in regenerated_hlsl
+    )
+    assert (
+        "InterlockedCompareExchange(buffer[coord], value0, value1, original);"
+        in regenerated_hlsl
     )
     assert "atomicCompareExchange(buf" not in regenerated_hlsl
 
@@ -7018,8 +7670,9 @@ def test_codegen_byte_address_interlocked_compare_store_roundtrip():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u4)" in crossgl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in crossgl
-    assert "atomicCompareExchange(rawBytes" not in crossgl
+    # CrossGL spells it as the byte-address compare-exchange whose previous value is unused.
+    assert "atomicCompareExchange(rawBytes, offset, compare, 7u);" in crossgl
+    assert "InterlockedCompareStore" not in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl
@@ -7043,17 +7696,19 @@ def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
 
     output = generate_crossgl(code)
 
-    assert "RWBuffer<uint> counterBuffers[2];" in output
+    assert "uimageBuffer counterBuffers[2];" in output
     assert "RWStructuredBuffer<int> signedValues;" in output
-    assert "original = atomicAdd(counterBuffers[1][dtid.x], 1u);" in output
+    assert "original = imageAtomicAdd(counterBuffers[1], dtid.x, 1u);" in output
     assert "oldSigned = atomicMax(signedValues[dtid.x], -1);" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "RWBuffer<uint> counterBuffers[2] : register(u4);" in regenerated_hlsl
     assert "RWStructuredBuffer<int> signedValues : register(u6);" in regenerated_hlsl
     assert (
-        "InterlockedAdd(counterBuffers[1][dtid.x], 1u, original);" in regenerated_hlsl
+        "original = __crossgl_imageAtomicAdd_RWBuffer_uint(counterBuffers[1], dtid.x, 1u);"
+        in regenerated_hlsl
     )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in regenerated_hlsl
     assert "InterlockedMax(signedValues[dtid.x], -1, oldSigned);" in regenerated_hlsl
     assert "atomicAdd(counterBuffers" not in regenerated_hlsl
     assert "atomicMax(signedValues" not in regenerated_hlsl
@@ -7081,8 +7736,10 @@ def test_codegen_template_specialized_struct_declarations_reparse_crossgl():
 
     output = generate_crossgl(code)
 
-    assert output.count("struct TemplateValue") == 2
-    assert "TemplateValue selected;" in output
+    # The explicit specialization is the concrete structure that ``TemplateValue<float>`` names.
+    assert "generic<T> struct TemplateValue {" in output
+    assert "struct TemplateValue_float_specialization {" in output
+    assert "TemplateValue_float_specialization selected;" in output
     assert "TemplateValue<float>" not in output
     parse_crossgl(output)
 
@@ -7105,14 +7762,14 @@ def test_codegen_elaborated_template_struct_variable_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "struct TS" in output
-    assert "TS ts;" in output
+    assert "generic<T> struct TS {" in output
+    assert "TS<vec4> ts;" in output
     assert "TS<float4>" not in output
     assert "return ts.t;" in output
     parse_crossgl(output)
 
 
-def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
+def test_codegen_dependent_typename_scoped_template_traits_are_refused():
     # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
     # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
     code = textwrap.dedent("""
@@ -7149,13 +7806,13 @@ def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
         }
     """).strip()
 
-    output = generate_crossgl(code)
-
-    assert "struct Wrapper" in output
-    assert "Wrapper wf;" in output
-    assert "float f = wf.Get();" in output
-    assert "typename" not in output
-    parse_crossgl(output)
+    # ``enable_if`` and ``is_arithmetic`` are type traits computed through partial and explicit specializations,
+    # which CrossGL cannot express; the importer used to emit ``Wrapper wf;`` with an undeclared ``T`` member.
+    with pytest.raises(
+        DirectXImportRefused,
+        match=r"HLSL struct 'hlsl::enable_if' is a partial specialization",
+    ):
+        generate_crossgl(code)
 
 
 def test_codegen_upstream_declarations_defaults_and_for_update_sequences():
@@ -7219,7 +7876,7 @@ def test_codegen_linalg_post_type_attributes_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "type Mat10by20 = __builtin_LinAlgMatrix;" in output
+    assert "typedef __builtin_LinAlgMatrix Mat10by20;" in output
     assert "void f2(__builtin_LinAlgMatrix mat2_)" in output
     assert "__builtin_LinAlgMatrix mat1;" in output
     assert "Mat10by20 f3()" in output
@@ -7250,7 +7907,7 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "type MyHandleT = __builtin_LinAlgMatrix;" in output
+    assert "typedef __builtin_LinAlgMatrix MyHandleT;" in output
     assert "@ numthreads(4, 4, 4)" in output
     assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
     parse_crossgl(output)
@@ -7376,7 +8033,8 @@ def test_codegen_fixed_array_partial_initializers_recurse_through_aggregates(
         "float2(2.0, 3.0), (float2)0};" in hlsl
     )
     assert (
-        "float2x2 matrices[2] = {float2x2(1.0, float(0), 2.0, 3.0), "
+        # Nested matrix initializers are columns; HLSL constructors fill rows.
+        "float2x2 matrices[2] = {transpose(float2x2(1.0, float(0), 2.0, 3.0)), "
         "(float2x2)0};" in hlsl
     )
     assert "Pair pairs[2] = {{1.0, float(0)}, (Pair)0};" in hlsl
@@ -7506,6 +8164,26 @@ def test_codegen_fixed_array_value_initializer_rejects_resource_members():
     diagnostic = exc_info.value
     assert diagnostic.reason == "value-initialization-unsupported"
     assert diagnostic.expected_type == "Texture2D"
+
+
+def test_hlsl_import_keeps_dx_hit_object_namespace():
+    code = textwrap.dedent("""
+        RWStructuredBuffer<uint> outp : register(u0);
+        [shader("raygeneration")]
+        void main() {
+            uint i = 0u;
+            dx::HitObject obj;
+            uint r = obj.GetHitKind();
+            outp[i] = r;
+        }
+    """)
+
+    crossgl = generate_crossgl(code)
+
+    assert "dx::HitObject obj;" in crossgl
+    assert "dx_HitObject" not in crossgl
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "dx::HitObject obj;" in hlsl
 
 
 def test_codegen_invalid_hlsl_raises():

@@ -307,3 +307,107 @@ def test_proof_refuses_to_overwrite_previous_evidence(tmp_path):
             tmp_path / "mlx", tmp_path / "bundle", proof.DEFAULT_CONTRACT, output
         )
     assert sentinel.read_text() == "previous evidence"
+
+
+@pytest.mark.parametrize("allow_drift", [False, True])
+def test_proof_forwards_the_drift_policy_to_both_bundle_reads(
+    tmp_path, monkeypatch, allow_drift
+):
+    calls = []
+
+    def records(*_args, allow_drift=False):
+        calls.append(allow_drift)
+        raise ValueError("stop after the bundle read")
+
+    monkeypatch.setattr(proof, "_verify_checkout", lambda _root: None)
+    monkeypatch.setattr(
+        proof,
+        "_contract",
+        lambda _path: (
+            {
+                "commit": proof.MLX_COMMIT,
+                "source": proof.SOURCE,
+                "sourceSha256": proof.SOURCE_SHA256,
+                "target": "metal",
+            },
+            {},
+            "0" * 64,
+        ),
+    )
+    monkeypatch.setattr(proof, "_selected_entries", lambda _contract: [])
+    monkeypatch.setattr(proof, "_bundle_records", records)
+    report = proof.prove(
+        tmp_path / "mlx",
+        tmp_path / "bundle",
+        proof.DEFAULT_CONTRACT,
+        tmp_path / "proof",
+        allow_drift=allow_drift,
+    )
+    assert calls == [allow_drift]
+    assert report["status"] == "failed"
+    assert report["failures"] == ["stop after the bundle read"]
+
+
+def test_cli_allows_drift_only_when_asked(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_prove(*_args, allow_drift):
+        seen.append(allow_drift)
+        return {"status": "passed", "records": [], "matrixRecords": []}
+
+    monkeypatch.setattr(proof, "prove", fake_prove)
+    argv = [
+        "--mlx-root",
+        str(tmp_path / "mlx"),
+        "--bundle-root",
+        str(tmp_path / "bundle"),
+        "--output-dir",
+        str(tmp_path / "proof"),
+    ]
+    proof.main(argv)
+    proof.main([*argv, "--allow-drift"])
+    assert seen == [False, True]
+
+
+def test_matrix_controls_check_sources_against_their_bundle_records(
+    tmp_path, monkeypatch
+):
+    # In report mode a drifted record keeps the contract's pin apart from its
+    # own bytes; the controls run the exported bytes the record names.
+    contract = {
+        "entries": [
+            {
+                "entryPoint": f"{family}_{dtype}",
+                "variant": variant,
+                "dataType": dtype,
+                "groupSize": group,
+                "bitWidth": bits,
+                "sha256": "0" * 64,
+            }
+            for family, (variant, group, bits) in proof.MATRIX_VARIANTS.items()
+            for dtype in proof.DATA_TYPES
+        ]
+    }
+    source = tmp_path / "kernel.metal"
+    source.write_text("kernel", encoding="utf-8")
+    artifacts = {
+        entry["entryPoint"]: {"path": str(source), "sha256": proof._sha256(source)}
+        for entry in contract["entries"]
+    }
+
+    class Compiled(Exception):
+        pass
+
+    def compile_source(*_args, **_kwargs):
+        raise Compiled
+
+    monkeypatch.setattr(proof, "_compile_source", compile_source)
+    with pytest.raises(Compiled):
+        proof._run_matrix_controls(
+            contract, artifacts, tmp_path, tmp_path / "out", None, None, {}
+        )
+    artifacts["wide_float"]["sha256"] = "1" * 64
+    with pytest.raises(ValueError, match="Matrix source changed"):
+        proof._run_matrix_controls(
+            contract, artifacts, tmp_path, tmp_path / "out", None, None, {}
+        )

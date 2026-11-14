@@ -4,12 +4,12 @@ using namespace metal;
 
 struct PSInput {
     float4 position [[position]];
-    float2 uv [[attribute(4)]];
+    float2 uv [[user(TEXCOORD0)]];
 };
 // Vertex Shader
 struct VSMain_Input {
     float4 position [[attribute(0)]];
-    float2 uv [[attribute(4)]];
+    float2 uv [[attribute(5)]];
 };
 
 vertex PSInput VSMain(VSMain_Input _crossglInput [[stage_in]], texture2d<float> g_texture [[texture(0)]]) {

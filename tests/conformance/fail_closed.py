@@ -3,14 +3,17 @@
 CrossTL must refuse what it cannot translate. Three code shapes break that rule silently:
 
 - ``fallback-text``: a string literal that writes a loss marker into the output (``; WARNING``, ``// WARNING``,
-  ``/* unsupported``, ``placeholder``, ``using default value``) instead of raising a diagnostic;
+  ``/* unsupported``, ``placeholder``, ``using default value``, ``not directly supported``, ``not preserved */``)
+  instead of raising a diagnostic;
 - ``identity-fallback``: ``mapping.get(key, key)``, which passes an unknown name through verbatim;
 - ``empty-block-recovery``: an exception handler that replaces what failed to parse with an empty block.
 
 Each site is keyed by file, enclosing function and kind, and counted. ``fail_closed_baseline.json`` records the
 current counts; the check fails when a count rises or a new key appears, and also when a count falls without the
 baseline being lowered, so that every removal is recorded and cannot be spent again. The baseline only shrinks:
-the target is an empty baseline, enforced by this check.
+the target is an empty baseline, enforced by this check. It stores no per-kind totals, so that pull requests
+which remove sites in different modules change different lines and merge without conflict; ``report`` prints
+the totals.
 
 Usage: ``python -m tests.conformance.fail_closed [check|update|report]``.
 """
@@ -30,7 +33,9 @@ REPOSITORY = HERE.parents[1]
 BASELINE = HERE / "fail_closed_baseline.json"
 ROOTS = ("crosstl/translator", "crosstl/backend")
 MARKERS = re.compile(
-    r"; WARNING|// WARNING|/\*\s*unsupported|\bplaceholder\b|using default value", re.I
+    r"; WARNING|// WARNING|/\*\s*unsupported|\bplaceholder\b|using default value"
+    r"|not directly supported|\bnot (?:supported|preserved) (?:in CrossGL|\*/)",
+    re.I,
 )
 KINDS = ("fallback-text", "identity-fallback", "empty-block-recovery")
 
@@ -185,7 +190,7 @@ def main(argv=None):
                 "The baseline only shrinks; fix the new sites instead.", file=sys.stderr
             )
             return 1
-        document = {"schemaVersion": 1, "totals": totals(current), "sites": current}
+        document = {"schemaVersion": 1, "sites": current}
         BASELINE.write_text(json.dumps(document, indent=1, sort_keys=True) + "\n")
         print(f"Recorded {sum(current.values())} fail-open sites in {BASELINE.name}")
         return 0

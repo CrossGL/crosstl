@@ -29,6 +29,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 from ..corpus_evidence import (
@@ -57,13 +61,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "3d7ed589bf65afc61579475582e201f94eb88b305c2849eff82264d386b99a58"
+    "669325efba929188f788de9d5a8f3d08b10910c3accd0c3b336638d7953942b0"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c"
+    "351c29d49e5d3738db5273194528c461335a0ab013d7f0bd42ae8bd7670782bc"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
@@ -116,9 +120,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba"
+                "d3c86258eabf71b3c68f2a1271d7df7758e02595073fddacba0b480c1d1a816e"
             ),
-            "sizeBytes": 3611,
+            "sizeBytes": 3660,
         },
     },
     input_values=(-3.0, -1.5, 0.0, 2.0, 4.25),
@@ -154,9 +158,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "bc420d338b5c995e110dea0f98c9ffd3aa0ae8c77f1ea4bbe13df5acd4462b9e"
+                "e4398126d06061c56603b9a8c6630456b15cad50f90efe0850c40d43c157c5e0"
             ),
-            "sizeBytes": 6450,
+            "sizeBytes": 6499,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
@@ -772,12 +776,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 2206358,
+        "generatedSizeBytesTotal": 2206790,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1076},
             "maximum": {
                 "entryPoint": "gn4large_ArcSincomplex64complex64",
-                "sizeBytes": 13843,
+                "sizeBytes": 13851,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -1080,11 +1084,11 @@ def _translate_unary_artifact(
         "algorithm": "sha256",
         "value": MLX_UNARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     expected_target_entry = {
         "directx": "CSMain",
         "metal": workload.entry_point,
@@ -1275,6 +1279,7 @@ def _roundtrip_pinned_mlx_unary_through_metal(
                 UNARY_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

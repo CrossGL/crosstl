@@ -1,3 +1,5 @@
+import pytest
+
 from crosstl.backend.OpenCL.OpenCLAst import (
     ForNode,
     FunctionCallNode,
@@ -13,6 +15,11 @@ from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser, OpenCLProgramNode
 def parse_code(source):
     tokens = OpenCLLexer(source).tokenize()
     return OpenCLParser(tokens).parse()
+
+
+def test_template_prefix_without_declaration_raises_syntax_error_at_eof():
+    with pytest.raises(SyntaxError):
+        parse_code("template <typename T>")
 
 
 def test_kernel_qualifier_before_return_type_parses():
@@ -404,3 +411,50 @@ def test_function_local_anonymous_record_declarators_are_preserved():
     assert getattr(union_node, "is_union", False) is True
     assert isinstance(payloads, VariableNode)
     assert (payloads.vtype, payloads.name) == ("union <anonymous>[2]", "payloads")
+
+
+def test_multiline_static_and_const_constant_address_space_qualifiers():
+    ast = parse_code("""
+        static
+        __constant float static_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        const
+        __constant float const_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        """)
+
+    static_table, const_table = ast.statements
+    assert static_table.vtype == "float[4]"
+    assert static_table.qualifiers == ["static", "__constant__"]
+    assert const_table.vtype == "const float[4]"
+    assert const_table.qualifiers == ["__constant__"]
+
+
+@pytest.mark.parametrize(
+    "malformed_source",
+    [
+        "__kernel void k(__global /* a\nb",
+        "__kernel void k(__global /* a",
+        "__kernel void k(__global",
+        "__kernel void k(__global\n ",
+        "__kernel void k(__global\n}",
+    ],
+)
+def test_opencl_parameter_qualifier_malformed_inputs_raise_syntax_error(
+    malformed_source,
+):
+    with pytest.raises(SyntaxError):
+        parse_code(malformed_source)
+
+
+def test_opencl_parameter_terminated_multiline_comment_after_qualifier():
+    ast = parse_code("__kernel void k(__global /* a */ float* x) {}")
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.params[0]["type"] == "__global__ float *"
+
+
+def test_opencl_parameter_newline_separated_qualifiers_parse():
+    ast = parse_code("__kernel void k(__global\nfloat* x) {}")
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.params[0]["type"] == "__global__ float *"

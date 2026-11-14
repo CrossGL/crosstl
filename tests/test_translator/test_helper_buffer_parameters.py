@@ -113,6 +113,41 @@ def test_nested_helpers_forward_their_own_rebases():
     )
 
 
+GATHER = """
+    void run(StructuredBuffer<uint> input @buffer(0),
+             RWStructuredBuffer<uint> output @buffer(1),
+             StructuredBuffer<uint> indices @buffer(2)) {
+        BODY
+    }
+"""
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        # Accesses of several rewritten parameters nest inside one statement.
+        (
+            "buffer_store(output, buffer_load(indices, 0), "
+            "buffer_load(input, buffer_load(indices, 1)));",
+            "output[uint((output_offset + indices[uint(indices_offset)]))] = "
+            "input[uint((input_offset + indices[uint((indices_offset + 1))]))];",
+        ),
+        # A store whose index reads the same buffer it writes.
+        (
+            "buffer_store(output, buffer_load(output, 0), 1u);",
+            "output[uint((output_offset + output[uint(output_offset)]))] = 1u;",
+        ),
+    ],
+)
+def test_nested_accesses_of_rewritten_parameters_all_become_indexing(body, expected):
+    generated = HLSLCodeGen().generate_entry(
+        parse(_source(GATHER.replace("BODY", body), "run(input, output, input)")),
+        "select_value",
+    )
+    assert expected in generated
+    assert ".Load(" not in generated
+
+
 @pytest.mark.parametrize(
     "body,call,parameter",
     [

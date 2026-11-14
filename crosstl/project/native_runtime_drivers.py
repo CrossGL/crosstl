@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
 from .runtime_value_encoding import validate_value_encoding
+from .runtime_values import exact_types_within, flatten_values, scalars_fit
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -192,6 +193,8 @@ class _OpenGLSPIRVUnavailable(RuntimeError):
         self.details = dict(details)
 
 
+_BOOL_TYPES = frozenset({bool})
+_INT_TYPES = frozenset({int})
 _OPENGL_SPIRV_HEADER_BYTE_LENGTH = 5 * 4
 _OPENGL_SUBGROUP_SIZE_KHR = 0x9532
 _OPENGL_SUBGROUP_EXTENSION = "GL_KHR_shader_subgroup"
@@ -1915,6 +1918,32 @@ class OpenGLComputeRuntime:
         return outputs
 
 
+_VK_PORTABILITY_ENUMERATION = "VK_KHR_portability_enumeration"
+_VK_PORTABILITY_SUBSET = "VK_KHR_portability_subset"
+_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 = "VK_KHR_get_physical_device_properties2"
+
+
+def _vulkan_extension_names(properties: Any) -> set[str]:
+    return {str(item.extensionName) for item in properties or ()}
+
+
+def _vulkan_driver_missing(vk: Any, exc: Exception) -> bool:
+    # The loader reports VK_ERROR_INCOMPATIBLE_DRIVER when it finds no driver at all,
+    # portability drivers included once portability enumeration is requested.
+    incompatible_driver = getattr(vk, "VkErrorIncompatibleDriver", None)
+    return isinstance(incompatible_driver, type) and isinstance(
+        exc, incompatible_driver
+    )
+
+
+def _vulkan_device_name(vk: Any, physical_device: Any) -> str | None:
+    get_properties = getattr(vk, "vkGetPhysicalDeviceProperties", None)
+    if not callable(get_properties):
+        return None
+    name = getattr(get_properties(physical_device), "deviceName", None)
+    return str(name) if name else None
+
+
 class VulkanComputeRuntime:
     """Reference Vulkan compute runtime for simple storage-buffer fixtures.
 
@@ -1956,17 +1985,25 @@ class VulkanComputeRuntime:
             )
 
         instance = None
+        portability = False
         try:
+            portability = self._portability_enumeration_available(vk)
             instance = self._create_instance(vk)
             physical_device, queue_family = self._select_compute_device(vk, instance)
-        except Exception as exc:  # pragma: no cover - depends on local Vulkan loader
+            device_name = _vulkan_device_name(vk, physical_device)
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+            reason_kind = "vulkan-runtime-unavailable"
+            if portability and instance is None and not _vulkan_driver_missing(vk, exc):
+                reason_kind = "portability-enumeration-failed"
             return RuntimeExecutorAvailability(
                 False,
-                reason=f"Vulkan runtime is unavailable: {exc}",
+                reason=f"Vulkan runtime is unavailable: {error}",
                 details={
-                    "reasonKind": "vulkan-runtime-unavailable",
+                    "reasonKind": reason_kind,
                     "target": "vulkan",
-                    "error": str(exc),
+                    "error": error,
+                    "portabilityEnumeration": portability,
                 },
             )
         finally:
@@ -1979,8 +2016,9 @@ class VulkanComputeRuntime:
                 "reasonKind": "available",
                 "target": "vulkan",
                 "runtime": self.name,
-                "physicalDevice": str(physical_device),
+                "physicalDevice": device_name or str(physical_device),
                 "queueFamilyIndex": queue_family,
+                "portabilityEnumeration": portability,
             },
         )
 
@@ -2056,11 +2094,36 @@ class VulkanComputeRuntime:
             engineVersion=1,
             apiVersion=getattr(vk, "VK_API_VERSION_1_1", vk.VK_API_VERSION_1_0),
         )
+        options: dict[str, Any] = {}
+        instance_extensions = self._instance_extension_names(vk)
+        if _VK_PORTABILITY_ENUMERATION in instance_extensions:
+            # Portability drivers such as MoltenVK are only enumerated on request.
+            extensions = [_VK_PORTABILITY_ENUMERATION]
+            if _VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 in instance_extensions:
+                # VK_KHR_portability_subset requires it on a Vulkan 1.0 instance.
+                extensions.append(_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2)
+            options = {
+                "flags": vk.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
+                "enabledExtensionCount": len(extensions),
+                "ppEnabledExtensionNames": extensions,
+            }
         create_info = vk.VkInstanceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             pApplicationInfo=application_info,
+            **options,
         )
         return vk.vkCreateInstance(create_info, None)
+
+    def _portability_enumeration_available(self, vk: Any) -> bool:
+        return _VK_PORTABILITY_ENUMERATION in self._instance_extension_names(vk)
+
+    def _instance_extension_names(self, vk: Any) -> set[str]:
+        enumerate_extensions = getattr(
+            vk, "vkEnumerateInstanceExtensionProperties", None
+        )
+        if not callable(enumerate_extensions):
+            return set()
+        return _vulkan_extension_names(enumerate_extensions(None))
 
     def _destroy_instance(self, vk: Any, instance: Any) -> None:
         destroy = getattr(vk, "vkDestroyInstance", None)
@@ -2141,7 +2204,9 @@ class _VulkanDispatchContext:
         self.physical_device, self.queue_family = self.runtime._select_compute_device(
             vk, self.instance
         )
-        limits = vk.vkGetPhysicalDeviceProperties(self.physical_device).limits
+        # Keep the properties alive: cffi frees it, and its nested limits, once unreferenced.
+        properties = vk.vkGetPhysicalDeviceProperties(self.physical_device)
+        limits = properties.limits
         _validate_dispatch_limits(
             self.workgroup_count,
             self.workgroup_size,
@@ -2157,10 +2222,19 @@ class _VulkanDispatchContext:
             queueCount=1,
             pQueuePriorities=priority,
         )
+        extensions = []
+        enumerate_extensions = getattr(vk, "vkEnumerateDeviceExtensionProperties", None)
+        if callable(enumerate_extensions) and _VK_PORTABILITY_SUBSET in (
+            _vulkan_extension_names(enumerate_extensions(self.physical_device, None))
+        ):
+            # The Vulkan spec requires enabling this extension whenever a device exposes it.
+            extensions.append(_VK_PORTABILITY_SUBSET)
         device_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             queueCreateInfoCount=1,
             pQueueCreateInfos=[queue_info],
+            enabledExtensionCount=len(extensions),
+            ppEnabledExtensionNames=extensions,
         )
         self.device = vk.vkCreateDevice(self.physical_device, device_info, None)
         self.queue = vk.vkGetDeviceQueue(self.device, self.queue_family, 0)
@@ -5027,17 +5101,7 @@ def _dtype_size(dtype: str) -> int:
     return struct.calcsize("<" + _dtype_format(dtype))
 
 
-def _flatten_values(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, (str, bytes, bytearray)):
-        return [value]
-    if isinstance(value, Sequence):
-        flattened: list[Any] = []
-        for item in value:
-            flattened.extend(_flatten_values(item))
-        return flattened
-    return [value]
+_flatten_values = flatten_values
 
 
 def _native_buffer_element_count(binding: NativeRuntimeBufferBinding) -> int:
@@ -5140,7 +5204,7 @@ def _pack_values(
             "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
             *values,
         )
-    if dtype == "bool" and any(type(item) is not bool for item in values):
+    if dtype == "bool" and not exact_types_within(values, _BOOL_TYPES):
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
         )
@@ -5151,11 +5215,15 @@ def _pack_values(
             if dtype.startswith("int")
             else (0, (1 << width) - 1)
         )
-        if any(type(item) is not int or not low <= item <= high for item in values):
+        if not exact_types_within(values, _INT_TYPES) or (
+            values and not (low <= min(values) and max(values) <= high)
+        ):
             raise RuntimeExecutorUnavailable(
                 f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
             )
     if dtype in {"float16", "float32"}:
+        if scalars_fit(values, dtype):
+            return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
         special_bits = (
             {
                 "nan": 0x7E00,
@@ -5211,7 +5279,7 @@ def _unpack_values(
             details={"target": target.lower(), "reasonKind": "value-encoding-invalid"},
         ) from exc
     size = _dtype_size(dtype)
-    if dtype == "bool" and any(byte not in (0, 1) for byte in payload):
+    if dtype == "bool" and bytes(payload).translate(None, b"\x00\x01"):
         raise RuntimeAdapterDispatchError(
             f"{target} boolean output contains a noncanonical storage byte.",
             details={
@@ -5233,18 +5301,12 @@ def _unpack_values(
     count = len(payload) // size
     if count == 0:
         return []
-    return list(
-        struct.unpack(
-            "<"
-            + (
-                ("H" if dtype in {"float16", "bfloat16"} else "I")
-                if encoding is not None
-                else _dtype_format(dtype)
-            )
-            * count,
-            payload,
-        )
+    code = (
+        ("H" if dtype in {"float16", "bfloat16"} else "I")
+        if encoding is not None
+        else _dtype_format(dtype)
     )
+    return list(struct.unpack(f"<{count}{code}", payload))
 
 
 def _buffer_readback(

@@ -1,3 +1,4 @@
+#pragma cgl_rules(udiv_zero, wrap)
 shader main {
     groupshared int a;
     // compute Shader

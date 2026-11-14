@@ -223,7 +223,7 @@ def test_project_matrix_policy_preserves_fragment_contract(
     assert data["summary"]["failedCount"] == 1
     diagnostic = data["diagnostics"][0]
     if original == "metal_thread_elements, 32, 2":
-        assert diagnostic["code"] == "project.translate.failed"
+        assert diagnostic["code"] == "project.translate.crossgl-syntax-error"
         assert "no registered contract" in diagnostic["message"]
     else:
         assert (
@@ -277,13 +277,13 @@ def test_directx_matrix_policy_can_be_changed_between_generations():
 
 
 def test_project_matrix_fragment_native_gate():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

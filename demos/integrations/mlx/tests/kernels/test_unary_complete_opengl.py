@@ -22,6 +22,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     compile_opengl_artifact,
     corpus_workspace,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
@@ -40,13 +41,13 @@ UNARY_OPENGL_CONTRACT_PATH = (
     / "unary.opengl-translation.json"
 )
 UNARY_OPENGL_CONTRACT_SHA256 = (
-    "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233"
+    "f1316272de8109623d0713b28b81c23d8f1132fbce48f32677b5a24af4176534"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c"
+    "351c29d49e5d3738db5273194528c461335a0ab013d7f0bd42ae8bd7670782bc"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -244,11 +245,11 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
             "gn4large": 915,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5316552,
+        "generatedSizeBytesTotal": 5355099,
         "generatedSizeRange": {
             "minimum": {
                 "entryPoint": "v_Absint32int32",
-                "sizeBytes": 3566,
+                "sizeBytes": 3615,
             },
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
@@ -288,9 +289,9 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5316552
+    assert sum(entry["sizeBytes"] for entry in entries) == 5355099
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        3566,
+        3615,
         "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
@@ -535,11 +536,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_UNARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "main",

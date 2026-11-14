@@ -2,6 +2,7 @@
 
 from demos.integrations.mlx.portable_host.absolute_workloads import physical
 from demos.integrations.mlx.portable_host.binary_workloads import mlx_operand
+from demos.integrations.mlx.portable_host.cast_workloads import contiguous_span
 from demos.integrations.mlx.portable_host.packages import (
     INTEGER64_ABSOLUTE_ENTRIES,
     INTEGER64_BINARY_ENTRIES,
@@ -166,6 +167,9 @@ def trace_entries(case, arrays):
     copy = f"ggn2_dynamic_copy{source.dtype.name}{source.dtype.name}"
     if entry in INTEGER64_ABSOLUTE_ENTRIES:
         return ([copy] if case["layout"] == "reverse" else []) + [entry]
+    # Casts run in place over the contiguous span MLX's layout marks.
+    if entry in INTEGER64_CAST_ENTRIES and contiguous_span(source) is not None:
+        return [entry]
     if not source.flags.c_contiguous:
         if source.dtype.name not in {"int64", "uint64"}:
             copy = (
@@ -175,6 +179,23 @@ def trace_entries(case, arrays):
             )
         return [copy, entry]
     return [entry]
+
+
+def written(np, case, arrays, expected):
+    """The values a case's last dispatch writes, in its output's memory order.
+
+    Absolute values write the physical words; a cast runs in place over the
+    contiguous span MLX's layout marks and converts it in memory order.
+    """
+    if case["entry"] in INTEGER64_ABSOLUTE_ENTRIES:
+        return np.abs(physical(np, arrays[0]))
+    if case["layout"] in FILL_LAYOUTS or case["entry"] not in INTEGER64_CAST_ENTRIES:
+        return expected
+    span = contiguous_span(arrays[0])
+    if span is None:
+        return expected
+    memory = np.lib.stride_tricks.as_strided(arrays[0], (span,), (arrays[0].itemsize,))
+    return reference(np, case, [memory])
 
 
 def validate(records, trace, *, native):
@@ -212,9 +233,7 @@ def validate(records, trace, *, native):
         if not events:
             continue
         event = events[-1]
-        actual = expected
-        if case["entry"] in INTEGER64_ABSOLUTE_ENTRIES:
-            actual = np.abs(physical(np, arrays[0]))
+        actual = written(np, case, arrays, expected)
         values = actual.reshape(-1).tolist()
         if expected.dtype == np.bool_:
             guard = BOOLEAN_GUARD

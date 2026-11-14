@@ -120,6 +120,16 @@ NATIVE_SOURCE_SNIPPETS = {
     ),
 }
 
+# The host picks the block size of these kernels at launch time; the snippets read threadIdx, which depends on it.
+HOST_SIZED_SUFFIXES = frozenset({".cu", ".cuh", ".cuda", ".hip"})
+
+
+def _host_size_options(filename):
+    if Path(filename).suffix in HOST_SIZED_SUFFIXES:
+        return {"threadgroup_size": 32}
+    return None
+
+
 NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     "cuda_header": (
         "shader.cuh",
@@ -387,6 +397,57 @@ def test_root_package_exposes_documented_registry_helpers():
     assert "cgl" in crosstl.supported_sources()
 
 
+def test_translate_with_metadata_reports_target_resource_bindings(tmp_path):
+    source_path = tmp_path / "bindings.hlsl"
+    source_path.write_text(
+        textwrap.dedent("""
+            cbuffer Constants : register(b0) { uint count; float scale; }
+            StructuredBuffer<float> source : register(t0);
+            RWStructuredBuffer<float> destination : register(u0);
+
+            [numthreads(64, 1, 1)]
+            void Execute(uint3 id : SV_DispatchThreadID) {
+                if (id.x < count) { destination[id.x] = source[id.x] * scale; }
+            }
+            """),
+        encoding="utf-8",
+    )
+    saved = tmp_path / "bindings.metal"
+
+    assert set(crosstl.__all__) >= {"translate_with_metadata", "TranslationResult"}
+    result = crosstl.translate_with_metadata(
+        str(source_path), backend="metal", save_shader=str(saved)
+    )
+
+    assert isinstance(result, crosstl.TranslationResult)
+    assert result.backend == "metal"
+    assert result.code == crosstl.translate(str(source_path), backend="metal")
+    assert saved.read_text(encoding="utf-8") == result.code
+    by_register = {record["register"]: record for record in result.resource_bindings}
+    assert {
+        key: (value["namespace"], value["binding"])
+        for key, value in by_register.items()
+    } == {
+        "b0": ("buffer", 0),
+        "t0": ("buffer", 1),
+        "u0": ("buffer", 2),
+    }
+    assert by_register["b0"]["kind"] == "constant-buffer"
+    assert by_register["t0"]["name"] == "source"
+    assert by_register["u0"]["name"] == "destination"
+    for record in result.resource_bindings:
+        slot = f"[[buffer({record['binding']})]]"
+        assert slot in result.code
+
+    # Targets without a binding report return the code with an empty table.
+    assert (
+        crosstl.translate_with_metadata(
+            str(source_path), backend="cgl"
+        ).resource_bindings
+        == ()
+    )
+
+
 def test_registered_native_sources_have_reverse_codegen_factories():
     register_default_sources()
 
@@ -472,7 +533,6 @@ def test_translate_forwards_supported_options_to_reverse_codegen(
         backend=target,
         format_output=False,
         source_options={
-            "strict_function_bodies": True,
             "preprocess": False,
             "reverse_mode": "selected_mode",
         },
@@ -857,7 +917,10 @@ def test_metal_reachable_template_resources_materialize_before_target_codegen(
     )
 
     generated = crosstl.translate(
-        str(source_path), backend=backend, format_output=False
+        str(source_path),
+        backend=backend,
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1034,7 +1097,10 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1074,7 +1140,10 @@ def test_metal_constexpr_threadgroup_extent_lowers_to_directx_literal(tmp_path):
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1112,7 +1181,10 @@ def test_metal_value_template_threadgroup_extents_remain_entry_specific(tmp_path
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1747,7 +1819,8 @@ def test_hlsl_pixel_shader_user_semantic_input_lowers_to_metal_stage_in(tmp_path
     metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
 
     assert "struct fragment_main_Input" in metal
-    assert "float4 a [[attribute(0)]];" in metal
+    # HLSL links stages by semantic; Metal fragment inputs take it as a [[user]] key.
+    assert "float4 a [[user(A0)]];" in metal
     assert (
         "fragment float4 fragment_main("
         "fragment_main_Input _crossglInput [[stage_in]])"
@@ -1796,10 +1869,7 @@ def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
         not in crossgl
     )
     assert "texture2d<float> Texture [[texture(0)]]" in metal
-    assert (
-        "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"
-        in metal
-    )
+    assert "Texture.sample(TextureSampler, input.texCoord)" in metal
     assert "[[gl_FragData]]" not in metal
     _compile_with_metal_if_available(metal, tmp_path)
 
@@ -1994,7 +2064,8 @@ def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
     metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
 
     assert "float4 position [[attribute(0)]];" in metal
-    assert "float4 color [[attribute(1)]];" in metal
+    # COLOR takes location 13 on every target (crosstl.translator.codegen.stage_io_semantic_locations).
+    assert "float4 color [[attribute(13)]];" in metal
     assert "float4 position [[position]];" in metal
     assert "[[Color]]" not in metal
     assert "[[COLOR]]" not in metal
@@ -2048,7 +2119,7 @@ def test_hlsl_struct_inout_vertex_entry_generates_valid_glsl_and_metal(tmp_path)
     assert "float3 VSIn_Pos [[attribute(0)]];" in metal
     assert "float4 VSIn_Color [[attribute(1)]];" in metal
     assert "float4 PSIn_Pos [[position]];" in metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in metal
     assert "[[ATTRIB" not in metal
     assert "[[COLOR" not in metal
     assert " PSIn." not in metal
@@ -2094,7 +2165,7 @@ def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
 
     assert "fragment fragment_main_Return fragment_main" in metal
     assert "float4 PSIn_Pos [[position]]" in metal
-    assert "float4 PSIn_Color [[user(Color0)]]" in metal
+    assert "float4 PSIn_Color [[user(COLOR0)]]" in metal
     assert "float4 PSOut_Color [[color(0)]];" in metal
     assert "[[COLOR" not in metal
     assert " PSIn." not in metal
@@ -2140,7 +2211,10 @@ def test_native_source_to_registered_target_pipeline_is_total(
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(
-        str(source_path), backend=target_backend, format_output=False
+        str(source_path),
+        backend=target_backend,
+        format_output=False,
+        source_options=_host_size_options(filename),
     )
 
     _assert_generated_output_is_usable(generated)
@@ -2157,7 +2231,10 @@ def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(
-        str(source_path), backend=target_backend, format_output=False
+        str(source_path),
+        backend=target_backend,
+        format_output=False,
+        source_options=_host_size_options(filename),
     )
 
     _assert_generated_output_is_usable(generated)
@@ -2429,6 +2506,7 @@ def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path)
             include = ["kernels/tg.metal"]
             targets = ["vulkan"]
             output_dir = "out"
+            workgroup_size = [32, 1, 1]
 
             [project.sources]
             "**/*.metal" = "metal"

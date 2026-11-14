@@ -36,6 +36,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -62,12 +63,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33",
-        "sizeBytes": 10476,
+        "sha256": "f9d0856e49b856d29a56a90d4e6870fb057d6ca414ed09344249724a2b124e94",
+        "sizeBytes": 10953,
     },
     "opengl": {
-        "sha256": "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451",
-        "sizeBytes": 11932,
+        "sha256": "4af3c8e9c6fa41c65cad1563407b2dc046abe47c02ea963da44807f17cf1a5e1",
+        "sizeBytes": 12464,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -394,11 +395,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         "value": MLX_MXFP4_SHA256,
     }
     assert artifact["sourceSizeBytes"] == MLX_MXFP4_SOURCE_SIZE_BYTES
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected["sizeBytes"]
+    check_generated_artifact(
+        artifact, sha256=expected["sha256"], size_bytes=expected["sizeBytes"]
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_MXFP4_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
@@ -446,7 +445,11 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         if target == "directx"
         else "crossgl_metal_round_float"
     )
-    assert generated.count(f"int n = int({round_helper}(float(le)));") == 1
+    # Metal float-to-int conversion saturates, so the rounded exponent keeps it.
+    assert (
+        generated.count(f"int n = cgl_rule_sat_ftoi({round_helper}(float(le)));") == 1
+    )
+    assert f"int n = int({round_helper}(float(le)));" not in generated
     assert "int n = int(round(le));" not in generated
     global_scale_lines = [
         line for line in generated.splitlines() if "global_scale" in line

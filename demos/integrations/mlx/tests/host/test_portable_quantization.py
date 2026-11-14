@@ -175,9 +175,8 @@ def test_upstream_affine_runner_retains_workers_and_source_checks(
     )
     for mode, command in commands:
         assert (output / f"{mode}.command.json").exists()
-        assert (
-            command[command.index("--timeout-seconds") + 1]
-            == {"random": "600", "cpu": "180", "native": "1800"}[mode]
+        assert command[command.index("--timeout-seconds") + 1] == str(
+            upstream.TIMEOUTS[mode]
         )
         if mode != "random":
             assert (
@@ -206,6 +205,19 @@ def test_upstream_affine_ci_reuses_existing_whole_reduction_jobs():
     )
     assert "${{ matrix.companion_args }}" in execution["run"]
     assert "5400" in execution["run"] and "continue-on-error" not in execution
+    # The whole-array verification bounds the reduction proof plus every
+    # upstream quantization worker, so it must outlast their combined
+    # deadlines with room left for the reduction proof itself.
+    assert all(
+        item["verification_timeout"] >= sum(upstream.TIMEOUTS.values()) + 900
+        for item in cases
+    )
+
+
+def test_upstream_quantization_native_deadline_covers_measured_dispatches():
+    # About 430 native dispatches at up to 5.6 s each, as measured in CI.
+    assert upstream.TIMEOUTS["native"] >= 2 * 430 * 5.6
+    assert upstream.TIMEOUTS["random"] == 600 and upstream.TIMEOUTS["cpu"] == 180
 
 
 def buffers(entry, groups, data=None):
@@ -474,6 +486,45 @@ def test_affine_cache_verifies_selected_source_entry(
             cache._load(tmp_path, identity)
     else:
         assert cache._load(tmp_path, identity) == (descriptor, tmp_path / "package")
+
+
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "affine_dequantize_bfloat16_t_gs_32_b_2",
+        "affine_dequantize_float16_t_gs_64_b_8",
+        "affine_quantize_float_gs_32_b_4",
+    ),
+)
+def test_affine_package_recipe_reproduces_metal_contraction(
+    tmp_path, monkeypatch, target, entry
+):
+    """affine_dequantize's `scale * d + bias` rounds once on Metal.
+
+    The Metal compiler fuses it even under -fno-fast-math, so the generated
+    targets select the contraction profile; Metal keeps the native expression.
+    """
+
+    class ObservedRecipe(Exception):
+        pass
+
+    def translate(config, **kwargs):
+        assert config.include_patterns == [quantization_packages.SOURCE]
+        options = config.source_options["metal"]
+        assert "floating_contraction_profile" not in options
+        if target == "metal":
+            assert "target_options" not in options
+        else:
+            settings = options["target_options"][target]
+            assert settings["floating_contraction_profile"] == "rne-flush"
+            assert settings["software_subgroup_width"] == 32
+        raise ObservedRecipe
+
+    monkeypatch.setattr(quantization_packages, "translate_project", translate)
+    cache = QuantizationPackageCache(tmp_path, tmp_path, target)
+    with pytest.raises(ObservedRecipe):
+        cache._build(entry, tmp_path)
 
 
 def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():

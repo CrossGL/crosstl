@@ -19,6 +19,7 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
+from .metal_worker_server import MetalWorkerServer
 from .native_loader_dispatch import NativeLoaderDispatchError, _validated_scalar_layout
 from .native_runtime_drivers import (
     _binding_requires_readback,
@@ -178,19 +179,62 @@ class MetalComputeRuntime:
         self.tool_resolver = tool_resolver or shutil.which
         self.platform_name = platform_name or sys.platform
         self._shared_worker = command_runner is None and tool_resolver is None
+        # Without an injected runner, dispatches go to long-lived serve-mode
+        # workers; an injected runner sees one command per dispatch.
+        self._persistent = command_runner is None
+        self._servers = []
+        self._servers_lock = threading.Lock()
         self._worker_directory = None
         self._worker_path = None
+        # (helper path, device name) of the last probe that found a device.
+        self._available_device = None
 
     def close(self):
+        with self._servers_lock:
+            servers, self._servers = self._servers, []
+        for server in servers:
+            server.terminate()
         if self._worker_directory is not None:
             self._worker_directory.cleanup()
             self._worker_directory = None
         self._worker_path = None
+        self._available_device = None
 
     def _run(self, command, *, input_text=None):
         return self.command_runner(
             command, input_text=input_text, timeout_seconds=self.timeout_seconds
         )
+
+    def _serve(self, worker, request_text):
+        # An idle worker of the same helper is reused; concurrent dispatches
+        # start their own, so dispatches never wait on each other.
+        server = None
+        with self._servers_lock:
+            while self._servers:
+                candidate = self._servers.pop()
+                if candidate.worker == str(worker) and candidate.usable:
+                    server = candidate
+                    break
+                if candidate.owner == os.getpid():
+                    candidate.terminate()
+        if server is None:
+            try:
+                server = MetalWorkerServer(worker)
+            except OSError as exc:
+                raise _setup_error(
+                    "Metal worker could not start.", "worker-start-failed"
+                ) from exc
+        try:
+            result = server.exchange(request_text, self.timeout_seconds)
+        except BaseException:
+            server.terminate()
+            raise
+        if server.usable:
+            with self._servers_lock:
+                self._servers.append(server)
+        else:
+            server.terminate()
+        return result
 
     def _worker(self):
         if self.platform_name != "darwin":
@@ -332,21 +376,20 @@ class MetalComputeRuntime:
     def is_available(self, adapter, request):
         _ = adapter, request
         try:
-            result = self._run([str(self._worker()), "--probe"])
+            worker = str(self._worker())
+            # Persistent runtimes keep a probe that found a device for the
+            # same helper; a device lost later fails its dispatch instead.
+            known = self._available_device
+            if self._persistent and known is not None and known[0] == worker:
+                return self._availability(True, known[1])
+            result = self._run([worker, "--probe"])
             payload = json.loads(result.stdout)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid Metal device probe response.")
             available = result.returncode == 0 and payload.get("available") is True
-            return RuntimeExecutorAvailability(
-                available,
-                reason=None if available else "No Metal compute device is available.",
-                details={
-                    "target": "metal",
-                    "runtime": self.name,
-                    "reasonKind": "available" if available else "device-unavailable",
-                    "device": payload.get("device"),
-                },
-            )
+            if available and self._persistent:
+                self._available_device = (worker, payload.get("device"))
+            return self._availability(available, payload.get("device"))
         except (OSError, ValueError, TypeError, RuntimeAdapterSetupError) as exc:
             return RuntimeExecutorAvailability(
                 False,
@@ -357,6 +400,18 @@ class MetalComputeRuntime:
                     **getattr(exc, "details", {}),
                 },
             )
+
+    def _availability(self, available, device):
+        return RuntimeExecutorAvailability(
+            available,
+            reason=None if available else "No Metal compute device is available.",
+            details={
+                "target": "metal",
+                "runtime": self.name,
+                "reasonKind": "available" if available else "device-unavailable",
+                "device": device,
+            },
+        )
 
     def load_artifact(self, adapter, state, module_path):
         _ = adapter, state
@@ -373,7 +428,10 @@ class MetalComputeRuntime:
         payload, outputs = self._prepare_request(request)
         worker = self._worker()
         try:
-            result = self._run([str(worker)], input_text=json.dumps(payload))
+            if self._persistent:
+                result = self._serve(worker, json.dumps(payload))
+            else:
+                result = self._run([str(worker)], input_text=json.dumps(payload))
         except RuntimeAdapterSetupError as exc:
             raise RuntimeAdapterDispatchError(str(exc), details=exc.details) from exc
         if result.returncode:

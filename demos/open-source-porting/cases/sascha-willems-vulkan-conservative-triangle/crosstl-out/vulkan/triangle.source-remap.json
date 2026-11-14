@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 110,
-        "endOffset": 3003,
+        "endLine": 103,
+        "endOffset": 2804,
         "file": "crosstl-out/vulkan/triangle.spvasm",
-        "length": 3003,
+        "length": 2804,
         "line": 1,
         "offset": 0
       },

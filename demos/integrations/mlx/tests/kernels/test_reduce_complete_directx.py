@@ -39,6 +39,10 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+)
 
 REQUIRE_REDUCE_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION"
 REDUCE_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX"
@@ -54,17 +58,17 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
+    "c2715da544962d24a5e2d7bae809283b6f5dfba6f13c767cc734dc3545f4b6e2"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796827
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1798345
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37727715
-REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24201740
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37884036
+REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24201972
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30398,
+    30222,
 )
 REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
@@ -341,6 +345,47 @@ def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },
+            {
+                "reason": (
+                    "Regenerate the HLSL identities under the translator on main at "
+                    "6a1301114; every regenerated body compiles to its recorded DXIL "
+                    "byte for byte."
+                ),
+                "previousContractSha256": (
+                    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
+                ),
+                "changedEntryCount": 1206,
+                "unaffectedEntryCount": 1190,
+                "reviewedBodyCount": 1206,
+                "nativeCompiledChangedEntryCount": 1206,
+                "changedDxilCompilerVersion": "1.9.0.5191",
+                "compiledBodiesIdentical": True,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Keep binary16 workgroup and private memory typed unless all of it "
+                    "is lowered to bits; each regenerated float16 body compiles to the "
+                    "DXIL recorded here."
+                ),
+                "previousContractSha256": (
+                    "8f5f9e53f8cbd8dbfbe15c21e59e6a1b8ee8b2b95addbc7a6c17ef3daa927596"
+                ),
+                "changedEntryCount": 128,
+                "unaffectedEntryCount": 2268,
+                "reviewedBodyCount": 128,
+                "nativeCompiledChangedEntryCount": 128,
+                "changedDxilCompilerVersion": "1.9.0.5191",
+                "compiledBodiesIdentical": False,
+                "changedDxilEntryCount": 112,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
     }
     complex_entries = [
@@ -538,11 +583,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "CSMain",
@@ -559,8 +602,13 @@ def _translate_and_validate(
     assert execution[0]["targetEntryPoint"] == "CSMain"
     assert execution[0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == workload.materialization_sha256
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]

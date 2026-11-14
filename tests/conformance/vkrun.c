@@ -1,8 +1,11 @@
 // vkrun: execute one SPIR-V compute entry point on the first Vulkan device the loader exposes.
 //
-// usage: vkrun <module.spv> <entry> <gx> <gy> <gz> <binding>:<in|out|inout>:<file>[:<bytes>] ...
-//   All buffers are storage buffers in descriptor set 0. For `in`/`inout` the file is uploaded;
-//   for `out`/`inout` the buffer is written back to the same path (an `out` buffer needs :<bytes>).
+// usage: vkrun <module.spv> <entry> <gx> <gy> <gz> <binding>:<in|out|inout|uniform>:<file>[:<bytes>] ...
+//              [push:<file>]
+//   Buffers live in descriptor set 0. `in`/`out`/`inout` buffers are storage buffers: for `in`/`inout`
+//   the file is uploaded, for `out`/`inout` the buffer is written back to the same path (an `out`
+//   buffer needs :<bytes>). A `uniform` buffer is a uniform buffer uploaded from the file. `push:<file>`
+//   pushes the file's first bytes, up to maxPushConstantsSize, as compute push constants at offset 0.
 //   The driver is selected by the Vulkan loader (VK_DRIVER_FILES / VK_ICD_FILENAMES).
 //   On success prints "ok gpu_ns=<n>" (timestamp-query delta, 0 if unsupported) followed by one
 //   "key=value" line each for driver, driver_info, api and device; on failure prints "error <msg>".
@@ -24,6 +27,7 @@
 typedef struct {
   uint32_t binding;
   int mode;  // 1 = in, 2 = out, 3 = inout
+  int uniform;
   char path[1024];
   VkDeviceSize size;
   VkBuffer buf;
@@ -58,20 +62,31 @@ int main(int argc, char **argv) {
   }
   const char *spv_path = argv[1], *entry = argv[2];
   uint32_t gx = (uint32_t)atoi(argv[3]), gy = (uint32_t)atoi(argv[4]), gz = (uint32_t)atoi(argv[5]);
-  int nb = argc - 6;
-  Buf *bufs = calloc((size_t)nb, sizeof(Buf));
-  for (int i = 0; i < nb; i++) {
-    char tmp[1200];
-    strncpy(tmp, argv[6 + i], sizeof tmp - 1);
+  int nb = 0;
+  Buf *bufs = calloc((size_t)(argc - 6), sizeof(Buf));
+  const char *push_path = NULL;
+  for (int a = 6; a < argc; a++) {
+    if (!strncmp(argv[a], "push:", 5)) {
+      if (push_path) {
+        printf("error more than one push-constant file\n");
+        return 1;
+      }
+      push_path = argv[a] + 5;
+      continue;
+    }
+    char tmp[1200] = {0};
+    strncpy(tmp, argv[a], sizeof tmp - 1);
     char *b = strtok(tmp, ":"), *m = strtok(NULL, ":"), *p = strtok(NULL, ":"), *s = strtok(NULL, ":");
     if (!b || !m || !p) {
-      printf("error bad buffer spec %s\n", argv[6 + i]);
+      printf("error bad buffer spec %s\n", argv[a]);
       return 1;
     }
-    bufs[i].binding = (uint32_t)atoi(b);
-    bufs[i].mode = !strcmp(m, "in") ? 1 : !strcmp(m, "out") ? 2 : 3;
-    strncpy(bufs[i].path, p, sizeof bufs[i].path - 1);
-    bufs[i].size = s ? (VkDeviceSize)atoll(s) : 0;
+    Buf *buf = &bufs[nb++];
+    buf->binding = (uint32_t)atoi(b);
+    buf->uniform = !strcmp(m, "uniform");
+    buf->mode = !strcmp(m, "in") || buf->uniform ? 1 : !strcmp(m, "out") ? 2 : 3;
+    strncpy(buf->path, p, sizeof buf->path - 1);
+    buf->size = s ? (VkDeviceSize)atoll(s) : 0;
   }
 
   VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "vkrun", 1, "none", 1, VK_API_VERSION_1_3};
@@ -142,17 +157,37 @@ int main(int argc, char **argv) {
   VkShaderModule sm;
   CHECK(vkCreateShaderModule(dev, &smci, NULL, &sm));
 
-  VkDescriptorSetLayoutBinding *lb = calloc((size_t)nb, sizeof *lb);
+  size_t push_n = 0;
+  void *push = NULL;
+  if (push_path) {
+    push = read_file(push_path, &push_n);
+    if (!push) {
+      printf("error cannot read %s\n", push_path);
+      return 1;
+    }
+    if (push_n > props.limits.maxPushConstantsSize) push_n = props.limits.maxPushConstantsSize;
+    push_n &= ~(size_t)3;
+    if (!push_n) {
+      printf("error empty push-constant file %s\n", push_path);
+      return 1;
+    }
+  }
+  VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, (uint32_t)push_n};
+
+  VkDescriptorSetLayoutBinding *lb = calloc((size_t)(nb ? nb : 1), sizeof *lb);
+  uint32_t n_uniform = 0;
   for (int i = 0; i < nb; i++) {
+    n_uniform += (uint32_t)bufs[i].uniform;
     lb[i].binding = bufs[i].binding;
-    lb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lb[i].descriptorType = bufs[i].uniform ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     lb[i].descriptorCount = 1;
     lb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
   VkDescriptorSetLayoutCreateInfo dslci = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, NULL, 0, (uint32_t)nb, lb};
   VkDescriptorSetLayout dsl;
   CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
-  VkPipelineLayoutCreateInfo plci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, NULL, 0, 1, &dsl, 0, NULL};
+  VkPipelineLayoutCreateInfo plci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, NULL, 0, 1, &dsl,
+                                     push ? 1u : 0u, &pcr};
   VkPipelineLayout pl;
   CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &pl));
   VkComputePipelineCreateInfo cpci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -180,7 +215,8 @@ int main(int argc, char **argv) {
       return 1;
     }
     VkBufferCreateInfo bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, bufs[i].size,
-                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, NULL};
+                              bufs[i].uniform ? VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              VK_SHARING_MODE_EXCLUSIVE, 0, NULL};
     CHECK(vkCreateBuffer(dev, &bci, NULL, &bufs[i].buf));
     VkMemoryRequirements mr;
     vkGetBufferMemoryRequirements(dev, bufs[i].buf, &mr);
@@ -197,15 +233,20 @@ int main(int argc, char **argv) {
     free(data);
   }
 
-  VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (uint32_t)nb};
-  VkDescriptorPoolCreateInfo dpci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, 1, 1, &ps};
+  // Pool sizes must be positive, so a type no buffer uses is left out.
+  VkDescriptorPoolSize ps[2];
+  uint32_t n_ps = 0;
+  if ((uint32_t)nb > n_uniform) ps[n_ps++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (uint32_t)nb - n_uniform};
+  if (n_uniform) ps[n_ps++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n_uniform};
+  if (!n_ps) ps[n_ps++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+  VkDescriptorPoolCreateInfo dpci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, 1, n_ps, ps};
   VkDescriptorPool dp;
   CHECK(vkCreateDescriptorPool(dev, &dpci, NULL, &dp));
   VkDescriptorSetAllocateInfo dsai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, NULL, dp, 1, &dsl};
   VkDescriptorSet ds;
   CHECK(vkAllocateDescriptorSets(dev, &dsai, &ds));
-  VkDescriptorBufferInfo *dbi = calloc((size_t)nb, sizeof *dbi);
-  VkWriteDescriptorSet *w = calloc((size_t)nb, sizeof *w);
+  VkDescriptorBufferInfo *dbi = calloc((size_t)(nb ? nb : 1), sizeof *dbi);
+  VkWriteDescriptorSet *w = calloc((size_t)(nb ? nb : 1), sizeof *w);
   for (int i = 0; i < nb; i++) {
     dbi[i].buffer = bufs[i].buf;
     dbi[i].range = VK_WHOLE_SIZE;
@@ -213,7 +254,7 @@ int main(int argc, char **argv) {
     w[i].dstSet = ds;
     w[i].dstBinding = bufs[i].binding;
     w[i].descriptorCount = 1;
-    w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[i].descriptorType = lb[i].descriptorType;
     w[i].pBufferInfo = &dbi[i];
   }
   vkUpdateDescriptorSets(dev, (uint32_t)nb, w, 0, NULL);
@@ -234,6 +275,7 @@ int main(int argc, char **argv) {
   vkCmdResetQueryPool(cb, qp, 0, 2);
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &ds, 0, NULL);
+  if (push) vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, (uint32_t)push_n, push);
   vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
   vkCmdDispatch(cb, gx, gy, gz);
   vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);

@@ -1,6 +1,6 @@
 """Project demos remain discoverable without becoming package dependencies."""
 
-import configparser
+import tomllib
 from pathlib import Path
 
 from tools.check_release import package_metadata
@@ -9,9 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_default_pytest_collection_includes_project_demos():
-    config = configparser.ConfigParser()
-    config.read(ROOT / "setup.cfg")
-    assert config["tool:pytest"]["testpaths"].split() == [
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert config["tool"]["pytest"]["ini_options"]["testpaths"] == [
         "tests",
         "demos/integrations",
     ]

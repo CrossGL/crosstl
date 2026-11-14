@@ -19,7 +19,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .process import run
-from .toolchains import mesa_image, python_module, tool, vkrun, vulkan_sdk
+from .toolchains import (
+    d3d12_worker,
+    mesa_image,
+    python_module,
+    tool,
+    vkrun,
+    vulkan_sdk,
+)
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY = HERE.parents[1]
@@ -83,7 +90,7 @@ RUNTIMES = {
             "hlsl",
             "d3d12",
             "Microsoft Basic Render Driver",
-            "Direct3D 12 WARP through compushady",
+            "Direct3D 12 WARP through the CrossTL buffer-view worker",
         ),
     )
 }
@@ -369,8 +376,12 @@ def provision(runtime):
         module = python_module("compushady")
         if not module.available:
             return Provision(runtime.id, runtime.target, False, "host", module.reason)
+        worker = d3d12_worker()
+        if not worker.available:
+            return Provision(runtime.id, runtime.target, False, "host", worker.reason)
+        env = (("CROSSTL_CONFORMANCE_D3D12_WORKER", worker.command[0]),)
         identity, reason = _probe_python("d3d12")
-        return _checked(runtime, "host", identity, reason)
+        return _checked(runtime, "host", identity, reason, env)
     if (
         system == "Linux"
         and _mesa_mode() != "container"

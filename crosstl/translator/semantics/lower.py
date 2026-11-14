@@ -12,19 +12,23 @@ import functools
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .compound_values import CompoundValueHoister
 from .conversions import UNRESOLVED, native_conversion
 from .helpers import HelperSet
 from .hub_types import call_name
+from .nan_conversions import ORIGIN, lower_conversion
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .rule_table import (
     CONVERSION_SIGNATURES,
     CONVERT_SAT_GENERIC,
+    FTOI_NAN_INTRINSICS,
     HELPERS,
     INTRINSIC_FAMILY,
     INTRINSICS,
     POLYFILLS,
     target_entry,
 )
+from .step_values import StepValueHelpers
 
 
 class RuleInexpressibleError(TranslationDiagnostic):
@@ -37,6 +41,9 @@ _STATEMENT_FIELDS = frozenset(
     {"statements", "body", "then_branch", "else_branch", "default_case"}
 )
 
+# Annotation on the read of the target that rewriting a compound assignment ``t op= v`` as ``t = f(t, v)`` adds.
+COMPOUND_TARGET_READ = "cgl_compound_target_read"
+
 
 class Lowerer:
     def __init__(self, program, target, report):
@@ -44,17 +51,37 @@ class Lowerer:
         self.target = target
         self.report = report
         self.helpers = HelperSet(program, target, RuleInexpressibleError)
+        self.step_values = StepValueHelpers(program, target, RuleInexpressibleError)
+        self.compound_values = CompoundValueHoister(program)
+        # Compound assignments that are statements of their own, and the declarations hoisted before them.
+        self.statement_compounds = set()
+        self.hoisted = {}
+        self.function = None
 
     def run(self):
         self.visit(self.program, None, None)
         self.helpers.inject()
+        self.step_values.inject()
 
     def visit(self, node, parent, field):
+        in_block = field in _STATEMENT_FIELDS and not isinstance(parent, A.ForNode)
+        expression = getattr(node, "expression", None)
+        if in_block and isinstance(node, A.ExpressionStatementNode):
+            self.statement_compounds.add(id(expression))
+        enclosing = self.function
+        if isinstance(node, A.FunctionNode):
+            self.function = node
         for slot_field, key in list(child_slots(node)):
             child = get_child(node, slot_field, key)
             replacement = self.visit(child, node, slot_field)
             if replacement is not child:
                 set_child(node, slot_field, key, replacement)
+        self.function = enclosing
+        if (
+            isinstance(node, A.ExpressionStatementNode)
+            and id(expression) in self.hoisted
+        ):
+            return A.BlockNode([self.hoisted.pop(id(expression)), node])
         if isinstance(node, A.FunctionCallNode) and call_name(node) in INTRINSIC_FAMILY:
             return self.lower_call(node)
         statement = node.annotations.get("cgl_rule_statement")
@@ -94,6 +121,8 @@ class Lowerer:
                 target=self.target,
             )
         entry = self.entry(intrinsic)
+        if intrinsic in FTOI_NAN_INTRINSICS and ORIGIN in node.annotations:
+            return lower_conversion(node, entry.kind, self.helpers)
         if entry.kind == "native":
             if intrinsic in CONVERSION_SIGNATURES:
                 result_type = node.annotations.get("cgl_rule_type")
@@ -122,10 +151,10 @@ class Lowerer:
         if entry.kind == "native":
             return node
         if isinstance(node, A.AssignmentNode):
-            return self.lower_compound(node, statement)
+            return self.lower_compound(node, statement, parent, field)
         return self.lower_step(node, statement, parent, field)
 
-    def lower_compound(self, node, statement):
+    def lower_compound(self, node, statement, parent, field):
         if not is_pure(node.target):
             raise RuleInexpressibleError(
                 f"the compound assignment {node.operator} to an lvalue with side effects cannot be rewritten "
@@ -133,18 +162,39 @@ class Lowerer:
                 target=self.target,
             )
         target_conversion, value_conversion = statement.conversions
+        target_read = clone(node.target)
+        # glslang and DXC read the target of a compound assignment after its value; a backend that orders
+        # the evaluation of the rewritten operands keeps that read last.
+        target_read.annotations[COMPOUND_TARGET_READ] = True
+        operand = _convert(node.value, value_conversion)
+        in_block = field in _STATEMENT_FIELDS and isinstance(
+            parent, (A.StatementNode, A.CaseNode)
+        )
+        declaration = None
+        value_type = value_conversion or statement.value_type
+        if (
+            (in_block or id(node) in self.statement_compounds)
+            and value_type is not None
+            and self.compound_values.may_write(node.value, node.target, self.function)
+        ):
+            # The value can write the target, which the rewritten assignment reads after it (see
+            # :mod:`.compound_values`).
+            declaration, name = self.compound_values.declare(operand, value_type.lanes)
+            operand = A.IdentifierNode(name)
         value = self.polyfill(
             statement.intrinsic,
-            [
-                _convert(clone(node.target), target_conversion),
-                _convert(node.value, value_conversion),
-            ],
+            [_convert(target_read, target_conversion), operand],
             statement.result_type,
         )
         value = _convert(value, statement.back_conversion)
         node.operator = "="
         node.value = value
         node.right = value
+        if declaration is None:
+            return node
+        if in_block:
+            return A.BlockNode([declaration, node])
+        self.hoisted[id(node)] = declaration
         return node
 
     def lower_step(self, node, statement, parent, field):
@@ -154,11 +204,16 @@ class Lowerer:
         in_block = field in _STATEMENT_FIELDS and isinstance(
             parent, (A.StatementNode, A.CaseNode)
         )
-        if not (in_statement or in_block) or not is_pure(node.operand):
+        if not is_pure(node.operand):
             raise RuleInexpressibleError(
-                f"the signed {node.op} used as a value cannot be rewritten with wrapping arithmetic for "
-                f"{self.target}; write it as a separate statement",
+                f"the signed {node.op} of an lvalue with side effects cannot be rewritten with wrapping "
+                f"arithmetic for {self.target}",
                 target=self.target,
+            )
+        if not (in_statement or in_block):
+            # Used as a value: a helper call updates the operand in place and yields the operator's value.
+            return self.step_values.call(
+                statement.intrinsic, node, statement.result_type
             )
         one = A.LiteralNode(1, A.PrimitiveType("int"))
         value = self.polyfill(

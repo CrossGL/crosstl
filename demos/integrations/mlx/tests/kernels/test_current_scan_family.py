@@ -15,10 +15,12 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 from fractions import Fraction
 from pathlib import Path
@@ -47,6 +49,7 @@ from demos.integrations.mlx.tests.kernels.test_current_searchsorted import (
     _runtime_value,
 )
 from demos.integrations.mlx.tests.kernels.test_current_sort import _execute
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -1830,11 +1833,9 @@ def _translate(root, work, target, entry):
     assert report["summary"]["failedCount"] == 0
     (artifact,) = report["artifacts"]
     assert artifact["sourceHash"] == {"algorithm": "sha256", "value": SOURCE_SHA256}
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": record["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+    check_generated_artifact(
+        artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
+    )
     (execution,) = artifact["execution"]["entryPoints"]
     assert execution["workgroupSize"] == _workgroup(entry)
     generated = root / artifact["path"]
@@ -1964,6 +1965,60 @@ METAL_BYTE_REVERSE_ENTRIES = frozenset(
     if info["kind"] == "contig" and info["reverse"] and ITEM_SIZES[info["itype"]] == 1
 )
 
+# Direct3D WARP 1.0.21 on some runner CPUs (seen on AMD EPYC 9V74, not on EPYC
+# 7763) miscomputes the blocked boolean maximum scan that MLX's contiguous scans
+# run through guarded groupshared slots. The fixed HLSL control in
+# tests/test_translator/test_directx_guarded_groupshared_controls.py reproduces
+# it without CrossTL code generation, word for word on the "short" case. These
+# entries gate on every runtime where that control computes the right words.
+WARP_BOOL_SCAN_ENTRIES = frozenset(
+    entry
+    for entry, info in INFO.items()
+    if info["kind"] == "contig" and info["op"] == "max" and info["itype"] == "bool_"
+)
+WARP_BOOL_SCAN_CONTROL = "bool-in-bool-slots"
+
+
+def _warp_bool_scan_control_differences(work):
+    """Run the fixed-HLSL boolean scan control on this Direct3D runtime."""
+
+    from tests.test_translator import (
+        test_directx_guarded_groupshared_controls as control,
+    )
+
+    directory = work / "warp-bool-scan-control"
+    directory.mkdir(exist_ok=True)
+    expected = control._scan_expected()
+    actual = control._execute(
+        directory,
+        control._scan_source(WARP_BOOL_SCAN_CONTROL),
+        control._scan_words(),
+        expected,
+    )
+    return control._differences(actual, expected)
+
+
+def _check_or_xfail_runtime_defect(case, target, entry, actual, data, work):
+    """Check a case; a DirectX boolean scan mismatch first runs the WARP control.
+
+    The test fails unless the runtime also miscomputes the fixed control, so a
+    CrossTL regression still fails wherever the runtime is sound.
+    """
+
+    try:
+        return _check(case, target, entry, actual, data)
+    except AssertionError:
+        if target != "directx" or entry not in WARP_BOOL_SCAN_ENTRIES:
+            raise
+        differences = _warp_bool_scan_control_differences(work)
+        if not differences:
+            raise
+        pytest.xfail(
+            f"Direct3D runtime on {platform.processor() or 'this CPU'} also "
+            f"miscomputes the fixed-HLSL {WARP_BOOL_SCAN_CONTROL} scan control "
+            f"({len(differences)} words, first {differences[:3]})"
+        )
+
 
 def _assert_identical(label, actual, expected):
     assert len(actual) == len(expected), label
@@ -2086,7 +2141,9 @@ def test_current_mlx_scan_native_parity(current_mlx, metal_reference, tmp_path, 
                                 }
                             )
                             continue
-                    worst = _check(case, target, entry, output["values"], data)
+                    worst = _check_or_xfail_runtime_defect(
+                        case, target, entry, output["values"], data, work
+                    )
                     evidence.append(
                         {
                             "case": case,
@@ -2123,6 +2180,70 @@ def test_current_mlx_scan_native_parity(current_mlx, metal_reference, tmp_path, 
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns("*.air", "*.metallib", "out"),
             )
+
+
+def test_warp_bool_scan_entries_are_the_contiguous_boolean_maxima():
+    assert WARP_BOOL_SCAN_ENTRIES == {
+        f"contig_scan_{variant}max_bool__bool_" for variant, _, _ in VARIANTS
+    }
+    assert len(WARP_BOOL_SCAN_ENTRIES) == 4
+
+
+@pytest.mark.parametrize(
+    ("target", "entry", "control", "outcome"),
+    [
+        ("directx", "contig_scan_inclusive_max_bool__bool_", [(41, 0, 1)], "xfail"),
+        ("directx", "contig_scan_inclusive_max_bool__bool_", [], "fail"),
+        ("directx", "contig_scan_inclusive_min_bool__bool_", [(41, 0, 1)], "fail"),
+        ("directx", "strided_scan_inclusive_max_bool__bool_", [(41, 0, 1)], "fail"),
+        ("opengl", "contig_scan_inclusive_max_bool__bool_", [(41, 0, 1)], "fail"),
+    ],
+)
+def test_boolean_scan_mismatch_is_excused_only_by_a_failing_runtime_control(
+    monkeypatch, tmp_path, target, entry, control, outcome
+):
+    def mismatch(label, *_args):
+        raise AssertionError((label, 1, [(0, 0, 1)]))
+
+    runs = []
+
+    def run_control(work):
+        runs.append(work)
+        return control
+
+    monkeypatch.setattr(sys.modules[__name__], "_check", mismatch)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_warp_bool_scan_control_differences", run_control
+    )
+    expected = pytest.xfail.Exception if outcome == "xfail" else AssertionError
+    with pytest.raises(expected) as raised:
+        _check_or_xfail_runtime_defect("short", target, entry, [], {}, tmp_path)
+    if outcome == "xfail":
+        assert "bool-in-bool-slots scan control" in str(raised.value)
+    else:
+        assert raised.value.args[0] == ("short", 1, [(0, 0, 1)])
+    applies = target == "directx" and entry in WARP_BOOL_SCAN_ENTRIES
+    assert runs == ([tmp_path] if applies else [])
+
+
+def test_boolean_scan_match_never_runs_the_runtime_control(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys.modules[__name__], "_check", lambda *_args: 0.0)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_warp_bool_scan_control_differences",
+        lambda _work: pytest.fail("the control runs only after a mismatch"),
+    )
+    assert (
+        _check_or_xfail_runtime_defect(
+            "short",
+            "directx",
+            "contig_scan_inclusive_max_bool__bool_",
+            [],
+            {},
+            tmp_path,
+        )
+        == 0.0
+    )
 
 
 def test_ci_requires_native_scan_family_parity():

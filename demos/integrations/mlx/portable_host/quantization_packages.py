@@ -190,8 +190,11 @@ class QuantizationPackageCache:
             "max_template_materialization_work": 4096,
         }
         if source == BLOCK_SOURCE:
+            # An all-zero mx block's E8M0 scale converts to the subnormal
+            # 2^-127, which the Metal source compares as zero.
             options.update(
                 binary32_multiplication_profile="rne-flush",
+                binary32_comparison_profile="flush-subnormals",
                 binary32_log2_operand_profile="flush-subnormals",
                 binary32_log2_accuracy_profile="portable-finite",
             )
@@ -202,6 +205,12 @@ class QuantizationPackageCache:
             }
             if self.target == "directx":
                 settings["relative_wave_shuffle_out_of_range"] = "self"
+            if source == SOURCE:
+                # Metal fuses affine_dequantize's `scale * d + bias` into one
+                # rounding even under -fno-fast-math, as the qmm loaders'
+                # binary32 dequantization rounds once; per-operation bfloat16
+                # rounding differs from both in about 30% of weights.
+                settings["floating_contraction_profile"] = "rne-flush"
             options["target_options"] = {self.target: settings}
         with tempfile.TemporaryDirectory(
             prefix=".quantization-translate-", dir=self.root

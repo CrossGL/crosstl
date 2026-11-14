@@ -3,11 +3,93 @@
 import math
 import struct
 
+from demos.integrations.mlx.portable_host import column_small_layout
+from demos.integrations.mlx.portable_host.column_small_layout import (
+    SMALL_COLUMN_ENTRIES,
+)
 from demos.integrations.mlx.portable_host.reduction_packages import COLUMN_ENTRIES
 from demos.integrations.mlx.portable_host.row_workloads import values_match, wire_values
 
+# Fewer than 32 reduced elements per output. Each template's reduction rank,
+# with a partial last threadgroup of columns for the rank-one template.
+SMALL_SHAPES = {
+    1: ((5, 130), (0,)),
+    2: ((2, 2, 3, 33), (0, 2)),
+    5: ((2, 2, 2, 2, 3, 32), (0, 2, 4)),
+}
+# Further sum geometries: one lane, narrow lanes, the widest threadgroup and
+# 31 reduced rows, the largest small plan, 131,072 elements, and a stride of
+# 65,536 columns over two axes, past the bound of one axis.
+SMALL_SUM_SHAPES = (
+    (2, 3),
+    (3, 16),
+    (31, 32),
+    (8, 128),
+    (8, 2048),
+    (8, 16384),
+    (8, 128, 512),
+)
+# Looped and two-pass plans over more than 65,535 elements, for these entries'
+# rank-one templates.
+WIDE_OPERATIONS = ("sumfloat32", "maxuint32")
+WIDE_SHAPES = {"looped": (40, 2048), "2pass": (300, 256)}
+SMALL_SUM_ENTRY = "col_reduce_small_1_reduce_sumfloat32"
+
+
+def _small_cases():
+    for entry, dtype in SMALL_COLUMN_ENTRIES.items():
+        dimension = int(entry.split("_")[3])
+        shape, axes = SMALL_SHAPES[dimension]
+        case = {
+            "id": f"{entry}-small",
+            "entry": entry,
+            "dtype": dtype,
+            "operation": entry.rsplit("reduce_", 1)[1].removesuffix(dtype),
+            "shape": shape,
+            "axes": axes,
+            "layout": "dense",
+        }
+        yield case
+        if entry == SMALL_SUM_ENTRY:
+            for shape in SMALL_SUM_SHAPES:
+                yield case | {
+                    "id": f"{entry}-{'x'.join(map(str, shape))}",
+                    "shape": shape,
+                }
+        if dtype == "float32" and dimension == 1:
+            for profile in ("early-nan", "late-nan", "positive-infinity"):
+                yield case | {"id": f"{entry}-{profile}", "profile": profile}
+
+
+def small_variants():
+    """The small column variants the workloads launch, as cache keys."""
+    keys = set()
+    for case in _small_cases():
+        size, stride, _ = small_plan(case)
+        lanes, rows = column_small_layout.geometry(stride, size)
+        keys.add(column_small_layout.variant(case["entry"], (lanes, rows, 1)))
+    return keys
+
+
+def column_stride(case):
+    """The reduction stride MLX plans: the dense axes after the last reduced one."""
+    return math.prod(case["shape"][max(case["axes"]) + 1 :])
+
+
+def small_plan(case):
+    """``(reduced elements, columns, outputs)`` of one small column case."""
+    shape, axes = case["shape"], case["axes"]
+    total = math.prod(shape[axis] for axis in axes)
+    columns = column_stride(case)
+    return total, columns, math.prod(shape) // total // columns
+
 
 def cases():
+    yield from _looped_cases()
+    yield from _small_cases()
+
+
+def _looped_cases():
     for entry, dtype in COLUMN_ENTRIES.items():
         two_pass = "2pass" in entry
         dimension = int(entry.split("_")[3])
@@ -26,6 +108,9 @@ def cases():
             yield case
         if dimension == 1:
             yield case | {"id": f"{entry}-65-columns", "shape": (rows, 65)}
+            if entry.endswith(WIDE_OPERATIONS):
+                mode = "2pass" if two_pass else "looped"
+                yield case | {"id": f"{entry}-wide", "shape": WIDE_SHAPES[mode]}
             for boundary in ((1025, 1985) if two_pass else (32, 256)):
                 yield case | {
                     "id": f"{entry}-{boundary}-rows",
@@ -185,7 +270,7 @@ def validate(records, *, trace=None):
         cursor = end
         for stage, values in enumerate(passes):
             dispatch = trace[start + stage]
-            stride = logical.shape[-1] if stage == 0 else expected.size
+            stride = column_stride(case) if stage == 0 else expected.size
             outer = expected.size // stride
             entry = (
                 case["entry"]
@@ -197,6 +282,12 @@ def validate(records, *, trace=None):
                 outer * (32 if stage == 0 and partials is not None else 1),
                 1,
             ]
+            size = [256, 1, 1]
+            if entry in SMALL_COLUMN_ENTRIES:
+                total = logical.size // expected.size
+                lanes, rows = column_small_layout.geometry(stride, total)
+                blocks = -(-stride // column_small_layout.N_READS)
+                groups, size = [-(-blocks // lanes), outer, 1], [lanes, rows, 1]
             guards = (
                 [index % 2 == 0 for index in range(32)]
                 if dtype == "bool_"
@@ -216,7 +307,7 @@ def validate(records, *, trace=None):
                 or type(dispatch.get("threads")) is not int
                 or dispatch.get("threads")
                 != (logical.size if stage == 0 else partials.size)
-                or dispatch.get("workgroupSize") != [256, 1, 1]
+                or dispatch.get("workgroupSize") != size
                 or dispatch.get("workgroupCount") != groups
                 or any(
                     type(value) is not int

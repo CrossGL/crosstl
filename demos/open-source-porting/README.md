@@ -74,7 +74,7 @@ claim that either case is warning-free or establish rendered-image parity.
 | `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal has no fragment-size input equivalent. |
 | `glfw-opengl-triangle` | `glfw/glfw` at `567b1ec2442d59525e24c19e8d413df6baf02496` | Zlib | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream OpenGL triangle shader strings extracted from `triangle-opengl.c`. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
-| `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
+| `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Metal is refused: a function constant cannot size a function-parameter array, and Metal has no double function constant (Metal Shading Language Specification, sections 2.1 and 5.8.1). |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
@@ -477,15 +477,15 @@ repeats the quick triage rollups under fields such as `success`,
 for automation or a fast status check; use `<case>-portability-report.json` for
 the full source, artifact, diagnostic, and validation detail.
 
-CI keeps the same report files under `support/generated/demo-reports` and
+CI keeps the same report files under `build/reports/demo-reports` and
 uploads them from the `Open-Source Porting Demo` workflow as the artifact named
 `open-source-porting-demo-reports-${{ matrix.os }}`. The reproducibility check
 writes per-case reports under
-`support/generated/demo-reports/${{ matrix.os }}/artifacts`, and platform smoke
-checks write under `support/generated/demo-reports/linux-opengl`,
-`support/generated/demo-reports/linux-vulkan`,
-`support/generated/demo-reports/macos-metal`, or
-`support/generated/demo-reports/windows-directx`. If the pytest selection fails,
+`build/reports/demo-reports/${{ matrix.os }}/artifacts`, and platform smoke
+checks write under `build/reports/demo-reports/linux-opengl`,
+`build/reports/demo-reports/linux-vulkan`,
+`build/reports/demo-reports/macos-metal`, or
+`build/reports/demo-reports/windows-directx`. If the pytest selection fails,
 CI also uploads `open-source-porting-demo-failure-summary-${{ matrix.os }}`
 with the JUnit XML and failure-summary JSON/Markdown files.
 

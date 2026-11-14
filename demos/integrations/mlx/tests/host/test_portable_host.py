@@ -1,6 +1,7 @@
 import ctypes
 import json
 import math
+import re
 import shlex
 import shutil
 import struct
@@ -34,12 +35,14 @@ def checkout(root, monkeypatch, newline=b"\n"):
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
         "primitives.cpp": (
             "\n".join(
-                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name == 'Quantize' else 'NO_GPU'}({name})"
+                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name in {'DivMod', 'Quantize'} else 'NO_GPU'}({name})"
                 for name in (
                     "Arange",
                     "RandomBits",
                     "Scan",
                     "Quantize",
+                    "QuantizedMatmul",
+                    "Matmul",
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",
@@ -49,6 +52,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "GatherAxis",
                     "ScatterAxis",
                     "Scatter",
+                    "DivMod",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
@@ -101,6 +105,10 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
         "NO_GPU_MULTI(Quantize)" not in (backend / "crosstl_primitives.cpp").read_text()
     )
     assert "NO_GPU_MULTI(Quantize)" in (backend / "primitives.cpp").read_text()
+    assert (
+        "NO_GPU_MULTI(DivMod)" not in (backend / "crosstl_primitives.cpp").read_text()
+    )
+    assert "NO_GPU_MULTI(DivMod)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Abs)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" in (backend / "primitives.cpp").read_text()
@@ -307,6 +315,41 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
 @pytest.fixture
 def translated_packages(tmp_path, package_templates):
     return Path(shutil.copytree(package_templates, tmp_path / "packages"))
+
+
+def _package_outputs(output):
+    """Return the package index and generated artifacts without the work-dir name."""
+
+    def normalized(text):
+        return re.sub(r"\.portable-host-[A-Za-z0-9_]+", ".portable-host-", text)
+
+    report = json.loads((output / "translation/report.json").read_text())
+    artifacts = sorted(
+        (normalized(artifact["path"]), artifact["generatedHash"])
+        for artifact in report["artifacts"]
+    )
+    return normalized((output / "index.json").read_text()), artifacts
+
+
+def test_parallel_package_translation_matches_serial(
+    package_templates, tmp_path, monkeypatch
+):
+    target = json.loads((package_templates / "index.json").read_text())["target"]
+    monkeypatch.setattr(
+        packages.subprocess,
+        "check_output",
+        lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
+    )
+    output = tmp_path / "parallel"
+    packages.build_packages(package_templates.parent / "mlx", output, target, jobs=2)
+    assert _package_outputs(output) == _package_outputs(package_templates)
+
+
+@pytest.mark.parametrize("jobs", [0, -1, 1.5, True])
+def test_package_translation_rejects_invalid_job_counts(tmp_path, jobs):
+    with pytest.raises(ValueError, match="jobs must be a positive integer"):
+        packages.build_packages(tmp_path, tmp_path / "out", "opengl", jobs=jobs)
+    assert not (tmp_path / "out").exists()
 
 
 def test_runtime_selects_the_requested_native_adapter(translated_packages, tmp_path):
@@ -743,7 +786,7 @@ def test_cast_dispatch_contract(
 )
 def test_cast_references_require_exact_results(fault):
     records = cast_workloads.expected_records()
-    assert len(records) == 50 and len(cast_workloads.dispatches()) == 64
+    assert len(records) == 50 and len(cast_workloads.dispatches()) == 52
     assert sum(len(record["words"]) for record in records) == 1976
     if fault == "missing":
         records.pop()
@@ -865,7 +908,7 @@ def test_binary_dispatch_contract(
 )
 def test_binary_reference_checks_reject_changed_results(fault):
     records = binary_workloads.expected_records()
-    assert len(records) == 134 and len(binary_workloads.dispatches()) == 198
+    assert len(records) == 168 and len(binary_workloads.dispatches()) == 248
     if fault == "missing":
         records.pop()
     elif fault == "identity":
@@ -913,6 +956,79 @@ def test_binary_extrema_preserve_second_operand_zero_sign(operation, index):
     record["values"][index] = -record["values"][index]
     with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
         binary_workloads.validate(records)
+
+
+def test_binary_remainder_follows_the_kernel_floored_definition():
+    import numpy as np
+
+    records = {
+        (row["entry"], row["layout"]): row
+        for row in binary_workloads.expected_records()
+    }
+    assert {"vv_Remainderfloat32", "vv_Remainderint32", "vv_Remainderuint32"} <= {
+        entry for entry, _ in records
+    }
+    assert not any(
+        entry.startswith(("vv_LogAddExpint", "vv_LogAddExpuint", "vv_Divideint"))
+        for entry, _ in records
+    )
+    # Signed results take the divisor's sign, as binary_ops.h corrects fmod.
+    a = np.asarray([-7, 7, -7, 7, -6, 6], dtype=np.int32)
+    b = np.asarray([2, 2, -2, -2, 3, -3], dtype=np.int32)
+    got = binary_workloads.floored_remainder(np, a, b)
+    assert got.dtype == np.int32 and got.tolist() == [1, 1, -1, -1, 0, 0]
+    # An exact float remainder keeps the dividend's zero sign, unlike NumPy.
+    zero = binary_workloads.floored_remainder(
+        np, np.asarray([-1.0], np.float32), np.asarray([0.5], np.float32)
+    )
+    assert zero[0] == 0 and math.copysign(1, zero[0]) == -1
+    assert math.copysign(1, np.remainder(np.float32(-1.0), np.float32(0.5))) == 1
+    vector = records[("vv_Remainderint32", "vector")]
+    assert vector["values"] == [
+        x - y * math.floor(x / y) for x, y in zip(vector["a"], vector["b"])
+    ]
+    nonfinite = records[("vv_Remainderfloat32", "nonfinite")]
+    assert nonfinite["values"] == ["nan"] * 7
+    logaddexp = records[("vv_LogAddExpfloat32", "nonfinite")]
+    assert logaddexp["values"][:3] == [1.0, "+infinity", "nan"]
+    assert logaddexp["values"][3] == pytest.approx(math.log(2))
+    binary_workloads.validate(list(records.values()))
+    logaddexp["values"][4] = 0.0
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(list(records.values()))
+
+
+@pytest.mark.parametrize("entry", ["vv_Remainderfloat32", "vv_Multiplyfloat32"])
+def test_binary_cpu_records_only_relax_the_remainder_zero_sign(entry):
+    records = binary_workloads.expected_records()
+    record = next(
+        row
+        for row in records
+        if row["entry"] == entry
+        and row["layout"] in {"tail", "nonfinite"}
+        and any(
+            value == 0 and math.copysign(1, value) == -1
+            for value in row["values"]
+            if type(value) is float
+        )
+    )
+    index = next(
+        i
+        for i, value in enumerate(record["values"])
+        if type(value) is float and value == 0 and math.copysign(1, value) == -1
+    )
+    record["values"][index] = 0.0
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(records)
+    if entry == "vv_Remainderfloat32":
+        # MLX's CPU scalar and Accelerate paths disagree on this zero's sign.
+        binary_workloads.validate(records, cpu=True)
+    else:
+        with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+            binary_workloads.validate(records, cpu=True)
+    record["values"][index] = 1e-30
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(records, cpu=True)
 
 
 @pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
@@ -1677,7 +1793,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
     records = full_workloads.expected_records()
     assert len(records) == 62
     assert sum(len(record["words"]) for record in records) == 2421
-    assert len(full_workloads.dispatches()) == 52
+    assert len(full_workloads.dispatches()) == 51
     if fault == "missing":
         records.pop()
     elif fault == "payload":
@@ -1979,7 +2095,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault in {"source-before", "test-source-before"}:
             assert calls == []
         if fault == "command":
-            assert len(calls) == 20
+            assert len(calls) == 19
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -1987,7 +2103,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 == 124
             )
         if fault == "native-timeout":
-            assert len(calls) == 20
+            assert len(calls) == 19
             for mode in ("cpu", "native", *verify.NEGATIVE_CHECKS):
                 command_result = json.loads(
                     (args.output_dir / f"{mode}.command.json").read_text()
@@ -1995,7 +2111,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 20 and evidence["dispatchCount"] == 495 + len(
+        assert len(calls) == 19 and evidence["dispatchCount"] == 532 + len(
             boolean_workloads.dispatches()
         )
         assert len(identities) == 2
@@ -2151,7 +2267,10 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 34
+    assert len(verify.UPSTREAM_TESTS) == 52
+    assert len(set(verify.UPSTREAM_TESTS)) == len(verify.UPSTREAM_TESTS)
+    assert "test_ops.TestOps.test_kron" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_reciprocal" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_diff" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_flip" in verify.UPSTREAM_TESTS
     assert "test_array.TestArray.test_array_type_cast" in verify.UPSTREAM_TESTS
@@ -2184,9 +2303,10 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
     assert contracts["if"] == "runner.os == 'Linux'"
     command = shlex.split(contracts["run"])
     assert command[:6] == ["python", "-m", "pytest", "-q", "-n", "auto"]
-    assert len(command[6:]) == 25
+    assert len(command[6:]) == 26
     assert set(command[6:]) == {
         "demos/integrations/mlx/tests/host/test_portable_host.py",
+        "demos/integrations/mlx/tests/host/test_portable_upstream_ops.py",
         "demos/integrations/mlx/tests/host/test_portable_reductions.py",
         "demos/integrations/mlx/tests/host/test_portable_rows.py",
         "demos/integrations/mlx/tests/host/test_reduction_cache.py",
@@ -2239,6 +2359,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
             == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
         )
         assert "continue-on-error" not in steps[name]
+    assert "--jobs 4" in steps["Translate unchanged upstream kernels"]["run"]
     execution = steps["Execute upstream tests on the translated backend"]
     assert " ".join(execution["if"].split()) == (
         "${{ !cancelled() && steps.host-build.outcome == 'success' && "
@@ -2508,7 +2629,7 @@ def test_boolean_unary_dispatch_preserves_stored_contiguous_layouts(monkeypatch)
 
 
 def test_ci_requires_native_math_before_building_mlx():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -2519,7 +2640,7 @@ def test_ci_requires_native_math_before_building_mlx():
         "Build adapted upstream MLX",
     )
     for earlier, later in zip(order, order[1:]):
-        assert ci_coverage.workflow_job_step_after(
+        assert workflow_text.workflow_job_step_after(
             workflow, "portable-host", later, earlier
         )
     for name, seconds, evidence_directory, modules, flags in (
@@ -2551,7 +2672,7 @@ def test_ci_requires_native_math_before_building_mlx():
             ),
         ),
     ):
-        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
+        step = workflow_text.workflow_job_step_section(workflow, "portable-host", name)
         condition = " ".join(yaml.safe_load(step)[0]["if"].split())
         if name == "Validate native scalar math":
             assert condition == (
@@ -2578,18 +2699,18 @@ def test_ci_requires_native_math_before_building_mlx():
             assert path in step
             for event in ("push", "pull_request"):
                 assert_paths_covered(
-                    ci_coverage.workflow_event_path_filters(workflow, event), path
+                    workflow_text.workflow_event_path_filters(workflow, event), path
                 )
         for flag in flags:
             assert f'{flag}: "1"' in step
-    scalar = ci_coverage.workflow_job_step_section(
+    scalar = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate native scalar math"
     )
     assert (
         "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
         in scalar
     )
-    half = ci_coverage.workflow_job_step_section(
+    half = workflow_text.workflow_job_step_section(
         workflow, "opengl", "Validate OpenGL half conversions"
     )
     assert "if:" not in half
@@ -2604,10 +2725,10 @@ def test_ci_requires_native_math_before_building_mlx():
     assert "tee .mlx-gather-opengl/half-conversions.log" in half
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_opengl_half_conversion.py",
         )
-    directx_half = ci_coverage.workflow_job_step_section(
+    directx_half = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX half conversions"
     )
     for job, name, directory, flag, module, seconds in (
@@ -2628,7 +2749,7 @@ def test_ci_requires_native_math_before_building_mlx():
             600,
         ),
     ):
-        step = ci_coverage.workflow_job_step_section(workflow, job, name)
+        step = workflow_text.workflow_job_step_section(workflow, job, name)
         if job == "opengl":
             assert "if:" not in step
             assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
@@ -2651,9 +2772,9 @@ def test_ci_requires_native_math_before_building_mlx():
         assert module in step
         for event in ("pull_request", "push"):
             assert_paths_covered(
-                ci_coverage.workflow_event_path_filters(workflow, event), module
+                workflow_text.workflow_event_path_filters(workflow, event), module
             )
-    derivatives = ci_coverage.workflow_job_step_section(
+    derivatives = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned OpenGL attention derivatives"
     )
     assert (
@@ -2674,10 +2795,10 @@ def test_ci_requires_native_math_before_building_mlx():
     assert "tests/test_translator/test_directx_half_conversion.py" in directx_half
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_half_conversion.py",
         )
-    binary = ci_coverage.workflow_job_step_section(
+    binary = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
     assert "CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}" in binary
@@ -2690,18 +2811,18 @@ def test_ci_requires_native_math_before_building_mlx():
         "${{ runner.os == 'Linux' && '1' || '0' }}" in binary
     )
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
-    timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
+    timeout = workflow_text.workflow_job_timeout_minutes(workflow, "portable-host")
     assert timeout * 60 > 120 + 900 + 1800 + 900 + 1800
 
 
 def test_ci_requires_resident_attention_reductions():
     import re
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned resident attention reductions"
     )
     assert (
@@ -2724,7 +2845,7 @@ def test_ci_requires_resident_attention_reductions():
     assert (
         "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py" in step
     )
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "portable-host",
         "Execute pinned resident attention reductions",
@@ -2732,22 +2853,22 @@ def test_ci_requires_resident_attention_reductions():
     )
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py",
         )
-    assert ci_coverage.workflow_job_timeout_minutes(
+    assert workflow_text.workflow_job_timeout_minutes(
         workflow, "portable-host"
     ) * 60 > sum(
         int(value)
         for value in re.findall(
             r"--timeout-seconds (\d+)",
-            ci_coverage.workflow_job_text(workflow, "portable-host"),
+            workflow_text.workflow_job_text(workflow, "portable-host"),
         )
     )
 
 
 def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -2788,7 +2909,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py",
         ),
     ):
-        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
+        step = workflow_text.workflow_job_step_section(workflow, "portable-host", name)
         prerequisite = (
             "host-warp-identity"
             if name.startswith("Validate DirectX")
@@ -2807,11 +2928,11 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         assert f"--junitxml=.mlx-portable-host/{directory}/results.xml" in step
         assert f"tee .mlx-portable-host/{directory}.log" in step
         assert module in step
-        assert ci_coverage.workflow_job_step_after(
+        assert workflow_text.workflow_job_step_after(
             workflow, "portable-host", "Build adapted upstream MLX", name
         )
         for event in ("push", "pull_request"):
-            paths = ci_coverage.workflow_event_path_filters(workflow, event)
+            paths = workflow_text.workflow_event_path_filters(workflow, event)
             assert_paths_covered(paths, module)
             assert_paths_covered(
                 paths, "tests/test_translator/test_metal_float_atomics.py"
@@ -2827,7 +2948,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
                 paths, "demos/integrations/mlx/tests/fixtures/gated_delta_reference.py"
             )
     metal = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    attention = ci_coverage.workflow_job_step_section(
+    attention = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned portable attention row dots"
     )
     assert (
@@ -2852,10 +2973,12 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert "tee .mlx-portable-host/attention-odo.log" in attention
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py",
         )
-    assert ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host") * 60 > (
+    assert workflow_text.workflow_job_timeout_minutes(
+        workflow, "portable-host"
+    ) * 60 > (
         120
         + 120
         + 180
@@ -2872,7 +2995,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         + 600
         + 600
     )
-    reductions = ci_coverage.workflow_job_step_section(
+    reductions = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX software reductions"
     )
     assert "tests/test_translator/test_directx_subgroup_identity.py" in reductions
@@ -2880,18 +3003,18 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert "tests/test_translator/test_directx_subgroup_components.py" in reductions
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_identity.py",
         )
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_uniformity.py",
         )
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_components.py",
         )
-    control = ci_coverage.workflow_job_step_section(
+    control = workflow_text.workflow_job_step_section(
         metal, "metal-host", "Validate native float atomics"
     )
     assert (
@@ -2901,6 +3024,6 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert 'CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"' in control
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(metal, event),
+            workflow_text.workflow_event_path_filters(metal, event),
             "tests/test_translator/test_directx_float_atomics.py",
         )

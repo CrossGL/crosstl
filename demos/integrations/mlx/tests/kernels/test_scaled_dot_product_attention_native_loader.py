@@ -42,6 +42,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -69,12 +70,12 @@ MLX_ATTENTION_DISPATCH_CONTRACT = (
 )
 MLX_ATTENTION_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "b6c596dfce2e3695f0d5c28eaf7b837ee97bda579169885ff19cba52c0bbc553",
-        "sizeBytes": 9116,
+        "sha256": "14b992077d816c4f6deb9e0550679e1ab2d9032ce85e12ee814cc8acd6e0c2e2",
+        "sizeBytes": 8084,
     },
     "opengl": {
-        "sha256": "6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268",
-        "sizeBytes": 12412,
+        "sha256": "388ebd0f2a92879641c7bfc818822fcf7a513e6d502b01462fa311de1e13956b",
+        "sizeBytes": 14530,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER"
@@ -426,11 +427,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         "algorithm": "sha256",
         "value": MLX_ATTENTION_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected["sizeBytes"]
+    check_generated_artifact(
+        artifact, sha256=expected["sha256"], size_bytes=expected["sizeBytes"]
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_ATTENTION_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
@@ -484,8 +483,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "static const bool has_mask = false;" in generated
         assert generated.count("WaveActiveSum(") == 3
         assert generated.count("WaveActiveMax(") == 1
-        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
-        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "groupshared uint __crossgl_physical_subgroup_leaders[32];" in generated
+        assert (
+            "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]" in generated
+        )
         assert "uint crossglPhysicalSubgroupID = " in generated
         _assert_directx_compiles(generated_path, work_dir)
     else:

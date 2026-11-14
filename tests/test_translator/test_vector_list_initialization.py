@@ -271,7 +271,7 @@ def test_wide_vector_lists_execute_natively(tmp_path, signed, width, form):
 
 
 def test_vector_list_native_checks_are_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
@@ -282,7 +282,7 @@ def test_vector_list_native_checks_are_required():
         "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert "test_vector_list_initialization.py" in step
         assert f'{REQUIRE_ENV}: "1"' in step
         assert (

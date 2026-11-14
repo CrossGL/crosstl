@@ -3,6 +3,10 @@
 import logging
 from copy import deepcopy
 
+from .anonymous_blocks import (
+    AnonymousBufferBlock,
+    bind_anonymous_buffer_block_members,
+)
 from .ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -14,6 +18,7 @@ from .ast import (
     BlockNode,
     BreakNode,
     CaseNode,
+    CommaExpressionNode,
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
@@ -24,6 +29,7 @@ from .ast import (
     EnumNode,
     EnumVariantNode,
     ExecutionModel,
+    ExpressionNode,
     ExpressionStatementNode,
     ForInNode,
     ForNode,
@@ -75,11 +81,32 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .codegen.array_utils import evaluate_literal_int_expression
+from .explicit_specializations import (
+    EXPLICIT_SPECIALIZATION_ATTRIBUTE,
+    explicit_specialization_annotation,
+)
+from .host_workgroup_size import (
+    HOST_WORKGROUP_SIZE_ATTRIBUTE,
+    HOST_WORKGROUP_SIZE_KEY,
+    explicit_workgroup_size,
+    host_workgroup_size_mark,
+    padded_workgroup_size_arguments,
+    resolve_host_workgroup_sizes,
+)
 from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
+from .refusals import CrossGLSyntaxError
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
+from .static_assertion_syntax import (
+    mark_template_assertions,
+    parse_static_assertion,
+    starts_static_assertion,
+)
 from .validation import validate_shader_cbuffers
+from .vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS
+from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
 WAVE_INTRINSICS = {
     "WaveGetLaneCount",
@@ -122,11 +149,13 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitAnd",
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
+    *sorted(WAVE_EXTENDED_OPERATIONS),
 }
 
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",
     "cooperative_matrix_fill": "fill",
+    "cooperative_matrix_diagonal": "diagonal",
     "cooperative_matrix_load": "load",
     "cooperative_matrix_store": "store",
     "cooperative_matrix_multiply": "multiply",
@@ -149,6 +178,9 @@ MESH_INTRINSICS = {
     "SetMeshOutputCounts",
     "DispatchMesh",
 }
+
+# Generic vector types whose braced initializer lists their components, as a constructor call does.
+_GENERIC_VECTOR_TYPE_NAMES = frozenset({"vec", "vector"})
 
 VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
     {
@@ -261,7 +293,7 @@ RAYQUERY_METHODS = {
     "Proceed",
     "Abort",
     "CandidateType",
-    "CommittedType",
+    "CommittedStatus",
     "CandidatePrimitiveIndex",
     "CommittedPrimitiveIndex",
     "CandidateInstanceID",
@@ -273,7 +305,7 @@ RAYQUERY_METHODS = {
     "CommittedObjectRayOrigin",
     "CommittedObjectRayDirection",
     "CommittedRayT",
-    "CandidateRayT",
+    "CandidateTriangleRayT",
     "TraceRayInline",
 }
 
@@ -320,14 +352,45 @@ class CrossGLFunctionBodyParseError(SyntaxError):
         self.token_value = token_value
 
 
+# How a cooperative-matrix contract mismatch names each field it compares.
+COOPERATIVE_MATRIX_FIELD_LABELS = {
+    "element_type": "component type",
+    "rows": "row count",
+    "cols": "column count",
+    "scope": "scope",
+    "use": "use",
+    "layout": "layout",
+    "subgroup_size": "subgroup size",
+    "elements_per_lane": "elements-per-lane count",
+    "fragment_layout": "fragment layout",
+    "fragment_provenance": "fragment provenance",
+    "fragment_mapping": "fragment mapping",
+    "fragment_mapping_provenance": "fragment mapping provenance",
+}
+# Scalar spellings a vector generic argument may use for the CrossGL scalars ``float``, ``double``, ``int``, ``uint``.
+WGSL_STYLE_SCALAR_SPELLINGS = {
+    "f32": "float",
+    "f64": "double",
+    "i32": "int",
+    "u32": "uint",
+}
+
+
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
-    def __init__(self, tokens, strict_function_bodies=False):
+    def __init__(self, tokens):
         self.tokens = tokens
-        self.strict_function_bodies = strict_function_bodies
+        # Every in-place token edit, as (position, replaced token), so that a
+        # lookahead can undo its edits without copying the whole token list.
+        self.token_edits = []
+        self.anonymous_buffer_blocks = []
+        # static_assert declarations outside blocks, attached to the ShaderNode by finalize_shader.
+        self.static_assertions = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
+        # Declared values with their own parameters, which `name[...]` specializes.
+        self.parameterized_value_names = set()
         self.current_function_return_type = None
         self.declared_type_names = {
             str(tokens[index + 1][1])
@@ -376,7 +439,12 @@ class Parser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
-        """Consume one token of the expected type or raise ``SyntaxError``."""
+        """Consume one token of the expected type or raise ``SyntaxError``.
+
+        The end of input is never consumed: a construct that tries to read past it is unterminated.
+        """
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise CrossGLSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -384,7 +452,7 @@ class Parser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Expected {token_type}, got {self.current_token[0]} '{self.current_token[1]}'"
             )
 
@@ -395,12 +463,24 @@ class Parser:
     def eat_type_greater_than(self):
         """Consume one generic ``>`` close, splitting lexer ``>>`` when needed."""
         if self.current_token[0] == "BITWISE_SHIFT_RIGHT":
+            self.token_edits.append((self.pos, self.tokens[self.pos]))
             self.tokens[self.pos] = ("GREATER_THAN", ">")
             self.tokens.insert(self.pos + 1, ("GREATER_THAN", ">"))
             self.current_token = self.tokens[self.pos]
             self.eat("GREATER_THAN")
             return
         self.eat("GREATER_THAN")
+
+    def mark_token_edits(self):
+        """Return a mark that ``undo_token_edits`` can restore the tokens to."""
+        return len(self.token_edits)
+
+    def undo_token_edits(self, mark):
+        """Undo, newest first, every ``>>`` split made since ``mark``."""
+        while len(self.token_edits) > mark:
+            position, token = self.token_edits.pop()
+            del self.tokens[position + 1]
+            self.tokens[position] = token
 
     def peek(self, offset=1):
         peek_pos = self.pos + offset
@@ -409,7 +489,11 @@ class Parser:
         return ("EOF", None)
 
     def finalize_shader(self, shader):
-        return validate_shader_cbuffers(shader)
+        bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
+        shader.static_assertions = list(self.static_assertions)
+        return resolve_host_workgroup_sizes(
+            validate_shader_cbuffers(shader), self.layout_argument_to_string
+        )
 
     def append_parsed_nodes(self, collection, parsed):
         """Append one parsed node or extend a list of parsed nodes."""
@@ -432,11 +516,7 @@ class Parser:
         preprocessors = []
         shader_name = "main"
 
-        loop_count = 0
-        max_loops = 10000
-
-        while self.current_token[0] != "EOF" and loop_count < max_loops:
-            loop_count += 1
+        while self.current_token[0] != "EOF":
             previous_pos = self.pos
 
             parsed_element = self.parse_global()
@@ -477,18 +557,7 @@ class Parser:
                     structs.append(parsed_element)
 
             if self.pos == previous_pos:
-                current_token_info = (
-                    f"{self.current_token[0]}:{self.current_token[1]}"
-                    if self.current_token[1]
-                    else self.current_token[0]
-                )
-                print(
-                    f"Warning: Parser may be stuck at token {current_token_info}, breaking..."
-                )
-                self.skip_unknown_token()
-
-        if loop_count >= max_loops:
-            print(f"Warning: Parser hit maximum loop limit ({max_loops}), stopping...")
+                self.reject_unexpected_token("a top-level declaration")
 
         shader = ShaderNode(
             name=shader_name,
@@ -519,6 +588,8 @@ class Parser:
         shader_node = None
 
         while self.current_token[0] != "EOF":
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
                 imports.append(self.parse_import())
             elif self.current_token[0] == "PREPROCESSOR":
@@ -528,7 +599,9 @@ class Parser:
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -536,7 +609,9 @@ class Parser:
             elif self.current_token[0] == "ENUM":
                 enums.append(self.parse_enum())
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -552,15 +627,25 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
                     )
                 else:
-                    self.skip_unknown_token()
+                    self.reject_unexpected_token("a layout-qualified declaration")
             elif self.is_function_declaration():
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
@@ -570,8 +655,10 @@ class Parser:
             elif self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
                 stage_func = self.parse_shader_stage()
                 functions.append(stage_func)
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
             else:
-                self.skip_unknown_token()
+                self.reject_unexpected_token("a top-level declaration")
 
         if shader_node:
             shader_node.structs.extend(structs)
@@ -618,6 +705,9 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"shader declaration {name!r}")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "PREPROCESSOR":
                 preprocessors.append(self.parse_preprocessor_directive())
             elif self.current_token[0] == "PRECISION":
@@ -626,7 +716,9 @@ class Parser:
                 stage_node = self.parse_shader_stage_block()
                 stages.append(stage_node.stage, stage_node)
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -656,7 +748,9 @@ class Parser:
                     stages,
                 )
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -672,15 +766,25 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
                     )
                 else:
-                    self.skip_unknown_token()
+                    self.reject_unexpected_token("a layout-qualified declaration")
             elif self.is_function_declaration():
                 func = self.parse_function()
                 functions.append(func)
@@ -688,8 +792,10 @@ class Parser:
                 self.append_parsed_nodes(
                     global_variables, self.parse_variable_declaration()
                 )
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
             else:
-                self.skip_unknown_token()
+                self.reject_unexpected_token("a shader declaration")
 
         self.eat("RBRACE")
 
@@ -763,6 +869,9 @@ class Parser:
         layout_qualifiers = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"{stage_type} stage block")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
                 layout = self.parse_stage_layout_qualifier()
                 layout_qualifiers.append(layout)
@@ -776,19 +885,32 @@ class Parser:
                     local_structs.append(struct_node)
                     local_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         local_variables, self.parse_variable_declaration(attributes)
                     )
                 else:
-                    self.skip_unknown_token()
+                    self.reject_unexpected_token("a layout-qualified declaration")
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffer = self.parse_attributed_cbuffer()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 struct_node = self.parse_attributed_struct()
                 if struct_node:
@@ -798,9 +920,12 @@ class Parser:
                 if struct_node:
                     local_structs.append(struct_node)
             elif self.is_cbuffer_declaration():
-                cbuffer = self.parse_cbuffer_as_struct()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.is_function_declaration():
                 func = self.parse_function()
                 parsed_functions.append(func)
@@ -810,8 +935,10 @@ class Parser:
                 self.append_parsed_nodes(
                     local_variables, self.parse_variable_declaration()
                 )
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
             else:
-                self.skip_unknown_token()
+                self.reject_unexpected_token(f"a {stage_type} stage block")
 
         self.eat("RBRACE")
 
@@ -854,6 +981,18 @@ class Parser:
         execution_config.update(
             self.execution_config_from_function_attributes(main_function)
         )
+        host_size_mark = host_workgroup_size_mark(
+            getattr(main_function, "attributes", []) or [],
+            self.layout_argument_to_string,
+        )
+        if host_size_mark is not None:
+            main_function.attributes = [
+                attr
+                for attr in main_function.attributes
+                if str(getattr(attr, "name", "")).lower()
+                != HOST_WORKGROUP_SIZE_ATTRIBUTE
+            ]
+            execution_config[HOST_WORKGROUP_SIZE_KEY] = host_size_mark
 
         return StageNode(
             stage=stage_enum,
@@ -966,7 +1105,7 @@ class Parser:
                         break
                     self.eat("RPAREN")
 
-                attributes.append(AttributeNode(name=name, arguments=arguments))
+                attributes.append(self.source_attribute(name, arguments))
 
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
@@ -1048,7 +1187,16 @@ class Parser:
                 break
             self.eat("RPAREN")
 
-        return [AttributeNode(name=name, arguments=arguments)]
+        return [self.source_attribute(name, arguments)]
+
+    def source_attribute(self, name, arguments):
+        """An attribute as CrossGL source spells it, with a workgroup size's omitted dimensions made 1."""
+        return AttributeNode(
+            name=name,
+            arguments=padded_workgroup_size_arguments(
+                name, arguments, lambda: LiteralNode(1, PrimitiveType("int"))
+            ),
+        )
 
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
@@ -1117,7 +1265,15 @@ class Parser:
 
         execution_config = {}
         for entry in getattr(layout, "entries", []) or []:
-            if entry.name not in {"local_size_x", "local_size_y", "local_size_z"}:
+            # local_size_{x,y,z}_id name the specialization constants that set a dimension (GLSL 4.60 4.4.1.4).
+            if entry.name not in {
+                "local_size_x",
+                "local_size_y",
+                "local_size_z",
+                "local_size_x_id",
+                "local_size_y_id",
+                "local_size_z_id",
+            }:
                 continue
             if len(entry.arguments) != 1:
                 continue
@@ -1128,19 +1284,10 @@ class Parser:
 
     def execution_config_from_function_attributes(self, function):
         """Return execution metadata implied by stage function attributes."""
-        for attr in getattr(function, "attributes", []) or []:
-            attr_name = str(getattr(attr, "name", "")).lower()
-            if attr_name not in {"local_size", "numthreads", "workgroup_size"}:
-                continue
-
-            arguments = getattr(attr, "arguments", []) or []
-            if len(arguments) != 3:
-                continue
-
-            values = tuple(self.layout_argument_to_string(arg) for arg in arguments)
-            return {"numthreads": values}
-
-        return {}
+        size = explicit_workgroup_size(
+            getattr(function, "attributes", []) or [], self.layout_argument_to_string
+        )
+        return {} if size is None else {"numthreads": size}
 
     def layout_argument_to_string(self, argument):
         """Return the source-like value for simple layout argument expressions."""
@@ -1211,16 +1358,19 @@ class Parser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"buffer block {block_name!r}")
             member = self.parse_struct_member()
             self.append_parsed_nodes(members, member)
         self.eat("RBRACE")
 
         variable_name = self.default_layout_buffer_instance_name(block_name)
         variable_type = NamedType(block_name)
-        if self.current_token[0] == "IDENTIFIER":
+        anonymous = self.current_token[0] != "IDENTIFIER"
+        if not anonymous:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1231,7 +1381,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            variable_type = ArrayType(variable_type, size)
+            sizes.append(size)
+        variable_type = self.wrap_array_dimensions(variable_type, sizes)
 
         self.eat("SEMICOLON")
 
@@ -1242,6 +1393,13 @@ class Parser:
             qualifiers=qualifiers + ["buffer"],
             attributes=self.glsl_buffer_block_attributes(layout_attributes),
         )
+        if anonymous:
+            self.anonymous_buffer_blocks.append(
+                AnonymousBufferBlock(
+                    variable_node,
+                    [getattr(member, "name", None) for member in members],
+                )
+            )
         return struct_node, variable_node
 
     def glsl_buffer_block_attributes(self, layout_attributes):
@@ -1274,6 +1432,8 @@ class Parser:
         token_type, token_value = token
         if token_type == "BUFFER":
             return False
+        if token_type == "IDENTIFIER" and token_value in VULKAN_MEMORY_SCOPE_QUALIFIERS:
+            return True
         return self.token_is_variable_qualifier(token_type, token_value)
 
     def default_layout_buffer_instance_name(self, block_name):
@@ -1330,10 +1490,18 @@ class Parser:
 
     def parse_attributed_struct(self):
         attributes = self.parse_attribute_annotations()
+        if self.is_generic_declaration():
+            struct_node = self.parse_generic_declaration()
+            if not isinstance(struct_node, StructNode):
+                raise CrossGLSyntaxError(
+                    "Attributes before a generic declaration must precede a struct"
+                )
+            struct_node.attributes = attributes + list(struct_node.attributes or [])
+            return struct_node
         return self.parse_struct(attributes)
 
     def current_token_starts_attributed_struct_declaration(self):
-        """Return whether leading attributes are followed by ``struct``."""
+        """Return whether leading attributes are followed by ``struct`` or ``generic<...> struct``."""
         if not (
             self.current_token[0] in ["AT", "ATTRIBUTE"]
             or self.current_token_starts_square_attribute()
@@ -1344,6 +1512,11 @@ class Parser:
         saved_token = self.current_token
         try:
             attributes = self.parse_attribute_annotations()
+            if attributes and self.is_generic_declaration():
+                self.eat("IDENTIFIER")
+                if self.current_token[0] != "LESS_THAN":
+                    return False
+                self.parse_generic_parameters()
             return bool(attributes and self.current_token[0] == "STRUCT")
         finally:
             self.pos = saved_pos
@@ -1359,7 +1532,10 @@ class Parser:
         self.eat("STRUCT")
 
         if self.current_token[0] != "IDENTIFIER":
-            return None
+            raise CrossGLSyntaxError(
+                "Expected a structure name after 'struct', got "
+                f"{self.current_token[0]} {self.current_token[1]!r}"
+            )
 
         name = self.parse_binding_identifier()
 
@@ -1370,27 +1546,37 @@ class Parser:
         attributes.extend(self.parse_attribute_annotations(allow_single_square=False))
 
         if self.current_token[0] != "LBRACE":
-            # Skip malformed struct
-            while self.current_token[0] not in ["SEMICOLON", "EOF"]:
-                self.skip_unknown_token()
-            if self.current_token[0] == "SEMICOLON":
-                self.skip_unknown_token()
-            return None
+            if self.current_token[0] == "SEMICOLON" and not attributes:
+                # ``struct S;`` declares the name only; the definition carries the members.
+                self.eat("SEMICOLON")
+                return None
+            self.reject_unexpected_token(f"structure {name!r} before its '{{'")
 
         self.eat("LBRACE")
         members = []
+        methods = []
+        first_assertion = len(self.static_assertions)
 
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                if self.is_function_declaration():
+                    # A member function reads its receiver's members by name.
+                    static_member = self.current_token[0] == "STATIC"
+                    method = self.parse_function()
+                    if static_member and "static" not in method.qualifiers:
+                        method.qualifiers.append("static")
+                    methods.append(method)
+                    continue
                 member = self.parse_struct_member()
                 self.append_parsed_nodes(members, member)
         finally:
             self.restore_generic_parameter_scope(previous_scope)
+        mark_template_assertions(
+            self.static_assertions[first_assertion:], name, generic_params
+        )
 
-        if self.current_token[0] == "EOF":
-            return None
-
+        self.reject_end_of_input(f"structure {name!r}")
         self.eat("RBRACE")
 
         if self.current_token[0] == "SEMICOLON":
@@ -1401,11 +1587,15 @@ class Parser:
             members=members,
             generic_params=generic_params,
             attributes=attributes,
+            methods=methods,
         )
 
     def parse_struct_member(self):
         """Parse one struct member declaration."""
         if self.current_token[0] == "EOF":
+            return None
+
+        if self.parse_scope_static_assertion():
             return None
 
         if self.current_token[0] == "PREPROCESSOR":
@@ -1417,16 +1607,18 @@ class Parser:
         if self.current_token[0] == "ENUM":
             return self.parse_enum()
 
+        if self.current_token[0] == "SEMICOLON":
+            # An empty member declaration, which C++ [class.mem] allows.
+            self.eat("SEMICOLON")
+            return None
+
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] in [
             "generic",
             "trait",
         ]:
-            # Skip to semicolon or brace
-            while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
-                self.skip_unknown_token()
-            if self.current_token[0] == "SEMICOLON":
-                self.skip_unknown_token()
-            return None
+            raise CrossGLSyntaxError(
+                f"CrossGL cannot declare a {self.current_token[1]} inside a structure"
+            )
 
         leading_attributes = []
         while True:
@@ -1450,16 +1642,7 @@ class Parser:
             attributes.extend(self.parse_post_declaration_attributes())
 
             if self.current_token[0] not in ["SEMICOLON", "COMMA", "RBRACE"]:
-                while self.current_token[0] not in [
-                    "SEMICOLON",
-                    "COMMA",
-                    "RBRACE",
-                    "EOF",
-                ]:
-                    self.skip_unknown_token()
-                if self.current_token[0] in ["SEMICOLON", "COMMA"]:
-                    self.skip_unknown_token()
-                return None
+                self.reject_unexpected_token(f"structure member {name!r}")
 
             if self.current_token[0] in ["SEMICOLON", "COMMA"]:
                 self.eat(self.current_token[0])
@@ -1483,21 +1666,16 @@ class Parser:
         member_type = self.parse_array_suffixes(member_type)
 
         if not self.current_token_is_binding_identifier():
-            # Skip malformed member
-            while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
-                self.skip_unknown_token()
-            if self.current_token[0] == "SEMICOLON":
-                self.skip_unknown_token()
-            return None
+            self.reject_unexpected_token(
+                "a structure member declaration, before its name"
+            )
 
         members = []
         while True:
             if not self.current_token_is_binding_identifier():
-                while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
-                    self.skip_unknown_token()
-                if self.current_token[0] == "SEMICOLON":
-                    self.skip_unknown_token()
-                return members or None
+                self.reject_unexpected_token(
+                    "a structure member declaration, before its name"
+                )
 
             name = self.parse_binding_identifier()
             declarator_type = self.parse_array_suffixes(deepcopy(member_type))
@@ -1532,12 +1710,13 @@ class Parser:
                 self.eat("SEMICOLON")
                 return members[0] if len(members) == 1 else members
 
-            # Skip malformed member suffix while preserving earlier declarators.
-            while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
-                self.skip_unknown_token()
-            if self.current_token[0] == "SEMICOLON":
-                self.skip_unknown_token()
-            return members or None
+            if self.current_token[0] == "LPAREN":
+                # Skipping to the next ';' would drop a member function silently.
+                raise CrossGLSyntaxError(
+                    f"Struct member '{name}' is declared like a function that CrossGL "
+                    "cannot read as a member function"
+                )
+            self.reject_unexpected_token(f"structure member {name!r}")
 
     def parse_enum(self):
         """Parse an enum declaration and its variants."""
@@ -1613,7 +1792,7 @@ class Parser:
                     if self.current_token[0] == "COMMA":
                         self.eat("COMMA")
                 elif self.current_token[0] != "RBRACE":
-                    self.skip_unknown_token()
+                    self.reject_unexpected_token(f"enum variant {name!r}")
                 else:
                     break
             self.eat("RBRACE")
@@ -1641,11 +1820,21 @@ class Parser:
                 "ATTRIBUTE",
             }
             or self.current_token_starts_square_attribute()
+            or self.current_token_is_function_precise_qualifier()
         ):
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
             elif self.current_token_starts_square_attribute():
                 attributes.extend(self.parse_square_attributes())
+            elif self.current_token_is_function_precise_qualifier():
+                # Kept in the attribute form that codegen honors for functions;
+                # leading qualifiers name stages for several targets.
+                self.eat("IDENTIFIER")
+                if not any(
+                    getattr(attribute, "name", None) == "precise"
+                    for attribute in attributes
+                ):
+                    attributes.append(AttributeNode(name="precise"))
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -1664,7 +1853,9 @@ class Parser:
             self.current_token[0] == "KERNEL"
             or self.current_token_is_binding_identifier()
         ):
-            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
+            raise CrossGLSyntaxError(
+                f"Expected function name, got {self.current_token[0]}"
+            )
         name = self.parse_binding_identifier()
 
         generic_params = []
@@ -1686,8 +1877,6 @@ class Parser:
 
             body = None
             if self.current_token[0] == "LBRACE":
-                body_start_pos = self.pos
-                body_start_token = self.current_token
                 parameter_types = {
                     parameter.name: parameter.param_type for parameter in parameters
                 }
@@ -1698,16 +1887,13 @@ class Parser:
                     try:
                         body = self.parse_block()
                     except SyntaxError as exc:
-                        if self.strict_function_bodies:
-                            raise CrossGLFunctionBodyParseError(
-                                name,
-                                exc,
-                                self.current_token,
-                            ) from exc
-                        self.pos = body_start_pos
-                        self.current_token = body_start_token
-                        self.skip_balanced_declaration()
-                        body = BlockNode([])
+                        # A body that does not parse is refused: an empty body in its place would be a function
+                        # that returns an undefined value.
+                        raise CrossGLFunctionBodyParseError(
+                            name,
+                            exc,
+                            self.current_token,
+                        ) from exc
                 finally:
                     self.restore_value_type_scope()
                     self.current_function_return_type = previous_return_type
@@ -1719,6 +1905,7 @@ class Parser:
         function_attributes = []
         linkage_qualifiers = set()
         source_licenses = set()
+        explicit_specialization = None
         for attribute in attributes + post_attributes:
             if attribute.name == "source_license":
                 arguments = attribute.arguments
@@ -1726,13 +1913,17 @@ class Parser:
                     getattr(arguments[0], "name", None) if len(arguments) == 1 else None
                 )
                 if license_name not in SOURCE_LICENSES:
-                    raise SyntaxError(
+                    raise CrossGLSyntaxError(
                         "@source_license requires one registered license identifier"
                     )
                 source_licenses.add(license_name)
+            elif attribute.name == EXPLICIT_SPECIALIZATION_ATTRIBUTE:
+                explicit_specialization = explicit_specialization_annotation(attribute)
             elif attribute.name in {"metal_static", "metal_inline"}:
                 if attribute.arguments:
-                    raise SyntaxError(f"@{attribute.name} does not accept arguments")
+                    raise CrossGLSyntaxError(
+                        f"@{attribute.name} does not accept arguments"
+                    )
                 qualifier = attribute.name[len("metal_") :]
                 linkage_qualifiers.add(qualifier)
             else:
@@ -1751,9 +1942,19 @@ class Parser:
             linkage="internal" if "static" in linkage_qualifiers else "external",
             is_inline="inline" in linkage_qualifiers,
             annotations=(
-                {"source_licenses": tuple(sorted(source_licenses))}
-                if source_licenses
-                else None
+                {
+                    **(
+                        {"source_licenses": tuple(sorted(source_licenses))}
+                        if source_licenses
+                        else {}
+                    ),
+                    **(
+                        {EXPLICIT_SPECIALIZATION_ATTRIBUTE: explicit_specialization}
+                        if explicit_specialization
+                        else {}
+                    ),
+                }
+                or None
             ),
         )
 
@@ -1828,6 +2029,7 @@ class Parser:
             param_type = self.parse_type()
             name = self.parse_binding_identifier()
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1838,7 +2040,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            param_type = ArrayType(param_type, size)
+            sizes.append(size)
+        param_type = self.wrap_array_dimensions(param_type, sizes)
 
         if isinstance(param_type, ReferenceType):
             qualifier_names = {str(qualifier).lower() for qualifier in qualifiers}
@@ -1894,7 +2097,7 @@ class Parser:
 
             if (
                 token_type == "IDENTIFIER"
-                and normalized in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
+                and str(token_value) in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
                 and self.current_token_starts_qualified_parameter_type()
             ):
                 qualifiers.append(normalized)
@@ -1908,7 +2111,9 @@ class Parser:
         token_type, token_value = self.current_token
         kind = str(token_value).lower()
         if kind not in RESOURCE_MEMORY_QUALIFIER_NAMES:
-            raise SyntaxError(f"Expected resource memory qualifier, got {token_type}")
+            raise CrossGLSyntaxError(
+                f"Expected resource memory qualifier, got {token_type}"
+            )
         self.eat(token_type)
 
         scope = None
@@ -1916,7 +2121,9 @@ class Parser:
             self.eat("LPAREN")
             scope_token_type, scope_value = self.current_token
             if not isinstance(scope_value, str) or not scope_value.isidentifier():
-                raise SyntaxError(f"Expected coherence scope, got {scope_token_type}")
+                raise CrossGLSyntaxError(
+                    f"Expected coherence scope, got {scope_token_type}"
+                )
             scope = scope_value.lower()
             self.eat(scope_token_type)
             self.eat("RPAREN")
@@ -2036,6 +2243,26 @@ class Parser:
 
         return self.parse_type()
 
+    def parse_array_template_type(self):
+        """Parse ``array<T, N>`` as the ``ArrayType`` that ``T name[N]`` declares, wherever a type is written.
+
+        Parameters, locals, struct members, globals and return types all take this spelling, and a plain
+        ``NamedType`` left every generator without array semantics for it. Two forms keep the ``array`` template
+        type: an extent of zero, the zero-extent standard array that C-style ``T name[0]`` cannot declare
+        (MSL 2.3.4 ``array<T, 0>``), and ``array<T>`` with no extent, whose meaning depends on where it is declared.
+        """
+        self.eat("IDENTIFIER")
+        generic_args = self.parse_generic_arguments()
+        if len(generic_args) == 2:
+            element_type, extent = generic_args
+            if isinstance(element_type, IdentifierNode):
+                element_type = NamedType(element_type.name, [])
+            if isinstance(element_type, TypeNode) and (
+                evaluate_literal_int_expression(extent) != 0
+            ):
+                return ArrayType(element_type, extent)
+        return NamedType("array", generic_args)
+
     def current_token_starts_var_address_space_declaration(self):
         """Return whether the current token starts ``var<address-space>`` syntax."""
         return self.current_token[0] == "VAR" and self.peek()[0] == "LESS_THAN"
@@ -2068,10 +2295,11 @@ class Parser:
         name = self.parse_binding_identifier()
         self.eat("COLON")
         var_type = self.parse_resource_parameter_type()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2096,6 +2324,9 @@ class Parser:
         """Parse a variable declaration, including qualifiers and attributes."""
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
+        if self.current_token[0] == "LET":
+            # ``@ deprecated("...") let pi = 3.14;``: annotations apply to a ``let`` binding as well.
+            return self.parse_let_declaration(attributes)
         is_type_alias = self.current_token_starts_type_alias_declaration()
         if is_type_alias:
             self.eat("IDENTIFIER")
@@ -2106,11 +2337,13 @@ class Parser:
         is_colon_style_var = (
             self.current_token[0] == "VAR"
             and self.peek()[0] != "LESS_THAN"
-            and self.peek(2)[0] == "COLON"
+            and self.peek(2)[0] in {"COLON", "EQUALS"}
         )
 
         parsed_qualifiers = (
-            [] if is_colon_style_var else self.parse_variable_qualifiers()
+            []
+            if is_colon_style_var
+            else self.parse_variable_qualifiers(layout_attributes=attributes)
         )
         qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
             parsed_qualifiers
@@ -2119,12 +2352,17 @@ class Parser:
         if is_colon_style_var:
             self.eat("VAR")
             name = self.parse_binding_identifier()
-            self.eat("COLON")
-            var_type = self.parse_type()
-            var_type = self.parse_array_suffixes(var_type)
+            var_type = None
+            sizes = []
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                var_type = self.parse_type()
+                sizes = self.parse_array_suffix_sizes()
 
             attributes.extend(self.parse_post_declaration_attributes())
-            var_type = self.parse_array_suffixes(var_type)
+            if var_type is not None:
+                sizes += self.parse_array_suffix_sizes()
+                var_type = self.wrap_array_dimensions(var_type, sizes)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -2178,11 +2416,12 @@ class Parser:
         var_type = self.parse_array_suffixes(deepcopy(base_type))
         name = self.parse_binding_identifier()
         generic_params = self.parse_declaration_square_generic_parameters()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes = list(declaration_attributes)
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2217,8 +2456,9 @@ class Parser:
             return self.parse_square_generic_arguments()
         return []
 
-    def parse_array_suffixes(self, type_node):
-        """Parse one or more non-attribute array suffixes after a type/name."""
+    def parse_array_suffix_sizes(self):
+        """Parse the sizes of consecutive non-attribute array suffixes, in source order (``None`` when unsized)."""
+        sizes = []
         while (
             self.current_token[0] == "LBRACKET"
             and not self.current_token_starts_square_attribute(
@@ -2231,13 +2471,43 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
+            sizes.append(size)
+        return sizes
+
+    @staticmethod
+    def wrap_array_dimensions(type_node, sizes):
+        """``T`` with suffixes ``[a][b]`` as an array of ``a`` arrays of ``b`` ``T``: the first suffix is outermost.
+
+        A declarator's suffixes enclose its type's own (GLSL 4.60 section 4.1.9: ``vec4[2] a[3]`` is an array of 3
+        ``vec4[2]``), so they wrap ``type_node`` whole.
+        """
+        for size in reversed(sizes):
             type_node = ArrayType(type_node, size)
         return type_node
 
-    def parse_variable_qualifiers(self):
-        """Parse declaration qualifiers that precede a variable type."""
+    def parse_array_suffixes(self, type_node):
+        """Parse one or more non-attribute array suffixes after a type/name."""
+        return self.wrap_array_dimensions(type_node, self.parse_array_suffix_sizes())
+
+    def parse_variable_qualifiers(self, layout_attributes=None):
+        """Parse declaration qualifiers that precede a variable type.
+
+        GLSL 4.20 accepts the qualifiers of a declaration in any order, so ``uniform layout(rgba16f) image2D x;``
+        is the same declaration as ``layout(rgba16f) uniform image2D x;``. When ``layout_attributes`` is a list, a
+        ``layout(...)`` qualifier that follows another qualifier is parsed into it instead of ending the sequence.
+        """
         qualifiers = []
-        while self.current_token_is_variable_qualifier():
+        while True:
+            if (
+                layout_attributes is not None
+                and qualifiers
+                and self.current_token[0] == "LAYOUT"
+                and self.peek()[0] == "LPAREN"
+            ):
+                layout_attributes.extend(self.parse_layout_attributes())
+                continue
+            if not self.current_token_is_variable_qualifier():
+                break
             token_type, token_value = self.current_token
             if str(token_value).lower() in RESOURCE_MEMORY_QUALIFIER_NAMES:
                 qualifiers.append(self.parse_resource_memory_qualifier())
@@ -2275,10 +2545,13 @@ class Parser:
         """
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         try:
             self.parse_attribute_annotations()
+
+            if self.current_token[0] == "LET":
+                return True
 
             if self.current_token_starts_type_alias_declaration():
                 self.eat("IDENTIFIER")
@@ -2286,14 +2559,14 @@ class Parser:
             if (
                 self.current_token[0] == "VAR"
                 and self.peek()[0] != "LESS_THAN"
-                and self.peek(2)[0] == "COLON"
+                and self.peek(2)[0] in {"COLON", "EQUALS"}
             ):
                 return True
 
             if self.current_token_starts_var_address_space_declaration():
                 return True
 
-            self.parse_variable_qualifiers()
+            self.parse_variable_qualifiers(layout_attributes=[])
 
             if not self.is_type_token():
                 return False
@@ -2365,7 +2638,7 @@ class Parser:
         except Exception:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -2383,11 +2656,18 @@ class Parser:
             if token_type == "BITWISE_AND" and self.peek(offset)[0] == "MUT":
                 offset += 1
 
-        if self.peek(offset)[0] != "IDENTIFIER":
+        declarator_type, declarator_value = self.peek(offset)
+        if declarator_type != "IDENTIFIER" and not (
+            # ``device float* local = p;``: a contextual keyword names the variable, as it may without the pointer.
+            isinstance(declarator_value, str)
+            and declarator_value.isidentifier()
+            and self.peek(offset + 1)[0] in {"EQUALS", "SEMICOLON", "COMMA", "LBRACKET"}
+        ):
             return False
 
         next_token = self.peek(offset + 1)[0]
-        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA"}:
+        # ``buffer float* data @binding(0);``: a post-declaration attribute follows the declarator.
+        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA", "ATTRIBUTE"}:
             return True
         return next_token == "RPAREN" and self.in_parameter_context()
 
@@ -2534,7 +2814,8 @@ class Parser:
             is_double_matrix = mat_type.startswith("dmat")
             dimensions = mat_type[4:] if is_double_matrix else mat_type[3:]
             if "x" in dimensions:
-                rows, cols = map(int, dimensions.split("x"))
+                # CrossGL follows GLSL: matCxR has C columns of R-component vectors.
+                cols, rows = map(int, dimensions.split("x"))
             else:
                 size = int(dimensions)
                 rows = cols = size
@@ -2688,6 +2969,13 @@ class Parser:
         elif self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "def":
             base_type = self.parse_callable_type()
 
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "array"
+            and self.peek()[0] == "LESS_THAN"
+        ):
+            base_type = self.parse_array_template_type()
+
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -2752,9 +3040,11 @@ class Parser:
         else:
             base_type = PrimitiveType("float")
 
+        sizes = []
         while self.current_token[0] == "LBRACKET":
             if (
-                isinstance(base_type, NamedType)
+                not sizes
+                and isinstance(base_type, NamedType)
                 and self.square_brackets_form_type_arguments()
             ):
                 base_type.generic_args.extend(self.parse_square_generic_arguments())
@@ -2764,7 +3054,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            base_type = ArrayType(base_type, size)
+            sizes.append(size)
+        base_type = self.wrap_array_dimensions(base_type, sizes)
 
         while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
             if self.current_token[0] == "MULTIPLY":
@@ -2790,7 +3081,7 @@ class Parser:
     def cooperative_matrix_type(self, generic_args):
         """Build the canonical cooperative matrix type from generic arguments."""
         if not 3 <= len(generic_args) <= 12:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "CooperativeMatrix expects 3 to 12 generic arguments: "
                 "element type, rows, columns, scope, use, layout, fragment "
                 "layout, subgroup size, elements per lane, fragment provenance, "
@@ -2799,7 +3090,9 @@ class Parser:
 
         element_type = generic_args[0]
         if not isinstance(element_type, TypeNode):
-            raise SyntaxError("CooperativeMatrix element argument must be a type")
+            raise CrossGLSyntaxError(
+                "CooperativeMatrix element argument must be a type"
+            )
 
         rows = self.cooperative_matrix_dimension(generic_args[1])
         cols = self.cooperative_matrix_dimension(generic_args[2])
@@ -2849,7 +3142,7 @@ class Parser:
                 fragment_mapping_provenance,
             )
         except ValueError as error:
-            raise SyntaxError(str(error)) from error
+            raise CrossGLSyntaxError(str(error)) from error
 
     def cooperative_matrix_dimension(self, argument):
         if isinstance(argument, LiteralNode) and type(argument.value) is int:
@@ -2925,7 +3218,7 @@ class Parser:
             self.cooperative_matrix_expression_type(expression)
         )
         if contract is None:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} operand {label} has no "
                 "cooperative-matrix contract"
             )
@@ -2976,18 +3269,8 @@ class Parser:
         if self.cooperative_matrix_values_equal(left, right):
             return deepcopy(right)
 
-        field_name = {
-            "element_type": "component type",
-            "rows": "row count",
-            "cols": "column count",
-            "subgroup_size": "subgroup size",
-            "elements_per_lane": "elements-per-lane count",
-            "fragment_layout": "fragment layout",
-            "fragment_provenance": "fragment provenance",
-            "fragment_mapping": "fragment mapping",
-            "fragment_mapping_provenance": "fragment mapping provenance",
-        }.get(field, field)
-        raise SyntaxError(
+        field_name = COOPERATIVE_MATRIX_FIELD_LABELS[field]
+        raise CrossGLSyntaxError(
             f"Cooperative matrix {operation} has incompatible {field_name}: "
             f"{left_label} is "
             f"{self.format_cooperative_matrix_contract_value(left)}, but "
@@ -3013,7 +3296,7 @@ class Parser:
                 values["fragment_mapping_provenance"],
             )
         except ValueError as error:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} inferred an invalid result "
                 f"contract: {error}"
             ) from error
@@ -3041,28 +3324,42 @@ class Parser:
         right,
         left_label,
         right_label,
+        *,
+        right_owned_fields=(),
     ):
-        """Unify two compatible matrix contracts into a distinct AST type."""
+        """Unify two compatible matrix contracts into a distinct AST type.
+
+        Fields in ``right_owned_fields`` are taken from ``right`` unchanged.
+        """
         left_values = self.cooperative_matrix_contract_values(left)
         right_values = self.cooperative_matrix_contract_values(right)
         values = {
-            field: self.merge_cooperative_matrix_field(
-                operation,
-                field,
-                left_values[field],
-                right_values[field],
-                left_label,
-                right_label,
+            field: (
+                deepcopy(right_values[field])
+                if field in right_owned_fields
+                else self.merge_cooperative_matrix_field(
+                    operation,
+                    field,
+                    left_values[field],
+                    right_values[field],
+                    left_label,
+                    right_label,
+                )
             )
             for field in left_values
         }
         return self.build_cooperative_matrix_contract(operation, values)
 
     def constrain_cooperative_matrix_accumulator(self, operation, product, accumulator):
-        """Validate a product shape while preserving accumulator representation."""
+        """Validate a product shape while preserving accumulator representation.
+
+        The accumulator keeps its own component type, which may differ from the
+        operands' (MSL simdgroup_multiply_accumulate, SPIR-V
+        OpCooperativeMatrixMulAddKHR).
+        """
         values = self.cooperative_matrix_contract_values(accumulator)
         product_values = self.cooperative_matrix_contract_values(product)
-        for field in ("element_type", "rows", "cols", "scope", "subgroup_size"):
+        for field in ("rows", "cols", "scope", "subgroup_size"):
             values[field] = self.merge_cooperative_matrix_field(
                 operation,
                 field,
@@ -3114,17 +3411,29 @@ class Parser:
         return result
 
     def infer_cooperative_matrix_multiply_contract(
-        self, operation, left, right, left_label="left", right_label="right"
+        self,
+        operation,
+        left,
+        right,
+        left_label="left",
+        right_label="right",
+        *,
+        same_component_type=True,
     ):
-        """Infer the source-neutral result contract for matrix multiplication."""
-        self.merge_cooperative_matrix_field(
-            operation,
-            "element_type",
-            left.element_type,
-            right.element_type,
-            left_label,
-            right_label,
-        )
+        """Infer the source-neutral result contract for matrix multiplication.
+
+        A plain product needs one component type. A multiply-accumulate takes
+        its A and B component types independently, as MSL and SPIR-V do.
+        """
+        if same_component_type:
+            self.merge_cooperative_matrix_field(
+                operation,
+                "element_type",
+                left.element_type,
+                right.element_type,
+                left_label,
+                right_label,
+            )
         self.merge_cooperative_matrix_field(
             operation,
             "scope",
@@ -3134,7 +3443,7 @@ class Parser:
             right_label,
         )
         if not self.cooperative_matrix_values_equal(left.cols, right.rows):
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} has incompatible inner dimension: "
                 f"{left_label} columns are "
                 f"{self.format_cooperative_matrix_contract_value(left.cols)}, but "
@@ -3173,19 +3482,19 @@ class Parser:
         arguments = operation_node.arguments
         if operation in {"load", "store"}:
             return operation_node
-        if operation == "fill":
-            # A fill names only its value; the declaration, assignment or
-            # return it initializes supplies the matrix contract.
+        if operation in {"fill", "diagonal"}:
+            # A fill or diagonal names only its value; the declaration,
+            # assignment or return it initializes supplies the matrix contract.
             if len(arguments) != 1:
-                raise SyntaxError(
-                    "Cooperative matrix fill expects 1 argument, got "
+                raise CrossGLSyntaxError(
+                    f"Cooperative matrix {operation} expects 1 argument, got "
                     f"{len(arguments)}"
                 )
             return operation_node
 
         if operation == "element":
             if not arguments:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Cooperative matrix element requires a matrix operand"
                 )
             matrix = self.cooperative_matrix_operand_contract(
@@ -3248,50 +3557,45 @@ class Parser:
                 arguments[2], operation, "accumulator"
             )
             product = self.infer_cooperative_matrix_multiply_contract(
-                operation, left, right
+                operation, left, right, same_component_type=False
             )
             result = self.constrain_cooperative_matrix_accumulator(
                 operation, product, accumulator
             )
             if destination is not None:
+                # The destination's component type is the result's; MSL lets it
+                # differ from the accumulator's.
                 result = self.merge_cooperative_matrix_contracts(
                     operation,
                     result,
                     destination,
                     "inferred result",
                     "destination operand",
+                    right_owned_fields=("element_type",),
                 )
 
         operation_node.set_result_contract(result)
         return operation_node
 
-    def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
-        """Preserve operations for target diagnostics in permissive parse mode."""
-        try:
-            return self.infer_cooperative_matrix_operation(operation_node)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            self.record_cooperative_matrix_inference_error(operation_node, error)
-            return operation_node
+    def parse_cooperative_matrix_constructor(self, generic_args):
+        """Parse ``CooperativeMatrix<...>(value)``, the diagonal constructor.
 
-    @staticmethod
-    def record_cooperative_matrix_inference_error(expression, error):
-        expression.annotations.setdefault(
-            "cooperative_matrix_inference_errors", []
-        ).append(str(error))
-
-    def apply_cooperative_matrix_result_constraint(
-        self, expression, expected_type, context
-    ):
-        """Apply a result constraint without discarding permissively parsed bodies."""
-        try:
-            self.constrain_cooperative_matrix_result(expression, expected_type, context)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            if isinstance(expression, CooperativeMatrixOpNode):
-                self.record_cooperative_matrix_inference_error(expression, error)
+        Like a GLSL ``matN(s)`` constructor, the one value fills the diagonal
+        and every other element is zero; it is the canonical
+        ``cooperative_matrix_diagonal`` with the written type as its result.
+        """
+        matrix_type = self.cooperative_matrix_type(generic_args)
+        self.eat("LPAREN")
+        arguments = self.parse_call_arguments()
+        self.eat("RPAREN")
+        if len(arguments) != 1:
+            raise CrossGLSyntaxError(
+                "CooperativeMatrix constructor expects 1 diagonal value, got "
+                f"{len(arguments)}"
+            )
+        operation = CooperativeMatrixOpNode("diagonal", arguments)
+        operation.set_result_contract(matrix_type)
+        return operation
 
     @staticmethod
     def type_is_inferred_declaration(value_type):
@@ -3310,7 +3614,7 @@ class Parser:
             if not self.cooperative_matrix_values_equal(
                 expression.expression_type, expected_type
             ):
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Cooperative matrix element has incompatible contextual type: "
                     f"inferred component is "
                     f"{self.format_cooperative_matrix_contract_value(expression.expression_type)}, "
@@ -3321,13 +3625,13 @@ class Parser:
 
         expected_contract = self.cooperative_matrix_value_type(expected_type)
         if expected_contract is None:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {expression.operation} requires a "
                 f"cooperative-matrix result, but {context} is "
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
             )
         if expression.result_type is None:
-            if expression.operation == "fill":
+            if expression.operation in {"fill", "diagonal"}:
                 expression.set_result_contract(deepcopy(expected_contract))
             return
         result = self.merge_cooperative_matrix_contracts(
@@ -3342,7 +3646,7 @@ class Parser:
     def finish_variable_contract(self, variable):
         """Constrain an initializer and register its effective lexical type."""
         if variable.initial_value is not None:
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 variable.initial_value,
                 variable.var_type,
                 f"declaration {variable.name!r}",
@@ -3354,6 +3658,8 @@ class Parser:
                 variable.initial_value
             )
         self.register_value_type(variable.name, effective_type)
+        if getattr(variable, "generic_params", None):
+            self.parameterized_value_names.add(str(variable.name))
         return variable
 
     def parse_callable_type(self):
@@ -3656,21 +3962,25 @@ class Parser:
         self.eat_type_greater_than()
         return params
 
-    def parse_generic_arguments(self):
+    def parse_generic_arguments(self, reject_logical_at_top_level=False):
         """Parse generic type arguments after ``<``."""
         self.eat("LESS_THAN")
         args = []
 
         while not self.current_token_is_type_greater_than():
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated generic argument list")
+                raise CrossGLSyntaxError("Unterminated generic argument list")
 
-            args.append(self.parse_generic_argument())
+            args.append(
+                self.parse_generic_argument(
+                    reject_logical_at_top_level=reject_logical_at_top_level
+                )
+            )
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif not self.current_token_is_type_greater_than():
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Expected ',' or '>' after generic argument, "
                     f"got {self.current_token[0]} '{self.current_token[1]}'"
                 )
@@ -3678,11 +3988,11 @@ class Parser:
         self.eat_type_greater_than()
         return args
 
-    def parse_generic_argument(self):
+    def parse_generic_argument(self, reject_logical_at_top_level=False):
         """Parse one angle-bracket type or value argument."""
         start_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         argument = None
 
         try:
@@ -3695,7 +4005,7 @@ class Parser:
                     self.parse_parameter_qualifiers()
                 )
                 if not self.current_token_starts_type():
-                    raise SyntaxError(
+                    raise CrossGLSyntaxError(
                         "Expected a type after generic argument qualifiers"
                     )
                 argument = self.parse_type()
@@ -3728,19 +4038,22 @@ class Parser:
         }:
             return argument
 
-        self.tokens[:] = saved_tokens
+        self.undo_token_edits(token_mark)
         self.pos = start_pos
         self.current_token = saved_token
-        argument = self.parse_expression(stop_at_generic_close=True)
+        argument = self.parse_expression(
+            stop_at_generic_close=True,
+            reject_logical_at_top_level=reject_logical_at_top_level,
+        )
 
         if self.current_token[0] == "EOF":
-            raise SyntaxError("Unterminated generic argument list")
+            raise CrossGLSyntaxError("Unterminated generic argument list")
         if self.pos == start_pos or self.current_token[0] not in {
             "COMMA",
             "GREATER_THAN",
             "BITWISE_SHIFT_RIGHT",
         }:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected ',' or '>' after generic argument, "
                 f"got {self.current_token[0]} '{self.current_token[1]}'"
             )
@@ -3904,18 +4217,11 @@ class Parser:
     def vector_element_type_from_generic(self, type_node):
         """Resolve a vector generic argument to a primitive element type."""
         type_name = self.format_type_argument(type_node)
-        aliases = {
-            "f32": "float",
-            "float": "float",
-            "f64": "double",
-            "double": "double",
-            "i32": "int",
-            "int": "int",
-            "u32": "uint",
-            "uint": "uint",
-            "bool": "bool",
-        }
-        return PrimitiveType(aliases.get(type_name, type_name))
+        # The argument names a CrossGL type: a scalar, a type alias or a generic parameter. ``f32``, ``f64``, ``i32``
+        # and ``u32`` are other spellings of four scalars.
+        if type_name in WGSL_STYLE_SCALAR_SPELLINGS:
+            type_name = WGSL_STYLE_SCALAR_SPELLINGS[type_name]
+        return PrimitiveType(type_name)
 
     def format_type_argument(self, type_node):
         """Format a parsed type node back into a compact type argument string."""
@@ -3930,14 +4236,29 @@ class Parser:
             return f"[{elements}]"
         if hasattr(type_node, "value"):
             value = type_node.value
-            return str(value).lower() if isinstance(value, bool) else str(value)
+            if isinstance(value, bool):
+                return str(value).lower()
+            literal_type = getattr(
+                getattr(type_node, "literal_type", None), "name", None
+            )
+            if literal_type == "uint" and isinstance(value, int):
+                # ``5u`` stays unsigned: a value argument binds a parameter of the literal's type.
+                return f"{value}u"
+            return str(value)
         if isinstance(type_node, ArrayAccessNode):
             array = self.format_type_argument(type_node.array)
             index = self.format_type_argument(type_node.index)
             return f"{array}[{index}]"
         if isinstance(type_node, BinaryOpNode):
-            left = self.format_type_argument(type_node.left)
-            right = self.format_type_argument(type_node.right)
+            # A nested operation keeps its grouping: ``(N + 1) * 2`` is not ``N + 1 * 2``.
+            left, right = (
+                (
+                    f"({self.format_type_argument(operand)})"
+                    if isinstance(operand, (BinaryOpNode, TernaryOpNode))
+                    else self.format_type_argument(operand)
+                )
+                for operand in (type_node.left, type_node.right)
+            )
             return f"{left} {type_node.operator} {right}"
         if isinstance(type_node, FunctionCallNode):
             function = self.format_type_argument(type_node.function)
@@ -3981,7 +4302,35 @@ class Parser:
                     f"{result} = {self.format_type_argument(type_node.default_type)}"
                 )
             return result
+        if isinstance(type_node, MatrixType):
+            element_type = self.format_type_argument(type_node.element_type)
+            dims = (
+                str(type_node.cols)
+                if type_node.rows == type_node.cols
+                else f"{type_node.cols}x{type_node.rows}"
+            )
+            prefix = {"double": "d"}.get(element_type, "")
+            return f"{prefix}mat{dims}"
+        if isinstance(type_node, ArrayType):
+            # The outermost size comes first, as it was written: ``float[2][3]`` is
+            # two arrays of three floats (see ``wrap_array_dimensions``).
+            suffixes = []
+            while isinstance(type_node, ArrayType):
+                size = type_node.size
+                if size is None:
+                    suffixes.append("[]")
+                elif isinstance(size, int):
+                    suffixes.append(f"[{size}]")
+                else:
+                    suffixes.append(f"[{self.format_type_argument(size)}]")
+                type_node = type_node.element_type
+            return self.format_type_argument(type_node) + "".join(suffixes)
         if hasattr(type_node, "name"):
+            if type_node.name is None and isinstance(type_node, ExpressionNode):
+                # An expression with no spelling here (a range, for one) names no type or value argument.
+                raise CrossGLSyntaxError(
+                    f"A {type(type_node).__name__} cannot be a type argument"
+                )
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
@@ -4029,7 +4378,7 @@ class Parser:
                         self.eat("COMMA")
                 self.eat("RPAREN")
 
-            attributes.append(AttributeNode(name=name, arguments=arguments))
+            attributes.append(self.source_attribute(name, arguments))
 
         return attributes
 
@@ -4052,6 +4401,13 @@ class Parser:
         """Parse any statement form supported by CrossGL."""
         if self.current_token_starts_statement_attribute():
             return self.parse_attributed_statement()
+        if self.current_token[0] == "SEMICOLON":
+            # A null statement does nothing (GLSL 4.60 section 6.1, C++ [stmt.expr]/1): it adds no node, and a
+            # braceless body made of one becomes an empty block through parse_substatement.
+            self.eat("SEMICOLON")
+            return []
+        if starts_static_assertion(self):
+            return parse_static_assertion(self)
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -4080,10 +4436,22 @@ class Parser:
             return ContinueNode()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.current_token[0] == "STRUCT" and self.peek()[0] == "IDENTIFIER":
+            # A structure declared in a block; semantics.local_structs hoists it to module scope.
+            return self.parse_local_struct_statement()
+        elif self.current_token_starts_inferred_var_declaration():
+            return self.parse_inferred_var_declaration()
         elif self.is_variable_declaration():
             return self.parse_variable_declaration()
         else:
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                # ``a(), b();``: the comma operator at statement level, the same node as ``(a(), b());``.
+                operands = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    operands.append(self.parse_expression())
+                expr = CommaExpressionNode(operands)
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return ExpressionStatementNode(expr)
@@ -4091,6 +4459,35 @@ class Parser:
                 return ExpressionStatementNode(expr, is_tail_expression=True)
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
+
+    def parse_local_struct_statement(self):
+        """Parse ``struct Name { ... } [declarators];`` in a block, refusing one it cannot read.
+
+        Declarators after the closing brace (``struct S { float x; } a, b[2];``) declare variables of the
+        structure, as in C and GLSL, and follow it in the block.
+        """
+        node = self.parse_struct()
+        if not isinstance(node, StructNode):
+            raise CrossGLSyntaxError(
+                "CrossGL could not parse the structure declared in a block, at "
+                f"{self.current_token[0]} {self.current_token[1]!r}"
+            )
+        node.is_local_declaration = True
+        if self.peek(-1)[0] == "SEMICOLON" or not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.peek()[0] in {"SEMICOLON", "COMMA", "LBRACKET", "EQUALS"}
+        ):
+            return node
+        declarations = []
+        while True:
+            declarations.append(
+                self.parse_variable_declarator(NamedType(node.name), [], [])
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        self.eat("SEMICOLON")
+        return [node, *declarations]
 
     def current_token_starts_statement_attribute(self):
         """Return whether the current token starts statement-level metadata."""
@@ -4112,8 +4509,8 @@ class Parser:
         statement.attributes = [*attributes, *existing]
         return statement
 
-    def parse_let_declaration(self):
-        """Parse Rust-style ``let [mut] name [: type] = expr;`` declarations."""
+    def parse_let_declaration(self, attributes=None):
+        """Parse Rust-style ``[@attr] let [mut] name [: type] = expr;`` declarations."""
         self.eat("LET")
 
         is_mutable = False
@@ -4134,7 +4531,10 @@ class Parser:
         self.eat("SEMICOLON")
 
         var_node = VariableNode(
-            name=name, var_type=var_type, initial_value=initial_value
+            name=name,
+            var_type=var_type,
+            initial_value=initial_value,
+            attributes=list(attributes or []),
         )
         var_node.generic_params = generic_params
 
@@ -4145,11 +4545,46 @@ class Parser:
 
         return self.finish_variable_contract(var_node)
 
+    def current_token_starts_inferred_var_declaration(self):
+        """Return whether ``var name = expr;``, or the refused ``var name;``, starts here."""
+        if self.current_token[0] != "VAR":
+            return False
+        name_value = self.peek()[1]
+        return (
+            isinstance(name_value, str)
+            and name_value.isidentifier()
+            and self.peek(2)[0] in {"EQUALS", "SEMICOLON"}
+        )
+
+    def parse_inferred_var_declaration(self):
+        """Parse ``var name = expr;``: a mutable local typed by its initializer.
+
+        It declares the same variable as ``let mut name = expr;`` (WGSL 7.3 ``var`` declarations and Mojo ``var``
+        locals both take the initializer's type when none is written). ``var name;`` writes neither a type nor an
+        initializer to take one from, so it is refused rather than given a guessed type.
+        """
+        self.eat("VAR")
+        name = self.parse_binding_identifier()
+        if self.current_token[0] != "EQUALS":
+            raise CrossGLSyntaxError(
+                f"'var {name};' has no type and no initializer to infer one from; "
+                f"write 'var {name}: <type>;' or 'var {name} = <value>;'"
+            )
+        self.eat("EQUALS")
+        initial_value = self.parse_expression()
+        self.eat("SEMICOLON")
+
+        var_node = VariableNode(name=name, var_type=None, initial_value=initial_value)
+        var_node.generic_params = []
+        var_node.qualifiers = getattr(var_node, "qualifiers", []) + ["mut"]
+        var_node.is_let_declaration = True
+        return self.finish_variable_contract(var_node)
+
     def parse_binding_identifier(self):
         """Parse an identifier in binding position, including keyword-like names."""
         token_type, token_value = self.current_token
         if not self.current_token_is_binding_identifier():
-            raise SyntaxError(f"Expected binding name, got {token_type}")
+            raise CrossGLSyntaxError(f"Expected binding name, got {token_type}")
 
         self.eat(token_type)
         return token_value
@@ -4174,13 +4609,31 @@ class Parser:
             "SEMICOLON",
         }
 
+    def parse_substatement(self):
+        """Parse the body of a selection or iteration statement as a block.
+
+        A substatement that is not a compound statement behaves as if it were one that contains it (C++
+        [stmt.select.general]/2 and [stmt.iter.general]/2; GLSL 4.60 sections 6.3-6.4 scope it the same way), so a
+        braceless body is kept as a one-statement block and every consumer sees a single shape.
+        """
+        statement = self.parse_statement()
+        if isinstance(statement, BlockNode):
+            return statement
+        statements = list(statement) if isinstance(statement, list) else [statement]
+        return BlockNode(
+            statements,
+            source_location=(
+                getattr(statements[0], "source_location", None) if statements else None
+            ),
+        )
+
     def parse_if_statement(self):
         """Parse an if/else statement chain."""
         self.eat("IF")
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        then_branch = self.parse_statement()
+        then_branch = self.parse_substatement()
 
         else_branch = None
         if self.current_token[0] == "ELSE":
@@ -4188,7 +4641,7 @@ class Parser:
             if self.current_token[0] == "IF":
                 else_branch = self.parse_if_statement()
             else:
-                else_branch = self.parse_statement()
+                else_branch = self.parse_substatement()
 
         return IfNode(
             condition=condition, then_branch=then_branch, else_branch=else_branch
@@ -4209,7 +4662,10 @@ class Parser:
                 if self.is_variable_declaration():
                     init = self.parse_for_loop_variable_declaration()
                 else:
-                    init = ExpressionStatementNode(self.parse_expression())
+                    # ``k = 0, m = 3`` gives the list of its expressions, like an update.
+                    init = self.parse_expression_sequence()
+                    if not isinstance(init, list):
+                        init = ExpressionStatementNode(init)
                 self.eat("SEMICOLON")
             else:
                 self.eat("SEMICOLON")
@@ -4224,17 +4680,28 @@ class Parser:
                 update = self.parse_expression_sequence()
 
             self.eat("RPAREN")
-            body = self.parse_statement()
+            body = self.parse_substatement()
 
             return ForNode(init=init, condition=condition, update=update, body=body)
         finally:
             self.restore_value_type_scope()
 
     def parse_expression_sequence(self):
-        expressions = [self.parse_expression()]
+        """A for-loop update: ``a, b`` and the comma operator ``(a, b)`` both give the list ``[a, b]``.
+
+        The update's value is discarded, so its operands are the same updates run left to right.
+        """
+        expressions = []
+        pending = [self.parse_expression()]
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            expressions.append(self.parse_expression())
+            pending.append(self.parse_expression())
+        while pending:
+            expr = pending.pop(0)
+            if isinstance(expr, CommaExpressionNode):
+                pending[:0] = list(expr.expressions)
+            else:
+                expressions.append(expr)
         return expressions[0] if len(expressions) == 1 else expressions
 
     def parse_for_in_statement_after_for(self):
@@ -4257,7 +4724,7 @@ class Parser:
 
         self.enter_value_type_scope({pattern: binding_type})
         try:
-            body = self.parse_statement()
+            body = self.parse_substatement()
         finally:
             self.restore_value_type_scope()
 
@@ -4274,15 +4741,20 @@ class Parser:
         if (
             self.current_token[0] == "VAR"
             and self.peek()[0] != "LESS_THAN"
-            and self.peek(2)[0] == "COLON"
+            and self.peek(2)[0] in {"COLON", "EQUALS"}
         ):
             self.eat("VAR")
             name = self.parse_binding_identifier()
-            self.eat("COLON")
-            var_type = self.parse_type()
-            var_type = self.parse_array_suffixes(var_type)
+            var_type = None
+            sizes = []
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                var_type = self.parse_type()
+                sizes = self.parse_array_suffix_sizes()
             attributes = self.parse_post_declaration_attributes()
-            var_type = self.parse_array_suffixes(var_type)
+            if var_type is not None:
+                sizes += self.parse_array_suffix_sizes()
+                var_type = self.wrap_array_dimensions(var_type, sizes)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -4321,14 +4793,14 @@ class Parser:
         """Parse a while loop statement."""
         self.eat("WHILE")
         condition = self.parse_expression()
-        body = self.parse_statement()
+        body = self.parse_substatement()
 
         return WhileNode(condition=condition, body=body)
 
     def parse_do_while_statement(self):
         """Parse a do-while loop statement."""
         self.eat("DO")
-        body = self.parse_statement()
+        body = self.parse_substatement()
         self.eat("WHILE")
         condition = self.parse_expression()
         self.eat("SEMICOLON")
@@ -4338,7 +4810,7 @@ class Parser:
     def parse_loop_statement(self):
         """Parse an unconditional loop statement."""
         self.eat("LOOP")
-        body = self.parse_statement()
+        body = self.parse_substatement()
 
         return LoopNode(body=body)
 
@@ -4520,7 +4992,7 @@ class Parser:
         value = None
         if self.current_token[0] != "SEMICOLON":
             value = self.parse_expression()
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 value,
                 self.current_function_return_type,
                 "function return type",
@@ -4529,25 +5001,39 @@ class Parser:
         self.eat("SEMICOLON")
         return ReturnNode(value=value)
 
-    def parse_expression(self, stop_at_generic_close=False):
+    def parse_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse an expression using the highest-precedence entry point."""
-        return self.parse_assignment_expression(stop_at_generic_close)
+        return self.parse_assignment_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
-    def parse_range_expression(self, stop_at_generic_close=False):
+    def parse_range_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse range and inclusive-range expressions."""
-        left = self.parse_ternary_expression(stop_at_generic_close)
+        left = self.parse_ternary_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             inclusive = self.current_token[0] == "RANGE_INCLUSIVE"
             self.eat(self.current_token[0])
-            right = self.parse_ternary_expression(stop_at_generic_close)
+            right = self.parse_ternary_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             return RangeNode(left, right, inclusive=inclusive)
 
         return left
 
-    def parse_assignment_expression(self, stop_at_generic_close=False):
+    def parse_assignment_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse assignment and compound-assignment expressions."""
-        left = self.parse_range_expression(stop_at_generic_close)
+        left = self.parse_range_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] in [
             "EQUALS",
@@ -4564,9 +5050,11 @@ class Parser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_assignment_expression(stop_at_generic_close)
+            right = self.parse_assignment_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             if op == "=":
-                self.apply_cooperative_matrix_result_constraint(
+                self.constrain_cooperative_matrix_result(
                     right,
                     self.cooperative_matrix_expression_type(left),
                     "assignment target",
@@ -4575,36 +5063,60 @@ class Parser:
 
         return left
 
-    def parse_ternary_expression(self, stop_at_generic_close=False):
+    def parse_ternary_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse a ternary conditional expression."""
-        condition = self.parse_logical_or_expression(stop_at_generic_close)
+        condition = self.parse_logical_or_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
-            true_expr = self.parse_expression(stop_at_generic_close)
+            true_expr = self.parse_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             self.eat("COLON")
-            false_expr = self.parse_ternary_expression(stop_at_generic_close)
+            false_expr = self.parse_ternary_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             return TernaryOpNode(condition, true_expr, false_expr)
 
         return condition
 
-    def parse_logical_or_expression(self, stop_at_generic_close=False):
+    def parse_logical_or_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse logical OR expressions."""
-        left = self.parse_logical_and_expression(stop_at_generic_close)
+        left = self.parse_logical_and_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         while self.current_token[0] == "LOGICAL_OR":
+            if reject_logical_at_top_level:
+                raise CrossGLSyntaxError(
+                    "Top-level '||' is not allowed in a generic argument list in expression context"
+                )
             op = self.current_token[1]
             self.eat("LOGICAL_OR")
-            right = self.parse_logical_and_expression(stop_at_generic_close)
+            right = self.parse_logical_and_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_logical_and_expression(self, stop_at_generic_close=False):
+    def parse_logical_and_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse logical AND expressions."""
         left = self.parse_bitwise_or_expression(stop_at_generic_close)
 
         while self.current_token[0] == "LOGICAL_AND":
+            if reject_logical_at_top_level:
+                raise CrossGLSyntaxError(
+                    "Top-level '&&' is not allowed in a generic argument list in expression context"
+                )
             op = self.current_token[1]
             self.eat("LOGICAL_AND")
             right = self.parse_bitwise_or_expression(stop_at_generic_close)
@@ -4783,6 +5295,23 @@ class Parser:
 
         return self.parse_postfix_expression()
 
+    # Keywords that continue an expression (``(a) as T``, ``x in r``) rather
+    # than start an operand.
+    EXPRESSION_CONTINUATION_KEYWORDS = frozenset({"AS", "IN", "WHERE", "MATCH"})
+
+    def current_token_is_keyword_spelled_operand(self):
+        """Whether the current keyword token is a name used as a cast operand.
+
+        Source languages without CrossGL's keywords use names such as ``from``,
+        which the expression parser reads as identifiers: ``(uint8)from``.
+        """
+        token_type = self.current_token[0]
+        return (
+            token_type != "IDENTIFIER"
+            and token_type not in self.EXPRESSION_CONTINUATION_KEYWORDS
+            and self.current_token_is_binding_identifier()
+        )
+
     def try_parse_c_style_cast(self, stop_at_generic_close=False):
         """Parse a C-style cast ``(type)operand`` into a constructor call.
 
@@ -4806,10 +5335,10 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         def restore():
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -4822,7 +5351,7 @@ class Parser:
             ):
                 if self.current_token[0] == "CONST":
                     if is_const:
-                        raise SyntaxError(
+                        raise CrossGLSyntaxError(
                             "Duplicate const qualifier in C-style cast target"
                         )
                     is_const = True
@@ -4863,12 +5392,12 @@ class Parser:
 
         if address_spaces or is_const:
             if not isinstance(target_type, PointerType):
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Qualified C-style cast target must be a pointer type"
                 )
             unique_address_spaces = set(address_spaces)
             if len(unique_address_spaces) > 1:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Conflicting address spaces in C-style cast target: "
                     + ", ".join(address_spaces)
                 )
@@ -4888,13 +5417,14 @@ class Parser:
         if (
             self.current_token[0] not in allowed_operand_starts
             and not self.is_type_token()
+            and not self.current_token_is_keyword_spelled_operand()
         ):
             if not unambiguous_target:
                 restore()
                 return None
 
             token_type, token_value = self.current_token
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected expression after C-style cast, "
                 f"got {token_type} {token_value!r}"
             )
@@ -4933,6 +5463,16 @@ class Parser:
         """Return whether ``token`` is a resource address-space qualifier."""
         return str(token[1]).lower() in RESOURCE_ADDRESS_SPACE_NAMES
 
+    def current_token_is_tuple_field_number(self):
+        """Return whether the current token is ``.N``, a float token that follows an operand as a tuple field."""
+        token_type, token_value = self.current_token
+        if token_type != "FLOAT_NUMBER":
+            return False
+        digits = str(token_value)[1:]
+        return (
+            str(token_value).startswith(".") and digits.isascii() and digits.isdigit()
+        )
+
     def parse_postfix_expression(self):
         """Parse member, call, index, and postfix unary expressions."""
         left = self.parse_primary_expression()
@@ -4941,6 +5481,11 @@ class Parser:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 member = self.parse_binding_identifier()
+                left = MemberAccessNode(left, member)
+            elif self.current_token_is_tuple_field_number():
+                # ``t.1`` lexes as ``t`` and the float ``.1``; after an operand it can only be tuple field 1.
+                member = str(self.current_token[1])[1:]
+                self.eat("FLOAT_NUMBER")
                 left = MemberAccessNode(left, member)
             elif self.is_arrow_token():
                 self.eat_arrow()
@@ -4959,6 +5504,7 @@ class Parser:
             elif (
                 self.current_token[0] == "LBRACKET"
                 and isinstance(left, (IdentifierNode, MemberAccessNode))
+                and not self.brackets_subscript_a_declared_value(left)
                 and self.square_brackets_form_expression_type_arguments()
             ):
                 generic_args = self.parse_square_expression_generic_arguments()
@@ -4981,7 +5527,9 @@ class Parser:
                 and isinstance(left, (MemberAccessNode, PointerAccessNode))
                 and self.generic_suffix_is_call_suffix()
             ):
-                generic_args = self.parse_generic_arguments()
+                generic_args = self.parse_generic_arguments(
+                    reject_logical_at_top_level=True
+                )
                 self.eat("LPAREN")
                 arguments = self.parse_call_arguments()
                 self.eat("RPAREN")
@@ -4994,9 +5542,27 @@ class Parser:
                     or self.generic_suffix_is_expression_name_suffix()
                 )
             ):
-                generic_args = self.parse_generic_arguments()
+                generic_args = self.parse_generic_arguments(
+                    reject_logical_at_top_level=True
+                )
+                if (
+                    left.name.rsplit("::", 1)[-1] == "CooperativeMatrix"
+                    and self.current_token[0] == "LPAREN"
+                ):
+                    left = self.parse_cooperative_matrix_constructor(generic_args)
+                    continue
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
-                left = IdentifierNode(f"{left.name}<{args}>")
+                spelled_name = f"{left.name}<{args}>"
+                if (
+                    self.current_token[0] == "LBRACE"
+                    and not getattr(self, "suppress_braced_constructor", False)
+                    and self.is_struct_constructor_brace()
+                ):
+                    left = self.parse_generic_braced_constructor(
+                        NamedType(left.name, generic_args), spelled_name
+                    )
+                    continue
+                left = IdentifierNode(spelled_name)
             elif self.current_token[0] == "LPAREN":
                 if isinstance(left, IdentifierNode) and left.name == "lambda":
                     arguments = self.parse_lambda_call_arguments()
@@ -5007,8 +5573,11 @@ class Parser:
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
+                    elif left.name in GLSL_SUBGROUP_FUNCTIONS:
+                        # CrossGL also accepts the GL_KHR_shader_subgroup spelling of a wave operation.
+                        left = WaveOpNode(GLSL_SUBGROUP_FUNCTIONS[left.name], arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
-                        left = self.infer_cooperative_matrix_operation_or_preserve(
+                        left = self.infer_cooperative_matrix_operation(
                             CooperativeMatrixOpNode(
                                 COOPERATIVE_MATRIX_INTRINSICS[left.name],
                                 arguments,
@@ -5051,7 +5620,7 @@ class Parser:
         arguments = []
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated function call argument list")
+                raise CrossGLSyntaxError("Unterminated function call argument list")
 
             arguments.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
@@ -5059,7 +5628,7 @@ class Parser:
                 continue
             if self.current_token[0] != "RPAREN":
                 token_type, token_value = self.current_token
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Expected ',' or ')' after function argument, "
                     f"got {token_type} {token_value!r}"
                 )
@@ -5102,6 +5671,49 @@ class Parser:
 
         self.eat("RBRACKET")
         return args
+
+    def brackets_subscript_a_declared_value(self, left):
+        """Whether ``left[...]`` indexes a declared variable rather than specializing a name.
+
+        ``t[j = k + 1]`` and ``t[i, j]`` look like specialization arguments (``name = value``, a comma) to
+        :meth:`square_brackets_form_expression_type_arguments`, but a declared variable cannot be specialized:
+        its brackets are a subscript whose index is an assignment or a comma expression. A call after the
+        brackets keeps the specialization reading.
+        """
+        root = left
+        while isinstance(root, MemberAccessNode):
+            root = root.object
+        if not isinstance(root, IdentifierNode):
+            return False
+        name = root.name
+        if (
+            name in self.declared_type_names
+            or name in self.active_generic_parameter_names
+            or name in self.parameterized_value_names
+        ):
+            return False
+        if not any(name in scope for scope in self.value_type_scopes):
+            return False
+        return self.token_after_matching_bracket() != "LPAREN"
+
+    def token_after_matching_bracket(self):
+        """Type of the token after the ``]`` that closes the current ``[``."""
+        depth = 0
+        index = self.pos
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return (
+                        self.tokens[index + 1][0]
+                        if index + 1 < len(self.tokens)
+                        else "EOF"
+                    )
+            index += 1
+        return "EOF"
 
     def square_brackets_form_expression_type_arguments(self):
         """Return whether expression ``[...]`` is a specialization suffix."""
@@ -5172,9 +5784,15 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         try:
-            self.parse_generic_arguments()
+            generic_args = self.parse_generic_arguments(
+                reject_logical_at_top_level=True
+            )
+            if self.current_token[0] == "LBRACE":
+                # ``vec<T, 2>{x, y}``: a braced constructor of a generic type, as MSL and HLSL write one. A
+                # relational chain is never followed by ``{``, but a single symbolic argument must name a type.
+                return self.generic_member_arguments_are_unambiguous(generic_args)
             return self.current_token[0] in {
                 "COMMA",
                 "DOT",
@@ -5188,7 +5806,7 @@ class Parser:
         except SyntaxError:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -5199,16 +5817,18 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         try:
-            generic_args = self.parse_generic_arguments()
+            generic_args = self.parse_generic_arguments(
+                reject_logical_at_top_level=True
+            )
             return self.current_token[0] == "LPAREN" and (
                 self.generic_member_arguments_are_unambiguous(generic_args)
             )
         except SyntaxError:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -5258,9 +5878,28 @@ class Parser:
             break
 
         self.eat("RBRACE")
-        node = ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        constructor_type = (
+            NamedType(type_name) if isinstance(type_name, str) else type_name
+        )
+        node = ConstructorNode(constructor_type, arguments, named_arguments)
         node.is_braced_constructor = True
         return node
+
+    def parse_generic_braced_constructor(self, generic_type, spelled_name):
+        """Parse ``Type<args>{...}``, the braced constructor of a generic type, after its type arguments.
+
+        A vector's braced list initializes its components in order, as its constructor does (MSL section 2.2.3), so
+        ``vec<T, 2>{x, y}`` reads as the call ``vec<T, 2>(x, y)``; any other type's is an aggregate constructor
+        that names the type as a declaration does.
+        """
+        constructor = self.parse_struct_constructor_expression(generic_type)
+        if (
+            generic_type.name in _GENERIC_VECTOR_TYPE_NAMES
+            and constructor.arguments
+            and not constructor.named_arguments
+        ):
+            return FunctionCallNode(IdentifierNode(spelled_name), constructor.arguments)
+        return constructor
 
     def is_constructor_shorthand_field(self):
         """Return whether the current token is a braced-constructor field shorthand."""
@@ -5473,14 +6112,19 @@ class Parser:
                 return ArrayLiteralNode([])
             expr = self.parse_expression()
             if self.current_token[0] == "COMMA":
+                # ``(a, b)`` is the comma operator; a trailing comma, ``(a, b,)``, keeps the tuple form.
                 elements = [expr]
+                trailing_comma = False
                 while self.current_token[0] == "COMMA":
                     self.eat("COMMA")
                     if self.current_token[0] == "RPAREN":
+                        trailing_comma = True
                         break
                     elements.append(self.parse_expression())
                 self.eat("RPAREN")
-                return ArrayLiteralNode(elements)
+                if trailing_comma:
+                    return ArrayLiteralNode(elements)
+                return CommaExpressionNode(elements)
             self.eat("RPAREN")
             return expr
 
@@ -5542,7 +6186,11 @@ class Parser:
             return self.parse_array_literal()
 
         else:
-            name = str(self.current_token[1]) if self.current_token[1] else "unknown"
+            name = str(self.current_token[1]) if self.current_token[1] else ""
+            if not name.isidentifier():
+                # A keyword spelled like a name (``vec4`` in ``vec4(x)``) is read as one; punctuation and the end of
+                # input start no expression, and turning them into identifiers would emit them as values.
+                self.reject_unexpected_token("an expression")
             self.eat(self.current_token[0])
             return IdentifierNode(name)
 
@@ -5632,11 +6280,14 @@ class Parser:
         body = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"{stage_type} stage block")
             if self.is_function_declaration():
                 func = self.parse_function()
                 body.append(func)
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
             else:
-                self.skip_unknown_token()
+                self.reject_unexpected_token(f"a {stage_type} stage block")
 
         self.eat("RBRACE")
 
@@ -5666,10 +6317,22 @@ class Parser:
         members = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"cbuffer {name!r}")
             member = self.parse_struct_member()
             self.append_parsed_nodes(members, member)
 
         self.eat("RBRACE")
+
+        if self.current_token_is_declaration_binding_identifier() and self.peek()[
+            0
+        ] in (
+            "SEMICOLON",
+            "LBRACKET",
+            "AT",
+            "ATTRIBUTE",
+        ):
+            # Without ';' or '[' next, the name is the type of the next declaration.
+            return self.parse_constant_block_instance(name, members, attributes)
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -5677,6 +6340,49 @@ class Parser:
         node = StructNode(name=name, members=members, attributes=attributes)
         node.is_cbuffer = True
         return node
+
+    def parse_constant_block_instance(self, block_name, members, attributes):
+        """Desugar ``cbuffer Block { ... } instance[N];`` into ``struct Block`` and ``ConstantBuffer<Block>``.
+
+        An instance name scopes the block's members, which are then read as ``instance.member`` (GLSL's named
+        uniform blocks and arrays of them). The block becomes a plain struct and the instance a uniform
+        ``ConstantBuffer`` of it that carries the block's attributes, the spelling every generator lowers.
+        """
+        instance_name = self.parse_binding_identifier()
+        sizes = []
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            sizes.append(size)
+        attributes.extend(self.parse_post_declaration_attributes())
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name=block_name, members=members)
+        variable_node = VariableNode(
+            name=instance_name,
+            var_type=self.wrap_array_dimensions(
+                NamedType("ConstantBuffer", [NamedType(block_name)]), sizes
+            ),
+            qualifiers=["uniform"],
+            attributes=attributes,
+        )
+        return [struct_node, variable_node]
+
+    def append_constant_block(self, parsed, cbuffers, structs, variables):
+        """Route a parsed constant block, or the struct and variable of an instance-named one."""
+        if isinstance(parsed, list):
+            struct_node, variable_node = parsed
+            structs.append(struct_node)
+            variables.append(variable_node)
+        elif parsed:
+            cbuffers.append(parsed)
 
     # Helper methods
     def is_cbuffer_declaration(self):
@@ -5754,7 +6460,7 @@ class Parser:
         """Return whether the current token sequence looks like a function."""
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         try:
             while (
@@ -5768,6 +6474,7 @@ class Parser:
                     "ATTRIBUTE",
                 }
                 or self.current_token_starts_square_attribute()
+                or self.current_token_is_function_precise_qualifier()
             ):
                 if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                     self.parse_attributes()
@@ -5810,11 +6517,26 @@ class Parser:
         except:
             pass
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
         return False
+
+    def current_token_is_function_precise_qualifier(self):
+        """Return whether ``precise`` qualifies the result of a declared function.
+
+        ``precise float f(...)`` requires the computation of the function's
+        results without value-changing optimizations such as contraction, as
+        ``precise`` does for a variable. The qualifier is kept on the function
+        instead of being skipped as an unknown token.
+        """
+        token_type, token_value = self.current_token
+        return (
+            token_type == "IDENTIFIER"
+            and token_value == "precise"
+            and self.peek()[0] not in {"LPAREN", "EQUALS", "SEMICOLON", "COMMA"}
+        )
 
     def is_type_token(self):
         """Return whether the current token can start a type expression."""
@@ -5962,6 +6684,10 @@ class Parser:
                 depth = 1
                 self.eat("LESS_THAN")
                 while depth > 0 and self.current_token[0] != "EOF":
+                    if self.current_token[0] == "LPAREN":
+                        # ``Loc<N, (N > 2)>``: a parenthesized value argument's ``<`` and ``>`` are comparisons.
+                        self.parse_balanced_parenthesized_token_text()
+                        continue
                     if self.current_token[0] == "LESS_THAN":
                         depth += 1
                         self.eat("LESS_THAN")
@@ -6014,10 +6740,35 @@ class Parser:
 
         return self.format_raw_lambda_tokens(payload_tokens)
 
-    def skip_unknown_token(self):
-        """Consume one token when recovering from unsupported syntax."""
-        if self.current_token[0] != "EOF":
-            self.eat(self.current_token[0])
+    def reject_unexpected_token(self, construct):
+        """Raise ``SyntaxError`` for a token that starts nothing ``construct`` can hold.
+
+        Skipping the token would silently drop the declaration or statement it belongs to.
+        """
+        token_type, token_value = self.current_token
+        if token_type == "EOF":
+            raise CrossGLSyntaxError(f"Unexpected end of input in {construct}")
+        raise CrossGLSyntaxError(
+            f"Unexpected {token_type} {token_value!r} in {construct}"
+        )
+
+    def parse_scope_static_assertion(self):
+        """Parse a ``static_assert`` outside a block into ``self.static_assertions``; False if none starts here."""
+        if not starts_static_assertion(self):
+            return False
+        self.static_assertions.append(parse_static_assertion(self))
+        return True
+
+    def reject_end_of_input(self, construct):
+        """Raise ``SyntaxError`` if the input ends inside ``construct`` before its closing brace.
+
+        A brace-delimited loop whose member parser returns ``None`` at ``EOF`` would otherwise spin forever on
+        truncated input.
+        """
+        if self.current_token[0] == "EOF":
+            raise CrossGLSyntaxError(
+                f"Unterminated {construct}: expected '}}' before end of input"
+            )
 
     def skip_balanced_declaration(self):
         """Recover past one semicolon or braced declaration without leaking tokens."""
@@ -6099,8 +6850,11 @@ class Parser:
         )
 
     def parse_global(self):
-        """Parse one top-level declaration or recover past unsupported input."""
+        """Parse one top-level declaration; input that starts none raises ``SyntaxError``."""
         if self.current_token[0] == "EOF":
+            return None
+
+        if self.parse_scope_static_assertion():
             return None
 
         if self.current_token[0] == "PREPROCESSOR":
@@ -6152,8 +6906,7 @@ class Parser:
                 return self.parse_cbuffer_as_struct(attributes)
             if self.is_variable_declaration():
                 return self.parse_variable_declaration(attributes)
-            self.skip_unknown_token()
-            return None
+            self.reject_unexpected_token("a layout-qualified declaration")
 
         if self.current_token_starts_shader_stage_block():
             return self.parse_shader_stage_block()
@@ -6167,48 +6920,41 @@ class Parser:
 
         # is_function_declaration can fail on some edge-case type tokens; try anyway.
         if self.is_type_token():
-            try:
-                return self.parse_function()
-            except:
-                self.skip_unknown_token()
-                return None
+            return self.parse_function()
 
-        self.skip_unknown_token()
-        return None
+        if self.current_token[0] == "SEMICOLON":
+            # An empty declaration, which C++ [dcl.pre] and GLSL allow at namespace or global scope.
+            self.eat("SEMICOLON")
+            return None
+        self.reject_unexpected_token("a top-level declaration")
 
     def parse_generic_declaration(self):
-        """Parse legacy generic declarations that wrap structs/enums/functions."""
-        if self.current_token[0] == "EOF":
-            return None
+        """Parse a ``generic<...>`` wrapper around a struct, enum, function or trait.
 
-        start_pos = self.pos
-        start_token = self.current_token
-
-        try:
-            return self.parse_generic_declaration_inner()
-        except SyntaxError:
-            self.pos = start_pos
-            self.current_token = start_token
-            self.skip_balanced_declaration()
-            return None
-
-    def parse_generic_declaration_inner(self):
-        """Parse a generic wrapper after recovery state has been captured."""
+        A malformed wrapper raises ``SyntaxError``; skipping it would drop the declaration from the program.
+        """
         self.eat("IDENTIFIER")
 
         if self.current_token[0] != "LESS_THAN":
-            return None
+            raise CrossGLSyntaxError(
+                f"Expected '<' after 'generic', got {self.current_token[1]!r}"
+            )
 
         generic_params = self.parse_generic_parameters()
 
-        if self.current_token[0] == "EOF":
-            return None
+        self.reject_end_of_input("generic declaration")
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             if self.current_token[0] == "STRUCT":
+                first_assertion = len(self.static_assertions)
                 struct_node = self.parse_struct()
                 if struct_node:
                     struct_node.generic_params = generic_params
+                    mark_template_assertions(
+                        self.static_assertions[first_assertion:],
+                        struct_node.name,
+                        generic_params,
+                    )
                 return struct_node
             if self.current_token[0] == "ENUM":
                 enum_node = self.parse_enum()
@@ -6225,8 +6971,10 @@ class Parser:
                 if trait_node:
                     trait_node.generic_params = generic_params
                 return trait_node
-            self.skip_balanced_declaration()
-            return None
+            raise CrossGLSyntaxError(
+                "Expected a struct, enum, function or trait after the generic parameters, got "
+                f"{self.current_token[1]!r}"
+            )
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
@@ -6237,18 +6985,12 @@ class Parser:
 
         self.eat("TRAIT")
 
-        if self.current_token[0] != "IDENTIFIER":
-            return None
-
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
             generic_params = self.parse_generic_parameters()
-
-        if self.current_token[0] != "LBRACE":
-            return None
 
         self.eat("LBRACE")
 
@@ -6261,13 +7003,11 @@ class Parser:
                     if func:
                         methods.append(func)
                 else:
-                    self.skip_unknown_token()
+                    self.reject_unexpected_token(f"trait {name!r}")
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
-        if self.current_token[0] == "EOF":
-            return None
-
+        self.reject_end_of_input(f"trait {name!r}")
         self.eat("RBRACE")
 
         # Traits are represented as marked structs to avoid a broader AST migration.
@@ -6295,10 +7035,16 @@ class Parser:
                 case = self.parse_default_case()
                 cases.append(case)
             else:
-                self.skip_unknown_token()
+                self.reject_unexpected_token(
+                    "a switch body before its first case label"
+                )
 
         self.eat("RBRACE")
 
+        if cases and not cases[-1].statements:
+            # GLSL ES 3.00 section 6.2 and C++ [stmt.label] (before C++23), which MSL and HLSL follow, need a
+            # statement after the last label. Leaving the switch from there is what that label already does.
+            cases[-1].statements.append(BreakNode())
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):

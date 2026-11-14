@@ -1,5 +1,9 @@
 #version 450
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 0) const uint BUFFER_ELEMENTS = 32;
+#else
+const uint BUFFER_ELEMENTS = 32;
+#endif
 
 layout(std430, binding = 0) buffer Pos {
     uint values[];

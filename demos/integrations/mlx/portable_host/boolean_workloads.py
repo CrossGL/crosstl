@@ -3,6 +3,7 @@
 import json
 
 from demos.integrations.mlx.portable_host.binary_workloads import LAYOUTS, mlx_operand
+from demos.integrations.mlx.portable_host.cast_workloads import contiguous_span
 from demos.integrations.mlx.portable_host.packages import (
     BOOLEAN_CAST_ENTRIES,
     BOOLEAN_COPY_ENTRY,
@@ -165,8 +166,10 @@ def dispatches():
         value = operand(source, layout)
         if not value.size:
             continue
-        if operation == "not" and layout in {"transpose", "broadcast"}:
-            result.append((entry, 5 if layout == "broadcast" else value.size))
+        # Unary entries, casts included, run in place over a contiguous span.
+        span = contiguous_span(value) if operation in {"not", "cast"} else None
+        if span is not None:
+            result.append((entry, span))
             continue
         contiguous = value.flags.c_contiguous
         copy = BOOLEAN_COPY_ENTRY if source == "bool_" else COPY_ENTRY

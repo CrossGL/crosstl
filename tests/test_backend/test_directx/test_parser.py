@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.backend.common_ast import (
     AssignmentNode,
+    BinaryOpNode,
     CastNode,
     FunctionCallNode,
     FunctionNode,
@@ -18,7 +19,9 @@ from crosstl.backend.DirectX.DirectxAst import (
     ForNode,
     IfNode,
     PragmaNode,
+    ScopedBlockNode,
     StructNode,
+    TypeAliasNode,
     VariableNode,
     WhileNode,
 )
@@ -270,6 +273,36 @@ def test_parse_main_struct_inout_parameters_infer_stage_qualifiers():
     assert vertex_main.qualifiers == ["vertex"]
     assert fragment_main.qualifier == "fragment"
     assert fragment_main.qualifiers == ["fragment"]
+
+
+def test_parse_main_returning_stage_struct_infers_stage_from_member_semantics():
+    vertex_ast = parse_code(textwrap.dedent("""
+            struct VSInput { float3 Pos : POSITION0; };
+            struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+            VSOutput main(VSInput input) {
+                VSOutput output = (VSOutput)0;
+                output.Pos = float4(input.Pos, 1.0);
+                return output;
+            }
+            """))
+    fragment_ast = parse_code(textwrap.dedent("""
+            struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+            struct FSOutput { float4 Color : SV_TARGET0; };
+            FSOutput main(VSOutput input) {
+                FSOutput output = (FSOutput)0;
+                output.Color = float4(input.UV, 0.0, 1.0);
+                return output;
+            }
+            """))
+    helper_ast = parse_code(textwrap.dedent("""
+            struct Light { float3 Dir : TEXCOORD0; };
+            Light main(float3 d) { Light l; l.Dir = d; return l; }
+            """))
+
+    assert vertex_ast.functions[0].qualifier == "vertex"
+    assert fragment_ast.functions[0].qualifier == "fragment"
+    # A returned structure without stage-output semantics names no stage.
+    assert helper_ast.functions[0].qualifier is None
 
 
 def test_parse_main_scalar_input_output_struct_keeps_helper_signature():
@@ -955,7 +988,8 @@ def test_parse_global_scope_hlsl_namespace_intrinsic_calls():
     ]
 
     assert "hlsl::saturate" in calls
-    assert "hlsl::lerp" in calls
+    # The parser keeps the global scope qualifier, which namespace resolution reads.
+    assert "::hlsl::lerp" in calls
 
 
 def test_parse_clip_intrinsic_expression_statement():
@@ -1192,9 +1226,12 @@ def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     ast = parse_code(code)
 
     assert ast.typedefs == []
-    assert len(ast.functions[0].body) == 1
-    assert ast.functions[0].body[0].vtype == "half16"
-    assert ast.functions[0].body[0].name == "srcF16"
+    assert len(ast.functions[0].body) == 2
+    alias, variable = ast.functions[0].body
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "half16"
+    assert variable.vtype == "half16"
+    assert variable.name == "srcF16"
 
 
 def test_parse_block_scope_class_declarations_from_dxc_spec():
@@ -3177,10 +3214,14 @@ def test_parse_upstream_bare_scope_block():
     }
     """)
 
-    body_names = [
-        node.name for node in ast.functions[0].body if isinstance(node, VariableNode)
-    ]
-    assert body_names == ["colorSum", "ambient"]
+    body = ast.functions[0].body
+    body_names = [node.name for node in body if isinstance(node, VariableNode)]
+    assert body_names == ["colorSum"]
+    # The bare block keeps its own scope, so 'ambient' is declared inside it only.
+    (block,) = (node for node in body if isinstance(node, ScopedBlockNode))
+    assert [
+        node.name for node in block.statements if isinstance(node, VariableNode)
+    ] == ["ambient"]
 
 
 def test_parse_parenthesized_identifier_after_unary_minus_not_cast():
@@ -3427,7 +3468,18 @@ def test_parse_inline_struct_array_member_in_cbuffer_from_directx_sdk_samples():
     assert light_data.packoffset == "c4"
 
 
-def test_parse_parenthesized_vector_values_from_directx_graphics_samples():
+def _comma_operands(expr):
+    operands = []
+    while isinstance(expr, BinaryOpNode) and expr.op == ",":
+        operands.insert(0, expr.right)
+        expr = expr.left
+    return [expr, *operands]
+
+
+def test_parse_parenthesized_values_from_directx_graphics_samples_as_comma_operator():
+    # ``(1, 0, 0, 1)`` is the comma operator, not a vector: DXC evaluates it to ``1`` and splats that
+    # to ``float4(1, 1, 1, 1)``, and FXC warns X3081, "comma expression used where a vector
+    # constructor may have been intended".
     ast = parse_code("""
     struct MyPayload {
         float4 color;
@@ -3441,10 +3493,10 @@ def test_parse_parenthesized_vector_values_from_directx_graphics_samples():
 
     plus_assign, assign = ast.functions[0].body
 
-    assert isinstance(plus_assign.right, InitializerListNode)
-    assert plus_assign.right.elements == [0.1, 0.1, 0.1, 1]
-    assert isinstance(assign.right, InitializerListNode)
-    assert assign.right.elements == [1, 0, 0, 1]
+    assert not isinstance(plus_assign.right, InitializerListNode)
+    assert _comma_operands(plus_assign.right) == [0.1, 0.1, 0.1, 1]
+    assert not isinstance(assign.right, InitializerListNode)
+    assert _comma_operands(assign.right) == [1, 0, 0, 1]
 
 
 def test_parse_local_struct_declaration_from_directx_graphics_samples():

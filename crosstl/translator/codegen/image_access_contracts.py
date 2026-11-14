@@ -1,6 +1,7 @@
 """Shared image access analysis and metadata helpers for code generators."""
 
 from ..ast import FunctionCallNode
+from ..refusals import TargetRefusal
 from ..validation import (
     floating_coordinate_dimension,
     integer_coordinate_dimension,
@@ -12,6 +13,10 @@ from ..validation import (
     texture_intrinsic_min_argument_count,
 )
 from .lowering_refusals import refuse_unsupported
+from .texture_lod_clamp import (
+    TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES,
+)
 
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
@@ -75,15 +80,32 @@ SUPPORTED_IMAGE_FORMATS = frozenset(
         "rgba32f",
         "rgba32i",
         "rgba32ui",
+        "rgb10_a2",
+        "rgb10_a2ui",
+        "r11f_g11f_b10f",
     }
 )
 
+# Packed formats whose names do not start with their channel set
+# (GLSL 4.60 section 4.4.7, SPIR-V Image Format Rgb10A2, Rgb10a2ui, R11fG11fB10f).
+PACKED_IMAGE_FORMAT_CHANNEL_COUNTS = {
+    "rgb10_a2": 4,
+    "rgb10_a2ui": 4,
+    "r11f_g11f_b10f": 3,
+}
+
+
+def _image_format_channel_count(image_format):
+    packed = PACKED_IMAGE_FORMAT_CHANNEL_COUNTS.get(image_format)
+    if packed is not None:
+        return packed
+    if image_format.startswith("rgba"):
+        return 4
+    return 2 if image_format.startswith("rg") else 1
+
+
 IMAGE_FORMAT_CHANNEL_COUNTS = {
-    image_format: (
-        4
-        if image_format.startswith("rgba")
-        else 2 if image_format.startswith("rg") else 1
-    )
+    image_format: _image_format_channel_count(image_format)
     for image_format in SUPPORTED_IMAGE_FORMATS
 }
 
@@ -362,7 +384,7 @@ def validate_texture_operation_arity(
         has_explicit_sampler,
     )
     if min_count is not None and argument_count < min_count:
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' requires at least "
             f"{min_count} argument(s), got {argument_count}"
         )
@@ -372,7 +394,7 @@ def validate_texture_operation_arity(
     )
     if allowed_counts is not None and argument_count not in allowed_counts:
         counts = ", ".join(str(count) for count in allowed_counts)
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' accepts "
             f"{counts} argument(s), got {argument_count}"
         )
@@ -382,7 +404,7 @@ def validate_texture_operation_arity(
     )
     if max_count is None or argument_count <= max_count:
         return
-    raise ValueError(
+    raise TargetRefusal(
         f"{backend_name} texture operation '{operation}' accepts at most "
         f"{max_count} argument(s), got {argument_count}"
     )
@@ -495,18 +517,20 @@ def texture_resource_dimension_descriptor(
         sampling, "gather_offset", 2
     )
     compare_offset_dimension = _offset_dimension_from_capability(
-        sampling, "compare_offset", 2
+        sampling,
+        "compare_offset",
+        offset_dimension if offset_dimension is not None else 2,
     )
     compare_lod_offset_dimension = _offset_dimension_from_capability(
         sampling,
         "compare_lod_offset",
-        2,
+        offset_dimension if offset_dimension is not None else 2,
         fallback_dimension=compare_offset_dimension,
     )
     compare_grad_offset_dimension = _offset_dimension_from_capability(
         sampling,
         "compare_grad_offset",
-        2,
+        offset_dimension if offset_dimension is not None else 2,
         fallback_dimension=compare_offset_dimension,
     )
     gather_compare_offset_dimension = _offset_dimension_from_capability(
@@ -658,7 +682,7 @@ def resolve_image_atomic_component_kind(
             func_name, image_format
         )
         if component_kind is None:
-            raise ValueError(
+            raise TargetRefusal(
                 image_atomic_format_error(backend_name, func_name, image_format)
             )
         return component_kind
@@ -666,7 +690,7 @@ def resolve_image_atomic_component_kind(
     component_kind = image_atomic_storage_component_kind(func_name, component_type)
     if component_kind is not None:
         return component_kind
-    raise ValueError(
+    raise TargetRefusal(
         image_atomic_resource_type_error(backend_name, func_name, resource_type)
     )
 
@@ -1217,6 +1241,8 @@ TEXTURE_COMPARE_INTRINSIC_NAMES = (
     | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+    # Minimum-LOD clamped compares (texture_lod_clamp.py); emitters lower them before their compare dispatch.
+    | TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
@@ -1255,6 +1281,8 @@ TEXTURE_SAMPLE_INTRINSIC_NAMES = (
     TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+    # Minimum-LOD clamped samples (texture_lod_clamp.py); emitters lower them before their sample dispatch.
+    | TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
@@ -1504,6 +1532,34 @@ def is_projected_texture_grad_offset_operation(operation):
 def is_projected_texture_compare_operation(operation):
     """Return whether a texture compare intrinsic uses projected coordinates."""
     return operation in PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def projected_texture_compare_reference(compare, divisor):
+    """The depth reference a projected compare tests: ``compare / q``.
+
+    ``textureCompareProj*`` takes the raw reference and divides it by the coordinate's projection component ``q``,
+    as it divides the coordinate. SPIR-V ``OpImageSampleProjDref*`` (Vulkan, "Projection Operation") and GLSL
+    ``textureProj`` on shadow samplers define it so; targets without projective compares sample the projected
+    coordinate against this quotient.
+    """
+    if not (
+        all(char.isalnum() or char in "_.[]" for char in compare)
+        or _is_parenthesized(compare)
+    ):
+        compare = f"({compare})"
+    return f"{compare} / {divisor}"
+
+
+def _is_parenthesized(expression):
+    """Whether one pair of parentheses encloses the whole expression."""
+    if not (expression.startswith("(") and expression.endswith(")")):
+        return False
+    depth = 0
+    for index, char in enumerate(expression):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0 and index < len(expression) - 1:
+            return False
+    return True
 
 
 def is_texture_compare_operation(operation):
@@ -2021,6 +2077,7 @@ def texture_query_lod_coordinate_swizzle(backend_name, texture_type):
     if backend_name == "GLSL":
         if texture_type in {
             "sampler1DArray",
+            "sampler1DArrayShadow",
             "isampler1DArray",
             "usampler1DArray",
         }:
@@ -2205,11 +2262,19 @@ def component_kind_mismatch(expected_kind, actual_kind):
     return actual_kind
 
 
+# Implicit conversions GLSL 4.60 section 4.1.10 applies to a loaded value: (to, from).
+IMPLICIT_LOAD_CONVERSIONS = frozenset(
+    {("float", "int"), ("float", "uint"), ("uint", "int")}
+)
+
+
 def image_load_result_kind_mismatch(expected_kind, component_kind):
     """Return expected result kind when an image load result kind conflicts."""
     if expected_kind is None or component_kind not in NUMERIC_COMPONENT_KINDS:
         return None
     if expected_kind == component_kind:
+        return None
+    if (expected_kind, component_kind) in IMPLICIT_LOAD_CONVERSIONS:
         return None
     return expected_kind
 
@@ -2573,14 +2638,14 @@ def image_multisample_sample_argument_index(
     if func_name == "imageLoad":
         if is_multisample_image:
             if argument_count != 3:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image operation 'imageLoad' "
                     "requires image, coordinate, and sample index arguments, "
                     f"got {argument_count}"
                 )
             return 2
         if argument_count > 2:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation 'imageLoad' accepts at most "
                 f"2 argument(s), got {argument_count}"
             )
@@ -2589,14 +2654,14 @@ def image_multisample_sample_argument_index(
     if func_name == "imageStore":
         if is_multisample_image:
             if argument_count != 4:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image operation 'imageStore' "
                     "requires image, coordinate, sample index, and value "
                     f"arguments, got {argument_count}"
                 )
             return 2
         if argument_count > 3:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation 'imageStore' accepts at most "
                 f"3 argument(s), got {argument_count}"
             )
@@ -2605,14 +2670,14 @@ def image_multisample_sample_argument_index(
     if func_name in IMAGE_ATOMIC_VALUE_INTRINSIC_NAMES:
         if is_multisample_image:
             if argument_count != 4:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image atomic operation "
                     f"'{func_name}' requires image, coordinate, sample index, "
                     f"and value arguments, got {argument_count}"
                 )
             return 2
         if argument_count > 3:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation '{func_name}' accepts at "
                 f"most 3 argument(s), got {argument_count}"
             )
@@ -2620,14 +2685,14 @@ def image_multisample_sample_argument_index(
 
     if is_multisample_image:
         if argument_count != 5:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} multisample image atomic operation "
                 "'imageAtomicCompSwap' requires image, coordinate, sample "
                 f"index, compare, and value arguments, got {argument_count}"
             )
         return 2
     if argument_count > 4:
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation 'imageAtomicCompSwap' accepts at "
             f"most 4 argument(s), got {argument_count}"
         )

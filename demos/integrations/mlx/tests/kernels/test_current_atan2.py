@@ -18,11 +18,11 @@ from demos.integrations.mlx.tests.kernels.test_current_extrema import (
     _payload,
     _request,
 )
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_division import _bfloat
 from tests.test_translator.test_metal_precise_atan2 import _oracle, _profile_word
 from tests.test_translator.test_metal_precise_trig import _float
-from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_ATAN2"
 PROFILE = "flush-subnormals"
@@ -245,7 +245,7 @@ def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path, target):
 def test_ci_requires_pinned_atan2_once_per_native_target():
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned arctangent"
     )
     selector = "demos/integrations/mlx/tests/kernels/test_current_atan2.py::test_current_atan2_native_parity"

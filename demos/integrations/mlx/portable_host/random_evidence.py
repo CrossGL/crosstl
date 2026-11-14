@@ -12,6 +12,7 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
 from demos.integrations.mlx.portable_host.random_layout import (
     MAX_NATIVE_BYTES,
     MAX_WORKGROUP_COUNT,
+    RandomOutputLayout,
 )
 from demos.integrations.mlx.portable_host.random_workloads import words
 
@@ -162,11 +163,18 @@ def audit_event(np, event):
         and event["dispatchVersion"] == 3,
         "Random host byte readback differs",
     )
+    launch = RandomOutputLayout(count, per_key).execution
     grid = [count, (word_count + 1) // 2, 1]
     require(
-        all(1 <= size <= MAX_WORKGROUP_COUNT for size in grid)
-        and event["workgroupCount"] == request["dispatch"]["workgroupCount"] == grid
-        and event["workgroupSize"] == request["dispatch"]["workgroupSize"] == [1, 1, 1],
+        all(1 <= size <= MAX_WORKGROUP_COUNT for size in launch["workgroupCount"])
+        and [n * w for n, w in zip(launch["workgroupCount"], launch["workgroupSize"])]
+        == grid
+        and event["workgroupCount"]
+        == request["dispatch"]["workgroupCount"]
+        == launch["workgroupCount"]
+        and event["workgroupSize"]
+        == request["dispatch"]["workgroupSize"]
+        == launch["workgroupSize"],
         "Random native launch differs",
     )
     require(

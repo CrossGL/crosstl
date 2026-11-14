@@ -2,10 +2,10 @@
 
 import ctypes
 import hashlib
-import json
 import math
 
 from crosstl.project import build_native_loader_dispatch_request
+from crosstl.project.runtime_values import exact_types_within
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.random_layout import (
     GUARD_COUNT,
@@ -14,8 +14,10 @@ from demos.integrations.mlx.portable_host.random_layout import (
     RandomOutputLayout,
 )
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 GUARD = [91] * GUARD_COUNT
+INT_TYPES = frozenset({int})
 TYPES = {
     "keys": ("uint32", ctypes.c_uint32),
     "out": ("int8", ctypes.c_int8),
@@ -94,10 +96,7 @@ def validate(entry, buffers, byte_count, execution):
     ):
         raise ValueError("Contiguous random entry requires row-contiguous keys")
     word_count = (per_key + 3) // 4
-    if execution != {
-        "workgroupCount": layout.workgroup_count,
-        "workgroupSize": [1, 1, 1],
-    }:
+    if execution != layout.execution:
         raise ValueError("Random launch does not match its output layout")
     output = buffers["out"]
     for name, buffer in buffers.items():
@@ -199,7 +198,7 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
     if (
         not isinstance(readback, list)
         or len(readback) != layout.native_byte_count + len(GUARD)
-        or any(type(value) is not int for value in readback)
+        or not exact_types_within(readback, INT_TYPES)
         or readback[layout.native_byte_count :] != GUARD
     ):
         raise RuntimeError("Native random readback or its guard differs")
@@ -219,7 +218,6 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         "randomGuardValues": readback[layout.native_byte_count :],
         "outputHash": hashlib.sha256(logical).hexdigest(),
     }
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     ctypes.memmove(supplied["out"].data, logical, len(logical))
     host.dispatch_count += 1

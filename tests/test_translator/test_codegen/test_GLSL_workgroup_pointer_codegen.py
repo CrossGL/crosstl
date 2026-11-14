@@ -2090,7 +2090,9 @@ def test_workgroup_pointer_helper_does_not_assume_shadowed_min_semantics():
     assert error.backing_name is not None and error.backing_name.endswith(
         "sharedValues"
     )
-    assert error.reason == "unprovable-view-access"
+    # The helper is analyzed as written: min(candidate, 0) returns candidate + 0, so a lane
+    # index in 0..7 overruns the four shared elements. Builtin min semantics would accept it.
+    assert error.reason == "view-out-of-bounds"
 
 
 _WORKGROUP_CONTROL_FLOW_DIRECT_ACCESS_CASES = (

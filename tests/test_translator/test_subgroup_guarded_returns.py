@@ -170,6 +170,73 @@ def test_narrow_conversions_preserve_guarded_collectives(target, dtype, form):
     assert "subgroup_result" in generated and "WaveActive" not in generated
 
 
+def _narrow_guarded_program(dtype, alias=None):
+    """A binary16 guarded maximum, optionally spelled through a type alias."""
+    spelling = alias or dtype
+    source = _program(
+        f"if (WaveActiveAnyTrue(value != value)) {{ return ({spelling})NAN; }} "
+        "return WaveActiveMax(value);",
+        f"{spelling} value",
+        f"{spelling}(float(invocation))",
+    ).replace("float guarded(", f"{spelling} guarded(")
+    if alias is not None:
+        source = source.replace(
+            "shader Votes {", f"shader Votes {{ typedef {dtype} {alias};", 1
+        )
+    return source
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("dtype", ["float16", "f16"])
+def test_crossgl_binary16_spellings_preserve_guarded_collectives(
+    tmp_path, target, dtype
+):
+    # Metal and GLSL importers spell ``half`` as CrossGL ``float16``.
+    generated = _codegen(target).generate_stage(
+        parse(_narrow_guarded_program(dtype)), "compute"
+    )
+    assert "subgroup_guard" in generated and "subgroup_result" in generated
+    assert "WaveActive" not in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("alias", ["binary16", "float16_t"])
+@pytest.mark.parametrize("dtype", ["float16", "half"])
+def test_type_aliases_of_scalars_preserve_guarded_collectives(
+    tmp_path, target, alias, dtype
+):
+    # ``float16_t`` also exercises an alias that HLSL emission renames because
+    # DXC reads the spelling as a built-in type.
+    generated = _codegen(target).generate_stage(
+        parse(_narrow_guarded_program(dtype, alias)), "compute"
+    )
+    assert "subgroup_guard" in generated and "subgroup_result" in generated
+    assert "WaveActive" not in generated
+    _compile(generated, target, tmp_path)
+
+
+def test_type_aliases_of_non_scalars_are_not_speculated():
+    generator = _codegen("directx")
+    source = _program(
+        "if (WaveActiveAnyTrue(value != value)) { return NAN; } return WaveActiveMin(value);",
+        "Pair value",
+        "Pair(float(invocation), 0.0)",
+    ).replace(
+        "shader Votes {",
+        "shader Votes { struct Pair { float x; float y; }; typedef Pair Alias;",
+        1,
+    )
+    source = source.replace("float guarded(", "Alias guarded(")
+    ast = parse(source)
+    assert (
+        converge_subgroup_guarded_returns(
+            ast, generator.walk_ast, generator.map_operator
+        )
+        is ast
+    )
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 @pytest.mark.parametrize(
     "tail",
@@ -234,11 +301,11 @@ def test_declared_intrinsics_and_unsafe_parameter_types_are_not_speculated():
 
 
 def test_guarded_return_gate_is_required_on_every_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate subgroup-guarded returns"
     )
     assert "test_subgroup_guarded_returns.py" in step
@@ -251,7 +318,7 @@ def test_guarded_return_gate_is_required_on_every_native_target():
     )
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_subgroup_guarded_returns.py",
         )
 

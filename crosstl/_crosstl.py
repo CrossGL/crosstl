@@ -8,7 +8,7 @@ import json
 import math
 import os
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -22,19 +22,25 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.ast_text_leaks import refuse_ast_text
 from .translator.codegen.entry_selection import prepare_entry_scoped_target
 from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
-from .translator.semantics import apply_rule_carrying
+from .translator.semantics import (
+    apply_rule_carrying,
+    generate_refusing_undeclared_identifiers,
+)
+from .translator.semantics.rule_pragmas import rule_pragma
 from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
     register_default_sources,
 )
+from .translator.stage_feasibility import refuse_infeasible_entry_stages
 
 try:
     from .formatter import format_shader_code
@@ -129,6 +135,61 @@ def _read_shader_source(file_path: str, source_name: str) -> str:
     return shader_bytes.decode("utf-8", errors="replace")
 
 
+@dataclass(frozen=True)
+class TranslationResult:
+    """Generated target code together with its resource binding table.
+
+    ``resource_bindings`` lists one record per bound resource as reported by the
+    target code generator: the source resource name, the target binding namespace
+    and slot, the slot count and, when the source bound it with an HLSL
+    ``register``, that register. Targets that do not report bindings return an
+    empty tuple.
+    """
+
+    code: str
+    backend: str
+    resource_bindings: tuple = ()
+
+
+def translate_with_metadata(
+    file_path: str,
+    backend: str = "cgl",
+    save_shader: Optional[str] = None,
+    format_output: bool = True,
+    source_backend: Optional[str] = None,
+    *,
+    include_paths: Optional[Sequence[str]] = None,
+    defines: Optional[Mapping[str, str]] = None,
+    source_options: Optional[Mapping[str, Any]] = None,
+    entry_point: Optional[str] = None,
+) -> TranslationResult:
+    """Translate a shader file and return the code with its binding table.
+
+    Accepts the same arguments as :func:`translate`.
+    """
+
+    generated_code, codegen = _translate_with_codegen(
+        file_path,
+        backend,
+        save_shader,
+        format_output,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+    records = ()
+    reporter = getattr(codegen, "resource_binding_records", None)
+    if callable(reporter):
+        records = tuple(dict(record) for record in reporter())
+    return TranslationResult(
+        code=generated_code,
+        backend=normalize_backend_name(backend) or backend,
+        resource_bindings=records,
+    )
+
+
 def translate(
     file_path: str,
     backend: str = "cgl",
@@ -162,6 +223,33 @@ def translate(
     Returns:
         str: The translated shader code
     """
+    generated_code, _codegen = _translate_with_codegen(
+        file_path,
+        backend,
+        save_shader,
+        format_output,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+    return generated_code
+
+
+def _translate_with_codegen(
+    file_path,
+    backend="cgl",
+    save_shader=None,
+    format_output=True,
+    source_backend=None,
+    *,
+    include_paths=None,
+    defines=None,
+    source_options=None,
+    entry_point=None,
+):
+    target_codegen = None
     file_path = os.fspath(file_path)
     if not isinstance(file_path, str):
         raise TypeError(
@@ -200,6 +288,17 @@ def translate(
             "intermediate target",
             entry_point=selected_entry_point,
         )
+
+    refuse_infeasible_entry_stages(
+        source_spec,
+        shader_code,
+        normalized_backend,
+        file_path=file_path,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
 
     if source_spec.name == "metal" and normalized_backend not in {
         "cgl",
@@ -247,8 +346,13 @@ def translate(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point, normalized_backend
+                codegen,
+                selected_ast,
+                remaining_entry_point,
+                normalized_backend,
+                program=ast,
             )
+            target_codegen = codegen
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             codegen = source_spec.create_reverse_codegen(source_options)
@@ -258,11 +362,19 @@ def translate(
                 codegen.normalize_target_safe_cgl = True
             lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
+            pragma = rule_pragma(source_spec.name)
+            if pragma is not None:
+                # The CrossGL program keeps the rule families of the language it came from (rule_pragmas.py).
+                generated_code = f"{pragma}\n{generated_code}"
+            cgl_spec = SOURCE_REGISTRY.get("cgl")
+            if not cgl_spec:
+                raise ValueError("CrossGL parser not available for validation")
+            # An importer's output that CrossGL cannot parse is refused here, as it is on the way to any other
+            # target, instead of being returned as CrossGL.
+            cgl_ast = cgl_spec.parse(
+                generated_code,
+            )
             if source_spec.name == "opencl":
-                cgl_spec = SOURCE_REGISTRY.get("cgl")
-                if not cgl_spec:
-                    raise ValueError("CrossGL parser not available for validation")
-                cgl_ast = cgl_spec.parse(generated_code)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
             reverse_codegen = source_spec.create_reverse_codegen(source_options)
@@ -276,13 +388,7 @@ def translate(
             cgl_spec = SOURCE_REGISTRY.get("cgl")
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
-            cgl_source_options = {
-                "strict_function_bodies": source_spec.name != "mojo",
-            }
-            cgl_ast = cgl_spec.parse(
-                intermediate_code,
-                source_options=cgl_source_options,
-            )
+            cgl_ast = cgl_spec.parse(intermediate_code)
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
@@ -308,8 +414,13 @@ def translate(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point, normalized_backend
+                codegen,
+                selected_ast,
+                remaining_entry_point,
+                normalized_backend,
+                program=cgl_ast,
             )
+            target_codegen = codegen
 
     if (
         format_output
@@ -324,22 +435,36 @@ def translate(
         with open(save_shader, "w", encoding="utf-8", newline="") as file:
             file.write(generated_code)
 
-    return generated_code
+    return generated_code, target_codegen
 
 
-def _generate_target_code(codegen, ast, entry_point, backend=None):
-    if entry_point is None:
-        code = codegen.generate(ast)
-    else:
+def _generate_target_code(codegen, ast, entry_point, backend=None, program=None):
+    """Generate ``ast`` for ``backend``.
+
+    ``program`` is the rule-carried program ``ast`` was selected from; the undeclared name recorded on it is refused
+    unless the generator refuses the program with a typed diagnostic of its own.
+    """
+
+    def generate():
+        if entry_point is None:
+            code = codegen.generate(ast)
+        else:
+            generate_entry = getattr(codegen, "generate_entry", None)
+            if not callable(generate_entry):
+                raise EntryPointSelectionUnsupportedError(
+                    "Entry-scoped artifact generation is not supported for the requested "
+                    "target backend",
+                    entry_point=entry_point,
+                )
+            code = generate_entry(ast, entry_point)
+        refuse_ast_text(code, backend)
+        return code
+
+    if entry_point is not None:
         entry_point = _validated_entry_point(entry_point)
-        generate_entry = getattr(codegen, "generate_entry", None)
-        if not callable(generate_entry):
-            raise EntryPointSelectionUnsupportedError(
-                "Entry-scoped artifact generation is not supported for the requested "
-                "target backend",
-                entry_point=entry_point,
-            )
-        code = generate_entry(ast, entry_point)
+    code = generate_refusing_undeclared_identifiers(
+        ast if program is None else program, generate
+    )
     notices = source_license_comments(ast, backend)
     return code if not notices or notices in code else notices + code
 
@@ -715,6 +840,34 @@ def _run_validate_project(args):
     else:
         _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
+
+
+def _format_toolchain_doctor_text(payload):
+    lines = ["Validation toolchains"]
+    for row in payload.get("tools", []):
+        tools = row.get("tools") or []
+        tool_bits = []
+        for tool in tools:
+            name = tool.get("name", "?")
+            path = tool.get("path")
+            tool_bits.append(f"{name}={path or 'not found'}")
+        version = row.get("version")
+        version_suffix = f"  version: {version}" if version else ""
+        lines.append(
+            f"- {row.get('target')}: {row.get('status')}; {', '.join(tool_bits)}{version_suffix}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _run_doctor(args):
+    from .project import toolchain_doctor_report
+
+    payload = toolchain_doctor_report()
+    if args.format == "text":
+        _write_text_payload(_format_toolchain_doctor_text(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0
 
 
 def _format_runtime_integration_plan(payload):
@@ -7137,6 +7290,21 @@ def _build_parser():
     )
     validate_parser.set_defaults(func=_run_validate_project)
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="List validation toolchains CrossTL can find on this machine",
+    )
+    doctor_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="text",
+        help="Doctor output format",
+    )
+    doctor_parser.add_argument(
+        "--output", "-o", help="Write doctor output; use '-' for stdout"
+    )
+    doctor_parser.set_defaults(func=_run_doctor)
+
     inspect_parser = subparsers.add_parser(
         "inspect-report", help="Inspect an existing project portability report"
     )
@@ -7854,6 +8022,7 @@ def _use_legacy_cli(argv):
         "plan-host-integration-execution",
         "execute-host-integration",
         "report",
+        "doctor",
     }
     if not argv or argv[0] in {"-h", "--help"}:
         return False

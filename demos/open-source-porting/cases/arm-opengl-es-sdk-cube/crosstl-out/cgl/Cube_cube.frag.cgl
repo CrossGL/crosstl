@@ -1,3 +1,4 @@
+#pragma cgl_rules(wrap)
 precision lowp float;
 
 shader main {

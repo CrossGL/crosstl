@@ -23,6 +23,11 @@ MLX_QUANTIZED_HEADER = f"{MLX_KERNEL_ROOT}/quantized.h"
 MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
+# affine_quantize reduces each quantization group with simd_min/simd_max, so
+# its result depends on the dispatch shape. MLX's quantize_impl launches up to
+# maxTotalThreadsPerThreadgroup threads per group; any multiple of the 32-lane
+# SIMD-group keeps every quantization group inside one SIMD-group.
+MLX_QUANTIZED_WORKGROUP_SIZE = (64, 1, 1)
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -88,6 +93,7 @@ ENTRY_CONTRACTS = {
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "quantize",
         "indexRangeAssertions": INDEX_RANGE_ASSERTIONS,
+        "workgroupSize": MLX_QUANTIZED_WORKGROUP_SIZE,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
@@ -135,9 +141,19 @@ _GENERATED_SEMANTIC_SENTINELS = {
 }"""
     ),
     "edgeRounding": "float q0 = crossgl_metal_round_float(float((edge / scale)));",
+    # Metal converts float to uint8_t with saturation and NaN to zero (MSL 2.13), so the stored value
+    # passes through the saturating conversion before the 8-bit clamp.
+    "saturatingConversion": (
+        "int cgl_rule_sat_ftoi(float x0) {\n"
+        "    return (((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? int(uintBitsToFloat("
+        "(((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? floatBitsToUint(x0) : 0u))) : "
+        "(((floatBitsToUint(x0) & 2147483647u) > 2139095040u) ? 0 : ((floatBitsToUint(x0) >= "
+        "2147483648u) ? int(2147483648u) : 2147483647)));\n"
+        "}"
+    ),
     "quantization": (
-        "uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / "
-        "scale))), n_bins)), 0, 8);"
+        "uint val = bitfieldExtract(uint(clamp(cgl_rule_sat_ftoi(min(crossgl_metal_round_float("
+        "float(((w_thread[i] - bias) / scale))), n_bins)), 0, 255)), 0, 8);"
     ),
     "subgroupPacking": "uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));",
 }
@@ -622,7 +638,8 @@ def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
         source.count("#version 450 core") == 1
         and source.count("void main()") == 1
         and (
-            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in source
+            "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"
+            in source
         ),
         "generated GLSL compute entry-point contract is incomplete",
     )
@@ -653,6 +670,7 @@ def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
         "status": "passed",
         "entryPoint": "main",
         "requiredExtensions": list(required_extensions),
+        "workgroupSize": list(MLX_QUANTIZED_WORKGROUP_SIZE),
         "semanticOperations": list(_GENERATED_SEMANTIC_SENTINELS),
         "normalizedIndexExpressions": list(INDEX_RANGE_EXPRESSIONS),
     }

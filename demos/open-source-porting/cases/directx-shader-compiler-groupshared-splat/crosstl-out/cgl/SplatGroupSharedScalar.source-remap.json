@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 179,
+        "endLine": 15,
+        "endOffset": 214,
         "file": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
-        "length": 179,
+        "length": 214,
         "line": 1,
         "offset": 0
       },

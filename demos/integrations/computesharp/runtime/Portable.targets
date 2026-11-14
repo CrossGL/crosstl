@@ -1,0 +1,45 @@
+<Project>
+  <!--
+    Builds the upstream ComputeSharp.Tests project and its portable companion test
+    projects (see test_projects.json) against the portable runtime. Pass this file as
+    CustomAfterMicrosoftCommonTargets when building the adapted checkout:
+
+      dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release \
+        -p:CrossTLTrustedCorpusBaseline=true \
+        -p:CustomAfterMicrosoftCommonTargets=<this file>
+
+    The test projects' references to the Direct3D 12 runtime (ComputeSharp) and to DXC
+    reflection (ComputeSharp.Dxc) are replaced by the portable assemblies with the same
+    names and public API. Every other upstream project, the source generators and the
+    tests themselves are built unchanged (apart from the documented patch series).
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)../baseline-audit.props" />
+
+  <PropertyGroup>
+    <CrossTLPortableTestProject Condition="'$(MSBuildProjectName)' == 'ComputeSharp.Tests' Or
+                                           '$(MSBuildProjectName)' == 'ComputeSharp.Tests.DisableDynamicCompilation' Or
+                                           '$(MSBuildProjectName)' == 'ComputeSharp.Tests.GlobalStatements' Or
+                                           '$(MSBuildProjectName)' == 'ComputeSharp.Tests.Internals'">true</CrossTLPortableTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(CrossTLPortableTestProject)' == 'true'">
+    <DefineConstants>$(DefineConstants);COMPUTESHARP_TRANSLATED_BACKEND</DefineConstants>
+    <CrossTLComputeSharpRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../..'))</CrossTLComputeSharpRoot>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CrossTLPortableTestProject)' == 'true'">
+    <ProjectReference Remove="..\..\src\ComputeSharp\ComputeSharp.csproj" />
+    <ProjectReference Remove="..\..\src\ComputeSharp.Dxc\ComputeSharp.Dxc.csproj" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)ComputeSharp.Portable.csproj"
+                      AdditionalProperties="ComputeSharpRoot=$(CrossTLComputeSharpRoot);CrossTLTrustedCorpusBaseline=$(CrossTLTrustedCorpusBaseline)" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)dxc/ComputeSharp.Dxc.Portable.csproj"
+                      AdditionalProperties="ComputeSharpRoot=$(CrossTLComputeSharpRoot);CrossTLTrustedCorpusBaseline=$(CrossTLTrustedCorpusBaseline)" />
+  </ItemGroup>
+
+  <Target Name="CrossTLCheckPortableReferences" BeforeTargets="ResolveProjectReferences" Condition="'$(CrossTLPortableTestProject)' == 'true'">
+    <ItemGroup>
+      <_CrossTLDirectReference Include="@(ProjectReference)" Condition="'%(Filename)' == 'ComputeSharp' Or '%(Filename)' == 'ComputeSharp.Dxc'" />
+    </ItemGroup>
+    <Error Condition="'@(_CrossTLDirectReference)' != ''" Text="The Direct3D 12 runtime is still referenced: @(_CrossTLDirectReference)" />
+  </Target>
+</Project>

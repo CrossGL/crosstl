@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-contract",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "categories": {
+    "required-gpu": "Fixture device test.",
+    "cpu-only": "Fixture host test.",
+    "windows-specific": "Fixture platform test."
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "target": "directx",
+      "os": "windows",
+      "device": "fixture baseline",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "optional-hardware"
+      },
+      "capabilities": {
+        "fixture-feature": false
+      }
+    },
+    "translated": {
+      "role": "translated-target",
+      "target": "metal",
+      "os": "macos",
+      "device": "fixture target",
+      "execution": "hardware",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "execute"
+      },
+      "capabilities": {
+        "fixture-feature": true
+      }
+    }
+  },
+  "capabilities": {
+    "fixture-feature": {
+      "description": "Fixture capability reported through Assert.Inconclusive.",
+      "gates": [
+        {
+          "method": "DiscoveryFixture.Cases.Gated",
+          "typeArguments": ["System.Single"],
+          "runsWhenAvailable": true
+        }
+      ]
+    }
+  },
+  "classes": {
+    "DiscoveryFixture.Cases": {
+      "category": "required-gpu",
+      "reason": "Fixture cases."
+    }
+  },
+  "methods": {
+    "DiscoveryFixture.Cases.Plain": {
+      "category": "windows-specific",
+      "reason": "Fixture platform case."
+    }
+  }
+}

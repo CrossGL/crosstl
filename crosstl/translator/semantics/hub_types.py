@@ -53,6 +53,7 @@ _SCALARS = {
     "f32": FLOAT32,
     "half": HubType("f", 16),
     "f16": HubType("f", 16),
+    "float16": HubType("f", 16),
     "float16_t": HubType("f", 16),
     "min16float": HubType("f", 16),
     "double": HubType("f", 64),
@@ -243,6 +244,37 @@ def _struct_name(node):
     return None
 
 
+_TEXEL_READ_CALLS = frozenset(
+    {
+        "imageLoad",
+        "subpassLoad",
+        "texelFetch",
+        "texelFetchOffset",
+        "texture",
+        "textureGather",
+        "textureGatherOffset",
+        "textureGrad",
+        "textureGradOffset",
+        "textureLod",
+        "textureLodOffset",
+        "textureOffset",
+        "textureProj",
+        "textureProjGrad",
+        "textureProjLod",
+        "textureProjOffset",
+    }
+)
+# Calls that return a four-component texel even from a shadow (depth) texture: gathers, and texel fetches, which
+# read the stored value instead of comparing it.
+_SHADOW_GATHER_CALLS = frozenset(
+    {"textureGather", "textureGatherOffset", "texelFetch", "texelFetchOffset"}
+)
+_TEXEL_RESOURCE = re.compile(
+    r"([iu]?)(image|sampler|texture|subpassInput)\w*?(Shadow)?"
+)
+_TEXEL_KINDS = {"": FLOAT32, "i": INT32, "u": UINT32}
+
+
 class TypeScope:
     """Lexical scopes of declared names, plus the program's structures, constants and functions."""
 
@@ -363,7 +395,10 @@ class TypeScope:
         op = expr.op
         left, right = self.infer(expr.left), self.infer(expr.right)
         if op in ("&&", "||", "^^"):
-            return BOOL
+            # Vector operands combine component by component.
+            return BOOL.with_lanes(
+                max(left.lanes if left else 1, right.lanes if right else 1)
+            )
         if op in ("<", "<=", ">", ">=", "==", "!="):
             lanes = max(left.lanes if left else 1, right.lanes if right else 1)
             return BOOL.with_lanes(lanes)
@@ -421,6 +456,9 @@ class TypeScope:
         direct = type_from_name(name)
         if direct is not None:
             return direct
+        if name in ("and", "or") and name not in self.functions:
+            lanes = [value.lanes for value in map(self.infer, arguments) if value]
+            return BOOL.with_lanes(max(lanes, default=1))
         first = self.infer(arguments[0]) if arguments else None
         lanes = first.lanes if first is not None else 1
         if name in ("asuint", "floatBitsToUint"):
@@ -440,13 +478,48 @@ class TypeScope:
             for argument in arguments[1:]:
                 result = arithmetic_result(result, self.infer(argument))
             return result
+        texel = self._infer_texel_call(name, arguments)
+        if texel is not None:
+            return texel
+        if name == "buffer_load" and arguments and name not in self.functions:
+            # CrossGL's read of a buffer element: ``buffer_load(buffer, index)`` has the element's type.
+            element = element_type_node(self.node_type(arguments[0]))
+            return type_from_node(element) if element is not None else None
         if name in self.functions:
             return type_from_node(self.functions[name])
         return None
 
+    def _infer_texel_call(self, name, arguments):
+        """The four-component texel a texture or storage-image read returns.
+
+        GLSL 4.60 sections 8.9 and 8.12: reads return a ``gvec4`` of the
+        resource's component type; a depth comparison returns a ``float``, a texel fetch from a depth texture its
+        stored texel. Only a combined ``sampler*Shadow`` compares: a separate ``texture*Shadow`` read through a
+        sampler argument returns the stored depth as a texel, and CrossGL spells its comparisons ``textureCompare``.
+        """
+        if name not in _TEXEL_READ_CALLS or not arguments:
+            return None
+        resource = self.node_type(arguments[0])
+        match = _TEXEL_RESOURCE.fullmatch(str(getattr(resource, "name", "") or ""))
+        if match is None:
+            return None
+        if (
+            match.group(3)
+            and match.group(2) != "texture"
+            and name not in _SHADOW_GATHER_CALLS
+        ):
+            return FLOAT32
+        return _TEXEL_KINDS[match.group(1)].with_lanes(4)
+
+
+# The ``x++``/``--x`` helpers (``step_values.STEP_HELPER_PREFIX``) write their operand.
+_WRITING_RULE_PREFIX = "cgl_rule_wrap_"
+
 
 def is_pure_callee(name: str) -> bool:
     """Value constructors, bit casts, rule intrinsics and math built-ins that neither write nor read memory."""
+    if name.startswith(_WRITING_RULE_PREFIX):
+        return False
     return (
         type_from_name(name) is not None
         or name.startswith(("__cgl_", "cgl_rule_"))

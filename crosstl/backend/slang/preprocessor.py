@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, LogicalLines
 
 
 class SlangPreprocessor(HLSLPreprocessor):
@@ -22,8 +22,13 @@ class SlangPreprocessor(HLSLPreprocessor):
             max_expansion_depth=max_expansion_depth,
         )
 
-    def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
-        return super().preprocess(self._strip_block_comments(code), file_path)
+    def _split_logical_lines(self, code: str) -> List[str]:
+        # Block comments are blanked after the lines are spliced and joined, so a comment that a directive
+        # line opens stays part of that directive.
+        lines = super()._split_logical_lines(code)
+        return LogicalLines(
+            [self._strip_block_comments(line) for line in lines], lines.physical
+        )
 
     def _strip_block_comments(self, code: str) -> str:
         result = []

@@ -5,8 +5,8 @@ using namespace metal;
 __attribute__((unused)) constant float3 lightDir = float3(0.424, 0.566, 0.707);
 
 struct FragmentInput {
-    float4 texcoord [[attribute(0)]];
-    float3 frag_pos [[attribute(1)]];
+    float4 texcoord [[user(locn0)]];
+    float3 frag_pos [[user(locn1)]];
 };
 float linearToSrgb(float linear) {
     if (linear <= 0.0031308) {
@@ -25,12 +25,12 @@ float4 linearToSrgb(float4 linear) {
 }
 
 // Fragment Shader
-fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float> tex [[texture(1)]]) {
+fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float> tex [[texture(1)]], sampler texSampler [[sampler(1)]]) {
     float4 uFragColor;
     float3 dX = dfdx(input.frag_pos);
     float3 dY = dfdy(input.frag_pos);
     float3 normal = normalize(cross(dX, dY));
     float light = max(0.0, dot(lightDir, normal));
-    uFragColor = linearToSrgb(float4(light) * tex.sample(sampler(mag_filter::linear, min_filter::linear), input.texcoord.xy));
+    uFragColor = linearToSrgb(light * tex.sample(texSampler, input.texcoord.xy));
     return uFragColor;
 }

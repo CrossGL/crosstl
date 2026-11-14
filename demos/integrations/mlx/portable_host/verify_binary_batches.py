@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host.binary_workloads import floored_remainder
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -36,6 +37,8 @@ OPERATIONS = {
     "Minimum": "minimum",
     "Maximum": "maximum",
     "Divide": "divide",
+    "Remainder": "remainder",
+    "LogAddExp": "logaddexp",
     "Equal": "equal",
     "NotEqual": "not_equal",
     "Less": "less",
@@ -90,10 +93,23 @@ def operand(np, case, side):
     words = np.arange(offset + high + 4, dtype=np.uint32) * np.uint32(104729 + side * 8)
     if case["dtype"] == "bool_":
         storage = words % (7 if side == 0 else 11) == 0
+    elif side == 1 and case["operation"] == "Remainder":
+        # Signed powers of two keep every floored remainder exact on each
+        # target and exercise both sign corrections; zero is never a divisor.
+        powers = np.left_shift(np.uint32(1), words % 5)
+        if case["dtype"] == "uint32":
+            storage = words % np.uint32(997) + np.uint32(1)
+        else:
+            signs = np.where(words % 3 == 0, -1, 1).astype(case["dtype"])
+            storage = powers.astype(case["dtype"]) * signs
     elif case["dtype"] == "float32":
         storage = (words % 4093).astype(np.float32) / np.float32(16) - np.float32(128)
         if side == 1 and case["operation"] == "Divide":
             storage = np.left_shift(np.uint32(1), words % 5).astype(np.float32)
+        elif case["operation"] == "Remainder":
+            # An odd 1/32 part keeps every remainder nonzero: MLX's CPU paths
+            # disagree on an exact zero's sign (the small workloads check it).
+            storage += np.float32(1 / 32)
     elif case["dtype"] == "int32":
         storage = (words % 2003).astype(np.int32) - np.int32(1001)
     else:
@@ -109,8 +125,31 @@ def operand(np, case, side):
 
 
 def reference(np, case):
-    return getattr(np, OPERATIONS[case["operation"]])(
-        operand(np, case, 0)[1], operand(np, case, 1)[1]
+    left, right = operand(np, case, 0)[1], operand(np, case, 1)[1]
+    if case["operation"] == "Remainder":
+        return floored_remainder(np, left, right)
+    return getattr(np, OPERATIONS[case["operation"]])(left, right)
+
+
+INEXACT_OPERATIONS = frozenset({"LogAddExp"})
+INEXACT_BOUND = "1e-6 + 2e-6 * |reference|"
+
+
+def matches_reference(np, case, actual):
+    expected = reference(np, case)
+    if case["operation"] not in INEXACT_OPERATIONS:
+        return equal_storage(actual, expected)
+    # exp and log1p are not correctly rounded on any target; use the base
+    # binary workload's float32 bound.
+    return (
+        actual.dtype == expected.dtype
+        and actual.shape == expected.shape
+        and bool(
+            np.all(
+                np.abs(actual.astype(np.float64) - expected)
+                <= 1e-6 + 2e-6 * np.abs(expected.astype(np.float64))
+            )
+        )
     )
 
 
@@ -134,17 +173,20 @@ def record(np, case, saved):
             "Binary source storage changed or differs from its workload",
         )
     require(
-        equal_storage(saved["actual"], reference(np, case)),
-        "Binary result differs from the exact reference",
+        matches_reference(np, case, saved["actual"]),
+        "Binary result differs from its reference",
     )
-    return {
-        "case": case["id"],
-        "sourcePreserved": True,
-        "hashes": {
-            name: hashlib.sha256(value.tobytes()).hexdigest()
-            for name, value in saved.items()
-        },
+    hashes = {
+        name: hashlib.sha256(value.tobytes()).hexdigest()
+        for name, value in saved.items()
     }
+    item = {"case": case["id"], "sourcePreserved": True, "hashes": hashes}
+    if case["operation"] in INEXACT_OPERATIONS:
+        # Each device was checked against the float64 reference bound above;
+        # the rounded bits legitimately differ between devices.
+        item["resultHash"] = hashes.pop("actual")
+        item["resultBound"] = INEXACT_BOUND
+    return item
 
 
 def run_cases(mx, np, directory, host=None):
@@ -280,6 +322,7 @@ def audit_copy(np, case, side, event):
 def audit_case(np, case, item, events, directory):
     with np.load(directory / (case["id"] + ".npz"), allow_pickle=False) as saved:
         observed = record(np, case, saved)
+        retained = saved["actual"].reshape(-1)
     require(
         {k: v for k, v in item.items() if k not in {"dispatchStart", "dispatchCount"}}
         == observed,
@@ -299,7 +342,13 @@ def audit_case(np, case, item, events, directory):
             audit_copy(np, case, side, events[copies])
             copies += 1
     require(copies == copy_count(case), "Binary materialization count differs")
-    expected = reference(np, case).reshape(-1)
+    # Inexact results were bounded against the reference by record(); each
+    # native batch must then reproduce the retained readback bit for bit.
+    expected = (
+        retained
+        if case["operation"] in INEXACT_OPERATIONS
+        else reference(np, case).reshape(-1)
+    )
     first = 0
     for event, size in zip(events[copies:], sizes):
         inputs = bindings(np, event, case["entry"], size, [size, 1, 1])
@@ -384,12 +433,12 @@ def verify(root, packages, output):
                 {
                     k: v
                     for k, v in original.items()
-                    if k not in {"dispatchStart", "dispatchCount"}
+                    if k not in {"dispatchStart", "dispatchCount", "resultHash"}
                 }
                 == {
                     k: v
                     for k, v in translated.items()
-                    if k not in {"dispatchStart", "dispatchCount"}
+                    if k not in {"dispatchStart", "dispatchCount", "resultHash"}
                 },
                 "CPU and translated binary results differ",
             )

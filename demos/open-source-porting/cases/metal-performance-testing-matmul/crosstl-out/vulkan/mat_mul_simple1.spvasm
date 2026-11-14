@@ -54,10 +54,10 @@ OpMemberDecorate %22 0 Offset 0
 OpDecorate %24 DescriptorSet 0
 OpDecorate %24 Binding 2
 OpDecorate %26 Block
-OpMemberDecorate %26 0 Offset 0
 OpMemberDecorate %25 0 Offset 0
 OpMemberDecorate %25 1 Offset 4
 OpMemberDecorate %25 2 Offset 8
+OpMemberDecorate %26 0 Offset 0
 OpDecorate %28 DescriptorSet 0
 OpDecorate %28 Binding 3
 OpDecorate %41 BuiltIn GlobalInvocationId

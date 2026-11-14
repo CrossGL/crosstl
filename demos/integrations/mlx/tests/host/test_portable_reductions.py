@@ -42,7 +42,14 @@ def test_invalid_all_reduce_stage_is_rejected(count):
 
 @pytest.mark.parametrize(
     "dtype,itemsize",
-    [("float32", 4), ("int32", 4), ("uint32", 4), ("bool_", 1), ("bfloat16", 2)],
+    [
+        ("float32", 4),
+        ("int32", 4),
+        ("uint32", 4),
+        ("bool_", 1),
+        ("bfloat16", 2),
+        ("float16", 2),
+    ],
 )
 @pytest.mark.parametrize(
     "boundary", [65536, 131075, "before", "at", "after", 2**31 - 1]
@@ -66,7 +73,7 @@ def test_large_reduction_stage_uses_logical_bytes(dtype, itemsize, boundary):
     assert final["workgroupSize"] == [32 if rows == 128 else 1024, 1, 1]
 
 
-@pytest.mark.parametrize("dtype", [None, [], "bool", "float16", "uint64", 4])
+@pytest.mark.parametrize("dtype", [None, [], "bool", "half", "int16", "uint64", 4])
 def test_reduction_plan_rejects_unsupported_logical_dtype(dtype):
     with pytest.raises(ValueError, match="dtype"):
         reduction_layout.stage(65536, dtype)
@@ -584,19 +591,19 @@ def test_reduction_workloads_cover_every_declared_width_and_operation():
 def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/host/test_portable_reductions.py",
         )
-    translation = ci_coverage.workflow_job_step_section(
+    translation = workflow_text.workflow_job_step_section(
         workflow, "reductions", "Translate reduction launch variants"
     )
-    execution = ci_coverage.workflow_job_step_section(
+    execution = workflow_text.workflow_job_step_section(
         workflow, "reductions", "Execute MLX reductions"
     )
     for step in (translation, execution):
@@ -606,13 +613,13 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     assert "--width" not in translation and "--entry" not in translation
     assert "--jobs 2" in translation and "--target ${{ matrix.target }}" in translation
     assert "--reductions .mlx-portable-reductions/packages" in execution
-    assert ci_coverage.workflow_job_step_after(
+    assert workflow_text.workflow_job_step_after(
         workflow,
         "reductions",
         "Execute MLX reductions",
         "Translate reduction launch variants",
     )
-    job = ci_coverage.workflow_job_text(workflow, "reductions")
+    job = workflow_text.workflow_job_text(workflow, "reductions")
     assert "needs: [ci-plan, portable-host, row-packages]" in job
     assert "artifact-ids: ${{ steps.host-artifact.outputs.id }}" in job
     assert "run_id: context.runId" in job and "merge-multiple: true" in job

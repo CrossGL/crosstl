@@ -4,3 +4,7 @@ include = ["reduce.cl"]
 targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"
+
+# The sample picks the work-group size on the host at enqueue time; the kernel's result depends on it.
+[project.source_options.opencl]
+threadgroup_size = 64

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.fake_commands import write_python_command
 from tools import check_release
 from tools.check_release import (
     check_distributions,
@@ -44,6 +45,12 @@ def test_release_versions_and_notes_match():
     assert "### " in notes and "## [" not in notes and "[Unreleased]" not in notes
 
 
+def test_zenodo_record_takes_its_version_from_the_release_tag():
+    # Zenodo prefers a version in .zenodo.json over the tag, and no release step updates that file.
+    record = json.loads((ROOT / ".zenodo.json").read_text(encoding="utf-8"))
+    assert "version" not in record
+
+
 def test_package_build_contract_retains_supported_python_and_resources():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert config["build-system"] == {
@@ -66,14 +73,11 @@ def test_package_build_contract_retains_supported_python_and_resources():
         "CITATION.cff",
         ".zenodo.json",
         "examples/",
-        "support/",
         "docs/",
     }
     assert set(source["exclude"]) == {
         "docs/_build/",
-        "docs/doxygen/build/",
         "examples/output/",
-        "support/generated/",
         "**/__pycache__/",
         "**/*.py[cod]",
     }
@@ -84,7 +88,7 @@ def test_release_build_and_publisher_support_current_metadata():
         "python -m pip install build==1.2.2.post1 twine==7.0.0"
     )
     publisher = _workflow()["jobs"]["publish-pypi"]["steps"][-1]
-    assert publisher["uses"] == "pypa/gh-action-pypi-publish@release/v1"
+    assert publisher["uses"].startswith("pypa/gh-action-pypi-publish@v1.")
     assert _step("Set up minimum supported Python")["with"]["python-version"] == "3.11"
     smoke = _step("Test isolated wheel and source installations")["run"]
     assert "${{ steps.python-minimum.outputs.python-path }}" in smoke
@@ -133,6 +137,7 @@ def test_release_validates_pull_requests_without_publishing():
         assert workflow["jobs"][job]["needs"] == dependency
     for name in (
         "Verify tag belongs to main and matches package version",
+        "Verify changelog entries are in CHANGELOG.md",
         "Verify required main CI succeeded",
     ):
         assert _step(name)["if"] == TAG_ONLY
@@ -144,9 +149,14 @@ def test_release_validates_pull_requests_without_publishing():
         "crosstl/**",
         "pyproject.toml",
         "tools/check_release.py",
+        "tools/changelog.py",
         "tests/test_release.py",
     ):
         assert path in paths
+    assert (
+        _step("Verify changelog entries are in CHANGELOG.md")["run"]
+        == "python tools/changelog.py check --folded"
+    )
 
 
 def test_release_checks_and_publishes_the_same_distributions():
@@ -277,9 +287,8 @@ def test_github_release_verifies_uploaded_bytes(
     remote = tmp_path / "remote"
     remote.mkdir()
     log = tmp_path / "calls.jsonl"
-    gh = tmp_path / "gh"
-    gh.write_text(
-        f"#!{sys.executable}\n"
+    write_python_command(
+        tmp_path / "gh",
         "import json, os, shutil, sys, zipfile\n"
         "from pathlib import Path\n"
         "args = sys.argv[1:]\n"
@@ -300,9 +309,7 @@ def test_github_release_verifies_uploaded_bytes(
         "        with zipfile.ZipFile(remote / 'crosstl-1.2.3-py3-none-any.whl', 'a') as archive: archive.comment = b'different archive bytes'\n"
         "    for path in remote.iterdir(): shutil.copyfile(path, Path(args[4]) / path.name)\n"
         "else: assert action == 'edit'\n",
-        encoding="utf-8",
     )
-    gh.chmod(0o755)
     (tmp_path / "python").symlink_to(sys.executable)
     command = _workflow()["jobs"]["github-release"]["steps"][-1]["run"]
     result = subprocess.run(
@@ -607,16 +614,14 @@ def test_release_gate_requires_successful_main_push_at_exact_commit(
         "deferred-native-compilation.yml",
         "demo-project-testing.yml",
     )
-    gh = tmp_path / "gh"
     log = tmp_path / "calls.jsonl"
-    gh.write_text(
-        f"#!{sys.executable}\nimport json, os, sys\n"
+    write_python_command(
+        tmp_path / "gh",
+        "import json, os, sys\n"
         "with open(os.environ['CALLS'], 'a') as output: output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "workflow = sys.argv[sys.argv.index('--workflow') + 1]\n"
         "print(os.environ['RUN_STATUS'] if workflow == os.environ['WORKFLOW'] else 'completed\\tsuccess\\turl')\n",
-        encoding="utf-8",
     )
-    gh.chmod(0o755)
     env = dict(
         os.environ,
         PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
@@ -709,22 +714,18 @@ def test_release_notes_shell_extraction_matches_checked_section(tmp_path):
 def test_release_tag_must_match_version_and_belong_to_main(
     tmp_path, comparison, tag, success
 ):
-    gh = tmp_path / "gh"
-    gh.write_text(
-        f"#!{sys.executable}\nimport os, sys\n"
+    write_python_command(
+        tmp_path / "gh",
+        "import os, sys\n"
         "assert sys.argv[1:] == ['api', 'repos/CrossGL/crosstl/compare/tag-commit...main', '--jq', '.status']\n"
         "print(os.environ['COMPARISON'])\n",
-        encoding="utf-8",
     )
-    python = tmp_path / "python"
-    python.write_text(
-        f"#!{sys.executable}\nimport sys\n"
+    write_python_command(
+        tmp_path / "python",
+        "import sys\n"
         "assert sys.argv[1:] == ['tools/check_release.py', 'version']\n"
         "print('1.2.3')\n",
-        encoding="utf-8",
     )
-    for path in (gh, python):
-        path.chmod(0o755)
     result = subprocess.run(
         [
             "bash",

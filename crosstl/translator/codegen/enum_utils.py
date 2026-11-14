@@ -3,7 +3,14 @@
 import re
 
 from ..ast import EnumNode, StructNode
+from ..refusals import TargetRefusal
 from .array_utils import format_c_style_array_declaration
+
+# An element type followed by one or more ``[size]`` dimensions, such as ``T[2]`` or ``T*[2][3]``.
+_ARRAY_TYPE_PATTERN = re.compile(r"^(.+?)((?:\s*\[[^\[\]]*\])+)$")
+# A name in a value expression, not a member (``.N``) or a qualified part (``ns::N``).
+_VALUE_NAME_PATTERN = re.compile(r"(?<![.:\w])[A-Za-z_]\w*(?![\w(])")
+_ATOMIC_VALUE_PATTERN = re.compile(r"\w+")
 
 
 def collect_plain_enums(nodes):
@@ -303,6 +310,7 @@ def enum_variant_constructor_name(enum_name, variant_name):
 
 
 def enum_value_expression(generator, path):
+    """The target expression for the enum value ``path`` (``Enum::Variant``), or ``None`` when it names none."""
     constructor = getattr(generator, "enum_variant_constructors", {}).get(path)
     fields = getattr(generator, "enum_variant_constructor_fields", {}).get(path)
     expected_type = getattr(generator, "current_expression_expected_type", None)
@@ -314,7 +322,7 @@ def enum_value_expression(generator, path):
     if generic_value is not None:
         return generic_value
 
-    return getattr(generator, "enum_variant_constants", {}).get(path, path)
+    return getattr(generator, "enum_variant_constants", {}).get(path)
 
 
 def generate_enum_constructor_call(generator, path, args):
@@ -324,7 +332,7 @@ def generate_enum_constructor_call(generator, path, args):
 
     fields = getattr(generator, "enum_variant_constructor_fields", {}).get(path, [])
     if len(args) != len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects {len(fields)} arguments, got {len(args)}"
         )
 
@@ -423,13 +431,13 @@ def render_enum_constructor_arguments(generator, path, expr, fields):
     field_names = [field_name for field_name, _field_type in fields]
 
     if len(positional_args) > len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects at most {len(fields)} arguments, "
             f"got {len(positional_args)}"
         )
     unknown_names = sorted(set(named_args) - set(field_names))
     if unknown_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} has no field {', '.join(unknown_names)}"
         )
 
@@ -455,7 +463,7 @@ def render_enum_constructor_arguments(generator, path, expr, fields):
         missing_names.append(field_name)
 
     if missing_names:
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} is missing field {', '.join(missing_names)}"
         )
     return rendered_args
@@ -483,7 +491,7 @@ def generate_generic_enum_constructor_call(generator, path, args):
     if fields is None:
         return None
     if len(args) != len(fields):
-        raise ValueError(
+        raise TargetRefusal(
             f"Enum constructor {path} expects {len(fields)} arguments, got {len(args)}"
         )
 
@@ -871,9 +879,21 @@ def substitute_generic_type_name(type_name, substitutions):
         if pointee_type:
             return f"{substitute_generic_type_name(pointee_type, substitutions)}*"
 
+    array_parts = _ARRAY_TYPE_PATTERN.match(type_name.strip())
+    if array_parts is not None:
+        element_type, dimensions = array_parts.groups()
+        # A dimension may be a value parameter: ``T[N]``.
+        dimensions = substitute_generic_value_names(dimensions, substitutions)
+        return (
+            f"{substitute_generic_type_name(element_type, substitutions)}{dimensions}"
+        )
+
     base_name, generic_args = generic_type_parts(type_name)
     if not generic_args:
-        return substitutions.get(base_name, type_name)
+        if base_name in substitutions:
+            return substitutions[base_name]
+        # A value argument that reads value parameters: ``N + 1`` in ``scale<T, N + 1>``.
+        return substitute_generic_value_names(type_name, substitutions)
 
     return (
         f"{base_name}<"
@@ -882,6 +902,21 @@ def substitute_generic_type_name(type_name, substitutions):
         )
         + ">"
     )
+
+
+def substitute_generic_value_names(text, substitutions):
+    """``text`` with each name in ``substitutions`` replaced, parenthesized unless the replacement is atomic."""
+    if not substitutions or not any(name in text for name in substitutions):
+        return text
+
+    def replace(match):
+        name = match.group(0)
+        if name not in substitutions:
+            return name
+        value = str(substitutions[name]).strip()
+        return value if _ATOMIC_VALUE_PATTERN.fullmatch(value) else f"({value})"
+
+    return _VALUE_NAME_PATTERN.sub(replace, text)
 
 
 def generic_enum_specialization_name(type_name):

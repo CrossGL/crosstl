@@ -21,8 +21,21 @@ structs outside any block. This pass rewrites the declaration, for every target,
   lay out member by member. ``name[i]`` becomes ``{name}Storage.name[i]``, ``buffer_load(name, i)`` an element
   read, ``buffer_store(name, i, v)`` an assignment statement and ``buffer_dimensions(name)`` a ``length()``.
 
-``buffer S name[]`` with a struct ``S`` is left alone: the parser gives GLSL's array of buffer blocks,
-``buffer S { ... } name[];``, the same form, and the emitters read it as that descriptor array.
+``buffer S name[]`` with a struct ``S`` is one storage buffer of ``S`` elements, as Metal's ``device S*`` always
+read it; GLSL had printed an unsized array of buffer blocks, which glslang rejects, SPIR-V a runtime descriptor
+array and HLSL a refusal. A struct of 32-bit scalars and two- and four-component vectors without std430 padding
+takes the structured-buffer form, since its offsets agree in std430, HLSL and MSL; any other struct takes the
+buffer block form. GLSL's array of buffer blocks, ``buffer B { ... } name[N];``, which the parser marks with
+``@glsl_buffer_block``, keeps its meaning of one binding per element and is left alone.
+
+``buffer T name[N]`` is likewise one storage buffer holding ``N`` elements; HLSL had declared a ``static``
+private array, so stores never reached memory, GLSL a ``uniform`` array, and struct elements gave ``N`` blocks.
+It takes the same two forms. A flat element drops the count from the type, and ``name.length()`` and
+``buffer_dimensions(name)`` become ``N``, the count the source declared; a block keeps ``T name[N]``.
+
+Stage interface arrays that GLSL sizes implicitly (geometry inputs, tessellation control outputs, mesh outputs,
+``pervertex`` inputs, ``gl_ClipDistance`` and ``gl_CullDistance``) first get the count their stage implies, and
+tessellation inputs, which the pipeline sizes, are kept unsized (:mod:`.stage_io_arrays`).
 
 Every other unsized array of values has no size any target can give it, and is refused with
 :class:`UnsizedArrayUnsupportedError`: a global, stage or local variable without an initializer, a parameter, an
@@ -41,9 +54,14 @@ from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name, iter_functions, iter_structs, type_from_node
 from .rewrite import call, clone
+from .stage_io_arrays import size_stage_io_arrays
 from .storage_blocks import _flat_element, _parents, _replace, _walk
 
-__all__ = ["UnsizedArrayUnsupportedError", "legalize_unsized_arrays"]
+__all__ = [
+    "StorageBufferParameterUnsupportedError",
+    "UnsizedArrayUnsupportedError",
+    "legalize_unsized_arrays",
+]
 
 _LAYOUTS = ("std430", "std140", "scalar")
 _ACCESS = frozenset({"buffer", "readonly", "writeonly"})
@@ -70,6 +88,48 @@ class UnsizedArrayUnsupportedError(TranslationDiagnostic):
             target=target,
             code=f"{CODE_PREFIX}{target}-unsized-array-unsupported",
         )
+
+
+class StorageBufferParameterUnsupportedError(TranslationDiagnostic):
+    """A ``buffer T name[]`` helper parameter whose elements have no single stride across the targets."""
+
+    def __init__(self, target, function, name, why, *, source_location=None):
+        self.source_location = source_location
+        self.missing_capabilities = (f"{target}.storage-buffer-parameter",)
+        super().__init__(
+            f"storage-buffer parameter '{name}' of '{function}' {why}: a helper can take a storage buffer only "
+            "as a structured buffer, whose elements are 32-bit scalars, two- or four-component vectors of one, "
+            "or structs of them without std430 padding, since only those have the same stride in std430, HLSL "
+            "structured buffers and MSL; pass the elements the helper needs instead",
+            target=target,
+            code=f"{CODE_PREFIX}{target}-storage-buffer-parameter-unsupported",
+        )
+
+
+_LAYOUT_MEMBER_ATTRIBUTES = frozenset({"offset", "align", "packoffset", "packed"})
+
+
+def _flat_struct(struct) -> bool:
+    """Whether a struct of 32-bit scalars and two- and four-component vectors has no padding in std430.
+
+    Such a struct has the same member offsets and stride in std430, the scalar layout, an HLSL structured buffer
+    (which packs to 4 bytes) and MSL (whose alignments for these types match std430), so a runtime array of it can
+    be a structured buffer. Any padding, or a member that is not such a vector, leaves it to the buffer block.
+    """
+    members = list(getattr(struct, "members", None) or [])
+    offset, alignment = 0, 4
+    for member in members:
+        member_type = getattr(member, "member_type", None)
+        if not _flat_element(member_type) or (
+            _attribute_names(member) & _LAYOUT_MEMBER_ATTRIBUTES
+        ):
+            return False
+        size = 4 * type_from_node(member_type).lanes
+        if offset % size:
+            return False
+        offset += size
+        alignment = max(alignment, size)
+    return bool(members) and offset % alignment == 0
 
 
 def _unsized(type_node):
@@ -120,6 +180,26 @@ def _is_bound_parameter(function, parameter):
     )
 
 
+def _array_initializer(array_type, value):
+    """``(value, array_type)`` for an array declaration: a GLSL array constructor becomes the equivalent
+    initializer list, and an unsized array takes the element count of its list, as C and GLSL 4.60 section 4.1.9
+    do."""
+    if isinstance(value, A.FunctionCallNode) and _ARRAY_CONSTRUCTOR.fullmatch(
+        call_name(value)
+    ):
+        value = A.ArrayLiteralNode(list(value.arguments or []))
+    if (
+        isinstance(value, A.ArrayLiteralNode)
+        and array_type.size is None
+        and value.elements
+    ):
+        array_type = A.ArrayType(
+            array_type.element_type,
+            A.LiteralNode(len(value.elements), A.PrimitiveType("int")),
+        )
+    return value, array_type
+
+
 def _type_names(type_node):
     """Every type name a type mentions, its generic arguments and elements included."""
     if isinstance(type_node, A.NamedType):
@@ -145,6 +225,7 @@ class _Legalizer:
         }
         self.parents = None
         self.taken = None
+        self.pipeline_sized = set()
 
     def is_value(self, type_node) -> bool:
         """Whether a type is a value (scalar, vector, matrix, struct or array of them), not a resource."""
@@ -184,21 +265,24 @@ class _Legalizer:
             yield stage, "local_variables"
 
     def run(self):
+        self.pipeline_sized = size_stage_io_arrays(self.program)
         buffers = [
             (owner, field, variable)
             for owner, field in self.scopes()
             for variable in list(getattr(owner, field, None) or [])
             if isinstance(variable, A.VariableNode)
             and "buffer" in _qualifiers(variable)
-            and _unsized(variable.var_type)
+            and isinstance(variable.var_type, A.ArrayType)
             and self.is_value(variable.var_type.element_type)
-            and not self.is_struct(variable.var_type.element_type)
+            and "glsl_buffer_block" not in _attribute_names(variable)
         ]
         if buffers:
             self.parents = _parents(self.program)
             self.taken = self.declared_names()
             for owner, field, variable in buffers:
                 self.legalize_buffer(owner, field, variable)
+        self.legalize_buffer_parameters()
+        self.constant_array_initializers()
         self.refuse_unsized_values()
 
     # Storage buffers declared as ``buffer T name[]``.
@@ -256,8 +340,12 @@ class _Legalizer:
         layout = str(layouts[0].name).lower() if layouts else "std430"
         readonly = "readonly" in _qualifiers(variable)
         element = variable.var_type.element_type
+        size = variable.var_type.size
         uses, ambiguous = self.uses(variable.name)
-        flat = layout != "std140" and _flat_element(element)
+        flat = layout != "std140" and (
+            _flat_element(element)
+            or (self.is_struct(element) and _flat_struct(self.structs[element.name]))
+        )
         if ambiguous and not flat:
             self.refuse(
                 variable.name,
@@ -272,14 +360,32 @@ class _Legalizer:
             wrapper = "StructuredBuffer" if readonly else "RWStructuredBuffer"
             variable.var_type = variable.vtype = A.NamedType(wrapper, [element])
             for identifier in uses:
-                length = self.length_call(identifier)
-                if length is not None:
-                    dimensions = call(
-                        "buffer_dimensions", [A.IdentifierNode(variable.name)]
-                    )
-                    _replace(self.parents, length, call("int", [dimensions]))
+                self.rewrite_flat_count(identifier, variable.name, size)
             return
-        self.to_block(owner, field, variable, element, layout, readonly, uses)
+        self.to_block(owner, field, variable, element, size, layout, readonly, uses)
+
+    def rewrite_flat_count(self, identifier, name, size):
+        """``name.length()`` of a structured buffer becomes its bound element count, or the declared count of
+        ``buffer T name[N]``, which ``buffer_dimensions(name)`` also gives; the declared count is what the source
+        array had, whatever size of buffer the host binds."""
+        length = self.length_call(identifier)
+        if length is not None:
+            count = (
+                clone(size)
+                if size is not None
+                else call("buffer_dimensions", [A.IdentifierNode(name)])
+            )
+            _replace(self.parents, length, call("int", [count]))
+            return
+        user = self.parent(identifier)
+        if (
+            size is not None
+            and isinstance(user, A.FunctionCallNode)
+            and call_name(user) == "buffer_dimensions"
+            and len(user.arguments or []) == 1
+            and user.arguments[0] is identifier
+        ):
+            _replace(self.parents, user, call("uint", [clone(size)]))
 
     def length_call(self, identifier):
         """The ``name.length()`` call around ``identifier``, if that is how it is used."""
@@ -290,11 +396,12 @@ class _Legalizer:
                 return length
         return None
 
-    def to_block(self, owner, field, variable, element, layout, readonly, uses):
+    def to_block(self, owner, field, variable, element, size, layout, readonly, uses):
         name = variable.name
         struct_name = self.fresh(f"{name[:1].upper()}{name[1:]}Block")
         instance = self.fresh(f"{name}Storage")
-        member = A.StructMemberNode(name, A.ArrayType(clone(element), None))
+        count = clone(size) if size is not None else None
+        member = A.StructMemberNode(name, A.ArrayType(clone(element), count))
         self.program.structs.append(A.StructNode(struct_name, [member]))
         self.structs[struct_name] = self.program.structs[-1]
         attributes = [A.AttributeNode("glsl_buffer_block", [A.IdentifierNode(layout)])]
@@ -351,7 +458,101 @@ class _Legalizer:
             identifier,
         )
 
+    # Storage buffers passed to helpers as ``buffer T name[]`` parameters.
+
+    def legalize_buffer_parameters(self):
+        """A helper's ``buffer T name[]`` (or ``buffer T name[N]``) parameter takes the structured-buffer form of
+        the buffer its caller passes, ``RWStructuredBuffer<T> name`` or ``StructuredBuffer<T>`` when ``readonly``,
+        which is how the HLSL importer spells the same parameter and which every emitter carries: HLSL and Slang
+        pass the resource, MSL a device pointer, and GLSL and SPIR-V, which cannot pass a buffer, specialize the
+        helper for each buffer it receives. The emitters had printed the unsized array parameter unchanged, which
+        DXC, glslang, slangc and spirv-val reject. ``name.length()`` in the helper becomes
+        ``int(buffer_dimensions(name))``, or ``N``.
+
+        A buffer of other elements takes the buffer-block form, which no target can pass to a function, so such
+        a parameter is refused with :class:`StorageBufferParameterUnsupportedError`.
+        """
+        parameters = [
+            (function, parameter)
+            for function in iter_functions(self.program)
+            for parameter in function.parameters or []
+            if "buffer" in _qualifiers(parameter)
+            and "glsl_buffer_block" not in _attribute_names(parameter)
+            and isinstance(parameter.param_type, A.ArrayType)
+            and self.is_value(parameter.param_type.element_type)
+            and not _is_bound_parameter(function, parameter)
+        ]
+        if not parameters:
+            return
+        self.parents = _parents(self.program)
+        for function, parameter in parameters:
+            self.legalize_buffer_parameter(function, parameter)
+
+    def legalize_buffer_parameter(self, function, parameter):
+        name = parameter.name
+        layouts = [
+            a for a in parameter.attributes or [] if str(a.name).lower() in _LAYOUTS
+        ]
+        layout = str(layouts[0].name).lower() if layouts else "std430"
+        element = parameter.param_type.element_type
+        size = parameter.param_type.size
+        if layout == "std140" or not (
+            _flat_element(element)
+            or (self.is_struct(element) and _flat_struct(self.structs[element.name]))
+        ):
+            raise StorageBufferParameterUnsupportedError(
+                self.target,
+                function.name,
+                name,
+                (
+                    "has an std140 layout"
+                    if layout == "std140"
+                    else "holds elements of another type"
+                ),
+                source_location=getattr(parameter, "source_location", None),
+            )
+        identifiers, shadowed = [], False
+        for node in _walk(function.body):
+            if isinstance(node, A.VariableNode) and node.name == name:
+                shadowed = True
+            elif isinstance(node, A.IdentifierNode) and node.name == name:
+                identifiers.append(node)
+        if shadowed and any(self.length_call(i) is not None for i in identifiers):
+            raise StorageBufferParameterUnsupportedError(
+                self.target,
+                function.name,
+                name,
+                "is measured with length() where a local declaration shadows it",
+                source_location=getattr(parameter, "source_location", None),
+            )
+        wrapper = (
+            "StructuredBuffer"
+            if "readonly" in _qualifiers(parameter)
+            else "RWStructuredBuffer"
+        )
+        parameter.qualifiers = [
+            q for q in parameter.qualifiers if str(q).lower() not in _ACCESS
+        ]
+        parameter.attributes = [
+            a for a in parameter.attributes or [] if a not in layouts
+        ]
+        parameter.param_type = A.NamedType(wrapper, [element])
+        for identifier in identifiers:
+            self.rewrite_flat_count(identifier, name, size)
+
     # Every other unsized array of values.
+
+    def constant_array_initializers(self):
+        """A shader-scope ``const T a[N] = T[N](...)`` or ``const T a[] = ...`` gets the initializer list and the
+        element count a local declaration gets (:meth:`size_from_initializer`)."""
+        for constant in getattr(self.program, "constants", None) or []:
+            const_type = getattr(constant, "const_type", None)
+            if isinstance(constant, A.ConstantNode) and isinstance(
+                const_type, A.ArrayType
+            ):
+                constant.value, constant.const_type = _array_initializer(
+                    const_type, constant.value
+                )
 
     def refuse_unsized_values(self):
         for owner, field in self.scopes():
@@ -380,7 +581,7 @@ class _Legalizer:
         if getattr(variable, "initial_value", None) is not None:
             self.size_from_initializer(variable)
             return
-        if _is_storage(variable):
+        if _is_storage(variable) or id(variable) in self.pipeline_sized:
             return
         if isinstance(variable, A.ArrayNode) and variable.size is None:
             element = getattr(variable, "element_type", None)
@@ -399,19 +600,10 @@ class _Legalizer:
         var_type = getattr(variable, "var_type", None)
         if not isinstance(var_type, A.ArrayType) or isinstance(variable, A.ArrayNode):
             return
-        value = variable.initial_value
-        if isinstance(value, A.FunctionCallNode) and _ARRAY_CONSTRUCTOR.fullmatch(
-            call_name(value)
-        ):
-            value = A.ArrayLiteralNode(list(value.arguments or []))
-            variable.initial_value = value
-        if not isinstance(value, A.ArrayLiteralNode) or var_type.size is not None:
-            return
-        count = len(value.elements or [])
-        if count:
-            sized = A.ArrayType(
-                var_type.element_type, A.LiteralNode(count, A.PrimitiveType("int"))
-            )
+        variable.initial_value, sized = _array_initializer(
+            var_type, variable.initial_value
+        )
+        if sized is not var_type:
             variable.var_type = variable.vtype = sized
 
     def check_type(self, node, type_node, where):

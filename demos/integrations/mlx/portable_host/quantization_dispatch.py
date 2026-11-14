@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -11,12 +10,15 @@ from crosstl.project.runtime_value_encoding import (
     FLOAT16_BITS,
     FLOAT32_BITS,
 )
+from crosstl.project.runtime_values import exact_types_within
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import half_storage, quantization_layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 GUARDS = {"uint8": 0xA5, "float32": 0x3EAAAAAB, "float16": 0x3555, "bfloat16": 0x3EAB}
 GUARD_COUNT = 17
+INT_TYPES = frozenset({int})
 WORD_TYPES = {1: ctypes.c_uint8, 2: ctypes.c_uint16, 4: ctypes.c_uint32}
 WORD_FORMATS = {1: "B", 2: "H", 4: "I"}
 
@@ -24,7 +26,9 @@ WORD_FORMATS = {1: "B", 2: "H", 4: "I"}
 def encode(words, logical, physical):
     words = list(words)
     size = quantization_layout.ITEM_SIZES[logical]
-    if any(type(word) is not int or not 0 <= word < 1 << (8 * size) for word in words):
+    if not exact_types_within(words, INT_TYPES) or (
+        words and not (0 <= min(words) and max(words) < 1 << (8 * size))
+    ):
         raise ValueError("Invalid quantization storage word")
     if logical == "uint8" and physical in {"uint8", "uint32"}:
         return {"dtype": physical, "shape": [len(words)], "values": words}
@@ -205,8 +209,7 @@ def dispatch(host, entry, buffers, count, elements, launch):
         },
     }
     # Validate every result and persist evidence before changing any MLX output.
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     for name, data in storage.items():
         ctypes.memmove(supplied[name].data, data, len(data))
     host.dispatch_count += 1

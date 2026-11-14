@@ -1,0 +1,24 @@
+#version 450
+// S11: a std430 mat2x3 is two columns of three floats, each column padded to 16 bytes
+// (GLSL 4.60 section 7.6.2.2), and a {...} initializer lists a matrix's columns (section 4.1.11).
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { mat2x3 ms[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint w = i * 8u;
+    mat2x3 m = ms[i];
+    vec3 mv = m * vec2(1.0, 10.0);
+    mat2 g = {{m[0].x, m[1].x}, {m[0].z, 5.0}};
+    mat3x2 h = {{m[1].x, m[1].y}, {m[1].z, m[0].x}, {m[0].y, m[0].z}};
+    vec2 gv = g * vec2(1.0, 100.0);
+    vec2 hv = h * vec3(1.0, 10.0, 100.0);
+    o[w + 0u] = mv.x;
+    o[w + 1u] = mv.y;
+    o[w + 2u] = mv.z;
+    o[w + 3u] = gv.x;
+    o[w + 4u] = gv.y;
+    o[w + 5u] = hv.x;
+    o[w + 6u] = hv.y;
+    o[w + 7u] = ms[i][1][2] + ms[i][0].y * 10.0;
+}

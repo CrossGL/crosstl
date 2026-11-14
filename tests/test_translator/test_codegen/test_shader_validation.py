@@ -18,6 +18,7 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.semantics.texel_offsets import legalize_texel_offsets
 from tests.lowering_refusal_helpers import refused_glsl
 from tests.metal_refusal_helpers import metal_partial_output
 
@@ -1301,6 +1302,8 @@ shader SpirvTextureQueryComputeValidation {
     sampler linearSampler;
 
     compute {
+        // Implicit-LOD queries in compute need a derivative group: 2x2 quads.
+        layout(local_size_x = 2, local_size_y = 2) in;
         void main() {
             vec2 uv = vec2(0.25, 0.75);
             vec3 uvLayer = vec3(0.25, 0.75, 1.0);
@@ -1543,7 +1546,7 @@ shader DynamicSampledTextureArrayValidation {
 
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
-            return sampleDynamic(textures, samplers, input.layer, input.uv);
+            return sampleDynamic(textures, samplers, clamp(input.layer, 0, 3), input.uv);
         }
     }
 }
@@ -7041,7 +7044,11 @@ def validate_spirv_shader_source(
 
     source = tmp_path / f"{stem}.spvasm"
     output = tmp_path / f"{stem}.spv"
-    code = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(shader_source))
+    program = crosstl.translator.parse(shader_source)
+    # As crosstl.translate does, offsets held in constant locals become ConstOffset operands: Vulkan accepts a
+    # non-constant Offset on gathers only (VUID-RuntimeSpirv-Offset-10213).
+    legalize_texel_offsets(program, "vulkan")
+    code = VulkanSPIRVCodeGen().generate(program)
     assert "WARNING" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -7439,10 +7446,10 @@ def test_generated_metal_integer_gather_offsets_compile_with_metal(tmp_path):
     # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
     # offset i (GLSL 4.60, section 8.9.4); Metal's gather returns it in w.
     assert (
-        "return int4(tex.gather(s, uvLayer.xy, uint(uvLayer.z), offset, component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 0), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(0, 1), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 1), component::z).w);"
+        "return int4(tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset, component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 0), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0, 1), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 1), component::z).w);"
         in code
     )
 
@@ -9271,9 +9278,9 @@ def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3(tmp_
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool active = rq.Proceed();
-                uint hitType = rq.CommittedType();
+                uint hitType = rq.CommittedStatus();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }
@@ -10256,9 +10263,8 @@ def test_generated_metal_threadgroup_helper_barriers_compile_with_metal(tmp_path
     assert "void writeScratch(threadgroup float scratch[64]" in code
     assert "float readScratch(threadgroup float scratch[64]" in code
     assert "threadgroup float scratch[64];" in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
-    assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 2
-    assert "threadgroup_barrier(mem_flags::mem_texture);" in code
+    # The eight adjacent barriers fold into one barrier with the union of flags.
+    assert code.count("threadgroup_barrier(") == 1
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
         "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
@@ -10289,7 +10295,7 @@ def test_generated_metal_helper_control_flow_barriers_compile_with_metal(tmp_pat
     )
     assert "void syncScratch(uint mode)" in code
     assert "threadgroup float scratch[16];" in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in code
     assert (
@@ -10329,7 +10335,7 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
         in code
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -11118,7 +11124,9 @@ def test_generated_metal_const_local_array_alias_compiles_with_metal(tmp_path):
 
     assert "const float values[2] = {1.0, 2.0};" in code
     assert "parameter store" in refusal
-    assert "parameter call" in refusal
+    # The by-value ``mutate`` parameter receives a thread copy of the read-only array.
+    assert "parameter call" not in refusal
+    assert "mutate(crosstl_array_value<" in code
     assert "values[0] = value;" not in code
     assert "mutate(values);" not in code
 
@@ -11171,7 +11179,9 @@ def test_generated_metal_nested_constant_local_array_compiles_with_metal(tmp_pat
 
     assert "const float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};" in code
     assert "parameter store" in refusal
-    assert "parameter call" in refusal
+    # The by-value ``mutate`` parameter receives a thread copy of the read-only array.
+    assert "parameter call" not in refusal
+    assert "mutate(crosstl_array_value<" in code
     assert "values[0][1] = value;" not in code
     assert "mutate(values);" not in code
 
@@ -11469,7 +11479,7 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
     assert "array<texture2d<float, access::write>, 2> targets;" in code
     assert "array<texture2d<uint, access::read_write>, 2> counters;" in code
     assert "pack.pairs[index].read(uint2(pixel)).xy" in code
-    assert "pack.targets[index].write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert "pack.targets[index].write(float4(value, 0.0, 1.0), uint2(pixel))" in code
     assert "pack.counters[index].atomic_fetch_add(uint2(pixel), value).x" in code
     assert "array<texture2d<float, access::read>, 2> pairsAlias = pack.pairs" in code
     assert "chainedPairsAlias[index].read(uint2(pixel)).xy" in code
@@ -11477,7 +11487,7 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
         "array<texture2d<float, access::write>, 2> targetsAlias = pack.targets" in code
     )
     assert (
-        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel))"
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 1.0), uint2(pixel))"
         in code
     )
     assert (
@@ -11511,7 +11521,7 @@ def test_generated_metal_compute_struct_held_storage_image_element_aliases_compi
     assert "texture2d<float, access::read> pairAlias = pack.pairs[index];" in code
     assert "pairAlias.read(uint2(pixel)).xy" in code
     assert "texture2d<float, access::write> targetAlias = pack.targets[index];" in code
-    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert "targetAlias.write(float4(value, 0.0, 1.0), uint2(pixel))" in code
     assert (
         "texture2d<uint, access::read_write> counterAlias = pack.counters[index];"
         in code
@@ -12360,18 +12370,16 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     run_validator([glslang, "-S", "frag", str(source)])
 
 
-def test_generated_glsl_fragment_cube_array_shadow_compare_lod_grad_fails_closed():
+def test_generated_glsl_fragment_cube_array_shadow_compare_grad_fails_closed():
+    # GL_EXT_texture_shadow_lod adds textureLod for cube-array shadows; no extension adds textureGrad.
     message = refused_glsl(
         GLSLCodeGen().generate_stage,
         crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
         "fragment",
     )
 
-    assert "OpenGL cannot lower 2 constructs" in message
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in message
-    )
+    assert "OpenGL cannot lower 1 construct" in message
+    assert "textureCompareLod" not in message
     assert (
         "texture compare: textureCompareGrad explicit gradients require 2D, "
         "2D-array, or cube shadow samplers" in message
@@ -12480,7 +12488,8 @@ def test_translated_metal_function_constants_validate_as_opengl_spirv13(tmp_path
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in code
     assert "layout(constant_id = 20) const bool has_w = false;" in code
     assert "layout(constant_id = 21) const int mode = 2;" in code
@@ -12589,6 +12598,7 @@ def test_translated_metal_materialized_template_validates_with_glslang(tmp_path)
         backend="opengl",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "float add_bias_float_4(float value, uint bias)" in code
@@ -13558,6 +13568,7 @@ def test_translated_metal_materialized_template_validates_with_dxc(tmp_path):
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 4},
     )
 
     assert "float add_bias_float_4(float value, uint bias)" in code

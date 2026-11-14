@@ -28,7 +28,7 @@ def assert_spirv_position_output_wgsl_contract(wgsl):
     assert "struct VertexOutput" in wgsl
     assert "@builtin(position) position: vec4<f32>," in wgsl
     assert "@vertex\nfn vertex_main() -> VertexOutput" in wgsl
-    assert "output.position = vec4<f32>(0, 0, 0, 1);" in wgsl
+    assert "output.position = vec4<f32>(0.0, 0.0, 0.0, 1.0);" in wgsl
     assert "vec4<f32>(f32(0), f32(0), f32(0), f32(1))" not in wgsl
     assert "return output;" in wgsl
     assert "gl_Position" not in wgsl

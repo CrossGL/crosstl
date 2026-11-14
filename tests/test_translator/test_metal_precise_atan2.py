@@ -134,13 +134,13 @@ def test_precise_atan2_does_not_set_file_scope_contraction(tmp_path):
 
 
 def test_ci_requires_metal_contraction_scope_in_existing_native_step():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned arctangent"
     )
     selector = "tests/test_translator/test_metal_precise_atan2.py::test_precise_helpers_preserve_enclosing_metal_contraction"

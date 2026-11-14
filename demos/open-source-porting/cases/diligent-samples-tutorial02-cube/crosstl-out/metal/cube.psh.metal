@@ -4,7 +4,7 @@ using namespace metal;
 
 // Fragment Shader
 struct fragment_main_Input {
-    float4 PSIn_Color [[user(Color0)]];
+    float4 PSIn_Color [[user(COLOR0)]];
 };
 
 struct fragment_main_Return {

@@ -3129,6 +3129,7 @@ def test_parse_materialx_out_parameter_qualifier_from_xcode_genmsl():
 
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
+    template <typename T0>
     void reduce(uint j, uint limit, device float* dst_row) {
         for (int i = 0; i < limit; i++) {
             _Pragma("clang loop unroll(full)")
@@ -3150,6 +3151,7 @@ def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
 
 def test_parse_empty_for_condition_before_type_trait_from_llama_cpp():
     code = """
+    template <typename T0>
     void flash_attn_ext(uint iwg, uint sgitg) {
         for (int ic0 = iwg * NSG + sgitg; ; ic0 += NWG * NSG) {
             int ic = ic0;
@@ -3387,8 +3389,8 @@ def test_parse_template_declaration_preserves_existing_source_location(monkeypat
     }
     original_parse_function = MetalParser.parse_function
 
-    def parse_function_with_existing_location(parser):
-        function = original_parse_function(parser)
+    def parse_function_with_existing_location(parser, *args, **kwargs):
+        function = original_parse_function(parser, *args, **kwargs)
         function.source_location = existing_location
         return function
 
@@ -3934,6 +3936,106 @@ def test_parse_retains_explicit_global_call_qualification():
     returned = ast.functions[0].body[0]
     assert isinstance(returned.value, FunctionCallNode)
     assert returned.value.name == "::fmin"
+
+
+def test_parse_contextual_access_names_as_function_identifiers_and_calls():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    namespace io {
+        float read(float v);
+        float read(float v) { return v + 1.0; }
+        float read(float v, float s) { return v * s; }
+        float write(float v) { return v - 1.0; }
+        float read_write(float v) { return read(v) + write(v); }
+    }
+
+    float read(float v);
+    float read(float v) { return v + 1.0; }
+    float read(float v, float s) { return v * s; }
+    float write(float v) { return v * 2.0; }
+    float read_write(float v) { return read(v) + write(v); }
+
+    fragment float4 fragmentShader(
+        float4 in [[stage_in]],
+        texture2d<float, access::read> tex_read [[texture(0)]],
+        texture2d<float, read> tex_bare_read [[texture(1)]],
+        texture2d<float, access::write> tex_write [[texture(2)]],
+        texture2d<float, access::read_write> tex_rw [[texture(3)]]
+    ) {
+        float a = read(in.x) + read(in.y, 2.0) + write(in.z) + read_write(in.w);
+        float b = io::read(a) + io::read(a, 0.5) + io::write(a) + io::read_write(a);
+        return float4(a, b, 0.0, 1.0);
+    }
+    """
+    ast = parse_ok(code)
+    fn_names = [(fn.name, getattr(fn, "namespace", "")) for fn in ast.functions]
+    assert ("read", "io") in fn_names
+    assert ("write", "io") in fn_names
+    assert ("read_write", "io") in fn_names
+    assert ("read", "") in fn_names
+    assert ("write", "") in fn_names
+    assert ("read_write", "") in fn_names
+
+    frag = next(fn for fn in ast.functions if fn.name == "fragmentShader")
+    param_types = {param.name: param.vtype for param in frag.params}
+    assert param_types["tex_read"] == "texture2d<float,access::read>"
+    assert param_types["tex_bare_read"] == "texture2d<float,read>"
+    assert param_types["tex_write"] == "texture2d<float,access::write>"
+    assert param_types["tex_rw"] == "texture2d<float,access::read_write>"
+
+    call_names = [
+        node.name
+        for node in iter_ast_nodes(frag.body)
+        if isinstance(node, FunctionCallNode)
+    ]
+    for expected in (
+        "read",
+        "write",
+        "read_write",
+        "io::read",
+        "io::write",
+        "io::read_write",
+    ):
+        assert expected in call_names
+
+
+@pytest.mark.parametrize("backend", ["metal", "opengl", "directx"])
+def test_translate_contextual_access_functions_across_backends(tmp_path, backend):
+    import crosstl
+
+    shader = tmp_path / "contextual_access_fns.metal"
+    shader.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        float read(float v) {
+            return v + 1.0;
+        }
+        float write(float v) {
+            return v * 2.0;
+        }
+        float read_write(float v) {
+            return read(v) + write(v);
+        }
+
+        fragment float4 fragmentShader(
+            float4 in [[stage_in]],
+            texture2d<float, access::read> tex_read [[texture(0)]],
+            texture2d<float, read> tex_bare_read [[texture(1)]]
+        ) {
+            float a = read(in.x) + write(in.y) + read_write(in.z);
+            return float4(a, a, 0.0, 1.0);
+        }
+        """,
+        encoding="utf-8",
+    )
+    output = crosstl.translate(str(shader), backend=backend, save_shader=None)
+    assert "float read(float v)" in output
+    assert "float write(float v)" in output
+    assert "float read_write(float v)" in output
 
 
 if __name__ == "__main__":

@@ -16,15 +16,21 @@ floating-point operation they compare against is exact:
 - ``cgl_half_fma`` adds the exact binary32 product of two binary16 values to the third one in 32-bit integers with a
   sticky bit, and rounds the sum once (IEEE 754-2019 section 5.4.1, fusedMultiplyAdd). A zero product or a
   non-finite operand makes the binary32 sum exact. The GLSL emitter uses the same definition (:func:`glsl_source`).
+- ``cgl_half_fmod`` is the truncated remainder of C ``fmod`` and MSL/HLSL ``%`` (IEEE 754-2019 section 5.3.1
+  defines its exactness): it is always a binary16 value, computed in 32-bit integers from the significands, as
+  ``sx * 2^d mod sy`` scaled by the divisor's unit in the last place (``d`` is at most 29), with no floating-point
+  operation other than an exact scaling.
 - ``cgl_half_to_bits`` and ``cgl_half_from_bits`` convert between a binary16 value and its encoding.
 
-Vector forms apply the scalar helper per lane.
+Vector forms apply the scalar helper per lane, and the matrix form of ``cgl_half_round`` (``lanes`` is a
+``(columns, rows)`` shape, named ``cgl_half_roundCxR``) applies the vector form per column.
 """
 
 from __future__ import annotations
 
 import functools
 
+from ..refusals import CrossGLRefusal
 from .rewrite import clone
 
 HALF_HELPER_MARK = "cgl_rule_helper"
@@ -211,6 +217,40 @@ float cgl_half_fma(float x0, float x1, float x2) {
 }
 """
 
+_FMOD = """
+float cgl_half_fmod(float x0, float x1) {
+    uint a = asuint(x0);
+    uint ma = a & 0x7fffffffu;
+    uint mb = asuint(x1) & 0x7fffffffu;
+    if (ma > 0x7f800000u) {
+        return x0;
+    }
+    if (mb > 0x7f800000u) {
+        return x1;
+    }
+    if (ma == 0x7f800000u || mb == 0u) {
+        return asfloat(0x7fc00000u);
+    }
+    if (ma < mb) {
+        return x0;
+    }
+    uint ka = cgl_half_index(x0);
+    uint kb = cgl_half_index(x1);
+    uint ea = ka >> 10u;
+    uint eb = kb >> 10u;
+    uint sa = ea == 0u ? ka : ((ka & 0x3ffu) | 0x400u);
+    uint sb = eb == 0u ? kb : ((kb & 0x3ffu) | 0x400u);
+    ea = ea == 0u ? 1u : ea;
+    eb = eb == 0u ? 1u : eb;
+    uint d = ea - eb;
+    uint low = d < 20u ? d : 20u;
+    uint scale = (((1u << low) % sb) * ((1u << (d - low)) % sb)) % sb;
+    uint r = ((sa % sb) * scale) % sb;
+    float remainder = float(r) * asfloat((eb + 102u) << 23u);
+    return asfloat((a & 0x80000000u) | asuint(remainder));
+}
+"""
+
 _TO_BITS = """
 uint cgl_half_to_bits(float x0) {
     uint bits = asuint(x0);
@@ -252,16 +292,46 @@ SCALAR_HELPERS = {
         ("cgl_half_round", "cgl_half_index", "cgl_half_value", "cgl_half_midpoint"),
     ),
     "cgl_half_fma": (_FMA, 3, ()),
+    "cgl_half_fmod": (_FMOD, 2, ("cgl_half_index",)),
     "cgl_half_to_bits": (_TO_BITS, 1, ("cgl_half_index",)),
     "cgl_half_from_bits": (_FROM_BITS, 1, ("cgl_half_value",)),
 }
 # Helpers with a per-lane vector form; their operands and results are floats.
-LANE_HELPERS = ("cgl_half_round", "cgl_half_div", "cgl_half_sqrt", "cgl_half_fma")
+LANE_HELPERS = (
+    "cgl_half_round",
+    "cgl_half_div",
+    "cgl_half_sqrt",
+    "cgl_half_fma",
+    "cgl_half_fmod",
+)
+# Helpers with a per-column matrix form.
+MATRIX_HELPERS = ("cgl_half_round",)
 _LANES = "xyzw"
 
 
-def helper_name(base: str, lanes: int) -> str:
+def helper_name(base: str, lanes) -> str:
+    if isinstance(lanes, tuple):
+        columns, rows = lanes
+        return f"{base}{columns}x{rows}"
     return base if lanes == 1 else f"{base}{lanes}"
+
+
+def matrix_name(shape) -> str:
+    """The CrossGL spelling of the float matrix with ``shape`` ``(columns, rows)``."""
+    columns, rows = shape
+    return f"mat{columns}" if columns == rows else f"mat{columns}x{rows}"
+
+
+def _matrix_source(base: str, shape) -> str:
+    columns, rows = shape
+    matrix = matrix_name(shape)
+    per_column = ", ".join(
+        f"{helper_name(base, rows)}(x0[{column}])" for column in range(columns)
+    )
+    return (
+        f"{matrix} {helper_name(base, shape)}({matrix} x0) "
+        f"{{ return {matrix}({per_column}); }}"
+    )
 
 
 def _vector_source(base: str, lanes: int) -> str:
@@ -278,15 +348,19 @@ def _vector_source(base: str, lanes: int) -> str:
     )
 
 
-def helper_source(base: str, lanes: int) -> str:
-    """The CrossGL definition of ``base`` for ``lanes`` lanes."""
+def helper_source(base: str, lanes) -> str:
+    """The CrossGL definition of ``base`` for ``lanes`` lanes (a ``(columns, rows)`` shape for a matrix)."""
+    if isinstance(lanes, tuple):
+        if base not in MATRIX_HELPERS:
+            raise CrossGLRefusal(f"{base} has no matrix form")
+        return _matrix_source(base, lanes)
     if lanes == 1:
         return SCALAR_HELPERS[base][0]
     return _vector_source(base, lanes)
 
 
 @functools.lru_cache(maxsize=None)
-def _parsed(base: str, lanes: int):
+def _parsed(base: str, lanes):
     from ..source_registry import SOURCE_REGISTRY, register_default_sources
 
     register_default_sources()
@@ -296,7 +370,7 @@ def _parsed(base: str, lanes: int):
     return function
 
 
-def helper_function(base: str, lanes: int):
+def helper_function(base: str, lanes):
     """A fresh copy of the helper's ``FunctionNode``, marked so rule carrying leaves its body alone."""
     function = clone(_parsed(base, lanes))
     function.annotations[HALF_HELPER_MARK] = "half"
@@ -312,7 +386,7 @@ def glsl_source(base: str, name: str) -> str:
     """The scalar helper ``base`` in GLSL 4.00 spelling, named ``name``; only self-contained helpers qualify."""
     source, _, dependencies = SCALAR_HELPERS[base]
     if dependencies:
-        raise ValueError(f"{base} calls other helpers")
+        raise CrossGLRefusal(f"{base} calls other helpers")
     return (
         source.strip()
         .replace(f"float {base}(", f"float {name}(", 1)
@@ -323,8 +397,12 @@ def glsl_source(base: str, name: str) -> str:
 
 
 def closure(required):
-    """Every ``(base, lanes)`` the required helpers need, in definition order (scalar helpers before their users)."""
+    """Every ``(base, lanes)`` the required helpers need, in definition order (scalar helpers before vector helpers
+    and vector helpers before matrix helpers)."""
     needed = set(required)
+    for base, lanes in list(needed):
+        if isinstance(lanes, tuple):
+            needed.add((base, lanes[1]))
     for base, lanes in list(needed):
         if lanes != 1:
             needed.add((base, 1))
@@ -335,4 +413,11 @@ def closure(required):
                 needed.add((dependency, 1))
                 pending.append(dependency)
     order = list(SCALAR_HELPERS)
-    return sorted(needed, key=lambda item: (item[1] != 1, order.index(item[0]), item[1]))
+
+    def key(item):
+        base, lanes = item
+        shape = lanes if isinstance(lanes, tuple) else (lanes,)
+        rank = 2 if isinstance(lanes, tuple) else int(lanes != 1)
+        return rank, order.index(base), shape
+
+    return sorted(needed, key=key)

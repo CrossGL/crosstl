@@ -1,18 +1,22 @@
-"""Native compute adapters for the harness's explicit two-buffer ABI.
+"""Native compute adapters for the harness's ordered storage-buffer ABI.
 
-Each adapter binds ``input.bin`` at the input slot and ``output.bin`` at the output slot of the job directory,
-dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes both buffers back so the runner can
-check the output and confirm that the input buffer and the output guard words were not overwritten. Every adapter
-reports the identity of the device that ran the job; the runner rejects a result from an unexpected driver.
+Each adapter binds the input files at slots 0 through n-1 and ``output.bin`` at slot n of the job directory,
+dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes every buffer back so the runner can
+check the output and confirm that every input buffer and the output guard words were not overwritten. When the job
+has a constants block, ``constants.bin`` is bound read-only as that API's uniform or constant buffer at the slot
+discovered in the artifact, or pushed as push constants. Every adapter reports the identity of the device that ran
+the job; the runner rejects a result from an unexpected driver.
 """
 
 import os
 import re
+import struct
 from pathlib import Path
 
 from .process import run
 
 FILES = ("input.bin", "output.bin")
+CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
 
 
@@ -24,6 +28,17 @@ class ExecutionTimeout(RuntimeError):
     """The dispatch did not complete in time, for example because a translated loop no longer terminates."""
 
 
+def buffer_files(input_count):
+    """Storage files in binding order, retaining the existing single-input filenames."""
+    if input_count < 1:
+        raise ValueError("At least one input buffer is required")
+    return (
+        "input.bin",
+        *(f"input{slot}.bin" for slot in range(1, input_count)),
+        "output.bin",
+    )
+
+
 def _groups(job):
     return (job["threads"] + job["group"][0] - 1) // job["group"][0]
 
@@ -32,6 +47,18 @@ def _expect(job, identity):
     if job.get("expect") and job["expect"] not in identity:
         raise RuntimeError(f"Expected a {job['expect']} device, ran on {identity}")
     return identity
+
+
+def _constants(job, *kinds):
+    """The job's constants block and its bytes, or ``(None, None)``; a block kind the API lacks is a harness error."""
+    block = job.get("constants")
+    if block is None:
+        return None, None
+    if block["kind"] not in kinds:
+        raise RuntimeError(
+            f"{job['runtime']} cannot bind a {block['kind']} constants block"
+        )
+    return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
 def execute_metal(job):
@@ -65,7 +92,9 @@ def execute_metal(job):
             f"Metal pipeline allows {pipeline.maxTotalThreadsPerThreadgroup()} threads per group"
         )
     buffers = []
-    for binding, filename in zip(job["bindings"], FILES):
+    for binding, filename in zip(
+        job["bindings"], buffer_files(len(job["bindings"]) - 1)
+    ):
         data = (Path(job["directory"]) / filename).read_bytes()
         buffer = device.newBufferWithBytes_length_options_(
             data, len(data), Metal.MTLResourceStorageModeShared
@@ -73,11 +102,21 @@ def execute_metal(job):
         if buffer is None:
             raise RuntimeError("Metal buffer allocation failed")
         buffers.append((binding, buffer, filename))
+    block, data = _constants(job, "uniform")
+    constants = None
+    if block is not None:
+        constants = device.newBufferWithBytes_length_options_(
+            data, len(data), Metal.MTLResourceStorageModeShared
+        )
+        if constants is None:
+            raise RuntimeError("Metal constants allocation failed")
     command = device.newCommandQueue().commandBuffer()
     encoder = command.computeCommandEncoder()
     encoder.setComputePipelineState_(pipeline)
     for binding, buffer, _ in buffers:
         encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
+    if constants is not None:
+        encoder.setBuffer_offset_atIndex_(constants, 0, block["slot"])
     # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
     # whole workgroups, which is the hazard the partial-threadgroup cases measure.
     encoder.dispatchThreads_threadsPerThreadgroup_(
@@ -109,14 +148,22 @@ def execute_opengl(job):
             shader = context.compute_shader(Path(job["artifact"]).read_text())
         except moderngl.Error as error:
             raise DriverRejected(str(error)) from error
-        for binding, filename in zip(job["bindings"], FILES):
+        for binding, filename in zip(
+            job["bindings"], buffer_files(len(job["bindings"]) - 1)
+        ):
             buffer = context.buffer((Path(job["directory"]) / filename).read_bytes())
             buffers.append((buffer, filename))
             buffer.bind_to_storage_buffer(binding)
+        block, data = _constants(job, "uniform")
+        if block is not None:
+            constants = context.buffer(data)
+            buffers.append((constants, None))
+            constants.bind_to_uniform_block(block["slot"])
         shader.run(group_x=_groups(job))
         context.finish()
         for buffer, filename in buffers:
-            (Path(job["directory"]) / filename).write_bytes(buffer.read())
+            if filename is not None:
+                (Path(job["directory"]) / filename).write_bytes(buffer.read())
         return {"device": identity, "runtime": job["runtime"]}
     finally:
         for buffer, _ in buffers:
@@ -130,8 +177,15 @@ def execute_vulkan(job):
     executable = os.environ.get("CROSSTL_CONFORMANCE_VKRUN", "vkrun")
     directory = Path(job["directory"])
     args = [executable, job["binary"], job["entry"], _groups(job), 1, 1]
-    for binding, filename in zip(job["bindings"], FILES):
+    for binding, filename in zip(
+        job["bindings"], buffer_files(len(job["bindings"]) - 1)
+    ):
         args.append(f"{binding}:inout:{directory / filename}")
+    block, _ = _constants(job, "uniform", "push")
+    if block is not None and block["kind"] == "push":
+        args.append(f"push:{directory / CONSTANTS}")
+    elif block is not None:
+        args.append(f"{block['slot']}:uniform:{directory / CONSTANTS}")
     result = run(args, timeout=job.get("timeout", VULKAN_TIMEOUT))
     if result.status == "timeout":
         raise ExecutionTimeout(f"vkrun exceeded {job.get('timeout', VULKAN_TIMEOUT)} s")
@@ -148,27 +202,11 @@ def execute_vulkan(job):
     return {"runtime": job["runtime"], "device": identity, "api": fields.get("api")}
 
 
-def loaded_module_version(name):
-    """Path and fixed file version of a DLL loaded into this Windows process, or ``(None, None)``."""
+def file_version(path):
+    """Fixed file version of a Windows DLL on disk, or ``None``."""
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-    kernel32.GetModuleFileNameW.argtypes = [
-        wintypes.HMODULE,
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-    ]
-    kernel32.GetModuleFileNameW.restype = wintypes.DWORD
-    handle = kernel32.GetModuleHandleW(name)
-    if not handle:
-        return None, None
-    buffer = ctypes.create_unicode_buffer(32768)
-    if not kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
-        return None, None
-    path = buffer.value
     version = ctypes.WinDLL("version", use_last_error=True)
     version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, wintypes.LPDWORD]
     version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
@@ -198,18 +236,18 @@ def loaded_module_version(name):
         )
         or length.value < 16
     ):
-        return path, None
+        return None
     # VS_FIXEDFILEINFO starts with dwSignature, dwStrucVersion, dwFileVersionMS, dwFileVersionLS.
     words = ctypes.cast(fixed, ctypes.POINTER(wintypes.DWORD * 4)).contents
     if words[0] != 0xFEEF04BD:
-        return path, None
+        return None
     high, low = words[2], words[3]
-    return path, f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
+    return f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
 
 
-def _warp_identity(job, name):
-    """The adapter name plus the d3d10warp.dll actually loaded; CROSSTL_CONFORMANCE_WARP_VERSION pins it."""
-    path, version = loaded_module_version("d3d10warp.dll")
+def _warp_identity(job, name, path):
+    """The adapter name plus the d3d10warp.dll the worker loaded; CROSSTL_CONFORMANCE_WARP_VERSION pins it."""
+    version = file_version(path) if path else None
     wanted = os.environ.get("CROSSTL_CONFORMANCE_WARP_VERSION")
     if wanted and version != wanted:
         raise RuntimeError(
@@ -265,38 +303,136 @@ def d3d12_pipeline_models(dxc, directory, models):
     return device.name, results
 
 
-def execute_d3d12(job):
-    compushady, device = _d3d12_software_device()
-    _expect(job, device.name)
-    views = []
+# The request, readback and runtime-identity formats of crosstl/project/directx_runtime_worker.cpp.
+D3D12_REQUEST, D3D12_READBACKS, D3D12_IDENTITY = 0x31565844, 0x31525844, 0x314C5844
+D3D12_CBV, D3D12_SRV, D3D12_UAV, D3D12_RAW = 0, 1, 2, 4
+D3D12_LIBRARIES = ("d3d12.dll", "D3D12Core.dll", "d3d10warp.dll")
+# Below the 60 s limit of the job process, so a dispatch that never finishes is reported as a timeout.
+D3D12_TIMEOUT = 45
+
+
+def d3d12_request(job, shader):
+    """Encode one dispatch for the buffer-view worker: an allocation per buffer, each view at its own register.
+
+    A ``ByteAddressBuffer`` gets a raw view (``R32_TYPELESS`` with the raw flag) and a ``StructuredBuffer`` a
+    structured view of its reflected stride, as HLSL requires; the constants block becomes a constant-buffer view
+    padded to 256 bytes. Returns the request bytes and the buffer files in allocation order.
+    """
+    directory = Path(job["directory"])
+    allocations, views, files = [], [], []
     for resource, filename in zip(job["resources"], FILES):
-        data = (Path(job["directory"]) / filename).read_bytes()
-        upload = compushady.Buffer(len(data), compushady.HEAP_UPLOAD, device=device)
-        upload.upload(data)
-        stride = resource["stride"] if resource["kind"] == "structured" else 0
-        buffer = compushady.Buffer(len(data), stride=stride, device=device)
-        upload.copy_to(buffer)
-        views.append((resource["register"], buffer, filename))
-    srv = [buffer for register, buffer, _ in views if register.startswith("t")]
-    uav = {
-        int(register[1:]): buffer
-        for register, buffer, _ in views
-        if register.startswith("u")
-    }
-    # UAV slots are positional; an unused u0 slot (input bound as t0) gets a placeholder.
-    placeholder = compushady.Buffer(16, stride=4, device=device)
-    shader = compushady.Compute(
-        Path(job["binary"]).read_bytes(),
-        srv=srv,
-        uav=[uav.get(slot, placeholder) for slot in range(max(uav) + 1)],
-        device=device,
-    )
-    shader.dispatch(_groups(job), 1, 1)
-    for _, buffer, filename in views:
-        readback = compushady.Buffer(
-            buffer.size, compushady.HEAP_READBACK, device=device
+        data = (directory / filename).read_bytes()
+        register = resource["register"]
+        kind = {"t": D3D12_SRV, "u": D3D12_UAV}[register[0]]
+        raw = resource["kind"] == "raw"
+        stride = 0 if raw else resource["stride"]
+        length = len(data) if raw else len(data) - len(data) % stride
+        views.append(
+            (
+                kind | (D3D12_RAW if raw else 0),
+                int(register[1:]),
+                len(allocations),
+                stride,
+                0,
+                length,
+            )
         )
-        buffer.copy_to(readback)
-        (Path(job["directory"]) / filename).write_bytes(readback.readback())
-    # d3d10warp.dll is loaded once the device exists, so its version is read after the dispatch.
-    return {"runtime": job["runtime"], "device": _warp_identity(job, device.name)}
+        allocations.append(data)
+        files.append(filename)
+    block, data = _constants(job, "uniform")
+    if block is not None:
+        padded = data.ljust(max(256, -(-len(data) // 256) * 256), b"\0")
+        views.append((D3D12_CBV, block["slot"], len(allocations), 0, 0, len(padded)))
+        allocations.append(padded)
+    parts = [struct.pack("<II", D3D12_REQUEST, len(allocations))]
+    for allocation in allocations:
+        parts += [struct.pack("<Q", len(allocation)), allocation]
+    parts += [
+        struct.pack("<IQ", 1, len(shader)),
+        shader,
+        struct.pack("<4I", _groups(job), 1, 1, len(views)),
+        *(struct.pack("<4I2Q", *view) for view in views),
+    ]
+    return b"".join(parts), files, [len(allocation) for allocation in allocations]
+
+
+def d3d12_readbacks(payload, sizes):
+    """Decode the worker's readbacks: every allocation's final contents, in request order."""
+    version, count = struct.unpack_from("<II", payload)
+    if version != D3D12_READBACKS or count != len(sizes):
+        raise RuntimeError("The D3D12 worker returned an incompatible readback")
+    offset, results = 8, []
+    for expected in sizes:
+        _, size = struct.unpack_from("<QQ", payload, offset)
+        offset += 16
+        if size != expected or offset + size > len(payload):
+            raise RuntimeError("The D3D12 worker returned a truncated readback")
+        results.append(payload[offset : offset + size])
+        offset += size
+    if offset != len(payload):
+        raise RuntimeError("The D3D12 worker returned trailing readback data")
+    return results
+
+
+def d3d12_loaded_libraries(payload):
+    """Map each library the worker observed after creating its device to the path it was loaded from."""
+    version, _, count = struct.unpack_from("<III", payload)
+    if version != D3D12_IDENTITY or count != len(D3D12_LIBRARIES):
+        raise RuntimeError("The D3D12 worker reported an incompatible runtime identity")
+    offset, paths = 12, {}
+    for name in D3D12_LIBRARIES:
+        loaded, _, length = struct.unpack_from("<III", payload, offset)
+        offset += 12
+        path = payload[offset : offset + 2 * length].decode("utf-16-le")
+        offset += 2 * length
+        paths[name] = path if loaded and path else None
+    return paths
+
+
+def execute_d3d12(job):
+    """Run the DXIL through CrossTL's Direct3D 12 buffer-view worker on the software adapter.
+
+    The worker builds a root signature with one descriptor table per view at the register the artifact declares,
+    so raw, structured and constant-buffer views each get the descriptor HLSL requires. The runtime provisions the
+    worker once per run and names it in ``CROSSTL_CONFORMANCE_D3D12_WORKER``.
+    """
+    _, device = _d3d12_software_device()
+    _expect(job, device.name)
+    worker = os.environ.get("CROSSTL_CONFORMANCE_D3D12_WORKER")
+    if not worker:
+        raise RuntimeError("CROSSTL_CONFORMANCE_D3D12_WORKER names no D3D12 worker")
+    directory = Path(job["directory"])
+    payload, files, sizes = d3d12_request(job, Path(job["binary"]).read_bytes())
+    request, output = directory / "d3d12-request.bin", directory / "d3d12-readbacks.bin"
+    request.write_bytes(payload)
+    identity = (
+        device.name,
+        int(device.is_hardware),
+        device.vendor_id,
+        device.dedicated_video_memory,
+        device.dedicated_system_memory,
+        device.shared_system_memory,
+    )
+    timeout = job.get("timeout", D3D12_TIMEOUT)
+    result = run([worker, request, output, *identity], timeout=timeout)
+    log = "\n".join(
+        line
+        for line in result.log.splitlines()
+        if not line.startswith("CROSSTL_DIRECTX_PROGRESS")
+    )
+    if result.status == "timeout" or "GPU fence timeout" in log:
+        raise ExecutionTimeout(f"The D3D12 dispatch exceeded {timeout} s")
+    if "CreateComputePipelineState failed" in log:
+        raise DriverRejected(log[-1500:])
+    if result.status != "accepted" or not output.is_file():
+        raise RuntimeError(f"D3D12 execution {result.status}: {log[-1500:]}")
+    for filename, data in zip(files, d3d12_readbacks(output.read_bytes(), sizes)):
+        (directory / filename).write_bytes(data)
+    runtime = Path(f"{output}.runtime")
+    libraries = (
+        d3d12_loaded_libraries(runtime.read_bytes()) if runtime.is_file() else {}
+    )
+    return {
+        "runtime": job["runtime"],
+        "device": _warp_identity(job, device.name, libraries.get("d3d10warp.dll")),
+    }

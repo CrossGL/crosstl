@@ -1,16 +1,18 @@
 #version 450 core
 #ifdef GL_VERTEX_SHADER
-in vec2 pos;
+layout(location = 0) in vec2 pos;
 #endif
 #ifdef GL_FRAGMENT_SHADER
 layout(location = 0) out vec4 fragColor;
 #endif
 vec3 tonemap(vec3 color);
 
+#ifdef GL_FRAGMENT_SHADER
 vec3 tonemap(vec3 color) {
     return color;
 }
 
+#endif
 #ifdef GL_FRAGMENT_SHADER
 // Fragment Shader
 void main() {

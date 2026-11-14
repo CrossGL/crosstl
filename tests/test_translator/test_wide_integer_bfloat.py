@@ -227,7 +227,7 @@ def test_wide_integer_bfloat_executes_natively(tmp_path, signed):
 
 
 def test_wide_integer_bfloat_native_gates_are_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
@@ -235,6 +235,6 @@ def test_wide_integer_bfloat_native_gates_are_required():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate Metal byte and vector storage",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "tests/test_translator/test_wide_integer_bfloat.py" in step

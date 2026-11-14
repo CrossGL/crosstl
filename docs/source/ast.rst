@@ -33,7 +33,8 @@ The type system is represented with ``TypeNode`` subclasses:
    * - ``CooperativeMatrixType``
      - Matrix values distributed across a subgroup or other execution scope
    * - ``ArrayType``
-     - Static or dynamic arrays
+     - Static or dynamic arrays. ``T a[2][3]`` is an array of 2 arrays of 3 ``T``,
+       ``ArrayType(ArrayType(T, 3), 2)``: the first suffix is the outermost dimension
    * - ``NamedType``
      - User-defined and backend resource types
    * - ``GenericType``
@@ -99,6 +100,25 @@ parameters, and attributes each have dedicated node classes. Code generators
 use these nodes to preserve semantics such as bindings, qualifiers, generic
 arguments, and stage annotations.
 
+A ``StructNode`` keeps the member functions a CrossGL structure declares in
+``methods``. An instance method names its receiver's members and the
+structure's other methods unqualified, or through ``this``; a ``static`` method
+has no receiver and is called as ``Owner::name(...)``. Before code generation
+the ``struct_methods`` rule pass gives every target each method as a free
+function ``Owner_name`` whose first parameter is the receiver, ``inout`` when
+the body may write it and ``in`` otherwise, and rewrites ``recv.name(args)``
+into ``Owner_name(recv, args)``.
+
+A concrete function marked ``@explicit_specialization(twice, float)`` replaces
+the body of the generic function ``twice`` for ``T = float``, as a C++
+``template <> float twice<float>(float)`` does. The parser keeps the primary's
+name and the template arguments in the function's
+``annotations["explicit_specialization"]``; the attribute itself is never
+printed. Generators that monomorphize generics call the marked function for
+every ``twice<float>`` instantiation, including ones reached only through
+another generic, and Rust, whose output keeps native generics, refuses the
+program with a typed diagnostic.
+
 Statement and expression nodes
 ------------------------------
 
@@ -107,6 +127,14 @@ switches, returns, breaks, and continues. Expression nodes cover literals,
 identifiers, binary/unary operators, function calls, member and array access,
 casts, constructors, lambdas, resource operations, wave intrinsics, ray tracing
 operations, and mesh operations.
+
+``CommaExpressionNode`` is the C comma operator, spelled ``(a, b, ...)`` in
+CrossGL. Its operands run left to right and its value is the last operand's; it
+is never an l-value. A trailing comma, ``(a, b,)``, keeps the tuple literal
+(``ArrayLiteralNode``). C-family targets print the operator in parentheses,
+SPIR-V evaluates the operands in order, WGSL hoists the discarded operands into
+statements where that keeps the evaluation order, and Rust and Mojo refuse it
+with a typed diagnostic.
 
 Compatibility helpers
 ---------------------

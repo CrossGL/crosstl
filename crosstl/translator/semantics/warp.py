@@ -41,7 +41,15 @@ from .hub_types import (
     iter_functions,
     type_from_name,
 )
-from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
+from .rewrite import (
+    call,
+    child_slots,
+    clone,
+    field_slots,
+    get_child,
+    is_pure,
+    set_child,
+)
 
 __all__ = [
     "SHUFFLES",
@@ -405,8 +413,8 @@ class WarpLegalizer:
             prelude, node.init = init[:-1], init[-1]
             uniform = uniform and self.is_uniform_statement(node.init)
         for field in ("condition", "update"):
-            part = getattr(node, field, None)
-            if part is not None:
+            for slot in field_slots(node, field):
+                part = get_child(node, *slot)
                 self.forbid(part, f"a loop {field}")
                 uniform = uniform and self.is_uniform_statement(part)
         set_child(node, "body", None, self.branch(node.body, uniform))

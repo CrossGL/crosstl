@@ -1,3 +1,4 @@
+import random
 import re
 
 import pytest
@@ -15,8 +16,13 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStructMethodError,
     MetalTemplateSpecializationError,
     MetalTypeTraitError,
+    _MetalAddressableValueType,
     _MetalIntegralConstantBinding,
     _MetalTemplateStruct,
+)
+from crosstl.backend.Metal.source_analysis_cache import (
+    FRAGMENT_CACHE_LIMIT,
+    FRAGMENT_LENGTH_LIMIT,
 )
 
 
@@ -246,13 +252,30 @@ def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch
 
     assert scan_counts == {name: 1 for name in scan_names}
 
-    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+    # Short sources are fragments and use the fragment tier's bound.
+    for index in range(FRAGMENT_CACHE_LIMIT + 2):
         preprocessor._find_namespace_spans(
             f"namespace generated_{index} {{ int value_{index}; }}"
         )
 
-    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert len(preprocessor._source_analysis_cache) == FRAGMENT_CACHE_LIMIT
     assert source not in preprocessor._source_analysis_cache
+
+    # Translation-unit-sized sources are bounded by SOURCE_ANALYSIS_CACHE_LIMIT.
+    padding = " " * FRAGMENT_LENGTH_LIMIT
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_namespace_spans(
+            f"namespace unit_{index} {{ int value_{index}; }}{padding}"
+        )
+
+    assert (
+        len(preprocessor._source_analysis_cache)
+        == FRAGMENT_CACHE_LIMIT + SOURCE_ANALYSIS_CACHE_LIMIT
+    )
+    assert (
+        f"namespace unit_0 {{ int value_0; }}{padding}"
+        not in preprocessor._source_analysis_cache
+    )
 
 
 def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
@@ -430,9 +453,9 @@ def test_discovery_records_are_evicted_with_source_snapshots():
     preprocessor = MetalPreprocessor()
     first = "template <typename T> T identity(T x) { return x; }"
     preprocessor._find_template_functions(first)
-    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+    for index in range(FRAGMENT_CACHE_LIMIT + 2):
         preprocessor._find_template_functions(first + f"\nint value{index};")
-    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert len(preprocessor._source_analysis_cache) == FRAGMENT_CACHE_LIMIT
     assert first not in preprocessor._source_analysis_cache
 
 
@@ -1945,7 +1968,6 @@ def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
     "declaration",
     (
         "device float* value;",
-        "float first, second;",
         "alignas(16) float value;",
     ),
 )
@@ -1975,6 +1997,36 @@ def test_preprocessor_keeps_unsupported_struct_layout_assertions_fail_closed(
     assert error.reason == "condition-unresolved"
     assert error.resolved_expression == "sizeof(UnsupportedLayout) == 8"
     assert error.unresolved_dependencies == ("UnsupportedLayout",)
+
+
+@pytest.mark.parametrize(("size", "holds"), ((8, True), (4, False)))
+def test_preprocessor_lays_out_struct_member_declarator_lists(size, holds):
+    # ``float first, second;`` declares two members ([dcl.decl]/3), so the
+    # struct is 8 bytes; the layout used to be unknown.
+    code = f"""
+    struct ListLayout {{
+        float first, second;
+    }};
+
+    kernel void list_layout(device float* out [[buffer(0)]]) {{
+        static_assert(sizeof(ListLayout) == {size}, "Layout must be known.");
+        out[0] = 0.0f;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    if holds:
+        lowered = preprocessor._lower_struct_member_functions(materialized)
+        assert "static_assert" not in lowered
+        return
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+    assert exc_info.value.reason == "assertion-failed"
+    assert exc_info.value.resolved_expression == "8 == 4"
 
 
 def test_preprocessor_rejects_false_static_assertion_with_source_context():
@@ -2634,8 +2686,18 @@ def test_preprocessor_preserves_operator_comparison_overloads():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "operator<=(complex64_t a, complex64_t b)" in output
-    assert "return operator>(b, a);" in output
+    # Concrete operators become the named helpers the code generator binds
+    # `a <= b` to; the direct `operator>(b, a)` call names the `>` helper.
+    assert (
+        "inline bool crosstl_metal_operator_less_equal__complex64_t__complex64_t"
+        "(complex64_t a, complex64_t b)"
+    ) in output
+    assert (
+        "return crosstl_metal_operator_greater__complex64_t__complex64_t(b, a);"
+        in output
+    )
+    assert "operator>(" not in output
+    assert "operator<=(" not in output
     assert "operator_complex64_t_a_complex64_t_b" not in output
 
 
@@ -3617,7 +3679,9 @@ def test_preprocessor_resolves_owner_alias_before_nested_struct_materialization(
     tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
     assert f"{tile_name} tile;" in output
     assert "BaseFrag_float_8_8::width" in tile_body
-    assert "BaseFrag_float_8_8::value_type" in tile_body
+    # The substituted `typename Frag::value_type` names the concrete owner's alias target.
+    assert "float values[4 * 1];" in tile_body
+    assert "value_type" not in tile_body
     assert "frag_t" not in tile_name
     assert "frag_t" not in tile_body
     assert preprocessor._materialized_struct_specializations[tile_name] == (
@@ -4977,6 +5041,58 @@ def test_preprocessor_matches_partial_specialization_through_materialized_alias(
 
     assert "using Scalar = half;" in output
     assert "StorageTraits_ComplexHalf" not in output
+
+
+def test_preprocessor_matches_partial_specialization_spelled_with_an_alias():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    using ComplexFloat = Complex<float>;
+
+    template <typename T, int N>
+    struct Block {
+        T values[N];
+    };
+
+    template <int N>
+    struct Block<ComplexFloat, N> {
+        float real[N];
+        float imag[N];
+    };
+
+    template <typename N>
+    struct Shadow {
+        int value;
+    };
+
+    template <typename ComplexFloat>
+    struct Shadow<Block<ComplexFloat, 1>> {
+        ComplexFloat value;
+    };
+
+    Block<Complex<float>, 2> split;
+    Block<ComplexFloat, 4> aliased;
+    Block<float, 2> plain;
+    Shadow<Block<half, 1>> shadowed;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    # The pattern names Complex<float> through its alias, so both spellings
+    # select the partial specialization rather than the primary's body.
+    assert "Block<Complex<float>, 2> split;" in output
+    assert "Block<ComplexFloat, 4> aliased;" in output
+    assert "ComplexFloat values" not in output
+    assert "Complex_float values" not in output
+    assert "Block_float_2 plain;" in output
+    assert "struct Block_float_2" in output
+    # A template parameter shadows the alias inside its own specialization.
+    assert "Shadow<Block<half, 1>> shadowed;" in output
+    assert "struct Shadow_Block_half_1" not in output
 
 
 def test_preprocessor_resolves_struct_alias_in_nested_method_parameter_template():
@@ -9213,6 +9329,51 @@ def test_preprocessor_does_not_resolve_types_from_future_declarations():
     assert preprocessor._resolve_declared_type_at(declarations, "value", 100) == "int"
 
 
+def reference_resolve_declared_type_at(declarations, name, position):
+    best = None
+    for decl_position, declared_type in declarations.get(name) or []:
+        if decl_position > position:
+            break
+        scope = getattr(declared_type, "scope", None)
+        if scope is not None and not scope[0] <= position < scope[1]:
+            continue
+        best = declared_type
+    return best
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_preprocessor_resolves_nearest_active_declaration_like_linear_scan(seed):
+    # Declarations are position-ordered, so the lookup bisects to the nearest
+    # preceding entry and walks back past bindings whose scope is inactive.
+    # Equal offsets, scoped and unscoped bindings, and positions before, on and
+    # after every declaration must resolve as the full linear scan resolves.
+    rng = random.Random(seed)
+    entries = []
+    for _ in range(rng.randint(0, 40)):
+        offset = rng.randint(0, 200)
+        if rng.random() < 0.6:
+            start = offset + rng.randint(0, 5)
+            declared = _MetalAddressableValueType(
+                rng.choice(["float", "int", "uint2"]),
+                scope=(start, start + rng.randint(0, 60)),
+            )
+        elif rng.random() < 0.5:
+            declared = _MetalAddressableValueType("half")
+        else:
+            declared = rng.choice(["float", "S", "S*"])
+        entries.append((offset, declared))
+    entries.sort(key=lambda item: item[0])
+    declarations = {"value": entries}
+    preprocessor = MetalPreprocessor()
+    for position in range(-1, 270):
+        resolved = preprocessor._resolve_declared_type_at(
+            declarations, "value", position
+        )
+        expected = reference_resolve_declared_type_at(declarations, "value", position)
+        assert resolved is expected
+    assert preprocessor._resolve_declared_type_at(declarations, "other", 50) is None
+
+
 def test_preprocessor_instantiates_template_operator_call_from_typed_local():
     # A template `operator()` is instantiated from the call-site argument types;
     # the struct template parameter U is materialized first, the method's own
@@ -10493,8 +10654,14 @@ def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered()
 
     assert calls == [name for name, _, _ in expected]
     assert definitions == expected
-    assert "integral_constant_int_1{} * Int<(4)>{}" in output
-    assert "integral_constant_int_1{} * Int<(1)>{}" in output
+    # `idx_row * Int<RowStride>{}` multiplies two integral constants, so the
+    # operator template's result `integral_constant<int, idx_row * 4>` is the
+    # argument ([over.match.oper]); each call passes that folded constant.
+    arguments = re.findall(
+        r"Fragment__load__\w+\(src,\s*(\w+)\{\},\s*(\w+)\{\}\);", output
+    )
+    assert arguments == [(row, col) for _name, row, col in expected]
+    assert "Int<(4)>{}" not in output and "Int<(1)>{}" not in output
     assert "src[0 + 0]" in output
     assert "src[0 + 1]" in output
     assert "src[4 + 0]" in output
@@ -11588,7 +11755,7 @@ def test_preprocessor_template_method_full_pipeline_to_hlsl():
     )
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
-    crossgl = MetalToCrossGLConverter().generate(ast)
+    crossgl = MetalToCrossGLConverter(threadgroup_size=32).generate(ast)
     parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     hlsl = HLSLCodeGen().generate(parsed)
     # No dangling receiver call and no bare Metal `simd_reduce(` builtin survive
@@ -11902,11 +12069,12 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
         )
         == "half"
     )
+    # A scalar converts to the vector's element type: short2 * int is short2.
     assert (
         pp._infer_argument_type(
             "lane2 * stride", {}, {"lane2": "short2", "stride": "int"}
         )
-        is None
+        == "short2"
     )
     assert pp._infer_argument_type("input + other", buffers, locals_) is None
     assert pp._infer_argument_type("input - same_type_input", buffers, locals_) is None
@@ -12609,15 +12777,28 @@ def test_infer_argument_type_signed_numeric_literal(sign, literal, kind):
         "+value",
         "--1",
         "++2",
-        "-true",
         "-1.0f; extra",
-        "-as_type<float>(bits)",
     ),
 )
 def test_infer_argument_type_signed_literal_does_not_guess_operators(expression):
     assert (
         MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    (
+        # Unary minus promotes a bool operand to int ([expr.unary.op]/8, [conv.prom]/6).
+        ("-true", "int"),
+        ("-as_type<float>(bits)", "float"),
+    ),
+)
+def test_infer_argument_type_built_in_unary_sign_of_typed_operand(expression, expected):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
+        == expected
     )
 
 
@@ -12721,9 +12902,9 @@ def test_infer_argument_type_arithmetic_construction_and_functor_call():
     assert infer("buf[i] + 1.0") == "complex64_t"
     # A scalar keeps its type when the literal does not out-rank it.
     assert infer("f + 1") == "float"
-    # ...but a floating literal meeting an INTEGER scalar promotes to an unknown
-    # floating width, so we bail rather than mis-claim `int`.
-    assert infer("n + 1.0") is None
+    # ...but a floating literal converts an INTEGER scalar: an unsuffixed
+    # literal is float in Metal, so `int + 1.0` is float, not int.
+    assert infer("n + 1.0") == "float"
     # Two DIFFERENT concrete non-literal types are ambiguous -> never guess.
     assert infer("x + f") is None
     # Brace construction of a recognized type.
@@ -13171,7 +13352,7 @@ def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
     assert "Red_float__simd_reduce__float(thread Red_float& self, float val)" in pre
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
-    crossgl = MetalToCrossGLConverter().generate(ast)
+    crossgl = MetalToCrossGLConverter(threadgroup_size=32).generate(ast)
     parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     hlsl = HLSLCodeGen().generate(parsed)
     assert "op.simd_reduce(" not in hlsl
@@ -13594,6 +13775,7 @@ def test_preprocessor_materializes_enabled_free_function_sfinae_fallback():
 
 def test_preprocessor_rejects_disabled_free_function_sfinae_for_native_overload():
     code = """
+    using namespace metal;
     template <
         typename T,
         metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
@@ -13685,7 +13867,6 @@ def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_amb
     [
         "int select_value(int value) { return 2; }",
         "int select_value(int value);",
-        "int select_value(float value);",
         "int select_value(int value, int other = 0);",
         "int select_value(int value, ...);",
         "template <typename T> int select_value(T value) { return 2; }",
@@ -13714,6 +13895,24 @@ def test_preprocessor_diagnoses_competing_free_function_sfinae_overloads(competi
     assert excinfo.value.callee_template == "select_value"
     assert excinfo.value.requested_signature == "select_value(value)"
     assert "distinct name" in excinfo.value.suggested_action
+
+
+def test_exact_constrained_template_outranks_a_converting_competitor():
+    # select_value<int>(int) is an exact match; select_value(float) needs an
+    # int-to-float conversion, so the template is the better function.
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(float value);
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value(value);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value) { return 1; }" in output
 
 
 @pytest.mark.parametrize(

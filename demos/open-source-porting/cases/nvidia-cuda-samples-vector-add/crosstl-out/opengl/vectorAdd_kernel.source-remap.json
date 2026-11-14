@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 779,
+        "endLine": 17,
+        "endOffset": 564,
         "file": "crosstl-out/opengl/vectorAdd_kernel.glsl",
-        "length": 779,
+        "length": 564,
         "line": 1,
         "offset": 0
       },

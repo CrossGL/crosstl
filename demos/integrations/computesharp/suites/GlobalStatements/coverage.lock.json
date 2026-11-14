@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-lock",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "contractSHA256": "576a385e621a8f29d7b8b0f4ff52756457784ff5609a0fe4e4ba28fb04975c30",
+  "testMethodCount": 1,
+  "caseCount": 1,
+  "allCasesDigest": "e616714a91732da570f6effd985fc71b761f8555c685a429acbdc32a35acd936",
+  "totals": {
+    "required-gpu": {
+      "methods": 1,
+      "cases": 1
+    },
+    "cpu-only": {
+      "methods": 0,
+      "cases": 0
+    },
+    "windows-specific": {
+      "methods": 0,
+      "cases": 0
+    }
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "execution": "software",
+      "expected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    },
+    "metal-apple-gpu": {
+      "role": "translated-target",
+      "execution": "hardware",
+      "expected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "role": "translated-target",
+      "execution": "software",
+      "expected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 1,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    }
+  },
+  "methods": {
+    "Program.<Main>$(System.String[])": {
+      "category": "required-gpu",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.GlobalStatements/Program.cs",
+        "line": 3
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "e616714a91732da570f6effd985fc71b761f8555c685a429acbdc32a35acd936"
+    }
+  }
+}

@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 530,
+        "endLine": 22,
+        "endOffset": 568,
         "file": "crosstl-out/cgl/shader.vert.cgl",
-        "length": 530,
+        "length": 568,
         "line": 1,
         "offset": 0
       },

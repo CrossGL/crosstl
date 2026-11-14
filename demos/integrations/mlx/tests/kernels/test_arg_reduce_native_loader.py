@@ -34,6 +34,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -90,29 +91,29 @@ MLX_ARG_REDUCE_ARTIFACTS = {
     "directx": {
         "argmin_float32": {
             "sha256": (
-                "9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086"
+                "8cb0d5643d86ffb4abbf3ec55fe970b7eb1233c2b0d6cf573ce07e5b7fb48e25"
             ),
-            "sizeBytes": 7129,
+            "sizeBytes": 7135,
         },
         "argmax_float32": {
             "sha256": (
-                "d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999"
+                "7be9aaf1eb1b4e53fd577a889149e9d7b1d551f8ef28819539aac7dcd5f1753c"
             ),
-            "sizeBytes": 7191,
+            "sizeBytes": 7197,
         },
     },
     "opengl": {
         "argmin_float32": {
             "sha256": (
-                "587b409127a5cec9711856acbdac69fbc05fe25fc8004f048de15057e5a9f59f"
+                "5a517235076f7fb636727a26f98787df8bab87eccd1fc623f7b7e6439f88383a"
             ),
-            "sizeBytes": 8024,
+            "sizeBytes": 8030,
         },
         "argmax_float32": {
             "sha256": (
-                "009389698c327dde691ee87a4f34d5f80c7a33384e800d8d640f97a462ae1be6"
+                "e39ef4311dee5d06fba17542fa53bb1d34d8c13a647dde2c5deac26f1d6f6d0b"
             ),
-            "sizeBytes": 8030,
+            "sizeBytes": 8036,
         },
     },
 }
@@ -355,11 +356,11 @@ def _translate_artifact(
         "algorithm": "sha256",
         "value": MLX_ARG_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     assert artifact["entryPoint"] == {
         "source": entry,
         "target": "CSMain" if target == "directx" else "main",

@@ -179,12 +179,21 @@ def test_invalid_storage_json_is_rejected(payload):
         {"input_values": {**BINARY16_STORAGE, "extra": True}},
         {"input_values": {**BINARY16_STORAGE, "encoding": "bfloat16-bits"}},
         {"input_values": {**BINARY16_STORAGE, "logicalElementType": "uint16"}},
-        {f"value{i}": BINARY16_STORAGE for i in range(257)},
+        # Too many records for the header byte limit.
+        {f"value{i}": BINARY16_STORAGE for i in range(1000)},
     ],
 )
 def test_invalid_storage_contracts_are_not_serialized(resources):
     with pytest.raises(ValueError):
         resource_storage_header(resources)
+
+
+def test_storage_contract_holds_as_many_records_as_its_byte_limit():
+    # A module with many entry points can declare hundreds of binary16 buffers.
+    many = {f"value{i}": dict(BINARY16_STORAGE) for i in range(800)}
+    header = resource_storage_header(many)
+    assert len(header.encode("utf-8")) <= MAX_RESOURCE_STORAGE_HEADER_BYTES
+    assert parse_resource_storage_header(header + "void main() {}\n") == many
 
 
 @pytest.mark.parametrize("prefix", ["\n", " ", "// comment\n", "/*\n", "void f() {}\n"])
@@ -401,10 +410,10 @@ def test_binary16_storage_decodes_for_arithmetic(tmp_path, form):
 
 
 def test_storage_contract_controls_join_existing_windows_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate indexed DirectX gather and resource aggregates"
     )
     assert "tests/test_translator/test_resource_storage_encoding.py" in step

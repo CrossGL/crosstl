@@ -2,7 +2,9 @@ import pytest
 
 from crosstl.backend.OpenCL.OpenCLAst import OpenCLBlockLiteralNode
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLBlockUnsupportedError,
     OpenCLRecordSemanticError,
+    OpenCLSizeofUnsupportedError,
     OpenCLToCrossGLConverter,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
@@ -466,9 +468,15 @@ def test_external_opencv_multiline_constant_address_space_array_codegen_reparse(
 
     ast, crossgl = assert_crossgl_reparses(source)
 
-    assert ast.statements[0].vtype == "__constant__ float[5]"
-    assert "var c_YUV2RGBCoeffs_420: array<f32, 5>" in crossgl
-    assert "var<uniform> coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
+    assert ast.statements[0].vtype == "float[5]"
+    assert ast.statements[0].qualifiers == ["static", "__constant__"]
+    assert (
+        "@group(0) @binding(0) var<uniform> c_YUV2RGBCoeffs_420: array<f32, 5>"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert "var coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
+    assert "var<uniform> coeffs:" not in crossgl
 
 
 def test_external_opencv_fft_leading_attribute_type_macro_constructor_codegen_reparse():
@@ -1027,7 +1035,7 @@ def test_external_pocl_core_math_global_designated_initializer_codegen_reparse()
     assert "{.u =" not in crossgl
 
 
-def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
+def test_opencl_unknown_sizeof_is_refused():
     source = """
     kernel void unknown_sizeof_probe(global int *out) {
         int n = sizeof(user_type);
@@ -1035,10 +1043,9 @@ def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
     }
     """
 
-    _ast, crossgl = assert_crossgl_reparses(source)
-
-    assert "unsupported OpenCL size query: user_type" in crossgl
-    assert "var n: i32 = (/* unsupported OpenCL size query: user_type */ 0);" in crossgl
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+    with pytest.raises(OpenCLSizeofUnsupportedError, match=r"sizeof\(user_type\)"):
+        OpenCLToCrossGLConverter().generate(ast)
 
 
 def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
@@ -1178,7 +1185,7 @@ def test_external_opencv_cascadedetect_aligned_typedef_struct_codegen_reparse():
     assert "__attribute__" not in crossgl
 
 
-def test_external_pocl_block_literal_codegen_reparse():
+def test_external_pocl_block_literal_is_refused():
     source_info = EXTERNAL_FIXTURE_SOURCES["pocl_block_literal"]
     assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
     assert source_info["path"] == "tests/kernel/test_block.cl"
@@ -1196,13 +1203,14 @@ def test_external_pocl_block_literal_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
 
     block_decl = ast.statements[1].body[0]
     assert block_decl.vtype.startswith("__opencl_block float")
     assert isinstance(block_decl.value, OpenCLBlockLiteralNode)
-    assert "// unsupported OpenCL block declaration: add1" in crossgl
-    assert "output(add1);" in crossgl
+    # Dropping the declaration left `output(add1);` naming nothing; the block is refused instead.
+    with pytest.raises(OpenCLBlockUnsupportedError, match="block variable 'add1'"):
+        OpenCLToCrossGLConverter().generate(ast)
 
 
 def test_external_pocl_vector_token_paste_wrapper_codegen_reparse():
@@ -1601,7 +1609,8 @@ def test_external_llvm_libclc_constant_pointer_local_codegen_reparse():
     local = ast.statements[0].body[1]
     assert local.qualifiers == ["__constant__"]
     assert local.vtype == "amdhsa_implicit_kernarg_v5 *"
-    assert "var<uniform> args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+    assert "var args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+    assert "var<uniform> args:" not in crossgl
 
 
 def test_external_llvm_clang_opencl_c_base_half_literal_codegen_reparse():

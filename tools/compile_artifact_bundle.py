@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Compile a complete, pinned source bundle without repeating translation."""
+"""Compile a complete, pinned source bundle without repeating translation.
+
+A bundle entry normally carries exactly the bytes its contract pins. Runs that
+build on a translator the contract was not reviewed against (a merge-queue group
+or a nightly run) may allow drift: the entry then records the bytes it actually
+exported next to the pinned identity it replaces, and the compiler checks the
+artifact against the recorded bytes. Strict runs never accept a drifted entry.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +32,7 @@ ENTRY_FIELDS = {
     "sha256",
     "sizeBytes",
 }
+DRIFT_FIELDS = {"pinnedSha256", "pinnedSizeBytes"}
 
 
 def _require(condition: bool, message: str) -> None:
@@ -74,9 +82,18 @@ def _contract(path: Path) -> tuple[dict, dict[str, dict], str]:
 
 
 def write_bundle_entry(
-    source: Path, contract_path: Path, entry_point: str, bundle_root: Path
+    source: Path,
+    contract_path: Path,
+    entry_point: str,
+    bundle_root: Path,
+    *,
+    allow_drift: bool = False,
 ) -> Path:
-    """Export one verified artifact; duplicate writers fail instead of overwriting."""
+    """Export one verified artifact; duplicate writers fail instead of overwriting.
+
+    With ``allow_drift`` an artifact whose bytes differ from its pin is exported
+    with its actual identity and the pinned identity it replaces.
+    """
 
     _, expected, contract_hash = _contract(contract_path)
     _require(entry_point in expected, f"Unexpected artifact: {entry_point}")
@@ -86,32 +103,39 @@ def write_bundle_entry(
     _require(re.fullmatch(r"\.[A-Za-z0-9]+", source.suffix), "Source suffix is invalid")
     data = source.read_bytes()
     entry = expected[entry_point]
-    _require(len(data) == entry["sizeBytes"], f"Artifact size differs: {entry_point}")
-    _require(
-        hashlib.sha256(data).hexdigest() == entry["sha256"],
-        f"Artifact hash differs: {entry_point}",
-    )
+    digest = hashlib.sha256(data).hexdigest()
+    drifted = len(data) != entry["sizeBytes"] or digest != entry["sha256"]
+    if not allow_drift:
+        _require(
+            len(data) == entry["sizeBytes"], f"Artifact size differs: {entry_point}"
+        )
+        _require(digest == entry["sha256"], f"Artifact hash differs: {entry_point}")
+    _require(data, f"Artifact is empty: {entry_point}")
     _require(not bundle_root.is_symlink(), "Bundle root must not be a symlink")
     directory = bundle_root / hashlib.sha256(entry_point.encode()).hexdigest()
     directory.mkdir(parents=True, exist_ok=False)
     artifact = directory / ("artifact" + source.suffix)
     artifact.write_bytes(data)
-    _write_json(
-        directory / "entry.json",
-        {
-            "schemaVersion": 1,
-            "contractSha256": contract_hash,
-            "entryPoint": entry_point,
-            "artifact": artifact.name,
-            "sha256": entry["sha256"],
-            "sizeBytes": entry["sizeBytes"],
-        },
-    )
+    record = {
+        "schemaVersion": 1,
+        "contractSha256": contract_hash,
+        "entryPoint": entry_point,
+        "artifact": artifact.name,
+        "sha256": digest,
+        "sizeBytes": len(data),
+    }
+    if drifted:
+        record.update(pinnedSha256=entry["sha256"], pinnedSizeBytes=entry["sizeBytes"])
+    _write_json(directory / "entry.json", record)
     return artifact
 
 
 def _bundle_records(
-    root: Path, expected: dict[str, dict], contract_hash: str
+    root: Path,
+    expected: dict[str, dict],
+    contract_hash: str,
+    *,
+    allow_drift: bool = False,
 ) -> list[dict]:
     _require(root.is_dir() and not root.is_symlink(), "Bundle root is not a directory")
     root = root.resolve()
@@ -126,7 +150,8 @@ def _bundle_records(
     for receipt in sorted(path for path in paths if path.name == "entry.json"):
         record = _read_json(receipt)
         _require(
-            isinstance(record, dict) and set(record) == ENTRY_FIELDS,
+            isinstance(record, dict)
+            and set(record) in (ENTRY_FIELDS, ENTRY_FIELDS | DRIFT_FIELDS),
             "Invalid bundle entry fields",
         )
         _require(
@@ -140,12 +165,26 @@ def _bundle_records(
         _require(isinstance(name, str) and name in expected, "Unexpected bundle entry")
         _require(name not in seen, f"Duplicate bundle entry: {name}")
         entry = expected[name]
+        drifted = "pinnedSha256" in record
+        pinned_sha = record["pinnedSha256"] if drifted else record["sha256"]
+        pinned_size = record["pinnedSizeBytes"] if drifted else record["sizeBytes"]
         _require(
-            record["sha256"] == entry["sha256"]
-            and type(record["sizeBytes"]) is int
-            and record["sizeBytes"] == entry["sizeBytes"],
+            pinned_sha == entry["sha256"]
+            and type(pinned_size) is int
+            and pinned_size == entry["sizeBytes"],
             f"Bundle identity differs: {name}",
         )
+        if drifted:
+            _require(allow_drift, f"Bundle entry drifted from its pin: {name}")
+            _require(
+                isinstance(record["sha256"], str)
+                and re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+                and type(record["sizeBytes"]) is int
+                and record["sizeBytes"] > 0
+                and (record["sha256"], record["sizeBytes"])
+                != (entry["sha256"], entry["sizeBytes"]),
+                f"Drifted bundle identity is invalid: {name}",
+            )
         filename = record["artifact"]
         _require(
             isinstance(filename, str)
@@ -155,17 +194,23 @@ def _bundle_records(
         artifact = receipt.parent / filename
         _require(artifact.is_file(), f"Bundle artifact is missing: {name}")
         _require(
-            artifact.stat().st_size == entry["sizeBytes"],
+            artifact.stat().st_size == record["sizeBytes"],
             f"Artifact size differs: {name}",
         )
-        _require(_sha256(artifact) == entry["sha256"], f"Artifact hash differs: {name}")
+        _require(
+            _sha256(artifact) == record["sha256"], f"Artifact hash differs: {name}"
+        )
         seen[name] = {
             "entryPoint": name,
             "targetEntryPoint": entry.get("targetEntryPoint", name),
             "path": str(artifact),
-            "sha256": entry["sha256"],
-            "sizeBytes": entry["sizeBytes"],
+            "sha256": record["sha256"],
+            "sizeBytes": record["sizeBytes"],
         }
+        if drifted:
+            seen[name].update(
+                pinnedSha256=entry["sha256"], pinnedSizeBytes=entry["sizeBytes"]
+            )
         verified_files.update((receipt, artifact))
     _require(set(seen) == set(expected), "Bundle coverage is incomplete")
     _require(
@@ -183,6 +228,7 @@ def compile_bundle(
     *,
     jobs: int = 2,
     timeout: float = 120,
+    allow_drift: bool = False,
 ) -> dict:
     _require(type(jobs) is int and jobs > 0, "Worker count must be positive")
     _require(
@@ -214,6 +260,7 @@ def compile_bundle(
         "compilerCommand": compiler_command,
         "records": [],
         "failures": [],
+        "drifted": [],
         "numericalExecution": False,
         "fullUpstreamSuite": False,
     }
@@ -230,7 +277,12 @@ def compile_bundle(
             expectedCount=len(expected),
             target=contract.get("target"),
         )
-        records = _bundle_records(bundle_root, expected, contract_hash)
+        records = _bundle_records(
+            bundle_root, expected, contract_hash, allow_drift=allow_drift
+        )
+        report["drifted"] = [
+            record["entryPoint"] for record in records if "pinnedSha256" in record
+        ]
         # Use the same warnings, timeout and nonempty-output checks as contract refreshes.
         with ThreadPoolExecutor(max_workers=jobs) as executor:
             compiled = executor.map(
@@ -275,6 +327,11 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument(
+        "--allow-drift",
+        action="store_true",
+        help="compile entries exported with bytes that differ from their pins",
+    )
     args = parser.parse_args(argv)
     try:
         report = compile_bundle(
@@ -284,6 +341,7 @@ def main(argv=None) -> int:
             args.compiler_command,
             jobs=args.jobs,
             timeout=args.timeout,
+            allow_drift=args.allow_drift,
         )
     except (OSError, ValueError, TypeError) as error:
         parser.exit(1, f"{error}\n")

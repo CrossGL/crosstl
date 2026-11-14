@@ -18,6 +18,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tests.test_translator.metal_contract import operator_implementations
 from tools.compile_artifact_bundle import write_bundle_entry
 
@@ -42,7 +46,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6"
+    "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7"
 )
 BINARY_METAL_CONTRACT_PATH = (
     ROOT
@@ -53,7 +57,7 @@ BINARY_METAL_CONTRACT_PATH = (
     / "binary.metal-roundtrip.json"
 )
 BINARY_METAL_CONTRACT_SHA256 = (
-    "c8403b863c4b2af133ca9fd16d91fc33f93ca24ab616a443cbf6e1b5898b2d10"
+    "392013d7f4cc26501d229db086a73b52b1bc74eda03c7d39460961cf5d955c3b"
 )
 
 
@@ -449,10 +453,10 @@ def test_current_mlx_binary_metal_contract_is_complete_and_classified():
         "reflectedResourceCount": 19106,
         "reflectedResourceCountsByShape": resource_counts,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 6121412,
+        "generatedSizeBytesTotal": 6124082,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7895},
+            "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7901},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
@@ -716,11 +720,9 @@ def _translate_binary_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_BINARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,
@@ -830,6 +832,7 @@ def _roundtrip_pinned_mlx_binary_through_metal(
                 BINARY_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

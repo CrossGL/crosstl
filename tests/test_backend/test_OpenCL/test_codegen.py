@@ -4,13 +4,21 @@ import crosstl
 from crosstl.backend.common_ast import UnaryOpNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLAtomicOrderUnsupportedError,
+    OpenCLFenceScopeUnsupportedError,
+    OpenCLImageReadUnsupportedError,
+    OpenCLImageWriteUnsupportedError,
+    OpenCLToCrossGLConverter,
+)
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
 from crosstl.backend.OpenCL.target_lowering import (
     OpenCLTargetUnsupportedError,
     validate_opencl_intermediate_for_target,
 )
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -58,6 +66,96 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var gid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
+
+
+def test_opencl_explicit_atomics_drop_memory_order_and_scope():
+    crossgl = generate_crossgl("""
+        kernel void probe(global int *iin, global atomic_int *outp) {
+            uint i = get_global_id(0);
+            atomic_fetch_sub_explicit(&outp[i], iin[i], memory_order_relaxed);
+            atomic_fetch_add_explicit(
+                &outp[i], iin[i], memory_order_relaxed, memory_scope_device);
+            atomic_exchange_explicit(&outp[i], iin[i], memory_order_relaxed);
+            atomic_fetch_or_explicit(
+                &outp[i], iin[i], memory_order_relaxed, memory_scope_work_group);
+        }
+        """)
+
+    assert "memory_order" not in crossgl
+    assert "memory_scope" not in crossgl
+    assert "atomicAdd(outp[i], -(iin[i]));" in crossgl
+    assert "atomicAdd(outp[i], iin[i]);" in crossgl
+    assert "atomicExchange(outp[i], iin[i]);" in crossgl
+    assert "atomicOr(outp[i], iin[i]);" in crossgl
+
+
+@pytest.mark.parametrize(
+    ("call", "reason"),
+    [
+        (
+            "atomic_fetch_add_explicit(&outp[i], 1, memory_order_seq_cst)",
+            "memory_order_seq_cst: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_exchange_explicit(&outp[i], 1, memory_order_acq_rel)",
+            "memory_order_acq_rel: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_fetch_or_explicit(&outp[i], 1, order)",
+            "with order: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_compare_exchange_strong_explicit(&outp[i], &expected, 1, "
+            "memory_order_relaxed, memory_order_acquire)",
+            "memory_order_acquire: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_fetch_max_explicit(&outp[i], 1, memory_order_relaxed, "
+            "memory_scope_all_svm_devices)",
+            "memory_scope_all_svm_devices: CrossGL atomics are atomic at device scope",
+        ),
+        (
+            "atomic_fetch_min_explicit(&outp[i], 1)",
+            "takes 3 or 4 arguments, got 2",
+        ),
+    ],
+)
+def test_opencl_explicit_atomics_refuse_orders_and_scopes_crossgl_cannot_keep(
+    call, reason
+):
+    source = f"""
+        kernel void probe(global atomic_int *outp, memory_order order) {{
+            uint i = get_global_id(0);
+            int expected = 0;
+            {call};
+        }}
+        """
+
+    with pytest.raises(OpenCLAtomicOrderUnsupportedError, match=reason) as raised:
+        generate_crossgl(source)
+    assert raised.value.code == "project.translate.opencl-atomic-order-unsupported"
+
+
+def test_opencl_get_local_linear_id_lowers_to_local_invocation_index(tmp_path):
+    source = """
+        kernel __attribute__((reqd_work_group_size(1, 1, 1)))
+        void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            ulong r = get_local_linear_id();
+            outp[i] = (uint)r;
+        }
+        """
+    crossgl = generate_crossgl(source)
+
+    assert "get_local_linear_id" not in crossgl
+    assert "gl_LocalInvocationIndex" in crossgl
+
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "get_local_linear_id" not in hlsl
+    assert "SV_GroupIndex" in hlsl
 
 
 def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
@@ -171,6 +269,68 @@ def test_opencl_local_memory_and_barrier_codegen_reparse():
     assert "out[gl_WorkGroupID.x] = scratch[0];" in crossgl
 
 
+def test_opencl_prefetch_is_dropped_as_a_hint():
+    crossgl = generate_crossgl("""
+        kernel void probe(global uint *uin, global uint *outp) {
+            uint i = get_global_id(0);
+            ulong n = (ulong)uin[i];
+            prefetch((const global float *)outp, n);
+            prefetch(outp + i, 4);
+            prefetch(&outp[get_global_id(0)], 1);
+            prefetch(outp, i > 0u ? 4 : 8);
+            prefetch(outp, sizeof(uint));
+            outp[i] = 0u;
+        }
+        """)
+
+    assert "prefetch" not in crossgl
+    assert "ptr<" not in crossgl
+    assert "&outp" not in crossgl
+    assert "?" not in crossgl
+    assert "4;" not in [line.strip() for line in crossgl.splitlines()]
+    assert "outp[i] = 0u;" in crossgl
+
+
+def test_opencl_prefetch_keeps_argument_side_effects():
+    crossgl = generate_crossgl("""
+        kernel void probe(global float *outp) {
+            uint i = get_global_id(0);
+            uint j = i;
+            uint n = 0u;
+            prefetch(outp, i++);
+            prefetch((const global float4 *)(outp + j++), n = 4u);
+            outp[i + j] = (float)n;
+        }
+        """)
+
+    assert "prefetch" not in crossgl
+    assert "ptr<" not in crossgl
+    assert "outp +" not in crossgl
+    effects = [crossgl.index(effect) for effect in ("i++", "j++", "n = 4u;")]
+    assert effects == sorted(effects)
+    assert effects[-1] < crossgl.index("outp[(i + j)]")
+
+
+def test_opencl_prefetch_translates_to_targets(tmp_path):
+    opencl_path = tmp_path / "prefetch.cl"
+    opencl_path.write_text("""
+        __attribute__((reqd_work_group_size(1, 1, 1)))
+        kernel void probe(global uint *uin, global uint *outp) {
+            uint i = get_global_id(0);
+            uint n = uin[i];
+            prefetch((const global float *)outp, n);
+            outp[i] = 0u;
+        }
+        """)
+
+    for backend in ("directx", "metal", "wgsl"):
+        output = crosstl.translate(
+            str(opencl_path), backend=backend, format_output=False
+        )
+        assert "prefetch" not in output
+        assert "outp[i] = 0u" in output
+
+
 def test_opencl_local_pointer_kernel_param_uses_workgroup_storage():
     crossgl = generate_crossgl("""
         kernel void local_arg_first(uint scale, local float *scratch, global float *out) {
@@ -238,6 +398,63 @@ def test_opencl_reduce_helpers_report_structured_target_contracts():
     assert all(contract["action"] for contract in contracts)
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl", "metal"])
+def test_opencl_device_enqueue_event_builtins_are_refused(target):
+    cgl_ast, _crossgl = parse_crossgl_from_opencl("""
+        kernel void events(global uint* outp, global int* status) {
+            uint i = get_global_id(0);
+            clk_event_t e = create_user_event();
+            retain_event(e);
+            if (is_valid_event(e)) {
+                set_user_event_status(e, status[i]);
+                capture_event_profiling_info(
+                    e, CLK_PROFILING_COMMAND_EXEC_TIME, (global void*)outp
+                );
+            }
+            release_event(e);
+            outp[i] = 0u;
+        }
+        """)
+
+    with pytest.raises(OpenCLTargetUnsupportedError) as error:
+        validate_opencl_intermediate_for_target(cgl_ast, target)
+
+    contracts = [contract.to_json() for contract in error.value.contracts]
+
+    assert "device-side enqueue event builtins have no target equivalent" in str(
+        error.value
+    )
+    assert {contract["signature"] for contract in contracts} == {
+        "capture_event_profiling_info(...)",
+        "create_user_event(...)",
+        "is_valid_event(...)",
+        "release_event(...)",
+        "retain_event(...)",
+        "set_user_event_status(...)",
+    }
+    assert {contract["code"] for contract in contracts} == {
+        "opencl.target.unsupported-builtin"
+    }
+    assert all(contract["action"] for contract in contracts)
+
+
+def test_opencl_helper_named_like_device_enqueue_event_builtin_is_not_refused():
+    # OpenCL C 1.2 does not reserve the device-side enqueue names.
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        uint retain_event(uint x) {
+            return x + 1u;
+        }
+
+        kernel void events(global uint* outp) {
+            uint i = get_global_id(0);
+            outp[i] = retain_event(i);
+        }
+        """)
+
+    validate_opencl_intermediate_for_target(cgl_ast, "opengl")
+    assert "u32 retain_event(u32 x)" in crossgl
+
+
 def test_opencl_vector_constructor_cast_codegen_reparse():
     crossgl = generate_crossgl("""
         __kernel void gaussian_filter(__read_only image2d_t srcImg,
@@ -250,6 +467,23 @@ def test_opencl_vector_constructor_cast_codegen_reparse():
 
     assert "var coord: vec2<i32> = vec2<i32>(" in crossgl
     assert "var color: vec4<f32> = vec4<f32>(" in crossgl
+
+
+def test_opencl_typedef_vector_constructor_reads_as_vector_not_comma():
+    crossgl = generate_crossgl("""
+        typedef float2 duo;
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            float x = outp[i];
+            float2 a = (float2)(x, 2.0f);
+            duo b = (duo)(x, 3.0f);
+            outp[i] = a.y + b.y;
+        }
+        """)
+
+    assert "var a: vec2<f32> = vec2<f32>(x, 2.0f);" in crossgl
+    assert "var b: vec2<f32> = vec2<f32>(x, 3.0f);" in crossgl
+    assert "(x , 3.0f)" not in crossgl
 
 
 def test_opencl_signed_char_pointer_lowers_to_crossgl_i8_array():
@@ -347,6 +581,258 @@ def test_opencv_anonymous_enum_and_constant_array_codegen_reparse():
     assert "sector_data: array<array<i32, 3>>" in crossgl
 
 
+CONSTANT_TABLE_KERNEL_SOURCE = """
+    __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+    __kernel void first(__global float* out) {
+        size_t i = get_global_id(0);
+        out[i] = coeffs_table[i % 4];
+    }
+    """
+
+
+def test_opencl_program_constant_binds_before_kernel_buffers(tmp_path):
+    crossgl = generate_crossgl(CONSTANT_TABLE_KERNEL_SOURCE)
+
+    assert "@group(0) @binding(0) var<uniform> coeffs_table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / "constant_table.cl"
+    opencl_path.write_text(CONSTANT_TABLE_KERNEL_SOURCE, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* coeffs_table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
+def test_opencl_program_constant_after_kernel_counts_before_parameters():
+    crossgl = generate_crossgl("""
+        __constant float scale[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        __kernel void first(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] * scale[i % 4];
+        }
+        __constant float bias[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        __kernel void second(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] + bias[i % 4] + scale[0];
+        }
+        """)
+
+    assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>" in crossgl
+    assert crossgl.count("@group(0) @binding(2) var<storage, read_write> values") == 2
+    assert crossgl.count("@group(0) @binding(1)") == 1
+
+
+def test_opencl_constant_pointer_local_is_not_a_resource():
+    crossgl = generate_crossgl("""
+        __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float *coeffs = coeffs_table;
+            size_t i = get_global_id(0);
+            out[i] = coeffs[i % 4];
+        }
+        """)
+
+    assert "var coeffs: ptr<f32> = coeffs_table;" in crossgl
+    assert "var<uniform> coeffs:" not in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl.count("@group(0) @binding(") == 2
+
+
+def test_opencl_local_pointer_local_keeps_its_initializer():
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out, __global const float* in) {
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = in[get_global_id(0)];
+            barrier(CLK_LOCAL_MEM_FENCE);
+            __local float *t = tile;
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> tile: array<f32, 64>;" in crossgl
+    assert "var t: ptr<f32> = tile;" in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("__local float *t = tile + 4;", "var t: ptr<f32> = (tile + 4);"),
+        ("__local float *t = &tile[l];", "var t: ptr<f32> = (&tile[l]);"),
+        ("local float *t = tile;", "var t: ptr<f32> = tile;"),
+        ("__local const float *t = tile;", "var t: ptr<f32> = tile;"),
+    ],
+    ids=["offset", "address-of-element", "unprefixed", "const"],
+)
+def test_opencl_local_pointer_local_initializer_forms(declaration, expected):
+    crossgl = generate_crossgl(f"""
+        __kernel void k(__global float* out) {{
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            {declaration}
+            out[get_global_id(0)] = t[0];
+        }}
+        """)
+
+    assert expected in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
+def test_opencl_pointer_declared_in_local_memory_stays_a_workgroup_variable():
+    # The trailing __local puts t itself in local memory: one pointer shared
+    # by the work-group, set by one work-item and read by all of them.
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out) {
+            __local float tile[64];
+            __local float * __local t;
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            if (l == 0) {
+                t = tile;
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> t: ptr<f32>;" in crossgl
+
+
+def test_opencl_kernel_scope_constant_array_is_a_local():
+    crossgl = generate_crossgl("""
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float local_table[2] = {5.0f, 6.0f};
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4] + local_table[i % 2];
+        }
+
+        __kernel void second(__global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[0];
+        }
+        """)
+
+    assert "var local_table: array<f32, 2> = {5.0f, 6.0f};" in crossgl
+    assert "var<uniform> local_table:" not in crossgl
+    # The kernel-scope table takes no binding, so the next kernel's buffer
+    # still follows the program-scope constant.
+    assert crossgl.count("@group(0) @binding(1) var<storage, read_write> out") == 2
+    assert crossgl.count("@group(0) @binding(") == 3
+
+
+def test_opencl_program_sampler_constant_takes_no_binding():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x * table[i % 4];
+        }
+        """)
+
+    assert "const sampler smp = sampler(" in crossgl
+    assert "@group(0) @binding(0) var<uniform> table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read> fin: array<f32>" in crossgl
+    assert "@group(0) @binding(2) var<storage, read_write> outp: array<f32>" in crossgl
+
+
+@pytest.mark.parametrize("leading_qualifier", ["static", "const"])
+def test_opencl_multiline_constant_qualifier_after_static_or_const(
+    tmp_path, leading_qualifier
+):
+    source = f"""
+        {leading_qualifier}
+        __constant float table[4] = {{1.0f, 2.0f, 3.0f, 4.0f}};
+
+        __kernel void first(__global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }}
+        """
+    crossgl = generate_crossgl(source)
+
+    assert (
+        "@group(0) @binding(0) var<uniform> table: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / f"multiline_{leading_qualifier}_constant.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "const __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+        "__constant\n        static float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+        "static\n        const\n        __constant\n        float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+    ],
+)
+def test_opencl_constant_qualifier_before_the_type_in_any_order(declaration):
+    crossgl = generate_crossgl(f"""
+        {declaration}
+
+        __kernel void first(__global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }}
+        """)
+
+    assert (
+        "@group(0) @binding(0) var<uniform> table: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+
+@pytest.mark.parametrize("separator", [" ", "\n            "])
+def test_opencl_kernel_scope_const_constant_array_is_a_local(separator):
+    crossgl = generate_crossgl(f"""
+        __kernel void first(__global float* out) {{
+            const{separator}__constant float t[2] = {{5.0f, 6.0f}};
+            size_t i = get_global_id(0);
+            out[i] = t[i % 2];
+        }}
+        """)
+
+    assert "var t: array<f32, 2> = {5.0f, 6.0f};" in crossgl
+    assert "var<uniform> t:" not in crossgl
+    assert crossgl.count("@group(0) @binding(") == 1
+
+
+@pytest.mark.parametrize("separator", [" ", "\n            "])
+def test_opencl_volatile_local_array_is_workgroup_memory(separator):
+    crossgl = generate_crossgl(f"""
+        __kernel void first(__global float* out) {{
+            volatile{separator}__local float tile[16];
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = tile[15 - l];
+        }}
+        """)
+
+    assert "var<workgroup> tile: array<f32, 16>;" in crossgl
+    assert "var tile:" not in crossgl
+
+
 def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
     crossgl = generate_crossgl("""
         static inline int FCxtrans(const int row,
@@ -411,6 +897,293 @@ def test_clspv_struct_return_and_local_elaborated_type_codegen_reparse():
     assert "T bar(ptr<i32> out)" in crossgl
     assert "var t: T;" in crossgl
     assert "var t: T = bar(out);" in crossgl
+
+
+def test_opencl_write_image_builtins_lower_to_image_store():
+    crossgl = generate_crossgl("""
+        kernel void k(global float4 *src, write_only image2d_t tex,
+                      write_only image2d_t itex, read_write image2d_t utex,
+                      write_only image1d_t line, write_only image1d_buffer_t buf,
+                      write_only image1d_array_t lines, write_only image3d_t vol,
+                      write_only image2d_array_t layers) {
+            int i = get_global_id(0);
+            write_imagef(tex, (int2)(i, 0), src[i]);
+            write_imagei(itex, (int2)(i, 1), (int4)(1, 2, 3, 4));
+            write_imageui(utex, (int2)(i, 2), (uint4)(1u, 2u, 3u, 4u));
+            write_imagef(line, i, src[i]);
+            write_imagef(buf, i, src[i]);
+            write_imagef(lines, (int2)(i, 1), src[i]);
+            write_imagef(vol, (int4)(i, 0, 0, 0), src[i]);
+            write_imagef(layers, (int4)(i, 0, 1, 0), src[i]);
+        }
+        """)
+
+    assert "write_image" not in crossgl
+    # The write function gives the image its element type.
+    assert " image2D tex," in crossgl
+    assert " iimage2D itex," in crossgl
+    assert " uimage2D utex," in crossgl
+    assert " imageBuffer buf," in crossgl
+    assert "imageStore(tex, vec2<i32>(i, 0), src[i]);" in crossgl
+    assert "imageStore(itex, vec2<i32>(i, 1), vec4<i32>(1, 2, 3, 4));" in crossgl
+    assert "imageStore(utex, vec2<i32>(i, 2), vec4<u32>(1u, 2u, 3u, 4u));" in crossgl
+    assert "imageStore(line, i, src[i]);" in crossgl
+    assert "imageStore(buf, i, src[i]);" in crossgl
+    assert "imageStore(lines, vec2<i32>(i, 1), src[i]);" in crossgl
+    # 3D images and 2D image arrays take an int4 coordinate in OpenCL.
+    assert "imageStore(vol, (vec4<i32>(i, 0, 0, 0)).xyz, src[i]);" in crossgl
+    assert "imageStore(layers, (vec4<i32>(i, 0, 1, 0)).xyz, src[i]);" in crossgl
+
+
+def test_opencl_write_image_translates_to_hlsl_texture_store(tmp_path):
+    source = """
+        kernel void k(global float *fin, write_only image2d_t dst,
+                      write_only image3d_t idst, write_only image1d_buffer_t udst) {
+            int i = get_global_id(0);
+            write_imagef(dst, (int2)(i, 0), (float4)(fin[i], 0.0f, 0.0f, 1.0f));
+            write_imagei(idst, (int4)(i, 0, 1, 0), (int4)(i));
+            write_imageui(udst, i, (uint4)(1u));
+        }
+        """
+    opencl_path = tmp_path / "write_image.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "write_image" not in hlsl
+    # Every image, integer ones included, is a bound resource, not a k_Args member.
+    assert "k_Args" not in hlsl
+    assert "RWTexture2D<float4> dst : register(u" in hlsl
+    assert "RWTexture3D<int4> idst : register(u" in hlsl
+    assert "RWBuffer<uint4> udst : register(u" in hlsl
+    assert "dst[int2(i, 0)] = float4(fin[i], 0.0, 0.0, 1.0);" in hlsl
+    assert "idst[int4(i, 0, 1, 0).xyz] = int4(i, i, i, i);" in hlsl
+    assert "udst[i] = uint4(1u, 1u, 1u, 1u);" in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    "source, reason",
+    [
+        (
+            """
+            kernel void k(global float4 *v, write_only image2d_t tex) {
+                write_imagef(tex, (int2)(0, 0), 1, v[0]);
+            }
+            """,
+            "write_imagef with 4 arguments",
+        ),
+        (
+            """
+            kernel void k(global float *v, write_only image2d_depth_t tex) {
+                write_imagef(tex, (int2)(0, 0), v[0]);
+            }
+            """,
+            "writing to image2d_depth_t: CrossGL has no depth storage image",
+        ),
+        (
+            """
+            kernel void k(global float4 *v, write_only image2d_t tex) {
+                write_imagef(tex, (int2)(0, 0), v[0]);
+                write_imagei(tex, (int2)(0, 1), (int4)(1));
+            }
+            """,
+            "write_imagei on tex of type image2D",
+        ),
+        (
+            """
+            void put(write_only image2d_t t, int4 v) {
+                write_imagei(t, (int2)(0, 0), v);
+            }
+            kernel void k(global int4 *v, write_only image2d_t tex) {
+                put(tex, v[0]);
+            }
+            """,
+            "write_imagei on parameter t of helper function put",
+        ),
+    ],
+)
+def test_opencl_write_image_refuses_writes_imagestore_cannot_keep(source, reason):
+    with pytest.raises(OpenCLImageWriteUnsupportedError, match=reason):
+        generate_crossgl(source)
+
+
+def test_opencl_read_imagef_lowers_to_texture_reads():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __constant sampler_t pix = CLK_NORMALIZED_COORDS_FALSE |
+            CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
+        float4 read_scaled(image2d_t img, sampler_t s, float2 c) {
+            return read_imagef(img, s, c * 2.0f);
+        }
+        kernel void k(global const float *fin, global float *outp,
+                      read_only image2d_t tex, image3d_t vol,
+                      read_write image2d_t rw, sampler_t hs) {
+            int i = get_global_id(0);
+            float2 uv = (float2)(fin[i], 0.5f);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+            outp[i] += read_imagef(tex, pix, uv).y;
+            outp[i] += read_imagef(tex, pix, (int2)(i, 0)).z;
+            outp[i] += read_imagef(tex, (int2)(i, 0)).w;
+            outp[i] += read_imagef(vol, smp, (float4)(fin[i], 0.5f, 0.5f, 0.0f)).x;
+            outp[i] += read_imagef(vol, (int4)(i, 0, 0, 0)).x;
+            outp[i] += read_imagef(rw, (int2)(i, 0)).x;
+            outp[i] += read_imagef(tex, hs, uv).x;
+            outp[i] += read_imagef(tex, CLK_FILTER_NEAREST, (int2)(i, 0)).x;
+            outp[i] += read_scaled(tex, smp, uv).x;
+        }
+        """)
+
+    assert "read_imagef" not in crossgl
+    # A sampler_t constant fixes its CLK_* state, as a sampler(...) does.
+    assert "CLK_" not in crossgl
+    assert (
+        "const sampler smp = sampler(coord::normalized, address::clamp_to_edge, "
+        "filter::linear);" in crossgl
+    )
+    assert (
+        "const sampler pix = sampler(coord::pixel, address::clamp_to_zero, "
+        "filter::nearest);" in crossgl
+    )
+    # Images are read_only by default, so only read_write stays a storage image.
+    assert "texture2D tex" in crossgl
+    assert "texture3D vol" in crossgl
+    assert "image2D rw" in crossgl
+    assert "read_scaled(texture2D img, sampler s, vec2<f32> c)" in crossgl
+    assert "textureLod(img, s, (c * 2.0f), 0.0)" in crossgl
+    assert "textureLod(tex, smp, vec2<f32>(fin[i], 0.5f), 0.0).x" in crossgl
+    assert "textureLod(tex, pix, uv, 0.0).y" in crossgl
+    # An integer coordinate goes through the sampler as a pixel coordinate.
+    assert "textureLod(tex, pix, vec2(vec2<i32>(i, 0)), 0.0).z" in crossgl
+    assert "texelFetch(tex, vec2<i32>(i, 0), 0).w" in crossgl
+    assert (
+        "textureLod(vol, smp, (vec4<f32>(fin[i], 0.5f, 0.5f, 0.0f)).xyz, 0.0).x"
+        in crossgl
+    )
+    assert "texelFetch(vol, (vec4<i32>(i, 0, 0, 0)).xyz, 0).x" in crossgl
+    assert "imageLoad(rw, vec2<i32>(i, 0)).x" in crossgl
+    assert "textureLod(tex, hs, uv, 0.0).x" in crossgl
+    assert (
+        "textureLod(tex, sampler(coord::pixel, address::clamp_to_edge, "
+        "filter::nearest), vec2(vec2<i32>(i, 0)), 0.0).x" in crossgl
+    )
+
+
+PIXEL_SAMPLER_SOURCE = """
+    __constant sampler_t smp = CLK_NORMALIZED_COORDS_FALSE |
+        CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+    __kernel void k(__global const float *fin, __global float4 *outp,
+                    __read_only image2d_t tex) {
+        int i = get_global_id(0);
+        outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f));
+    }
+    """
+
+
+def test_opencl_unnormalized_sampler_keeps_pixel_coordinates_for_metal(tmp_path):
+    opencl_path = tmp_path / "pixel.cl"
+    opencl_path.write_text(PIXEL_SAMPLER_SOURCE, encoding="utf-8")
+
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert (
+        "sampler smp = sampler(coord::pixel, address::clamp_to_edge, "
+        "filter::nearest);" in metal
+    )
+    assert "tex.sample(smp, float2(fin[i], 0.5), level(0.0))" in metal
+
+
+@pytest.mark.parametrize("backend", ["directx", "vulkan", "opengl", "wgsl"])
+def test_opencl_unnormalized_sampler_is_refused_where_targets_cannot_fix_it(
+    tmp_path, backend
+):
+    opencl_path = tmp_path / "pixel.cl"
+    opencl_path.write_text(PIXEL_SAMPLER_SOURCE, encoding="utf-8")
+
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(str(opencl_path), backend=backend)
+
+    # The target refuses pixel coordinates, or fixed sampler state at all.
+    code = raised.value.project_diagnostic_code
+    assert code.startswith(f"project.translate.{backend}-")
+    assert "sampler" in code
+
+
+@pytest.mark.parametrize(
+    ("read", "reason"),
+    [
+        ("read_imagef(tex, (float2)(0.5f))", "without a sampler takes integer"),
+        ("read_imagef(rw, pix, (int2)(0))", "read_write image is read without"),
+        ("read_imagef(tex, pix, (float2)(0.5f), 1.0f)", "4-argument form"),
+        ("read_imagef(dep, pix, (float2)(0.5f))", "image2d_depth_t has no"),
+        ("read_imagef(buf, 0)", "image1d_buffer_t has no"),
+        ("read_imagef(vol, pix, (float4)(0.5f))", "pixel coordinates on a 3D"),
+        ("read_imagef(arr, smp, (int4)(0))", "pixel coordinates on a 2DArray"),
+        ("read_imagef(tex, pix, floor((float2)(0.5f)))", "element type of"),
+        (
+            "read_imagef(tex, CLK_ADDRESS_REPEAT | CLK_FILTER_LINEAR, (float2)(0.5f))",
+            "repeats unnormalized",
+        ),
+        ("read_imagef(tex, CLK_ADDRESS_CLAMP, (int2)(0))", "no CLK_FILTER_* flag"),
+        (
+            "read_imagef(tex, CLK_FILTER_NEAREST | CLK_FILTER_LINEAR, (int2)(0))",
+            "two filter",
+        ),
+        ("read_imagef(tex, 18, (int2)(0))", "only CLK_* sampler flags"),
+        (
+            "read_imagef(rw, (int2)(0)); write_imagei(rw, (int2)(0), (int4)(0))",
+            "makes it an integer image",
+        ),
+    ],
+)
+def test_opencl_read_imagef_refuses_reads_crossgl_cannot_carry(read, reason):
+    source = f"""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE | CLK_FILTER_LINEAR;
+        __constant sampler_t pix = CLK_NORMALIZED_COORDS_FALSE | CLK_FILTER_NEAREST;
+        kernel void k(global float4 *outp, read_only image2d_t tex,
+                      read_write image2d_t rw, read_only image2d_depth_t dep,
+                      read_only image1d_buffer_t buf, read_only image3d_t vol,
+                      read_only image2d_array_t arr) {{
+            outp[0] = {read};
+        }}
+        """
+
+    with pytest.raises(OpenCLImageReadUnsupportedError) as raised:
+        generate_crossgl(source)
+
+    assert reason in str(raised.value)
+    assert (
+        raised.value.project_diagnostic_code
+        == "project.translate.opencl-image-read-unsupported"
+    )
+
+
+def test_opencl_sampled_read_imagef_translates_to_hlsl_sample_level(tmp_path):
+    source = """
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+        }
+        """
+    opencl_path = tmp_path / "read_image.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "read_imagef" not in hlsl
+    # The host creates the fixed sampler from the header record.
+    assert hlsl.startswith("// crosstl-fixed-samplers:")
+    assert '"mag_filter":"linear"' in hlsl
+    assert "SamplerState smp : register(s0);" in hlsl
+    # The texture is a bound resource, not a member of the k_Args cbuffer.
+    assert "k_Args" not in hlsl
+    assert "Texture2D tex : register(t" in hlsl
+    assert "outp[i] = tex.SampleLevel(smp, float2(fin[i], 0.5), 0.0).x;" in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
 
 
 def test_pocl_statement_expression_macro_block_codegen_reparse():
@@ -560,3 +1333,415 @@ def test_opencl_function_local_anonymous_records_materialize_named_types():
     assert "struct None" not in crossgl
     assert "struct <anonymous>" not in crossgl
     assert "union <anonymous>" not in crossgl
+
+
+def test_opencl_atomic_subtraction_lowers_to_atomic_add_of_negated_operand():
+    source = """
+        kernel void probe(global int *outp, global uint *counts, int v) {
+          uint i = get_global_id(0);
+          atomic_dec(&outp[i]);
+          int a = atomic_sub(&outp[i], v);
+          int b = atomic_fetch_sub(&outp[i], v - 2);
+          uint c = atomic_sub(&counts[i], 3u);
+          outp[0] = a + b + (int)c;
+        }
+        """
+
+    cgl_ast, crossgl = parse_crossgl_from_opencl(source)
+
+    assert "atomicSub" not in crossgl
+    assert "atomicAdd(outp[i], -1);" in crossgl
+    assert "atomicAdd(outp[i], -v)" in crossgl
+    assert "atomicAdd(outp[i], -(v - 2))" in crossgl
+    assert "atomicAdd(counts[i], 0u - 3u)" in crossgl
+
+    hlsl = HLSLCodeGen().generate(cgl_ast)
+    assert "atomicSub" not in hlsl
+    assert "InterlockedAdd(outp[i], -1" in hlsl
+
+
+def test_opencl_atomic_subtraction_on_uint_memory_subtracts_from_unsigned_zero(
+    tmp_path,
+):
+    source = """
+        kernel __attribute__((reqd_work_group_size(64, 1, 1)))
+        void probe(global uint *counts, global uint *res, uint v) {
+          local uint tmp[64];
+          uint l = get_local_id(0);
+          tmp[l] = 100u;
+          barrier(CLK_LOCAL_MEM_FENCE);
+          uint d = atomic_dec(&tmp[l]);
+          uint a = atomic_sub(&counts[l], v);
+          uint b = atomic_fetch_sub(&tmp[l], 1);
+          res[l] = a + b + d;
+        }
+        """
+
+    crossgl = generate_crossgl(source)
+    assert "atomicAdd(tmp[l], 0u - 1u)" in crossgl
+    assert "atomicAdd(counts[l], 0u - v)" in crossgl
+    assert crossgl.count("0u - 1u") == 2
+
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    glsl = crosstl.translate(str(opencl_path), backend="glsl", format_output=False)
+    assert "atomicAdd(probe_tmp[l], (0u - 1u))" in glsl
+    assert "atomicAdd(counts[l], (0u - v))" in glsl
+
+
+def test_opencl_memory_fences_lower_to_crossgl_fences_by_flag():
+    crossgl = generate_crossgl("""
+        kernel void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            read_mem_fence(CLK_LOCAL_MEM_FENCE);
+            write_mem_fence(CLK_GLOBAL_MEM_FENCE);
+            atomic_work_item_fence(
+                CLK_IMAGE_MEM_FENCE, memory_order_acq_rel, memory_scope_work_group);
+            read_mem_fence(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
+            sub_group_barrier(CLK_LOCAL_MEM_FENCE);
+            outp[i] = 0u;
+        }
+        """)
+
+    assert "CLK_" not in crossgl
+    assert "mem_fence" not in crossgl
+    assert "memoryBarrierShared();" in crossgl
+    assert "memoryBarrierBuffer();" in crossgl
+    assert "memoryBarrierImage();" in crossgl
+    assert "memoryBarrier();" in crossgl
+    assert "subgroupBarrier();" in crossgl
+
+
+def test_opencl_mem_fence_and_scoped_fences_lower_to_crossgl_fences():
+    crossgl = generate_crossgl("""
+        kernel void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            mem_fence(CLK_GLOBAL_MEM_FENCE);
+            atomic_work_item_fence(
+                CLK_LOCAL_MEM_FENCE, memory_order_seq_cst, memory_scope_device);
+            sub_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_sub_group);
+            outp[i] = 0u;
+        }
+        """)
+
+    assert "mem_fence" not in crossgl
+    assert "memory_" not in crossgl
+    assert "memoryBarrierBuffer();" in crossgl
+    assert "memoryBarrierShared();" in crossgl
+    assert "subgroupBarrier();" in crossgl
+
+
+@pytest.mark.parametrize(
+    "call, statements",
+    [
+        ("barrier(CLK_LOCAL_MEM_FENCE)", ["workgroupBarrier();"]),
+        (
+            "barrier(CLK_GLOBAL_MEM_FENCE)",
+            [
+                "memoryBarrierBuffer();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierBuffer();",
+            ],
+        ),
+        (
+            "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)",
+            ["memoryBarrierBuffer();", "workgroupBarrier();", "memoryBarrierBuffer();"],
+        ),
+        (
+            "work_group_barrier(CLK_IMAGE_MEM_FENCE)",
+            [
+                "memoryBarrierImage();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierImage();",
+            ],
+        ),
+        (
+            "work_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_device)",
+            [
+                "memoryBarrierBuffer();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierBuffer();",
+            ],
+        ),
+        (
+            "barrier(CLK_GLOBAL_MEM_FENCE | CLK_IMAGE_MEM_FENCE)",
+            [
+                "deviceMemoryBarrier();",
+                "workgroupExecutionBarrier();",
+                "deviceMemoryBarrier();",
+            ],
+        ),
+        ("work_group_barrier(0)", ["workgroupExecutionBarrier();"]),
+        (
+            "barrier(mask)",
+            ["allMemoryBarrier();", "workgroupBarrier();", "allMemoryBarrier();"],
+        ),
+        (
+            "barrier(CLK_LOCAL_MEM_FENCE | mask)",
+            ["allMemoryBarrier();", "workgroupBarrier();", "allMemoryBarrier();"],
+        ),
+    ],
+)
+def test_opencl_barriers_order_the_memory_their_flags_name(call, statements):
+    crossgl = generate_crossgl(f"""
+        kernel void probe(global uint *outp, uint mask) {{
+            uint i = get_global_id(0);
+            outp[i] = 1u;
+            {call};
+            outp[i] = outp[(i + 1u) % 64u];
+        }}
+        """)
+
+    lines = [line.strip() for line in crossgl.splitlines()]
+    start = lines.index("outp[i] = 1u;") + 1
+    assert lines[start : start + len(statements) + 1] == [
+        *statements,
+        "outp[i] = outp[((i + 1u) % 64u)];",
+    ]
+    assert "CLK_" not in crossgl
+
+
+def test_opencl_global_barrier_orders_device_memory_on_targets(tmp_path):
+    source = tmp_path / "probe.cl"
+    source.write_text(
+        """
+        kernel void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            outp[i] = 1u;
+            barrier(CLK_GLOBAL_MEM_FENCE);
+            outp[i] = outp[(i + 1u) % 64u];
+        }
+        """,
+        encoding="utf-8",
+    )
+    options = {"threadgroup_size": (64, 1, 1)}
+
+    def translate(backend):
+        return crosstl.translate(
+            str(source), backend=backend, format_output=False, source_options=options
+        )
+
+    assert "threadgroup_barrier(mem_flags::mem_device);" in translate("metal")
+    assert "DeviceMemoryBarrierWithGroupSync();" in translate("hlsl")
+    assert "storageBarrier();" in translate("wgsl")
+    assert "memoryBarrierBuffer();" in translate("glsl")
+
+
+def test_opencl_work_group_barrier_refuses_scopes_wider_than_the_device():
+    with pytest.raises(OpenCLFenceScopeUnsupportedError, match="memory_scope_"):
+        generate_crossgl("""
+            kernel void probe(global uint *outp) {
+                work_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_all_svm_devices);
+                outp[get_global_id(0)] = 0u;
+            }
+            """)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE, memory_order_acq_rel, "
+        "memory_scope_all_svm_devices)",
+        "sub_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_work_group)",
+        "sub_group_barrier(CLK_LOCAL_MEM_FENCE, memory_scope_device)",
+    ],
+)
+def test_opencl_fences_refuse_scopes_no_crossgl_fence_orders(call):
+    with pytest.raises(OpenCLFenceScopeUnsupportedError, match="memory_scope_"):
+        generate_crossgl(f"""
+            kernel void probe(global uint *outp) {{
+                {call};
+                outp[get_global_id(0)] = 0u;
+            }}
+            """)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line", "expected"),
+    [
+        (
+            "const",
+            "__global float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global",
+            "const float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "const __global",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global const",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+    ],
+)
+def test_opencl_kernel_parameter_qualifiers_split_across_lines(
+    first_line, second_line, expected
+):
+    split_source = f"""
+        __kernel void first({first_line}
+            {second_line}, __global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = in[i];
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert expected in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_constant_kernel_parameter_split_from_const():
+    split_source = """
+        __kernel void first(const
+            __constant float* table, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line"),
+    [("unsigned", "n"), ("unsigned", "int n"), ("const", "unsigned n")],
+)
+def test_opencl_unsigned_kernel_parameter_split_across_lines(first_line, second_line):
+    # `unsigned` / `n` is an `unsigned int` named `n`, as on one line.
+    split_source = f"""
+        __kernel void first(__global float* out, {first_line}
+            {second_line}) {{
+            out[get_global_id(0)] = (float)n;
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "u32 n" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_function_parameter_qualifier_split_across_lines():
+    split_source = """
+        float twice(const
+            float v) {
+            return v * 2.0f;
+        }
+
+        __kernel void first(__global const float* in, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = twice(in[i]);
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "f32 twice(f32 v)" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line", "expected"),
+    [
+        (
+            "__global float",
+            "* in",
+            "@group(0) @binding(0) var<storage, read_write> in_: array<f32>",
+        ),
+        (
+            "__global float",
+            "const* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global float const",
+            "* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global const float*",
+            "restrict in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global float* restrict",
+            "const in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+    ],
+)
+def test_opencl_kernel_parameter_type_split_after_base_type(
+    first_line, second_line, expected
+):
+    # A line break after the base type, a ``*`` or a postfix qualifier is ignored (#3753).
+    split_source = f"""
+        __kernel void first({first_line}
+            {second_line}, __global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = in[i];
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert expected in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_pipe_parameter_split_after_pipe_keyword():
+    split_source = """
+        __kernel void first(__read_only pipe
+            int p, __global float* out) {
+            out[get_global_id(0)] = 0.0f;
+        }
+        """
+    one_line_source = split_source.replace("pipe\n", "pipe ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_function_parameter_unsigned_split_across_lines():
+    split_source = """
+        float widen(unsigned
+            v) {
+            return (float)v;
+        }
+
+        __kernel void first(__global float* out) {
+            out[0] = widen(1u);
+        }
+        """
+    one_line_source = split_source.replace("unsigned\n", "unsigned ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "f32 widen(u32 v)" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_cast_type_qualifier_split_across_lines():
+    split_source = """
+        __kernel void first(__global float* in, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = (const
+                float)in[i];
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)

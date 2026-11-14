@@ -7,7 +7,7 @@ The source AST is retained.
 """
 
 from copy import copy, deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..arithmetic_conversions import (
     ArithmeticScalarKind,
@@ -57,7 +57,14 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import evaluate_literal_int_expression
+from .lane_records import lane_load, lane_record_layout, lane_store, lane_view
 from .resource_origins import ResourceOriginAnalysis
+from .resource_storage_views import (
+    combined_load,
+    restorable_view,
+    storage_view,
+    view_load,
+)
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -74,6 +81,9 @@ class ResourceAggregateError(ValueError):
         self.source_location = getattr(node, "source_location", None)
 
 
+_SIXTY_FOUR_BIT_INTEGER_SPELLINGS = {"int64": "int64_t", "uint64": "uint64_t"}
+
+
 @dataclass(frozen=True)
 class _Pointer:
     element: str
@@ -82,10 +92,17 @@ class _Pointer:
     readable: bool
 
 
+# CrossGL spellings of the 16-bit floating storage types.
+_NARROW_FLOAT_ELEMENTS = frozenset({"float16", "bfloat16"})
+# Other spellings of binary16 that type aliases may name.
+_BINARY16_SPELLINGS = frozenset({"f16", "half"})
+
+
 @dataclass(frozen=True)
 class _RootPointer(_Pointer):
     identity: int
     local_name: str
+    backing_name: str = ""
 
 
 def _name(value):
@@ -213,14 +230,16 @@ def _call(name, args):
 
 
 def _integer(value):
-    return LiteralNode(value, "int")
+    # A typed literal lets target range proofs compare it with the typed identity
+    # member, so a view's proven identity decides the accessor branch it takes.
+    return LiteralNode(value, PrimitiveType("int"))
 
 
 def _member(value, name):
     return MemberAccessNode(value, name)
 
 
-def _pointer_type(value, owner=None):
+def _pointer_type(value, owner=None, *, allow_thread=False):
     qualifiers = set(getattr(owner, "qualifiers", ()) or ())
     qualifiers.update(_name(item) for item in getattr(owner, "attributes", ()) or ())
 
@@ -236,9 +255,12 @@ def _pointer_type(value, owner=None):
             ):
                 raise ResourceAggregateError("unsupported-vector-pointee", owner)
             return arithmetic_type_name(component.kind, component.bits, value.size)
-        return {"int64": "int64_t", "uint64": "uint64_t"}.get(
-            _name(value), _name(value)
-        )
+        # A pointee keeps its CrossGL type name. The 64-bit integers take one spelling, so that pointers to the
+        # same element type compare equal.
+        name = _name(value)
+        if name in _SIXTY_FOUR_BIT_INTEGER_SPELLINGS:
+            return _SIXTY_FOUR_BIT_INTEGER_SPELLINGS[name]
+        return name
 
     if (
         isinstance(value, NamedType)
@@ -261,29 +283,20 @@ def _pointer_type(value, owner=None):
             )
     if not isinstance(value, PointerType):
         return None
-    space = value.address_space or next(
-        (
-            q
-            for q in (
-                "constant",
-                "device",
-                "global",
-                "storage",
-                "threadgroup",
-                "workgroup",
-            )
-            if q in qualifiers
-        ),
-        None,
-    )
-    if space not in {
+    allowed_spaces = (
         "constant",
         "device",
         "global",
         "storage",
         "threadgroup",
         "workgroup",
-    }:
+        *(("thread", "private") if allow_thread else ()),
+    )
+    space = value.address_space or next(
+        (q for q in allowed_spaces if q in qualifiers),
+        None,
+    )
+    if space not in set(allowed_spaces):
         return None
     element = element_name(value.pointee_type)
     if not element or getattr(value.pointee_type, "generic_args", None):
@@ -302,9 +315,13 @@ def _pointer_type(value, owner=None):
     return _Pointer(
         element,
         (
-            "threadgroup"
-            if space in {"threadgroup", "workgroup"}
-            else "constant" if space == "constant" else "device"
+            "thread"
+            if space in {"thread", "private"}
+            else (
+                "threadgroup"
+                if space in {"threadgroup", "workgroup"}
+                else "constant" if space == "constant" else "device"
+            )
         ),
         writable,
         readable,
@@ -321,6 +338,8 @@ def _remove_pointee_qualifiers(node):
         "storage",
         "threadgroup",
         "workgroup",
+        "thread",
+        "private",
         "readonly",
         "writeonly",
     }
@@ -341,6 +360,40 @@ def _contains_storage_pointer(node):
         }
         for child in node.walk()
     )
+
+
+def _contains_thread_pointer(node):
+    return any(
+        isinstance(child, PointerType) and child.address_space in {"thread", "private"}
+        for child in node.walk()
+    )
+
+
+def _is_used_as_pointer(body, name):
+    direct_array_uses = set()
+    for node in body.walk():
+        if (
+            isinstance(node, UnaryOpNode)
+            and node.operator == "&"
+            and isinstance(node.operand, ArrayAccessNode)
+            and isinstance(node.operand.array_expr, IdentifierNode)
+            and node.operand.array_expr.name == name
+        ):
+            return True
+        if (
+            isinstance(node, ArrayAccessNode)
+            and isinstance(node.array_expr, IdentifierNode)
+            and node.array_expr.name == name
+        ):
+            direct_array_uses.add(id(node.array_expr))
+    for node in body.walk():
+        if (
+            isinstance(node, IdentifierNode)
+            and node.name == name
+            and id(node) not in direct_array_uses
+        ):
+            return True
+    return False
 
 
 def _static_member(member):
@@ -416,12 +469,16 @@ class _Lowering:
         self.workgroup_roots = {}
         self.workgroup_declarations = []
         self.resource_origins = {}
+        self.storage_origins = {}
         self.structs = {}
         for node in ast.walk():
             if isinstance(node, StructNode):
                 if node.name in self.structs:
                     raise ResourceAggregateError("ambiguous-aggregate-type", node)
                 self.structs[node.name] = node
+        self.has_thread_aggregate_pointers = any(
+            _contains_thread_pointer(struct) for struct in self.structs.values()
+        )
         self.functions = {}
         for node in ast.walk():
             if isinstance(node, FunctionNode):
@@ -449,9 +506,13 @@ class _Lowering:
                 )
         self.resources = []
         for param in entry.parameters:
-            pointer = _pointer_type(param.param_type, param)
+            pointer = _pointer_type(
+                param.param_type,
+                param,
+                allow_thread=self.has_thread_aggregate_pointers,
+            )
             if pointer is not None:
-                if pointer.space == "threadgroup":
+                if pointer.space in {"threadgroup", "thread"}:
                     raise ResourceAggregateError("dynamic-workgroup-binding", param)
                 if self.contains_reference(NamedType(pointer.element)):
                     raise ResourceAggregateError("aggregate-buffer-abi", param)
@@ -480,6 +541,15 @@ class _Lowering:
                 raise ResourceAggregateError("aggregate-buffer-abi", buffer)
         self.handles = {}
         self.helpers = {}
+        # (view element, space) -> storage elements some view reads. The
+        # origin analysis infers every reachable expression, and so registers
+        # every view, before any helper is built.
+        self.storage_views = {}
+        # (element, space) -> elements some view of its handles yields.
+        self.view_targets = {}
+        self.viewed_loads = set()
+        # (element, space) pairs whose load or store helpers read lane views.
+        self.lane_accesses = set()
         self.generated = []
         self.entry_handles = {
             param.name: self.fresh(f"crosstl_reference_{param.name}")
@@ -519,7 +589,9 @@ class _Lowering:
     def source_type(self, value, owner=None):
         if id(owner) in self.workgroup_roots:
             return self.workgroup_roots[id(owner)]
-        pointer = _pointer_type(value, owner)
+        pointer = _pointer_type(
+            value, owner, allow_thread=self.has_thread_aggregate_pointers
+        )
         if pointer is not None:
             return pointer
         if isinstance(value, ArrayType):
@@ -539,7 +611,16 @@ class _Lowering:
                 continue
             qualifiers = set(node.qualifiers)
             qualifiers.update(_name(a) for a in node.attributes)
-            if not qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
+            is_workgroup = bool(
+                qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}
+            )
+            is_thread_local = (
+                not is_workgroup
+                and self.has_thread_aggregate_pointers
+                and qualifiers <= {"thread", "private", "const"}
+                and _is_used_as_pointer(function.body, node.name)
+            )
+            if not is_workgroup and not is_thread_local:
                 continue
             if id(node) in self.workgroup_roots:
                 continue
@@ -550,44 +631,99 @@ class _Lowering:
             if isinstance(element, PointerType):
                 continue
             numeric = _numeric(element)
+            # Binary16 and bfloat16 scalars keep their own element type; the
+            # target backends already lay out and convert shared 16-bit arrays.
+            narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
+            # Padding-free records of one 32-bit scalar type are element types
+            # the targets load, store and copy whole.
+            lane_record = self.lane_record(element)
             if (
                 extent is None
                 or extent <= 0
-                or numeric is None
-                or numeric.bits != 32
-                or numeric.lanes not in {1, 2, 4}
-                or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                or not narrow_float
+                and not lane_record
+                and (
+                    numeric is None
+                    or numeric.bits != 32
+                    or numeric.lanes not in {1, 2, 4}
+                    or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                )
             ):
-                raise ResourceAggregateError("workgroup-allocation-layout", node)
-            if node.initial_value is not None or qualifiers - {
-                "threadgroup",
-                "workgroup",
-                "shared",
-                "groupshared",
-            }:
+                raise ResourceAggregateError(
+                    (
+                        "workgroup-allocation-layout"
+                        if is_workgroup
+                        else "local-allocation-layout"
+                    ),
+                    node,
+                )
+            if is_workgroup and (
+                node.initial_value is not None
+                or qualifiers
+                - {
+                    "threadgroup",
+                    "workgroup",
+                    "shared",
+                    "groupshared",
+                }
+            ):
                 raise ResourceAggregateError(
                     "workgroup-allocation-initializer-or-qualifier", node
+                )
+            if (
+                is_thread_local
+                and node.initial_value is not None
+                and not (
+                    isinstance(node.initial_value, ArrayLiteralNode)
+                    and len(node.initial_value.elements) == extent
+                )
+            ):
+                raise ResourceAggregateError(
+                    "local-allocation-initializer-or-qualifier", node
                 )
             element_name = _name(element) or arithmetic_type_name(
                 numeric.kind, numeric.bits, numeric.lanes
             )
-            pointer = _Pointer(element_name, "threadgroup", True, True)
-            root = self.fresh(f"crosstl_workgroup_{node.name}")
+            space = "threadgroup" if is_workgroup else "thread"
+            writable = True if is_workgroup else ("const" not in qualifiers)
+            pointer = _Pointer(element_name, space, writable, True)
+            prefix = "crosstl_workgroup" if is_workgroup else "crosstl_local"
+            root = self.fresh(f"{prefix}_{node.name}")
             handle = self.fresh(f"crosstl_reference_{node.name}")
             identity = len(self.resources)
-            declaration = copy(node)
-            declaration.name = root
-            declaration.var_type = declaration.vtype = ArrayType(
-                deepcopy(element), _integer(extent)
-            )
+            if is_workgroup:
+                declaration = copy(node)
+                declaration.name = root
+                declaration.var_type = declaration.vtype = ArrayType(
+                    deepcopy(element), _integer(extent)
+                )
+            else:
+                declaration = VariableNode(
+                    root,
+                    ArrayType(deepcopy(element), _integer(extent)),
+                    qualifiers=["static"],
+                )
             self.workgroup_declarations.append(declaration)
             parameter = ParameterNode(
-                root, PointerType(deepcopy(element), address_space="threadgroup")
+                root, PointerType(deepcopy(element), address_space=space)
             )
             self.resources.append((parameter, pointer, root))
             self.workgroup_roots[id(node)] = _RootPointer(
-                pointer.element, pointer.space, True, True, identity, handle
+                pointer.element,
+                pointer.space,
+                writable,
+                True,
+                identity,
+                handle,
+                root,
             )
+
+    def lane_record(self, value):
+        """Whether ``value`` names a padding-free record of one 32-bit scalar."""
+
+        if not isinstance(value, NamedType) or value.generic_args:
+            return False
+        return lane_record_layout(self.structs.get(value.name)) is not None
 
     def handle_name(self, pointer):
         if pointer.element not in self.handles:
@@ -617,7 +753,7 @@ class _Lowering:
                 name, **self.resource_declaration(param, pointer, "param_type")
             )
             for param, pointer, name in self.resources
-            if pointer.space != "threadgroup"
+            if pointer.space not in {"threadgroup", "thread"}
         ]
 
     def resource_declaration(self, param, pointer, field):
@@ -644,11 +780,39 @@ class _Lowering:
             ],
         }
 
+    def storage_read(self, pointer, owner, call):
+        """Record the bindings a storage load can read when origins are proven.
+
+        A load helper selects its binding by the handle's identity, so a handle
+        whose origins are proven reads only those bindings. Uniformity proofs
+        then need only those bindings to be immutable, not every binding of
+        the element type. ``call.storage_reads`` names them in the call's
+        argument spelling; the helper body itself is unchanged.
+        """
+        origins = self.storage_origins.get(id(owner))
+        if pointer.space == "threadgroup" or not origins:
+            return call
+        names = []
+        for identity in sorted(origins):
+            if not 0 <= identity < len(self.resources):
+                return call
+            _param, resource, name = self.resources[identity]
+            if (
+                resource.space == "threadgroup"
+                or resource.element != pointer.element
+                or resource.space != pointer.space
+                or not resource.readable
+            ):
+                return call
+            names.append(name)
+        call.storage_reads = tuple(names)
+        return call
+
     def resource_arguments(self):
         return [
             _id(name)
             for _param, pointer, name in self.resources
-            if pointer.space != "threadgroup"
+            if pointer.space not in {"threadgroup", "thread"}
         ]
 
     def function_for_call(self, node, env=None):
@@ -963,6 +1127,8 @@ class _Lowering:
             return node.literal_type
         if isinstance(node, CastNode):
             return self.source_type(node.target_type)
+        if isinstance(node, PointerReinterpretNode):
+            return self.pointer_view(node, env)
         if isinstance(node, IdentifierNode):
             return env.get(node.name)
         if isinstance(node, MemberAccessNode):
@@ -1036,6 +1202,170 @@ class _Lowering:
             return self.arithmetic_result(left, right, "?:")
         return None
 
+    def pointer_view(self, node, env):
+        """The pointer a reinterpretation in one address space yields.
+
+        A view keeps the source's allocation and grants at most the access
+        both pointers grant, so an access the source lacks fails where it is
+        made. A view of the same element changes no byte and is the source
+        pointer itself. A view of another element is a narrowing integer view
+        of device or constant storage (see ``resource_storage_views``), or a
+        widening view whose elements every storage the source names holds
+        whole or in adjacent narrower elements; both are read-only. Any other
+        reinterpretation stays unknown.
+        """
+        source = self.infer(node.expression, env)
+        if not isinstance(source, _Pointer):
+            return None
+        try:
+            target = _pointer_type(node.target_type)
+        except ResourceAggregateError:
+            return None
+        if not isinstance(target, _Pointer) or target.space != source.space:
+            return None
+        readable = source.readable and target.readable
+        if target.element == source.element:
+            return replace(
+                source, writable=source.writable and target.writable, readable=readable
+            )
+        if self.lane_view(source.element, target.element) is not None:
+            return self.lane_pointer_view(source, target, readable, node)
+        if source.space == "threadgroup":
+            return None
+        space = source.space
+        storages = self.storage_views.get((source.element, space), set())
+        if storage_view(source.element, target.element) is None:
+            if not self.widening_view(source, target, storages):
+                return None
+            if self.binds_element(source.element, space):
+                # Handles of the narrow element may name its own bindings.
+                storages = {source.element, *storages}
+        else:
+            # A narrowing view reads the source's own bindings too.
+            storages = {source.element, *storages}
+        self.view_targets.setdefault((source.element, space), set()).add(target.element)
+        for storage in sorted(storages):
+            self.register_view(storage, target.element, space, node)
+        return _Pointer(target.element, space, False, readable)
+
+    def lane_view(self, source_element, target_element):
+        """The scalar view of ``source_element`` lane records, or None."""
+
+        return lane_view(self.structs.get(source_element), target_element)
+
+    def lane_pointer_view(self, source, target, readable, node):
+        """A scalar view of lane-record handles in any space.
+
+        Lane ``j`` of the view is member ``j % n`` of record ``j / n``. Each
+        lane is a whole 32-bit member, so loads and stores through the view
+        reach exactly that member, and the view keeps the access both
+        pointers grant. Record handles that already name other storage have
+        no lanes.
+        """
+        space = source.space
+        if self.storage_views.get((source.element, space)):
+            return None
+        self.view_targets.setdefault((source.element, space), set()).add(target.element)
+        self.register_view(source.element, target.element, space, node)
+        return _Pointer(
+            target.element, space, source.writable and target.writable, readable
+        )
+
+    def register_view(self, storage, element, space, node):
+        """Record that ``element`` handles in ``space`` may name ``storage``.
+
+        Handles viewed from ``element`` handles carry the same identities, so
+        the storage reaches every element viewed from it as well.
+        """
+        if storage == element:
+            # The handle's own element: load helpers read it directly.
+            return
+        if (
+            not restorable_view(storage, element)
+            and self.lane_view(storage, element) is None
+        ):
+            # Neither whole nor adjacent storage elements form the element.
+            raise ResourceAggregateError("widened-narrow-storage", node)
+        key = element, space
+        viewed = self.storage_views.setdefault(key, set())
+        if storage in viewed:
+            return
+        if key in self.viewed_loads or (
+            key in self.lane_accesses and self.lane_view(storage, element) is not None
+        ):
+            # A load helper of this element no longer covers every view.
+            raise ResourceAggregateError("late-storage-view", node)
+        viewed.add(storage)
+        for target in sorted(self.view_targets.get(key, ())):
+            self.register_view(storage, target, space, node)
+
+    def widening_view(self, source, target, storages):
+        """Whether ``target`` handles can restore what ``source`` handles view.
+
+        A ``source`` handle names a binding of its own element or a storage a
+        narrowing view of it reads (``storages``). The handle's offset divides
+        into ``target`` elements, which each such storage holds whole or as
+        adjacent unsigned narrower elements that a load combines. An offset
+        that does not divide is a misaligned ``target`` pointer, whose use
+        C++, and so MSL, leaves undefined.
+        """
+        if storage_view(target.element, source.element) is None:
+            return False
+        if self.binds_element(source.element, source.space):
+            storages = {source.element, *storages}
+        return bool(storages) and all(
+            restorable_view(storage, target.element) for storage in storages
+        )
+
+    def binds_element(self, element, space):
+        return any(
+            resource.element == element and resource.space == space
+            for _param, resource, _name in self.resources
+        )
+
+    def view_helper(self, source, target):
+        """A helper turning a ``source`` handle into a ``target`` view handle.
+
+        A narrowing view counts ``ratio`` view elements per source element; a
+        widening view divides the offset back into its wider elements.
+        """
+        view = self.lane_view(source.element, target.element) or storage_view(
+            source.element, target.element
+        )
+        if view is None:
+            view = storage_view(target.element, source.element)
+            operator = "/"
+        else:
+            operator = "*"
+        key = (source.element, target.element), "view", None
+        if key in self.helpers:
+            return self.helpers[key]
+        name = self.fresh(f"crosstl_resource_view_{source.element}_as_{target.element}")
+        self.helpers[key] = name
+        handle = self.target_type(target)
+        reference = _member(_id("reference"), "identity")
+        offset = _member(_id("reference"), "offset")
+        body = [
+            VariableNode("view", handle),
+            AssignmentNode(_member(_id("view"), "identity"), reference),
+            AssignmentNode(
+                _member(_id("view"), "offset"),
+                BinaryOpNode(
+                    offset, operator, _call("int64_t", [_integer(view.ratio)])
+                ),
+            ),
+            ReturnNode(_id("view")),
+        ]
+        function = FunctionNode(
+            name,
+            handle,
+            [ParameterNode("reference", self.target_type(source))],
+            BlockNode(body),
+        )
+        function.resource_aggregate_nonmutating = True
+        self.generated.append(function)
+        return name
+
     def arithmetic_result(self, left, right, operator):
         left, right = _numeric(left), _numeric(right)
         if left is None or right is None:
@@ -1072,6 +1402,8 @@ class _Lowering:
 
     def compatible(self, expected, actual, node):
         if isinstance(expected, _Pointer):
+            if isinstance(node, IdentifierNode) and node.name == "nullptr":
+                return
             if not isinstance(actual, _Pointer) or (
                 expected.element != actual.element
                 or expected.writable
@@ -1082,16 +1414,32 @@ class _Lowering:
             ):
                 raise ResourceAggregateError("pointer-contract-mismatch", node)
 
-    def helper(self, pointer, operation, origins=None):
+    def helper(
+        self, pointer, operation, origins=None, members=(), operator="=", value=None
+    ):
+        """The access helper for ``operation`` through ``pointer``.
+
+        A store with ``members`` writes that member path of the element in
+        place with ``operator`` and returns the member, whose type ``value``
+        names, so a swizzle or field store leaves the element's other members
+        untouched, as the source store does.
+        """
         pointer = _Pointer(
             pointer.element, pointer.space, pointer.writable, pointer.readable
         )
-        if pointer.space != "threadgroup" or operation not in {"load", "store"}:
+        if pointer.space not in {"threadgroup", "thread"} or operation not in {
+            "load",
+            "store",
+        }:
             origins = None
-        key = pointer, operation, origins
+        key = (pointer, operation, origins, *((members, operator) if members else ()))
         if key in self.helpers:
             return self.helpers[key]
-        storage = "workgroup" if pointer.space == "threadgroup" else "resource"
+        storage = (
+            "workgroup"
+            if pointer.space == "threadgroup"
+            else "local" if pointer.space == "thread" else "resource"
+        )
         name = self.fresh(f"crosstl_{storage}_{operation}_{pointer.element}")
         self.helpers[key] = name
         handle = self.target_type(pointer)
@@ -1119,14 +1467,32 @@ class _Lowering:
             if operation == "store":
                 if not pointer.writable:
                     raise ResourceAggregateError("write-through-readonly-pointer")
-                params.append(ParameterNode("value", PrimitiveType(pointer.element)))
+                params.append(
+                    ParameterNode(
+                        "value", value if members else PrimitiveType(pointer.element)
+                    )
+                )
             params.extend(self.resource_parameters())
+            # Read-only loads also read the storage views of this element.
+            viewed = set()
+            if operation == "load" and not pointer.writable:
+                self.viewed_loads.add((pointer.element, pointer.space))
+                viewed = self.storage_views.get((pointer.element, pointer.space), set())
+            # Lane views are exact for reads and writes through any handle.
+            self.lane_accesses.add((pointer.element, pointer.space))
+            viewed = set(viewed) | {
+                storage
+                for storage in self.storage_views.get(
+                    (pointer.element, pointer.space), set()
+                )
+                if self.lane_view(storage, pointer.element) is not None
+            }
             candidates = [
-                (index, resource_name)
+                (index, resource_name, resource.element)
                 for index, (_param, resource, resource_name) in enumerate(
                     self.resources
                 )
-                if resource.element == pointer.element
+                if (resource.element == pointer.element or resource.element in viewed)
                 and resource.space == pointer.space
                 and (operation != "store" or resource.writable)
                 and (operation != "load" or resource.readable)
@@ -1135,21 +1501,48 @@ class _Lowering:
             if not candidates:
                 raise ResourceAggregateError("missing-compatible-resource")
             body = []
-            for index, resource_name in candidates:
-                access = ArrayAccessNode(
-                    _id(resource_name),
-                    BinaryOpNode(
-                        _member(_id("reference"), "offset"), "+", _id("index")
-                    ),
+            for index, resource_name, element in candidates:
+                position = BinaryOpNode(
+                    _member(_id("reference"), "offset"), "+", _id("index")
                 )
-                statements = (
-                    [ReturnNode(access)]
-                    if operation == "load"
-                    else [
-                        AssignmentNode(access, _id("value")),
+                lanes = self.lane_view(element, pointer.element)
+                if element == pointer.element:
+                    access = ArrayAccessNode(_id(resource_name), position)
+                elif members:
+                    # A member of a storage view's element has no storage.
+                    raise ResourceAggregateError("member-write-through-storage-view")
+                elif lanes is not None:
+                    access = lane_load(lanes, _id(resource_name), position)
+                elif storage_view(element, pointer.element) is not None:
+                    access = view_load(
+                        storage_view(element, pointer.element),
+                        _id(resource_name),
+                        position,
+                    )
+                else:
+                    # Only read-only loads reach the storage of a widening view.
+                    access = combined_load(
+                        storage_view(pointer.element, element),
+                        _id(resource_name),
+                        position,
+                    )
+                written = access
+                for member in members:
+                    written = _member(written, member)
+                if operation == "load":
+                    statements = [ReturnNode(access)]
+                elif lanes is not None:
+                    statements = [
+                        lane_store(
+                            lanes, _id(resource_name), position, _id("value"), operator
+                        ),
                         ReturnNode(_id("value")),
                     ]
-                )
+                else:
+                    statements = [
+                        AssignmentNode(written, _id("value"), operator),
+                        ReturnNode(deepcopy(written) if members else _id("value")),
+                    ]
                 # Every handle originates at one of these compatible bindings.
                 if index == candidates[-1][0]:
                     body.extend(statements)
@@ -1164,7 +1557,7 @@ class _Lowering:
                             BlockNode(statements),
                         )
                     )
-            result_type = PrimitiveType(pointer.element)
+            result_type = value if members else PrimitiveType(pointer.element)
         function = FunctionNode(name, result_type, params, BlockNode(body))
         function.resource_aggregate_nonmutating = operation in {"make", "shift", "load"}
         self.generated.append(function)
@@ -1420,14 +1813,24 @@ class _Lowering:
         ):
             raise ResourceAggregateError("record-copy-layout", node)
         backing = _numeric(src.element)
+        # Copies move whole backing elements: 16-bit floating or 32-bit scalars.
+        element_bytes = (
+            2
+            if src.element in _NARROW_FLOAT_ELEMENTS
+            else (
+                4
+                if backing is not None
+                and backing.bits == 32
+                and backing.lanes == 1
+                and backing.kind != ArithmeticScalarKind.BOOLEAN
+                else None
+            )
+        )
         if (
             src.element != dst.element
-            or backing is None
-            or backing.bits != 32
-            or backing.lanes != 1
-            or backing.kind == ArithmeticScalarKind.BOOLEAN
-            or alignment > 4
-            or extent % 4
+            or element_bytes is None
+            or alignment > element_bytes
+            or extent % element_bytes
         ):
             raise ResourceAggregateError("record-copy-backing-layout", node)
         if any(
@@ -1470,7 +1873,7 @@ class _Lowering:
             )
         minimum = max(assertion.minimum for assertion in matches)
         maximum = min(assertion.maximum for assertion in matches)
-        words = extent // 4
+        words = extent // element_bytes
         if minimum > maximum or maximum - minimum + 1 < words:
             raise ResourceAggregateError(
                 "record-copy-conflicting-access-assertions", node
@@ -1692,6 +2095,8 @@ class _Lowering:
         self.compatible(expected, actual, node)
         location = getattr(node, "source_location", None)
         if isinstance(node, IdentifierNode):
+            if node.name == "nullptr" and isinstance(expected, _Pointer):
+                return _call(self.helper(expected, "make"), [_integer(-1)])
             if isinstance(actual, _RootPointer):
                 return _id(actual.local_name)
             return node
@@ -1711,6 +2116,37 @@ class _Lowering:
                     ],
                 )
             target_type = self.infer(node.target, env)
+            members, element = [], node.target
+            while isinstance(element, MemberAccessNode):
+                members.append(element.member)
+                element = element.object_expr
+            access = self.access(element, env) if members else None
+            if access is not None:
+                # A member or swizzle of a storage element: helper loads are
+                # values, so the store helper writes the member in place.
+                pointer, owner, index = access
+                origins = self.resource_origins.get(id(owner))
+                helper = self.helper(
+                    pointer,
+                    "store",
+                    origins,
+                    tuple(reversed(members)),
+                    node.operator,
+                    self.target_type(target_type),
+                )
+                return _call(
+                    helper,
+                    [
+                        self.expression(owner, env),
+                        _call("int64_t", [self.expression(index, env)]),
+                        self.expression(
+                            node.value,
+                            env,
+                            target_type if node.operator == "=" else None,
+                        ),
+                        *self.resource_arguments(),
+                    ],
+                )
             target = self.expression(node.target, env)
             value = self.expression(
                 node.value, env, target_type if node.operator == "=" else None
@@ -1726,13 +2162,17 @@ class _Lowering:
         access = self.access(node, env)
         if access is not None:
             pointer, owner, index = access
-            return _call(
-                self.helper(pointer, "load", self.resource_origins.get(id(owner))),
-                [
-                    self.expression(owner, env),
-                    _call("int64_t", [self.expression(index, env)]),
-                    *self.resource_arguments(),
-                ],
+            return self.storage_read(
+                pointer,
+                owner,
+                _call(
+                    self.helper(pointer, "load", self.resource_origins.get(id(owner))),
+                    [
+                        self.expression(owner, env),
+                        _call("int64_t", [self.expression(index, env)]),
+                        *self.resource_arguments(),
+                    ],
+                ),
             )
         if isinstance(node, BinaryOpNode):
             left_type, right_type = self.infer(node.left, env), self.infer(
@@ -1928,6 +2368,12 @@ class _Lowering:
                 self.expression(node.false_expr, env, expected),
                 source_location=location,
             )
+        if isinstance(node, PointerReinterpretNode) and isinstance(actual, _Pointer):
+            source = self.infer(node.expression, env)
+            value = self.expression(node.expression, env)
+            if source.element == actual.element:
+                return value
+            return _call(self.view_helper(source, actual), [value])
         if isinstance(node, (CastNode, PointerReinterpretNode)) and (
             self.contains_reference(self.infer(node.expression, env))
             or self.contains_reference(self.source_type(node.target_type))
@@ -1964,6 +2410,9 @@ class _Lowering:
             return ExpressionStatementNode(
                 record_copy, source_location=node.source_location
             )
+        step = self.pointer_step(expression, env)
+        if step is not None:
+            return ExpressionStatementNode(step, source_location=node.source_location)
         if isinstance(node, BlockNode):
             scoped = dict(env)
             return BlockNode(
@@ -1974,10 +2423,24 @@ class _Lowering:
             if id(node) in self.workgroup_roots:
                 pointer = self.workgroup_roots[id(node)]
                 env[node.name] = pointer
+                init_expr = _call(
+                    self.helper(pointer, "make"), [_integer(pointer.identity)]
+                )
+                if pointer.space == "thread" and isinstance(
+                    node.initial_value, ArrayLiteralNode
+                ):
+                    for idx, elem in reversed(
+                        list(enumerate(node.initial_value.elements))
+                    ):
+                        assign = AssignmentNode(
+                            ArrayAccessNode(_id(pointer.backing_name), _integer(idx)),
+                            self.expression(elem, env, PrimitiveType(pointer.element)),
+                        )
+                        init_expr = BinaryOpNode(assign, ",", init_expr)
                 return VariableNode(
                     pointer.local_name,
                     self.target_type(pointer),
-                    _call(self.helper(pointer, "make"), [_integer(pointer.identity)]),
+                    init_expr,
                 )
             if isinstance(node.var_type, ReferenceType):
                 raise ResourceAggregateError("local-reference-alias", node)
@@ -2026,7 +2489,8 @@ class _Lowering:
             return ForNode(
                 self.statement(node.init, scoped),
                 self.expression(node.condition, scoped),
-                self.expression(node.update, scoped),
+                self.pointer_step(node.update, scoped)
+                or self.expression(node.update, scoped),
                 self.statement(node.body, scoped),
                 source_location=node.source_location,
             )
@@ -2051,11 +2515,563 @@ class _Lowering:
             return result
         return self.expression(node, env)
 
+    def pointer_step(self, node, env):
+        """A pointer increment or decrement whose value is discarded.
+
+        It advances the handle's offset by one element. An increment whose
+        value is used still fails closed in ``expression``.
+        """
+        if not (
+            isinstance(node, UnaryOpNode)
+            and node.operator in {"++", "--"}
+            and isinstance(self.infer(node.operand, env), _Pointer)
+        ):
+            return None
+        return AssignmentNode(
+            _member(self.expression(node.operand, env), "offset"),
+            _call("int64_t", [_integer(1)]),
+            "+=" if node.operator == "++" else "-=",
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def default_state(self, type_, valid=False):
+        if isinstance(type_, _Pointer):
+            return bool(valid)
+        if isinstance(type_, tuple):
+            extent = evaluate_literal_int_expression(type_[1])
+            return (
+                [self.default_state(type_[0], valid) for _ in range(extent)]
+                if extent is not None and extent >= 0
+                else None
+            )
+        fields = self.fields.get(_name(type_))
+        if fields is not None:
+            return {
+                field: self.default_state(field_type, valid)
+                for field, field_type in fields.items()
+            }
+        return None
+
+    def merge_state(self, left, right):
+        if isinstance(left, bool) and isinstance(right, bool):
+            return left and right
+        if isinstance(left, dict) and isinstance(right, dict):
+            return {
+                key: self.merge_state(left.get(key), right.get(key))
+                for key in set(left) | set(right)
+            }
+        if (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+        ):
+            return [self.merge_state(a, b) for a, b in zip(left, right)]
+        return None
+
+    def get_lvalue_state(self, target, state):
+        if isinstance(target, IdentifierNode):
+            return state.get(target.name)
+        if isinstance(target, MemberAccessNode):
+            owner_state = self.get_lvalue_state(target.object_expr, state)
+            return (
+                owner_state.get(target.member)
+                if isinstance(owner_state, dict)
+                else None
+            )
+        if isinstance(target, ArrayAccessNode):
+            owner_state = self.get_lvalue_state(target.array_expr, state)
+            idx = evaluate_literal_int_expression(target.index_expr)
+            if (
+                isinstance(owner_state, list)
+                and idx is not None
+                and 0 <= idx < len(owner_state)
+            ):
+                return owner_state[idx]
+            return None
+        return None
+
+    def set_lvalue_state(self, target, value_state, state):
+        if isinstance(target, IdentifierNode):
+            state[target.name] = deepcopy(value_state)
+            return True
+        if isinstance(target, MemberAccessNode):
+            owner_state = self.get_lvalue_state(target.object_expr, state)
+            if isinstance(owner_state, dict) and target.member in owner_state:
+                owner_state[target.member] = deepcopy(value_state)
+                return True
+            return False
+        if isinstance(target, ArrayAccessNode):
+            owner_state = self.get_lvalue_state(target.array_expr, state)
+            idx = evaluate_literal_int_expression(target.index_expr)
+            if isinstance(owner_state, list):
+                if idx is not None and 0 <= idx < len(owner_state):
+                    owner_state[idx] = deepcopy(value_state)
+                    return True
+                for i in range(len(owner_state)):
+                    owner_state[i] = self.merge_state(owner_state[i], value_state)
+                return True
+            return False
+        return False
+
+    def verify_lvalue_subexpressions(self, target, env, state):
+        if isinstance(target, MemberAccessNode):
+            self.verify_lvalue_subexpressions(target.object_expr, env, state)
+        elif isinstance(target, ArrayAccessNode):
+            self.verify_lvalue_subexpressions(target.array_expr, env, state)
+            self.verify_expression(target.index_expr, env, state)
+
+    def verify_call(self, callee, call_node, arg_states, caller_state):
+        param_types = self.parameter_types[id(callee)]
+        ret_type = self.returns[id(callee)]
+        builds_or_mutates_aggregate = self.contains_reference(ret_type) or any(
+            (
+                isinstance(param.param_type, ReferenceType)
+                or set(param.qualifiers) & {"out", "inout"}
+            )
+            and self.contains_reference(ptype)
+            and not isinstance(ptype, _Pointer)
+            for param, ptype in zip(callee.parameters, param_types)
+        )
+        for param, ptype, arg_state in zip(callee.parameters, param_types, arg_states):
+            if (
+                isinstance(ptype, _Pointer)
+                and arg_state is False
+                and not builds_or_mutates_aggregate
+            ):
+                raise ResourceAggregateError("pointer-contract-mismatch", call_node)
+        callee_env = dict(self.global_types)
+        callee_state = {}
+        for param, ptype, arg_state in zip(callee.parameters, param_types, arg_states):
+            callee_env[param.name] = ptype
+            callee_state[param.name] = (
+                deepcopy(arg_state)
+                if arg_state is not None
+                else self.default_state(ptype, valid=True)
+            )
+        if id(callee) in self.verifying:
+            raise ResourceAggregateError("recursive-call", call_node)
+        self.verifying.add(id(callee))
+        try:
+            ret_state = self.verify_function_body(callee, callee_env, callee_state)
+        finally:
+            self.verifying.discard(id(callee))
+        for param, arg in zip(callee.parameters, call_node.arguments):
+            if isinstance(param.param_type, ReferenceType) or (
+                set(param.qualifiers) & {"out", "inout"}
+            ):
+                self.set_lvalue_state(arg, callee_state.get(param.name), caller_state)
+        return (
+            ret_state
+            if ret_state is not None
+            else self.default_state(ret_type, valid=True)
+        )
+
+    def verify_expression(self, node, env, state, expected=None):
+        if node is None:
+            return None
+        if isinstance(node, (BlockNode, VariableNode, IfNode, ForNode, ReturnNode)):
+            self.verify_statement(node, env, state)
+            return None
+        actual = self.infer(node, env)
+        if isinstance(node, IdentifierNode):
+            if node.name == "nullptr":
+                if not isinstance(expected, _Pointer):
+                    raise ResourceAggregateError("pointer-contract-mismatch", node)
+                return False
+            if isinstance(actual, _RootPointer):
+                return True
+            return deepcopy(
+                state.get(node.name, self.default_state(actual, valid=True))
+            )
+        if isinstance(node, AssignmentNode):
+            access = self.access(node.target, env)
+            if access is not None:
+                _pointer, owner, index = access
+                if self.verify_expression(owner, env, state) is not True:
+                    raise ResourceAggregateError("null-pointer-dereference", node)
+                self.verify_expression(index, env, state)
+                self.verify_expression(node.value, env, state)
+                return None
+            target_type = self.infer(node.target, env)
+            if node.operator == "=":
+                val_state = self.verify_expression(node.value, env, state, target_type)
+                self.verify_lvalue_subexpressions(node.target, env, state)
+                self.set_lvalue_state(node.target, val_state, state)
+                return deepcopy(val_state)
+            cur_state = self.verify_expression(node.target, env, state)
+            self.verify_expression(node.value, env, state)
+            if (
+                isinstance(target_type, _Pointer)
+                and node.operator in {"+=", "-="}
+                and cur_state is not True
+            ):
+                raise ResourceAggregateError("null-pointer-dereference", node)
+            return deepcopy(cur_state)
+        access = self.access(node, env)
+        if access is not None:
+            _pointer, owner, index = access
+            if self.verify_expression(owner, env, state) is not True:
+                raise ResourceAggregateError("null-pointer-dereference", node)
+            self.verify_expression(index, env, state)
+            return None
+        if isinstance(node, BinaryOpNode):
+            if node.operator == ",":
+                self.verify_expression(node.left, env, state)
+                return self.verify_expression(node.right, env, state, expected)
+            left_type, right_type = self.infer(node.left, env), self.infer(
+                node.right, env
+            )
+            left_state = self.verify_expression(node.left, env, state)
+            right_state = self.verify_expression(node.right, env, state)
+            if (
+                isinstance(left_type, _Pointer)
+                and node.operator in {"+", "-"}
+                and not isinstance(right_type, _Pointer)
+            ):
+                if left_state is not True:
+                    raise ResourceAggregateError("null-pointer-dereference", node)
+                return True
+            if isinstance(right_type, _Pointer) and node.operator == "+":
+                if right_state is not True:
+                    raise ResourceAggregateError("null-pointer-dereference", node)
+                return True
+            return None
+        if isinstance(node, UnaryOpNode):
+            if node.operator == "&":
+                access = self.access(node.operand, env)
+                if access is not None:
+                    _pointer, owner, index = access
+                    if self.verify_expression(owner, env, state) is not True:
+                        raise ResourceAggregateError("null-pointer-dereference", node)
+                    self.verify_expression(index, env, state)
+                    return True
+            operand_state = self.verify_expression(node.operand, env, state)
+            if (
+                node.operator in {"++", "--"}
+                and isinstance(self.infer(node.operand, env), _Pointer)
+                and operand_state is not True
+            ):
+                raise ResourceAggregateError("null-pointer-dereference", node)
+            return operand_state
+        if isinstance(node, MemberAccessNode):
+            owner_state = self.verify_expression(node.object_expr, env, state)
+            if isinstance(owner_state, dict):
+                return deepcopy(owner_state.get(node.member))
+            return self.default_state(actual, valid=False)
+        if isinstance(node, ArrayAccessNode):
+            owner_state = self.verify_expression(node.array_expr, env, state)
+            self.verify_expression(node.index_expr, env, state)
+            idx = evaluate_literal_int_expression(node.index_expr)
+            if isinstance(owner_state, list):
+                if idx is not None and 0 <= idx < len(owner_state):
+                    return deepcopy(owner_state[idx])
+                result = (
+                    owner_state[0]
+                    if owner_state
+                    else self.default_state(actual, valid=False)
+                )
+                for item in owner_state[1:]:
+                    result = self.merge_state(result, item)
+                return deepcopy(result)
+            return self.default_state(actual, valid=False)
+        if isinstance(node, ArrayLiteralNode):
+            fields = self.fields.get(_name(expected))
+            if fields is not None and len(fields) == len(node.elements):
+                return {
+                    field: self.verify_expression(value, env, state, type_)
+                    for (field, type_), value in zip(fields.items(), node.elements)
+                }
+            if isinstance(expected, tuple):
+                return [
+                    self.verify_expression(value, env, state, expected[0])
+                    for value in node.elements
+                ]
+            for value in node.elements:
+                self.verify_expression(value, env, state)
+            return None
+        if isinstance(node, FunctionCallNode):
+            operation = _name(node.function)
+            if (
+                operation in {
+                    "atomicLoad",
+                    "atomicCompareExchangeWeak",
+                    "atomicStore",
+                    "atomicAdd",
+                    "atomicMin",
+                    "atomicMax",
+                    "atomicAnd",
+                    "atomicOr",
+                    "atomicXor",
+                    "atomicExchange",
+                    "atomicCompSwap",
+                    "atomicCompareExchange",
+                }
+                and operation not in self.functions
+                and node.arguments
+            ):
+                target = node.arguments[0]
+                while isinstance(target, MemberAccessNode):
+                    target = target.object_expr
+                access = self.access(target, env)
+                if access is not None:
+                    _pointer, owner, index = access
+                    if self.verify_expression(owner, env, state) is not True:
+                        raise ResourceAggregateError("null-pointer-dereference", node)
+                    self.verify_expression(index, env, state)
+                    for arg in node.arguments[1:]:
+                        self.verify_expression(arg, env, state)
+                    return None
+            if (
+                operation == "buffer_store"
+                and "buffer_store" not in self.functions
+                and len(node.arguments) == 3
+                and isinstance(self.infer(node.arguments[0], env), _Pointer)
+            ):
+                if self.verify_expression(node.arguments[0], env, state) is not True:
+                    raise ResourceAggregateError("null-pointer-dereference", node)
+                self.verify_expression(node.arguments[1], env, state)
+                self.verify_expression(node.arguments[2], env, state)
+                return None
+            callee = self.function_for_call(node, env)
+            fields = self.fields.get(operation)
+            types = (
+                self.parameter_types[id(callee)]
+                if callee is not None
+                else list(fields.values()) if fields is not None else None
+            )
+            arg_states = [
+                self.verify_expression(
+                    arg,
+                    env,
+                    state,
+                    types[i] if types is not None and i < len(types) else None,
+                )
+                for i, arg in enumerate(node.arguments)
+            ]
+            if callee is None and fields is not None and len(fields) == len(arg_states):
+                return {field: st for field, st in zip(fields.keys(), arg_states)}
+            if callee is not None:
+                return self.verify_call(callee, node, arg_states, state)
+            return None
+        if isinstance(node, TernaryOpNode):
+            self.verify_expression(node.condition, env, state)
+            then_state = deepcopy(state)
+            else_state = deepcopy(state)
+            true_val = self.verify_expression(node.true_expr, env, then_state, expected)
+            false_val = self.verify_expression(
+                node.false_expr, env, else_state, expected
+            )
+            for key in set(state) | set(then_state) | set(else_state):
+                state[key] = self.merge_state(then_state.get(key), else_state.get(key))
+            return self.merge_state(true_val, false_val)
+        if isinstance(node, PointerReinterpretNode):
+            expr_state = self.verify_expression(node.expression, env, state)
+            if (
+                isinstance(self.infer(node.expression, env), _Pointer)
+                and expr_state is not True
+            ):
+                raise ResourceAggregateError("null-pointer-dereference", node)
+            return True
+        if isinstance(node, ASTNode) and not isinstance(node, TypeNode):
+            for child in node.child_nodes():
+                self.verify_expression(child, env, state)
+        return None
+
+    def verify_statement(self, node, env, state, return_states=None):
+        if node is None:
+            return
+        if isinstance(node, BlockNode):
+            scoped_env = dict(env)
+            outer_keys = set(state)
+            for item in node.statements:
+                self.verify_statement(item, scoped_env, state, return_states)
+            for key in list(state):
+                if key not in outer_keys:
+                    del state[key]
+            return
+        if isinstance(node, VariableNode):
+            if id(node) in self.workgroup_roots:
+                pointer = self.workgroup_roots[id(node)]
+                env[node.name] = pointer
+                if isinstance(node.initial_value, ArrayLiteralNode):
+                    for elem in node.initial_value.elements:
+                        self.verify_expression(elem, env, state)
+                state[node.name] = True
+                return
+            source_type = self.source_type(node.var_type, node)
+            if _name(source_type) == "auto":
+                source_type = self.infer(node.initial_value, env) or source_type
+            if isinstance(source_type, _RootPointer):
+                source_type = _Pointer(
+                    source_type.element,
+                    source_type.space,
+                    source_type.writable,
+                    source_type.readable,
+                )
+            if node.initial_value is not None:
+                init_state = self.verify_expression(
+                    node.initial_value, env, state, source_type
+                )
+            else:
+                init_state = self.default_state(source_type, valid=False)
+            env[node.name] = source_type
+            state[node.name] = init_state
+            return
+        if isinstance(node, ReturnNode):
+            val_state = self.verify_expression(
+                node.value, env, state, self.returns[id(self.current)]
+            )
+            if return_states is not None:
+                return_states.append(val_state)
+            return
+        if isinstance(node, IfNode):
+            self.verify_expression(node.condition, env, state)
+            branch_states = []
+            then_state = deepcopy(state)
+            self.verify_statement(
+                node.then_branch, dict(env), then_state, return_states
+            )
+            branch_states.append(then_state)
+            for cond, body in zip(node.else_if_conditions, node.else_if_bodies):
+                self.verify_expression(cond, env, state)
+                elif_state = deepcopy(state)
+                self.verify_statement(body, dict(env), elif_state, return_states)
+                branch_states.append(elif_state)
+            else_state = deepcopy(state)
+            if node.else_branch is not None:
+                self.verify_statement(
+                    node.else_branch, dict(env), else_state, return_states
+                )
+            branch_states.append(else_state)
+            for key in list(state):
+                merged = branch_states[0].get(key)
+                for other in branch_states[1:]:
+                    merged = self.merge_state(merged, other.get(key))
+                state[key] = merged
+            return
+        if isinstance(node, ForNode):
+            scoped_env = dict(env)
+            outer_keys = set(state)
+            self.verify_statement(node.init, scoped_env, state, return_states)
+            self.verify_loop(
+                (node.condition, node.body, node.update),
+                scoped_env,
+                state,
+                return_states,
+            )
+            for key in list(state):
+                if key not in outer_keys:
+                    del state[key]
+            return
+        if isinstance(node, (WhileNode, DoWhileNode)):
+            self.verify_loop((node.condition, node.body), env, state, return_states)
+            return
+        if isinstance(node, SwitchNode):
+            self.verify_expression(node.expression, env, state)
+            branch_states = []
+            for case in node.cases:
+                case_state = deepcopy(state)
+                if branch_states:
+                    # A case without break falls through with the slots the
+                    # previous case left behind.
+                    for key in case_state:
+                        case_state[key] = self.merge_state(
+                            case_state[key], branch_states[-1].get(key)
+                        )
+                case_env = dict(env)
+                self.verify_expression(case.value, case_env, case_state)
+                for item in case.statements:
+                    self.verify_statement(item, case_env, case_state, return_states)
+                branch_states.append(case_state)
+            default_state = deepcopy(state)
+            if node.default_case is not None and branch_states:
+                for key in default_state:
+                    default_state[key] = self.merge_state(
+                        default_state[key], branch_states[-1].get(key)
+                    )
+            if node.default_case is not None:
+                self.verify_statement(
+                    node.default_case, dict(env), default_state, return_states
+                )
+            branch_states.append(default_state)
+            for key in list(state):
+                merged = branch_states[0].get(key)
+                for other in branch_states[1:]:
+                    merged = self.merge_state(merged, other.get(key))
+                state[key] = merged
+            return
+        if isinstance(node, ExpressionStatementNode):
+            self.verify_expression(node.expression, env, state)
+            return
+        self.verify_expression(node, env, state)
+
+    def verify_loop(self, parts, env, state, return_states):
+        # A null stored late in one iteration reaches the next one, so repeat
+        # the loop parts until the merged slot states stop changing.
+        while True:
+            loop_state = deepcopy(state)
+            for part in parts:
+                self.verify_statement(part, dict(env), loop_state, return_states)
+            merged = {
+                key: self.merge_state(state[key], loop_state.get(key)) for key in state
+            }
+            if merged == state:
+                return
+            state.update(merged)
+
+    def verify_function_body(self, function, env, state):
+        previous = self.current
+        self.current = function
+        return_states = []
+        try:
+            self.verify_statement(function.body, env, state, return_states)
+        finally:
+            self.current = previous
+        if not return_states:
+            return None
+        result = return_states[0]
+        for item in return_states[1:]:
+            result = self.merge_state(result, item)
+        return result
+
+    def verify_definite_assignment(self):
+        env = dict(self.global_types)
+        state = {}
+        types = self.parameter_types[id(self.entry)]
+        for param, type_ in zip(self.entry.parameters, types):
+            env[param.name] = type_
+            state[param.name] = self.default_state(type_, valid=True)
+        for index, (param, pointer, _root) in enumerate(self.resources):
+            if pointer.space in {"threadgroup", "thread"}:
+                continue
+            env[param.name] = _RootPointer(
+                pointer.element,
+                pointer.space,
+                pointer.writable,
+                pointer.readable,
+                index,
+                self.entry_handles[param.name],
+            )
+            state[param.name] = True
+        self.verifying = {id(self.entry)}
+        self.verify_function_body(self.entry, env, state)
+
     def run(self):
         self.discover(self.entry)
         self.elide_unused_null_parameters()
+        # Only an explicit null needs a proof that it is overwritten before
+        # use; programs without one keep the existing lowering unchanged.
+        if any(
+            isinstance(node, IdentifierNode) and node.name == "nullptr"
+            for node in self.ast.walk()
+        ):
+            self.verify_definite_assignment()
+        origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+        # Device helpers keep every compatible binding; proven origins only
+        # annotate their reads (see ``storage_read``).
+        self.storage_origins = origins
         if any(isinstance(node, PointerReinterpretNode) for node in self.ast.walk()):
-            self.resource_origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+            self.resource_origins = origins
         # Bind calls to distinct symbols before pointer handles erase access and
         # address-space differences between source overloads.
         for name, overloads in self.functions.items():
@@ -2110,6 +3126,8 @@ class _Lowering:
                             "storage",
                             "threadgroup",
                             "workgroup",
+                            "thread",
+                            "private",
                         }
                     ]
         for overloads in self.functions.values():
@@ -2128,7 +3146,7 @@ class _Lowering:
                 )
                 if function is self.entry:
                     for index, (param, pointer, _root) in enumerate(self.resources):
-                        if pointer.space == "threadgroup":
+                        if pointer.space in {"threadgroup", "thread"}:
                             continue
                         env[param.name] = _RootPointer(
                             pointer.element,
@@ -2164,7 +3182,7 @@ class _Lowering:
                 **self.resource_declaration(param, pointer, "var_type"),
             )
             for param, pointer, name in self.resources
-            if pointer.space != "threadgroup"
+            if pointer.space not in {"threadgroup", "thread"}
         ] + [
             VariableNode(
                 self.entry_handles[param.name],
@@ -2172,7 +3190,7 @@ class _Lowering:
                 _call(self.helper(pointer, "make"), [_integer(index)]),
             )
             for index, (param, pointer, _name_) in enumerate(self.resources)
-            if pointer.space != "threadgroup"
+            if pointer.space not in {"threadgroup", "thread"}
         ]
         self.ast.global_variables.extend(self.workgroup_declarations)
         self.ast.structs = [
@@ -2292,6 +3310,56 @@ class _Lowering:
                 del candidates[name]
 
 
+def _resolve_narrow_float_aliases(ast):
+    """Spell aliases of 16-bit floating scalars by their CrossGL type.
+
+    Resource identity compares pointee names, so ``bfloat16_t*`` members must
+    match ``bfloat16`` entry buffers, and ``float16_t*`` members, whose alias
+    may name binary16 as ``half`` or ``f16``, ``float16`` ones. Other aliases
+    keep their spelling.
+    """
+    declared = {
+        variable.name: variable.var_type
+        for variable in getattr(ast, "global_variables", ())
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    aliases = {}
+    for name in sorted(declared):
+        target, seen = declared[name], {name}
+        while (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and target.name in declared
+            and target.name not in seen
+        ):
+            seen.add(target.name)
+            target = declared[target.name]
+        if (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and getattr(target, "size_bits", None) is None
+        ):
+            if target.name in _NARROW_FLOAT_ELEMENTS:
+                aliases[name] = target.name
+            elif target.name in _BINARY16_SPELLINGS:
+                aliases[name] = "float16"
+    if not aliases:
+        return
+    declarations = {
+        id(variable.var_type)
+        for variable in ast.global_variables
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    for node in ast.walk():
+        if (
+            isinstance(node, (PrimitiveType, NamedType))
+            and id(node) not in declarations
+            and not getattr(node, "generic_args", None)
+            and node.name in aliases
+        ):
+            node.name = aliases[node.name]
+
+
 def lower_resource_aggregates(
     ast, *, storage_pointer_parameters=False, workgroup_access_assertions=()
 ):
@@ -2299,7 +3367,8 @@ def lower_resource_aggregates(
     if not isinstance(ast, ASTNode):
         return ast
     if not any(
-        isinstance(node, StructNode) and _contains_storage_pointer(node)
+        isinstance(node, StructNode)
+        and (_contains_storage_pointer(node) or _contains_thread_pointer(node))
         for node in ast.walk()
     ):
         return ast
@@ -2307,6 +3376,7 @@ def lower_resource_aggregates(
     if len(stages) != 1 or _name(stages[0].stage).lower() != "compute":
         return ast
     result = deepcopy(ast)
+    _resolve_narrow_float_aliases(result)
     entry = list(result.stages.values())[0].entry_point
     return _Lowering(
         result, entry, storage_pointer_parameters, workgroup_access_assertions

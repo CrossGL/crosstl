@@ -31,6 +31,7 @@ from demos.integrations.mlx.tests.kernels.test_binary_complete_metal_roundtrip i
     BinaryMetalWorkload,
     _expected_materializations,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 REQUIRE_BINARY_OPENGL_ENV = "CROSTL_REQUIRE_MLX_BINARY_OPENGL_TRANSLATION"
 BINARY_OPENGL_SHARD_INDEX_ENV = "CROSTL_MLX_BINARY_OPENGL_SHARD_INDEX"
@@ -46,10 +47,10 @@ BINARY_OPENGL_CONTRACT_PATH = (
     / "binary.opengl-translation.json"
 )
 BINARY_OPENGL_CONTRACT_SHA256 = (
-    "b2d99336197564129e70b08eb06cc7a0d1ec493c42827dbdc9fe0231a058bae9"
+    "0f88db437b76b9a8029a843b0dd6a545b6b2c1170a7a08506e908a3fe5820e2e"
 )
-BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467897
-BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 18732199
+BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467900
+BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 18808303
 BINARY_OPENGL_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2875)
 BINARY_OPENGL_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 19553)
 INDEX_RANGE_ASSERTIONS = (
@@ -652,11 +653,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_BINARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "main",

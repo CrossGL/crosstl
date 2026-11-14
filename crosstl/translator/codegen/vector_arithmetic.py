@@ -11,6 +11,95 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .c_wide_integer_vectors import (
+    WIDE_INTEGER_COMPONENT_C_TYPES,
+    integer_vector_component_signedness,
+    is_integer_vector_component,
+    wide_integer_vector_details,
+    wide_integer_vector_prefix,
+)
+
+# C scalar types the CUDA and HIP generators write, keyed by the type names
+# their own mappings produce. ``min`` and ``max`` pick their intrinsic from
+# this, because ``fminf``/``fmaxf`` would round integer operands through
+# ``float``. Both compilers have ``min`` and ``max`` for ``int``,
+# ``unsigned int``, ``long long`` and ``unsigned long long`` only, so the
+# other integer spellings are widened to the one they promote to.
+MIN_MAX_SCALAR_TYPES = {
+    "bool": "bool",
+    "float": "float",
+    "f32": "float",
+    "half": "float",
+    "f16": "float",
+    "bfloat16": "float",
+    "double": "double",
+    "f64": "double",
+    "char": "char",
+    "signed char": "char",
+    "int8_t": "char",
+    "unsigned char": "unsigned char",
+    "uchar": "unsigned char",
+    "uint8_t": "unsigned char",
+    "short": "short",
+    "short int": "short",
+    "int16_t": "short",
+    "unsigned short": "unsigned short",
+    "unsigned short int": "unsigned short",
+    "ushort": "unsigned short",
+    "uint16_t": "unsigned short",
+    "int": "int",
+    "int32_t": "int",
+    "unsigned int": "unsigned int",
+    "uint": "unsigned int",
+    "uint32_t": "unsigned int",
+    "long": "long long",
+    "long int": "long long",
+    "unsigned long": "unsigned long long",
+    "ulong": "unsigned long long",
+    "long long": "long long",
+    "long long int": "long long",
+    "int64_t": "long long",
+    "unsigned long long": "unsigned long long",
+    "unsigned long long int": "unsigned long long",
+    "uint64_t": "unsigned long long",
+    "ptrdiff_t": "long long",
+    "size_t": "unsigned long long",
+}
+
+# Spellings that are the same C type as the entry they point at, so a min/max
+# operand written this way needs no cast. ``int64_t`` and ``uint64_t`` are not
+# here: they are ``long`` on LP64 Linux, and ``long`` next to ``long long``
+# makes the CUDA and HIP overloads ambiguous.
+MIN_MAX_SCALAR_ALIASES = {
+    "int32_t": "int",
+    "uint": "unsigned int",
+    "uint32_t": "unsigned int",
+}
+
+# Integer rank and signedness of the types above, as C++ orders them.
+MIN_MAX_INTEGER_SCALAR_RANKS = {
+    "char": 1,
+    "unsigned char": 1,
+    "short": 2,
+    "unsigned short": 2,
+    "int": 3,
+    "unsigned int": 3,
+    "long long": 4,
+    "unsigned long long": 4,
+}
+
+MIN_MAX_INTEGER_SCALAR_TYPES = {
+    1: ("char", "unsigned char"),
+    2: ("short", "unsigned short"),
+    3: ("int", "unsigned int"),
+    4: ("long long", "unsigned long long"),
+}
+
+FLOAT_SCALARS = {"float", "double", "half"}
+INTEGER_SCALARS = {"int", "uint", "unsigned int"}
+NUMERIC_SCALARS = FLOAT_SCALARS | INTEGER_SCALARS
+# GLSL geometric built-ins that neither CUDA nor HIP declares, with their arity.
+REFLECTION_BUILTIN_ARITIES = {"reflect": 2, "refract": 3, "faceforward": 3}
 
 
 class VectorArithmeticMixin:
@@ -57,8 +146,7 @@ class VectorArithmeticMixin:
             spec = self.dimension_query_spec(resource_type)
             if spec is None:
                 return None
-            dimensions = spec[0]
-            return self.query_return_type(dimensions)
+            return self.query_return_type(spec["dimensions"])
 
         if func_name in {"textureSamples", "imageSamples", "textureQueryLevels"}:
             return "int"
@@ -134,12 +222,18 @@ class VectorArithmeticMixin:
                 return self.expression_result_type(raw_args[0])
             if func_name == "cross" and raw_args:
                 return self.expression_result_type(raw_args[0])
-            if func_name in {"dot", "length"} and raw_args:
+            if func_name in {"dot", "distance", "length"} and raw_args:
                 vector_info = self.vector_type_info(
                     self.expression_result_type(raw_args[0])
                 )
                 if vector_info is not None:
                     return vector_info["component_type"]
+                if func_name == "length":
+                    return self.expression_result_type(raw_args[0])
+                if func_name == "distance":
+                    operand_types = self.scalar_distance_operand_types(raw_args)
+                    if operand_types is not None:
+                        return self.scalar_distance_result_type(operand_types)
             if (
                 func_name in {
                     "abs",
@@ -149,6 +243,7 @@ class VectorArithmeticMixin:
                     "floor",
                     "ceil",
                     "round",
+                    "roundEven",
                     "trunc",
                     "saturate",
                 }
@@ -172,7 +267,9 @@ class VectorArithmeticMixin:
             if func_name in self.scalar_float_math_functions() and raw_args:
                 return self.expression_result_type(raw_args[0])
             if isinstance(func_name, str):
-                return self.function_return_types.get(func_name)
+                return self.function_return_types.get(
+                    func_name
+                ) or self.scalar_cast_result_type(node)
             return None
         if isinstance(node, BinaryOpNode):
             left_type = self.expression_result_type(node.left)
@@ -213,13 +310,16 @@ class VectorArithmeticMixin:
                 return struct_members[member]
             vector_info = self.vector_type_info(object_type)
             if not vector_info:
+                native_component_type = self.native_vector_component_type(object_type)
+                if native_component_type is not None and (
+                    len(member) == 1 and member in "xyzwrgba"
+                ):
+                    return native_component_type
                 return None
             if len(member) == 1:
                 return vector_info["component_type"]
             if all(component in "xyzwrgba" for component in member):
-                return self.vector_type_for_components(
-                    vector_info["component_type"], len(member)
-                )
+                return self.swizzle_vector_type(vector_info, len(member))
         return None
 
     def array_access_element_type(self, type_name):
@@ -250,6 +350,11 @@ class VectorArithmeticMixin:
             return f"{base_type}{remaining_suffix}"
         return base_type
 
+    def native_vector_component_type(self, type_name):
+        """Return the component type of a native vector that ``vector_type_info``
+        deliberately leaves undescribed (so its arithmetic stays native), or None."""
+        return None
+
     def vector_type_info(self, type_name):
         """Return constructor and component metadata for a vector type."""
         if type_name is None:
@@ -274,6 +379,7 @@ class VectorArithmeticMixin:
             "uchar3": ("make_uchar3", "bool", ("x", "y", "z")),
             "uchar4": ("make_uchar4", "bool", ("x", "y", "z", "w")),
         }
+        vector_details.update(wide_integer_vector_details())
         details = vector_details.get(mapped_type)
         if details is None:
             return None
@@ -284,6 +390,21 @@ class VectorArithmeticMixin:
             "component_type": component_type,
             "components": components,
         }
+
+    def math_vector_type_info(self, type_name):
+        """Return vector type info for scalar math built-ins, including native half2."""
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info
+        if self.native_vector_component_type(type_name) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+                "narrow_lanes": False,
+            }
+        return None
 
     def is_repeat_safe_expression(self, expr):
         """Return whether an expression can be safely emitted more than once."""
@@ -307,7 +428,9 @@ class VectorArithmeticMixin:
         if len(args) != 1:
             return None
 
-        arg_type = self.expression_result_type(raw_args[0])
+        arg_type = self.expression_result_type(
+            raw_args[0]
+        ) or self.scalar_cast_result_type(raw_args[0])
         if arg_type is None or self.vector_type_info(arg_type):
             return None
         if self.is_repeat_safe_expression(raw_args[0]):
@@ -315,6 +438,30 @@ class VectorArithmeticMixin:
 
         helper_name = self.require_vector_splat_helper(vector_info)
         return f"{helper_name}({args[0]})"
+
+    def scalar_cast_result_type(self, expr):
+        """Return the target type of a one-argument scalar cast such as ``int(x)``.
+
+        Scalar casts are parsed as calls and have no inferred type, so a vector
+        constructor such as ``ivec3(int(x))`` would otherwise not be splatted.
+        """
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        raw_args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        if len(raw_args) != 1:
+            return None
+        function_expr = getattr(expr, "function", getattr(expr, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.vector_type_info(type_name) is not None:
+            return None
+        if (
+            self.scalar_component_type(type_name) is None
+            and self.map_vector_arithmetic_type(type_name) != "half"
+        ):
+            return None
+        return type_name
 
     def require_vector_splat_helper(self, vector_info):
         """Register a helper that splats one scalar into a CUDA/HIP vector."""
@@ -363,7 +510,7 @@ class VectorArithmeticMixin:
                     "object_expr",
                     getattr(raw_arg, "object", None),
                 )
-                object_info = self.vector_type_info(
+                object_info = self.swizzle_result_vector_info(
                     self.expression_result_type(object_node)
                 )
                 if object_info is not None:
@@ -382,7 +529,9 @@ class VectorArithmeticMixin:
                     emitted_lanes += len(components)
                     continue
 
-            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            arg_info = self.swizzle_result_vector_info(
+                self.expression_result_type(raw_arg)
+            )
             if arg_info is not None:
                 components = arg_info["components"][: target_size - emitted_lanes]
                 pieces.append(
@@ -415,10 +564,30 @@ class VectorArithmeticMixin:
         return pieces, helper_needed
 
     def vector_constructor_scalar_parameter_type(self, type_name, fallback_type):
+        # A 64-bit lane or a 64-bit scalar keeps its width in the helper
+        # parameter: the component classes below would narrow it to ``int``.
+        wide_scalar = self.wide_integer_scalar_c_type(type_name)
+        if wide_scalar is not None:
+            return wide_scalar
+        if fallback_type in WIDE_INTEGER_COMPONENT_C_TYPES:
+            return WIDE_INTEGER_COMPONENT_C_TYPES[fallback_type]
         component_type = self.scalar_component_type(type_name) or fallback_type
         if component_type == "uint":
             return "unsigned int"
         return component_type
+
+    def wide_integer_scalar_c_type(self, type_name):
+        """``long long`` or ``unsigned long long`` for a 64-bit integer scalar type, else None."""
+        if type_name is None:
+            return None
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = MIN_MAX_SCALAR_TYPES.get(
+            self.map_vector_arithmetic_type(type_name)
+        )
+        if mapped_type in {"long long", "unsigned long long"}:
+            return mapped_type
+        return None
 
     def require_vector_constructor_helper(self, vector_info, pieces):
         vector_type = vector_info["type"]
@@ -741,6 +910,19 @@ class VectorArithmeticMixin:
     def sanitize_helper_name(self, value):
         return "".join(character if character.isalnum() else "_" for character in value)
 
+    def swizzle_vector_type(self, vector_info, component_count):
+        """The type of a ``component_count``-component swizzle of a vector ``vector_info`` describes.
+
+        A vector of 8- or 16-bit integers reads its components as ``int`` or ``uint``, but a swizzle of it is a
+        vector of the same element (``vec4<i16>``), not an ``int4``.
+        """
+        element = vector_info.get("vector_element")
+        if element is not None and 2 <= component_count <= 4:
+            return f"vec{component_count}<{element}>"
+        return self.vector_type_for_components(
+            vector_info["component_type"], component_count
+        )
+
     def vector_type_for_components(self, component_type, component_count):
         """Return a vector type name for a component type/count pair."""
         if component_count < 2 or component_count > 4:
@@ -752,7 +934,9 @@ class VectorArithmeticMixin:
             "uint": "uvec",
             "bool": "bvec",
         }
-        prefix = prefixes.get(component_type)
+        prefix = prefixes.get(component_type) or wide_integer_vector_prefix(
+            component_type
+        )
         if prefix is None:
             return None
         return f"{prefix}{component_count}"
@@ -784,8 +968,12 @@ class VectorArithmeticMixin:
         right_expr,
         operator,
     ):
-        """Lower vector binary arithmetic into a helper call when required."""
-        if operator not in {"+", "-", "*", "/", "%"}:
+        """Lower vector binary arithmetic into a helper call when required.
+
+        ``%`` is the C, HLSL and CrossGL remainder, truncated toward zero on floating components; the pseudo-operator
+        ``mod`` is GLSL's ``mod``, which floors the quotient.
+        """
+        if operator not in {"+", "-", "*", "/", "%", "mod"}:
             return None
         left_type = self.expression_result_type(left_node)
         right_type = self.expression_result_type(right_node)
@@ -802,14 +990,14 @@ class VectorArithmeticMixin:
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if left_info and self.scalar_component_type(right_type) is not None:
+        if left_info and self.vector_binary_scalar_operand(left_info, right_type):
             helper_name = self.require_vector_binary_helper(
                 left_info, operator, "scalar_right"
             )
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if right_info and self.scalar_component_type(left_type) is not None:
+        if right_info and self.vector_binary_scalar_operand(right_info, left_type):
             helper_name = self.require_vector_binary_helper(
                 right_info, operator, "scalar_left"
             )
@@ -817,6 +1005,21 @@ class VectorArithmeticMixin:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
         return None
+
+    def vector_binary_scalar_operand(self, vector_info, scalar_type):
+        """Return whether a scalar operand can use the vector-scalar helpers.
+
+        ``half`` is not a general scalar component type, but a half vector
+        combined with a ``half`` scalar still needs the helper, because the
+        generated ``cgl_halfN`` structures define no arithmetic operators.
+        """
+        if self.scalar_component_type(scalar_type) is not None:
+            return True
+        if vector_info.get("component_type") != "half" or scalar_type is None:
+            return False
+        if not isinstance(scalar_type, str):
+            scalar_type = self.convert_type_node_to_string(scalar_type)
+        return self.map_vector_arithmetic_type(scalar_type) in {"half", "float16_t"}
 
     def lower_scalar_modulo_operation(
         self,
@@ -837,10 +1040,20 @@ class VectorArithmeticMixin:
         return None
 
     def generate_min_max_call(self, func_name, raw_args, args):
-        left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-        right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
-        if not left_info and not right_info:
+        if len(raw_args) != 2 or len(args) != 2:
             return None
+
+        left_type = self.expression_result_type(raw_args[0])
+        right_type = self.expression_result_type(raw_args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if not left_info and not right_info:
+            return self.generate_scalar_min_max_call(
+                func_name,
+                left_type,
+                right_type,
+                args,
+            )
 
         if left_info and right_info:
             if len(left_info["components"]) != len(right_info["components"]):
@@ -980,7 +1193,6 @@ class VectorArithmeticMixin:
         right_info,
         operator,
     ):
-        integer_components = {"int", "uint"}
         left_component = (
             left_info["component_type"]
             if left_info
@@ -991,9 +1203,11 @@ class VectorArithmeticMixin:
             if right_info
             else self.scalar_component_type(right_type)
         )
-        if left_component not in integer_components:
+        if not is_integer_vector_component(left_component):
             return None
-        if right_component not in {None, "int", "uint"}:
+        if right_component is not None and not is_integer_vector_component(
+            right_component
+        ):
             return None
 
         if left_info is not None:
@@ -1003,7 +1217,7 @@ class VectorArithmeticMixin:
         else:
             return None
 
-        if result_info["component_type"] not in integer_components:
+        if not is_integer_vector_component(result_info["component_type"]):
             return None
 
         if right_info is not None:
@@ -1014,14 +1228,20 @@ class VectorArithmeticMixin:
             ):
                 return None
 
+        # A scalar operand is classed ``int`` or ``uint`` even when it is 64
+        # bits wide, so it has to match the vector's signedness, not its width.
+        result_signedness = integer_vector_component_signedness(
+            result_info["component_type"]
+        )
         if left_info is not None and right_info is None:
-            if operator in {"&", "|", "^"} and right_component not in {
-                None,
-                result_info["component_type"],
-            }:
-                return None
+            if operator in {"&", "|", "^"} and right_component is not None:
+                if (
+                    integer_vector_component_signedness(right_component)
+                    != result_signedness
+                ):
+                    return None
         elif left_info is None and right_info is not None:
-            if left_component != result_info["component_type"]:
+            if integer_vector_component_signedness(left_component) != result_signedness:
                 return None
 
         return result_info
@@ -1329,6 +1549,84 @@ class VectorArithmeticMixin:
         operator = "<" if func_name == "min" else ">"
         return f"(({left}) {operator} ({right}) ? ({left}) : ({right}))"
 
+    def generate_scalar_min_max_call(self, func_name, left_type, right_type, args):
+        """Lower a scalar ``min``/``max`` onto the intrinsic its operands need.
+
+        ``fminf`` and ``fmaxf`` convert their arguments to ``float``, which
+        rounds integers above 2^24, so integer operands keep CUDA's and HIP's
+        overloaded integer ``min``/``max`` and ``double`` operands use the
+        ``fmin``/``fmax`` forms.
+        """
+        left_spelling = self.min_max_scalar_spelling(left_type)
+        right_spelling = self.min_max_scalar_spelling(right_type)
+        scalar_types = {
+            MIN_MAX_SCALAR_TYPES.get(left_spelling),
+            MIN_MAX_SCALAR_TYPES.get(right_spelling),
+        }
+        if "bool" in scalar_types:
+            return None
+        if "double" in scalar_types:
+            return self.format_scalar_min_max(func_name, "double", *args)
+        if "float" in scalar_types:
+            return self.format_scalar_min_max(func_name, "float", *args)
+        if None in scalar_types:
+            return None
+        if left_spelling == right_spelling:
+            # Two operands of one type match an overload as written.
+            return self.format_scalar_min_max(func_name, "integer", *args)
+
+        unified_type = self.unified_integer_scalar_type(
+            MIN_MAX_SCALAR_TYPES[left_spelling],
+            MIN_MAX_SCALAR_TYPES[right_spelling],
+        )
+        return self.format_scalar_min_max(
+            func_name,
+            "integer",
+            self.min_max_integer_operand(left_spelling, args[0], unified_type),
+            self.min_max_integer_operand(right_spelling, args[1], unified_type),
+        )
+
+    def format_scalar_min_max(self, func_name, scalar_class, left, right):
+        """Format a scalar ``min``/``max`` call for its operand class."""
+        if scalar_class == "integer":
+            return f"{func_name}({left}, {right})"
+        prefix = "fmin" if func_name == "min" else "fmax"
+        suffix = "f" if scalar_class == "float" else ""
+        return f"{prefix}{suffix}({left}, {right})"
+
+    def min_max_scalar_spelling(self, type_name):
+        """Return the C type name a min/max operand is written with, or None."""
+        if type_name is None:
+            return None
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = self.map_vector_arithmetic_type(type_name)
+        if not isinstance(mapped_type, str):
+            return None
+        return " ".join(mapped_type.split())
+
+    def min_max_integer_operand(self, spelling, arg, unified_type):
+        """Cast an integer operand to the type both min/max operands promote to."""
+        if spelling == unified_type:
+            return arg
+        if MIN_MAX_SCALAR_ALIASES.get(spelling) == unified_type:
+            return arg
+        return f"static_cast<{unified_type}>({arg})"
+
+    def unified_integer_scalar_type(self, left_scalar, right_scalar):
+        """Return the C integer type two operands promote to, as in C++."""
+        if left_scalar == right_scalar:
+            return left_scalar
+        left_rank = MIN_MAX_INTEGER_SCALAR_RANKS[left_scalar]
+        right_rank = MIN_MAX_INTEGER_SCALAR_RANKS[right_scalar]
+        signed_type, unsigned_type = MIN_MAX_INTEGER_SCALAR_TYPES[
+            max(left_rank, right_rank)
+        ]
+        if left_rank == right_rank:
+            return unsigned_type
+        wider_scalar = left_scalar if left_rank > right_rank else right_scalar
+        return signed_type if wider_scalar == signed_type else unsigned_type
+
     def require_vector_binary_helper(self, vector_info, operator, operand_shape):
         """Register and return a helper function for vector binary arithmetic."""
         if vector_info["component_type"] == "bool":
@@ -1340,6 +1638,7 @@ class VectorArithmeticMixin:
             "*": "mul",
             "/": "div",
             "%": "mod",
+            "mod": "glsl_mod",
         }
         operation_name = operator_names[operator]
         helper_name = f"cgl_{vector_info['type']}_{operation_name}"
@@ -1403,10 +1702,24 @@ class VectorArithmeticMixin:
         if operator == "%" and component_type in {"float", "double"}:
             func_name = "fmod" if component_type == "double" else "fmodf"
             return f"{func_name}({left}, {right})"
+        if operator == "mod" and component_type in {"float", "double"}:
+            # GLSL mod floors the quotient; the operands are parameter names.
+            floor_name = "floor" if component_type == "double" else "floorf"
+            return f"({left} - {right} * {floor_name}({left} / {right}))"
+        if operator in {"%", "mod"} and component_type == "half":
+            # ``__half`` has no ``%`` operator: take the remainder of the
+            # components converted to ``float`` the way float vectors do and
+            # round the result back to half.
+            remainder = self.format_vector_binary_component(
+                "float", operator, f"__half2float({left})", f"__half2float({right})"
+            )
+            return f"__float2half({remainder})"
+        if operator == "mod":
+            operator = "%"
         return f"({left} {operator} {right})"
 
     def generate_mod_call(self, raw_args, args):
-        """Lower vector mod builtins through the same path as binary modulo."""
+        """Lower vector GLSL ``mod`` builtins, which floor the quotient."""
         if len(raw_args) != 2 or len(args) != 2:
             return None
         return self.lower_vector_binary_operation(
@@ -1414,12 +1727,21 @@ class VectorArithmeticMixin:
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
+
+    def is_floating_value_type(self, vtype):
+        """Whether ``vtype`` is a floating-point scalar or vector."""
+        if vtype is None:
+            return False
+        vector_info = self.vector_type_info(vtype)
+        if vector_info is not None:
+            return vector_info["component_type"] in {"float", "double", "half"}
+        return self.scalar_component_type(vtype) in {"float", "double", "half"}
 
     def require_vector_negation_helper(self, vector_info):
         """Register and return a helper function for vector unary negation."""
-        if vector_info["component_type"] in {"bool", "uint"}:
+        if vector_info["component_type"] in {"bool", "uint", "u64"}:
             return None
 
         vector_type = vector_info["type"]
@@ -1463,23 +1785,72 @@ class VectorArithmeticMixin:
 
     def generate_vector_geometric_call(self, func_name, raw_args, args):
         """Lower vector geometric builtins to generated component-wise helpers."""
+        if func_name in REFLECTION_BUILTIN_ARITIES:
+            return self.generate_reflection_call(func_name, raw_args, args)
+
         if func_name in {"length", "normalize"}:
             if len(raw_args) != 1:
                 return None
-            vector_info = self.vector_type_info(
-                self.expression_result_type(raw_args[0])
-            )
-            if vector_info is None:
-                return None
-            if func_name == "length":
-                helper_name = self.require_vector_length_helper(vector_info)
-            else:
-                helper_name = self.require_vector_normalize_helper(vector_info)
-            if helper_name is None:
-                return None
-            return f"{helper_name}({args[0]})"
+            arg_type = self.expression_result_type(
+                raw_args[0]
+            ) or self.scalar_cast_result_type(raw_args[0])
+            vector_info = self.vector_type_info(arg_type)
+            if vector_info is not None:
+                if func_name == "length":
+                    helper_name = self.require_vector_length_helper(vector_info)
+                else:
+                    helper_name = self.require_vector_normalize_helper(vector_info)
+                if helper_name is None:
+                    return None
+                return f"{helper_name}({args[0]})"
 
-        if func_name in {"dot", "cross"}:
+            scalar_type = self.map_vector_arithmetic_type(arg_type)
+            if (
+                func_name == "normalize"
+                and scalar_type in FLOAT_SCALARS
+                and not self.is_repeat_safe_expression(raw_args[0])
+            ):
+                # x / |x| names its operand twice; the helper evaluates it once.
+                helper_name = self.require_scalar_normalize_helper(scalar_type)
+                return f"{helper_name}({args[0]})"
+            if scalar_type == "float":
+                if func_name == "length":
+                    return f"fabsf({args[0]})"
+                return f"({args[0]} / fabsf({args[0]}))"
+            if scalar_type == "double":
+                if func_name == "length":
+                    return f"fabs({args[0]})"
+                return f"({args[0]} / fabs({args[0]}))"
+            if scalar_type == "half":
+                if func_name == "length":
+                    return f"__float2half(fabsf(__half2float({args[0]})))"
+                return (
+                    f"__float2half(__half2float({args[0]}) / "
+                    f"fabsf(__half2float({args[0]})))"
+                )
+            return None
+
+        if func_name == "distance":
+            operand_types = self.scalar_distance_operand_types(raw_args)
+            if operand_types is not None:
+                left_scalar, right_scalar = operand_types
+                result_type = self.scalar_distance_result_type(operand_types)
+                if result_type == "half":
+                    return (
+                        f"__float2half(fabsf(__half2float({args[0]}) - "
+                        f"__half2float({args[1]})))"
+                    )
+                left_expr = (
+                    f"__half2float({args[0]})" if left_scalar == "half" else args[0]
+                )
+                right_expr = (
+                    f"__half2float({args[1]})" if right_scalar == "half" else args[1]
+                )
+                if result_type == "double":
+                    return f"fabs({left_expr} - {right_expr})"
+                return f"fabsf({left_expr} - {right_expr})"
+
+        if func_name in {"dot", "cross", "distance"}:
             if len(raw_args) != 2:
                 return None
             left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
@@ -1493,6 +1864,8 @@ class VectorArithmeticMixin:
                 return None
             if func_name == "dot":
                 helper_name = self.require_vector_dot_helper(left_info)
+            elif func_name == "distance":
+                helper_name = self.require_vector_distance_helper(left_info)
             else:
                 helper_name = self.require_vector_cross_helper(left_info)
             if helper_name is None:
@@ -1500,6 +1873,217 @@ class VectorArithmeticMixin:
             return f"{helper_name}({args[0]}, {args[1]})"
 
         return None
+
+    def generate_reflection_call(self, func_name, raw_args, args):
+        """Lower ``reflect``, ``refract`` and ``faceforward`` to generated helpers.
+
+        CUDA and HIP declare none of the three, for any scalar or vector type, so a
+        call the helpers do not cover is refused instead of being copied as written.
+        """
+        signature = self.reflection_call_signature(func_name, raw_args)
+        if signature is None:
+            raise self.LOWERING_REFUSAL_TYPE(
+                [self.reflection_refusal_reason(func_name, raw_args)]
+            )
+        helper_name = self.require_reflection_helper(func_name, *signature)
+        return f"{helper_name}({', '.join(args)})"
+
+    def reflection_result_type(self, func_name, raw_args):
+        """Return the result type of a ``reflect``/``refract``/``faceforward`` call, or None."""
+        if func_name not in REFLECTION_BUILTIN_ARITIES:
+            return None
+        signature = self.reflection_call_signature(func_name, raw_args)
+        return signature[0] if signature is not None else None
+
+    def reflection_operand_type(self, raw_arg):
+        return self.expression_result_type(raw_arg) or self.scalar_cast_result_type(
+            raw_arg
+        )
+
+    def reflection_call_signature(self, func_name, raw_args):
+        """Resolve the helper a ``reflect``/``refract``/``faceforward`` call needs.
+
+        Returns ``(value_type, component_type, accessors, constructor)``. Every
+        operand except ``refract``'s scalar ``eta`` has ``value_type``, which is
+        also the result type. Returns None when the operands do not resolve to one
+        float, double or half scalar or vector type.
+        """
+        if len(raw_args) != REFLECTION_BUILTIN_ARITIES[func_name]:
+            return None
+        value_operands = raw_args[:2] if func_name == "refract" else raw_args
+        operand_types = [
+            self.reflection_operand_type(raw_arg) for raw_arg in value_operands
+        ]
+        if any(operand_type is None for operand_type in operand_types):
+            return None
+        if func_name == "refract":
+            eta_type = self.reflection_operand_type(raw_args[2])
+            if eta_type is not None and self.math_vector_type_info(eta_type):
+                return None
+
+        vector_infos = [
+            self.math_vector_type_info(operand_type) for operand_type in operand_types
+        ]
+        if vector_infos[0] is not None:
+            vector_info = vector_infos[0]
+            if any(
+                info is None or info["type"] != vector_info["type"]
+                for info in vector_infos
+            ):
+                return None
+            component_type = vector_info["component_type"]
+            if self.geometric_component_float_type(component_type) is None:
+                return None
+            return (
+                vector_info["type"],
+                component_type,
+                [f".{component}" for component in vector_info["components"]],
+                vector_info["constructor"],
+            )
+
+        if any(info is not None for info in vector_infos):
+            return None
+        scalar_types = [
+            self.map_vector_arithmetic_type(operand_type)
+            for operand_type in operand_types
+        ]
+        if any(scalar_type not in NUMERIC_SCALARS for scalar_type in scalar_types):
+            return None
+        if all(scalar_type in INTEGER_SCALARS for scalar_type in scalar_types):
+            return None
+        if "double" in scalar_types:
+            scalar_type = "double"
+        elif all(scalar_type == "half" for scalar_type in scalar_types):
+            scalar_type = "half"
+        else:
+            scalar_type = "float"
+        return (scalar_type, scalar_type, [""], None)
+
+    def reflection_refusal_reason(self, func_name, raw_args):
+        arity = REFLECTION_BUILTIN_ARITIES[func_name]
+        if len(raw_args) != arity:
+            return f"{func_name} takes {arity} arguments, got {len(raw_args)}"
+        names = []
+        for raw_arg in raw_args:
+            operand_type = self.reflection_operand_type(raw_arg)
+            if operand_type is None:
+                names.append("unknown type")
+            elif isinstance(operand_type, str):
+                names.append(operand_type)
+            else:
+                names.append(self.convert_type_node_to_string(operand_type))
+        return (
+            f"{func_name}({', '.join(names)}): {self.LOWERING_REFUSAL_TYPE.label} "
+            f"declares no {func_name}, and its generated helpers need operands of "
+            "one float, double or half scalar or vector type"
+            + (" with a scalar eta" if func_name == "refract" else "")
+        )
+
+    def require_reflection_helper(
+        self, func_name, value_type, component_type, accessors, constructor
+    ):
+        """Register a ``reflect``/``refract``/``faceforward`` helper, per GLSL 4.60 8.5.
+
+        ``accessors`` are the member suffixes of a vector value (``[".x", ...]``)
+        or ``[""]`` for a scalar, which has no ``constructor``.
+        """
+        compute_type = self.geometric_component_float_type(component_type)
+        if constructor is None:
+            helper_name = f"cgl_{func_name}_{value_type}"
+        else:
+            helper_name = f"cgl_{value_type}_{func_name}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        suffix = "" if compute_type == "double" else "f"
+        one, two, zero = (f"{value}{suffix}" for value in ("1.0", "2.0", "0.0"))
+
+        def read(name, accessor):
+            return self.geometric_component_read(component_type, f"{name}{accessor}")
+
+        def dot(left, right):
+            return " + ".join(
+                f"({read(left, accessor)} * {read(right, accessor)})"
+                for accessor in accessors
+            )
+
+        def build(component_expression):
+            values = [component_expression(accessor) for accessor in accessors]
+            if constructor is None:
+                return self.geometric_scalar_result(component_type, values[0])
+            return f"{constructor}({', '.join(values)})"
+
+        if func_name == "reflect":
+            parameters = f"{value_type} i, {value_type} n"
+            body = (
+                f"    {compute_type} d = {two} * ({dot('n', 'i')});\n"
+                "    return "
+                + build(lambda a: f"{read('i', a)} - d * {read('n', a)}")
+                + ";\n"
+            )
+        elif func_name == "refract":
+            parameters = f"{value_type} i, {value_type} n, {compute_type} eta"
+            body = (
+                f"    {compute_type} d = {dot('n', 'i')};\n"
+                f"    {compute_type} k = {one} - eta * eta * ({one} - d * d);\n"
+                f"    if (k < {zero})\n"
+                "    {\n"
+                f"        return {build(lambda a: zero)};\n"
+                "    }\n"
+                f"    {compute_type} s = eta * d + "
+                f"{self.geometric_sqrt_name(component_type)}(k);\n"
+                "    return "
+                + build(lambda a: f"eta * {read('i', a)} - s * {read('n', a)}")
+                + ";\n"
+            )
+        else:
+            parameters = f"{value_type} n, {value_type} i, {value_type} nref"
+            body = (
+                f"    if (({dot('nref', 'i')}) < {zero})\n"
+                "    {\n"
+                "        return n;\n"
+                "    }\n"
+                "    return " + build(lambda a: "-" + read("n", a)) + ";\n"
+            )
+        helper = (
+            f"__device__ inline {value_type} {helper_name}({parameters})\n"
+            "{\n"
+            f"{body}"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def scalar_distance_operand_types(self, raw_args):
+        """Return the mapped scalar types of ``distance(a, b)``, or None.
+
+        None when an operand is a vector, unresolved or not numeric, or when both
+        are integers, which ``distance`` has no overload for.
+        """
+        if len(raw_args) != 2:
+            return None
+        operand_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(
+                raw_arg
+            ) or self.scalar_cast_result_type(raw_arg)
+            if arg_type is None or self.vector_type_info(arg_type) is not None:
+                return None
+            scalar_type = self.map_vector_arithmetic_type(arg_type)
+            if scalar_type not in NUMERIC_SCALARS:
+                return None
+            operand_types.append(scalar_type)
+        if all(scalar_type in INTEGER_SCALARS for scalar_type in operand_types):
+            return None
+        return tuple(operand_types)
+
+    def scalar_distance_result_type(self, operand_types):
+        """Return the type scalar ``distance`` lowers to for its operand types."""
+        if "double" in operand_types:
+            return "double"
+        if all(scalar_type == "half" for scalar_type in operand_types):
+            return "half"
+        return "float"
 
     def generate_abs_call(self, raw_args, args):
         """Lower abs with scalar type awareness and vector helper support."""
@@ -1544,8 +2128,10 @@ class VectorArithmeticMixin:
             return f"fabs({value})"
         if component_type == "float" or component_type is None:
             return f"fabsf({value})"
-        if component_type == "uint":
+        if component_type in {"uint", "u64"}:
             return value
+        if component_type == "i64":
+            return f"llabs({value})"
         return f"abs({value})"
 
     def generate_sign_call(self, raw_args, args):
@@ -1592,6 +2178,8 @@ class VectorArithmeticMixin:
     def format_sign_component(self, component_type, value):
         if component_type == "uint":
             return f"(({value}) > 0u ? 1u : 0u)"
+        if component_type == "u64":
+            return f"(({value}) > 0ull ? 1ull : 0ull)"
 
         if component_type == "double":
             zero = "0.0"
@@ -1625,7 +2213,10 @@ class VectorArithmeticMixin:
         component_types = []
         for raw_arg in raw_args:
             arg_type = self.expression_result_type(raw_arg)
-            if self.vector_type_info(arg_type) is not None:
+            if (
+                self.vector_type_info(arg_type) is not None
+                or self.native_vector_component_type(arg_type) is not None
+            ):
                 return None
             component_type = self.scalar_component_type(arg_type)
             if component_type not in {"float", "double", None}:
@@ -1648,12 +2239,14 @@ class VectorArithmeticMixin:
         if signatures is None or len(raw_args) != len(args) or len(raw_args) != 1:
             return None
 
-        vector_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        vector_info = self.math_vector_type_info(
+            self.expression_result_type(raw_args[0])
+        )
         if vector_info is None:
             return None
 
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         helper_name = self.require_vector_scalar_math_helper(
@@ -1677,11 +2270,13 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
+        narrow_half = vector_info.get("narrow_lanes", True)
         components = [
             self.format_scalar_math_component(
                 func_name,
                 component_type,
                 f"value.{component}",
+                narrow_half=narrow_half,
             )
             for component in vector_info["components"]
         ]
@@ -1699,11 +2294,17 @@ class VectorArithmeticMixin:
         if len(raw_args) != 2 or len(args) != 2:
             return None
 
-        base_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-        if base_info is None or base_info["component_type"] not in {"float", "double"}:
+        base_info = self.math_vector_type_info(self.expression_result_type(raw_args[0]))
+        if base_info is None or base_info["component_type"] not in {
+            "float",
+            "double",
+            "half",
+        }:
             return None
 
-        exponent_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        exponent_info = self.math_vector_type_info(
+            self.expression_result_type(raw_args[1])
+        )
         if exponent_info is not None:
             if exponent_info["component_type"] != base_info["component_type"] or len(
                 exponent_info["components"]
@@ -1733,6 +2334,7 @@ class VectorArithmeticMixin:
             if exponent_info is not None
             else self.vector_scalar_parameter_type(base_info)
         )
+        narrow_half = base_info.get("narrow_lanes", True)
         components = []
         for component in base_info["components"]:
             exponent_component = (
@@ -1740,7 +2342,10 @@ class VectorArithmeticMixin:
             )
             components.append(
                 self.format_scalar_math_component(
-                    "pow", component_type, f"base.{component}, {exponent_component}"
+                    "pow",
+                    component_type,
+                    f"base.{component}, {exponent_component}",
+                    narrow_half=narrow_half,
                 )
             )
         helper = (
@@ -1796,8 +2401,20 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
-    def format_scalar_math_component(self, func_name, component_type, value):
+    def format_scalar_math_component(
+        self, func_name, component_type, value, narrow_half=True
+    ):
         """Format one scalar component for a precision-aware math builtin."""
+        if component_type == "half":
+            # ``__half`` has no math overloads in every toolkit, so widen each
+            # operand to float, call the float function and narrow the result.
+            operands = ", ".join(
+                f"__half2float({operand.strip()})" for operand in value.split(",")
+            )
+            float_call = self.format_scalar_math_component(func_name, "float", operands)
+            if not narrow_half:
+                return float_call
+            return f"__float2half({float_call})"
         signatures = self.scalar_float_math_functions()[func_name]
         if func_name == "inversesqrt" and component_type == "double":
             return f"(1.0 / sqrt({value}))"
@@ -1810,6 +2427,8 @@ class VectorArithmeticMixin:
             "pow": {"float": "powf", "double": "pow"},
             "sin": {"float": "sinf", "double": "sin"},
             "cos": {"float": "cosf", "double": "cos"},
+            "sinpi": {"float": "sinpif", "double": "sinpi"},
+            "cospi": {"float": "cospif", "double": "cospi"},
             "tan": {"float": "tanf", "double": "tan"},
             "asin": {"float": "asinf", "double": "asin"},
             "acos": {"float": "acosf", "double": "acos"},
@@ -1824,6 +2443,7 @@ class VectorArithmeticMixin:
             "floor": {"float": "floorf", "double": "floor"},
             "ceil": {"float": "ceilf", "double": "ceil"},
             "round": {"float": "roundf", "double": "round"},
+            "roundEven": {"float": "rintf", "double": "rint"},
             "trunc": {"float": "truncf", "double": "trunc"},
             "inversesqrt": {"float": "rsqrtf", "double": "sqrt"},
         }
@@ -1901,9 +2521,36 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def geometric_component_float_type(self, component_type):
+        """Return the type geometric helpers compute in, or None if unsupported.
+
+        ``half`` components are widened to ``float`` because the generated
+        ``cgl_halfN`` structures have no arithmetic of their own and CUDA/HIP
+        provide no ``sqrt`` overload for ``__half`` in host-compatible code.
+        """
+        if component_type in {"float", "double"}:
+            return component_type
+        if component_type == "half":
+            return "float"
+        return None
+
+    def geometric_component_read(self, component_type, expression):
+        if component_type == "half":
+            return f"__half2float({expression})"
+        return expression
+
+    def geometric_scalar_result(self, component_type, expression):
+        if component_type == "half":
+            return f"__float2half({expression})"
+        return expression
+
+    def geometric_sqrt_name(self, component_type):
+        return "sqrt" if component_type == "double" else "sqrtf"
+
     def require_vector_cross_helper(self, vector_info):
+        component_type = vector_info["component_type"]
         if (
-            vector_info["component_type"] not in {"float", "double"}
+            self.geometric_component_float_type(component_type) is None
             or len(vector_info["components"]) != 3
         ):
             return None
@@ -1913,15 +2560,21 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
+        def read(side, component):
+            return self.geometric_component_read(component_type, f"{side}.{component}")
+
+        terms = []
+        for first, second in (("y", "z"), ("z", "x"), ("x", "y")):
+            terms.append(
+                f"({read('lhs', first)} * {read('rhs', second)} - "
+                f"{read('lhs', second)} * {read('rhs', first)})"
+            )
         constructor = vector_info["constructor"]
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
             f"({vector_type} lhs, {vector_type} rhs)\n"
             "{\n"
-            f"    return {constructor}("
-            "(lhs.y * rhs.z - lhs.z * rhs.y), "
-            "(lhs.z * rhs.x - lhs.x * rhs.z), "
-            "(lhs.x * rhs.y - lhs.y * rhs.x));\n"
+            f"    return {constructor}({', '.join(terms)});\n"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -1929,7 +2582,8 @@ class VectorArithmeticMixin:
 
     def require_vector_length_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
             return None
 
         vector_type = vector_info["type"]
@@ -1937,15 +2591,51 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
-        sqrt_name = "sqrt" if component_type == "double" else "sqrtf"
-        squares = [
-            f"(value.{component} * value.{component})"
-            for component in vector_info["components"]
-        ]
+        squares = []
+        for component in vector_info["components"]:
+            value = self.geometric_component_read(component_type, f"value.{component}")
+            squares.append(f"({value} * {value})")
+        result = self.geometric_scalar_result(
+            component_type,
+            f"{self.geometric_sqrt_name(component_type)}({' + '.join(squares)})",
+        )
         helper = (
             f"__device__ inline {component_type} {helper_name}({vector_type} value)\n"
             "{\n"
-            f"    return {sqrt_name}({' + '.join(squares)});\n"
+            f"    return {result};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_vector_distance_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_distance"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        declarations = []
+        squares = []
+        for component in vector_info["components"]:
+            lhs = self.geometric_component_read(component_type, f"lhs.{component}")
+            rhs = self.geometric_component_read(component_type, f"rhs.{component}")
+            declarations.append(f"    {compute_type} d{component} = {lhs} - {rhs};\n")
+            squares.append(f"(d{component} * d{component})")
+        result = self.geometric_scalar_result(
+            component_type,
+            f"{self.geometric_sqrt_name(component_type)}({' + '.join(squares)})",
+        )
+        helper = (
+            f"__device__ inline {component_type} {helper_name}"
+            f"({vector_type} lhs, {vector_type} rhs)\n"
+            "{\n"
+            f"{''.join(declarations)}"
+            f"    return {result};\n"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -1953,11 +2643,8 @@ class VectorArithmeticMixin:
 
     def require_vector_normalize_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
-            return None
-
-        length_helper = self.require_vector_length_helper(vector_info)
-        if length_helper is None:
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
             return None
 
         vector_type = vector_info["type"]
@@ -1965,16 +2652,54 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
-        one_literal = "1.0" if component_type == "double" else "1.0f"
+        one_literal = "1.0" if compute_type == "double" else "1.0f"
+        if component_type == "half":
+            # Keep the length in float so a half vector is not rounded twice
+            squares = []
+            for component in vector_info["components"]:
+                value = self.geometric_component_read(
+                    component_type, f"value.{component}"
+                )
+                squares.append(f"({value} * {value})")
+            length_expression = f"sqrtf({' + '.join(squares)})"
+        else:
+            length_helper = self.require_vector_length_helper(vector_info)
+            if length_helper is None:
+                return None
+            length_expression = f"{length_helper}(value)"
+
         components = [
-            f"(value.{component} * inv_length)"
+            f"({self.geometric_component_read(component_type, f'value.{component}')}"
+            " * inv_length)"
             for component in vector_info["components"]
         ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
             "{\n"
-            f"    {component_type} inv_length = {one_literal} / {length_helper}(value);\n"
+            f"    {compute_type} inv_length = {one_literal} / {length_expression};\n"
             f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_scalar_normalize_helper(self, scalar_type):
+        helper_name = f"cgl_normalize_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        if scalar_type == "half":
+            body = (
+                "    float widened = __half2float(value);\n"
+                "    return __float2half(widened / fabsf(widened));\n"
+            )
+        else:
+            fabs_name = "fabs" if scalar_type == "double" else "fabsf"
+            body = f"    return value / {fabs_name}(value);\n"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}({scalar_type} value)\n"
+            "{\n"
+            f"{body}"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -1983,4 +2708,6 @@ class VectorArithmeticMixin:
     def vector_scalar_parameter_type(self, vector_info):
         if vector_info["component_type"] == "uint":
             return "unsigned int"
+        if vector_info["component_type"] in WIDE_INTEGER_COMPONENT_C_TYPES:
+            return WIDE_INTEGER_COMPONENT_C_TYPES[vector_info["component_type"]]
         return vector_info["component_type"]

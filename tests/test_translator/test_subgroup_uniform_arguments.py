@@ -788,11 +788,11 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
 
 
 def test_uniform_argument_native_gate_is_required_on_every_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert "if:" not in step
@@ -806,6 +806,6 @@ def test_uniform_argument_native_gate_is_required_on_every_target():
     assert "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_subgroup_uniform_arguments.py",
         )

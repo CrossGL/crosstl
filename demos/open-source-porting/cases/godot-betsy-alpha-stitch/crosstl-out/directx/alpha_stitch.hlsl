@@ -7,5 +7,5 @@ RWTexture2D<uint4> dstTexture : register(u2);
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
     uint2 rgbBlock = srcRGB.Load(int3(int2(dispatchThreadID.xy), 0)).xy;
     uint2 alphaBlock = srcAlpha.Load(int3(int2(dispatchThreadID.xy), 0)).xy;
-    dstTexture[int2(dispatchThreadID.xy)] = uint4(rgbBlock.xy, alphaBlock.xy);
+    dstTexture[int2(dispatchThreadID.xy)] = uint4(rgbBlock, alphaBlock);
 }

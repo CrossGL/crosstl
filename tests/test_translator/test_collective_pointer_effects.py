@@ -271,13 +271,13 @@ def test_pointer_offset_helpers_execute(tmp_path, array, shape, count):
 
 
 def test_pointer_effect_execution_shares_required_native_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -286,6 +286,6 @@ def test_pointer_effect_execution_shares_required_native_job():
     assert "--timeout-seconds 600" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_collective_pointer_effects.py",
         )

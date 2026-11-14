@@ -22,6 +22,11 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     assert_deferred_metal_compiler_diagnostics,
     corpus_workspace,
 )
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -43,7 +48,7 @@ REDUCE_METAL_CONTRACT_PATH = (
     / "reduce.metal-roundtrip.json"
 )
 REDUCE_METAL_CONTRACT_SHA256 = (
-    "a96dabc394744a80859acfba2ab72a207325984bae0b429fabf431010d2cc579"
+    "f607173e0ee78be7b00060b610abca9d2b9be30e057f70ea98df0d8ee92a1b73"
 )
 RESOURCE_ABI_FIELDS = ("name", "kind", "set", "binding", "access", "type")
 REDUCE_METAL_TYPE_NAMES = {
@@ -813,11 +818,9 @@ def _translate_reduce_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,
@@ -829,8 +832,13 @@ def _translate_reduce_metal_artifact(
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == (workload.materialization_sha256)
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]
@@ -902,6 +910,7 @@ def _roundtrip_pinned_mlx_reduce_through_metal(
                 REDUCE_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

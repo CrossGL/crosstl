@@ -111,6 +111,16 @@ class IncludeNode(ASTNode):
         return f"IncludeNode(path={self.path}, is_system={self.is_system})"
 
 
+class ScopedBlockNode(ASTNode):
+    """A compound statement ``{ ... }`` inside a body; its declarations are visible only inside it."""
+
+    def __init__(self, statements):
+        self.statements = statements
+
+    def __repr__(self):
+        return f"ScopedBlockNode(statements={len(self.statements)})"
+
+
 class SwitchStatementNode(ASTNode):
     """Legacy switch statement node used by older HLSL parser paths."""
 

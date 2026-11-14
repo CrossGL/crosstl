@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from crosstl.project import ProjectConfig, translate_project
+from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
 from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
@@ -67,6 +68,10 @@ def _compile(source, tmp_path, *, profile="cs_6_0", flags=()):
     artifact = tmp_path / "translated.hlsl"
     module = tmp_path / "translated.dxil"
     artifact.write_text(source, encoding="utf-8")
+    # Native 16-bit scalar types need DXC's 16-bit mode; take the flags from
+    # the toolchain helper the project pipeline uses for the same source.
+    required = dxc_compiler_arguments_for_source(source)
+    flags = (*flags, *(flag for flag in required if flag not in flags))
     result = subprocess.run(
         [
             compiler,

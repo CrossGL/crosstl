@@ -4,7 +4,7 @@ using namespace metal;
 
 struct PSInput {
     float4 position [[position]];
-    float4 color [[attribute(0)]];
+    float4 color [[user(COLOR0)]];
 };
 // Constant Buffers
 struct SceneConstantBuffer {
@@ -14,7 +14,7 @@ struct SceneConstantBuffer {
 // Vertex Shader
 struct VSMain_Input {
     float4 position [[attribute(0)]];
-    float4 color [[attribute(1)]];
+    float4 color [[attribute(13)]];
 };
 
 vertex PSInput VSMain(VSMain_Input _crossglInput [[stage_in]], constant SceneConstantBuffer& sceneConstantBuffer [[buffer(0)]]) {

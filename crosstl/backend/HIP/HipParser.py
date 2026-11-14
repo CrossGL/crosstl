@@ -3,12 +3,16 @@
 import re
 from typing import List
 
+from crosstl.translator.refusals import HipSyntaxError
+
+from ..CUDA.local_memory_spaces import refuse_local_memory_space
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
     ASTNode,
     AtomicOperationNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CastNode,
@@ -57,6 +61,9 @@ class HipProgramNode(ASTNode):
 
 class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
+
+    # The typed syntax error of the source language; the OpenCL parser, which extends this one, names its own.
+    syntax_error = HipSyntaxError
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
     FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
@@ -596,7 +603,7 @@ class HipParser:
             if self.current_token
             else "at end of input"
         )
-        raise SyntaxError(f"Parse error {token_info}: {message}")
+        raise self.syntax_error(f"Parse error {token_info}: {message}")
 
     def advance(self):
         if self.pos < len(self.tokens) - 1:
@@ -753,9 +760,12 @@ class HipParser:
             "xor": "^",
             "xor_eq": "^=",
         }
-        return alternative_operators.get(
-            self.current_token.value, self.current_token.value
-        )
+        value = self.current_token.value
+        # An ISO C++ alternative token (``and``, ``not_eq``) is spelled as its operator; any other operator token
+        # is already the operator.
+        if value in alternative_operators:
+            return alternative_operators[value]
+        return value
 
     def is_declarator_name_token(self):
         return self.match(*self.DECLARATOR_NAME_TOKENS)
@@ -1269,8 +1279,13 @@ class HipParser:
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
 
-        raise SyntaxError(
-            f"Expected declaration after template prefix, got {self.current_token.type}"
+        token_type = (
+            self.current_token.type
+            if self.current_token is not None
+            else "end of input"
+        )
+        raise self.syntax_error(
+            f"Expected declaration after template prefix, got {token_type}"
         )
 
     def parse_explicit_template_instantiation(self):
@@ -2783,6 +2798,10 @@ class HipParser:
         qualifiers.extend(self.parse_declaration_qualifiers())
         return base_type
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        """Refuse a function-body variable that HIP allows in its memory space only with static storage."""
+        refuse_local_memory_space(qualifiers, name)
+
     def parse_variable_declarator(
         self, base_type, qualifiers, allow_prefix, attributes=None
     ):
@@ -2814,6 +2833,9 @@ class HipParser:
         self.skip_newlines()
         bitfield_width = self.parse_bitfield_width()
         value = self.parse_variable_initializer(var_type)
+
+        if self.block_depth > 0:
+            self.reject_disallowed_local_memory_space(qualifiers, name)
 
         declaration = VariableNode(
             var_type,
@@ -2965,6 +2987,43 @@ class HipParser:
         self.consume("RPAREN")
         return args
 
+    def parse_line_split_type_qualifiers(self):
+        """Read qualifiers that a line break separates from the rest of a type.
+
+        In `const` / `float* in` or `__restrict__ const` / `float* in`, the
+        base type reader stops at the line break; read the qualifiers up to the
+        last break here and leave the rest of the type, and qualifiers on one
+        line with it, to the rest of :meth:`parse_type`.
+        """
+        end = self.line_split_type_qualifiers_end(self.pos)
+        qualifiers = []
+        while self.current_token and self.pos < end:
+            if not self.match("NEWLINE"):
+                qualifiers.append(self.current_token.value)
+            self.advance()
+        return qualifiers
+
+    def line_split_type_qualifiers_end(self, index):
+        """Index after the last line break that follows a type qualifier at ``index``, or ``index`` if none does.
+
+        A sign word whose next line starts the declarator, as in `unsigned` /
+        `n`, stays with the type reader, which reads it as `unsigned int`.
+        """
+        end = index
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
+        ):
+            next_index = self.skip_newlines_at_pos(index + 1)
+            implicit_int = self.tokens[index].type in {
+                "SIGNED",
+                "UNSIGNED",
+            } and self.is_implicit_int_type_at_pos(next_index, True)
+            if next_index != index + 1 and not implicit_int:
+                end = next_index
+            index = next_index
+        return end
+
     def parse_type(self):
         type_parts = []
         saw_integral_sign = False
@@ -2973,12 +3032,18 @@ class HipParser:
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
+        for qualifier in self.parse_line_split_type_qualifiers():
+            if qualifier in {"signed", "unsigned"}:
+                saw_integral_sign = True
+            type_parts.append(qualifier)
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3027,12 +3092,18 @@ class HipParser:
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
+        for qualifier in self.parse_line_split_type_qualifiers():
+            if qualifier in {"signed", "unsigned"}:
+                saw_integral_sign = True
+            type_parts.append(qualifier)
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3104,12 +3175,12 @@ class HipParser:
 
         while depth > 0:
             if self.current_token is None:
-                raise SyntaxError("Unterminated decltype type")
+                raise self.syntax_error("Unterminated decltype type")
 
             token_type = self.current_token.type
             token_value = self.current_token.value
             if token_type == "EOF":
-                raise SyntaxError("Unterminated decltype type")
+                raise self.syntax_error("Unterminated decltype type")
             if token_type == "LPAREN":
                 depth += 1
                 parts.append(token_value)
@@ -3128,9 +3199,11 @@ class HipParser:
         return f"decltype({self.format_template_parts(parts)})"
 
     def parse_postfix_type_qualifiers(self, type_parts):
+        self.skip_newlines()
         while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
             type_parts.append(self.current_token.value)
             self.advance()
+            self.skip_newlines()
 
     def parse_type_name(self):
         if self.match(*self.ELABORATED_TYPE_TOKENS):
@@ -3236,8 +3309,16 @@ class HipParser:
             self.skip_newlines()
 
             param_name = ""
-            function_pointer_name = self.parse_function_pointer_parameter_declarator()
-            if function_pointer_name is not None:
+            reference_array_name = self.parse_reference_array_parameter_declarator()
+            function_pointer_name = (
+                None
+                if reference_array_name is not None
+                else self.parse_function_pointer_parameter_declarator()
+            )
+            if reference_array_name is not None:
+                param_type += " & "
+                param_name = reference_array_name
+            elif function_pointer_name is not None:
                 param_type += " (*)"
                 param_name = function_pointer_name
             elif self.is_declarator_name_token():
@@ -3276,6 +3357,28 @@ class HipParser:
             and self.peek()
             and self.peek().type in {"ASTERISK", "STAR"}
         )
+
+    def parse_reference_array_parameter_declarator(self):
+        """Consume the ``(&name)`` of a reference-to-array parameter ``T (&name)[N]`` and return the name."""
+        name_token = self.peek(2)
+        if not (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type == "AMPERSAND"
+            and name_token
+            and name_token.type in self.DECLARATOR_NAME_TOKENS
+            and self.peek(3)
+            and self.peek(3).type == "RPAREN"
+            and self.peek(4)
+            and self.peek(4).type == "LBRACKET"
+        ):
+            return None
+        self.consume("LPAREN")
+        self.advance()
+        name = self.current_token.value
+        self.advance()
+        self.consume("RPAREN")
+        return name
 
     def parse_function_pointer_parameter_declarator(self):
         if not (
@@ -3565,7 +3668,7 @@ class HipParser:
                 while self.current_token and not self.match(
                     "CASE", "DEFAULT", "RBRACE"
                 ):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         body.append(stmt)
                 case = CaseNode(value, body)
@@ -3573,13 +3676,13 @@ class HipParser:
                 ordered_cases.append(case)
             elif self.match("DEFAULT"):
                 if seen_default:
-                    raise SyntaxError("duplicate default label in switch")
+                    raise self.syntax_error("duplicate default label in switch")
                 seen_default = True
                 self.advance()
                 self.consume("COLON")
                 default_case = []
                 while self.current_token and not self.match("CASE", "RBRACE"):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         default_case.append(stmt)
                 ordered_cases.append(CaseNode(None, default_case))
@@ -3713,6 +3816,12 @@ class HipParser:
 
         return clobbers
 
+    def parse_scoped_statement(self):
+        """A statement of a block or a ``case``; a nested ``{ ... }`` keeps its own scope as a ``BlockNode``."""
+        if self.match("LBRACE"):
+            return BlockNode(self.parse_block())
+        return self.parse_statement()
+
     def parse_block(self):
         self.consume("LBRACE")
         statements = []
@@ -3720,7 +3829,7 @@ class HipParser:
         self.block_depth += 1
         try:
             while self.current_token and not self.match("RBRACE"):
-                stmt = self.parse_statement()
+                stmt = self.parse_scoped_statement()
                 if stmt:
                     if isinstance(stmt, list):
                         statements.extend(stmt)
@@ -4198,6 +4307,11 @@ class HipParser:
         depth = 1
 
         while depth > 0:
+            if self.current_token is None or self.current_token.type == "EOF":
+                # The input ended inside the argument list.
+                raise self.syntax_error(
+                    "Unterminated template argument list: expected '>'"
+                )
             token_type = self.current_token.type
             token_value = self.current_token.value
             if token_type == "LT" and self.is_nested_template_lt_at_pos(self.pos):
@@ -4785,7 +4899,7 @@ class HipParser:
                 continue
             self.advance()
 
-        raise SyntaxError("Unterminated lambda block body")
+        raise self.syntax_error("Unterminated lambda block body")
 
     def consume_balanced_lambda_tokens(self, open_token, close_token):
         depth = 0
@@ -4801,7 +4915,7 @@ class HipParser:
                 continue
             self.advance()
 
-        raise SyntaxError(f"Unterminated lambda {open_token}")
+        raise self.syntax_error(f"Unterminated lambda {open_token}")
 
     def format_lambda_raw_tokens(self, tokens):
         text = ""
@@ -5034,9 +5148,17 @@ class HipParser:
     def is_cast_type_sequence(self, start, end):
         index = start
         saw_integral_sign = False
-        while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+        while index < end:
+            if self.tokens[index].type == "NEWLINE":
+                index += 1
+                continue
+            if self.tokens[index].type not in self.TYPE_QUALIFIER_TOKENS:
+                break
             if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
+            index += 1
+
+        while index < end and self.tokens[index].type == "NEWLINE":
             index += 1
 
         if index >= end:
@@ -5412,6 +5534,7 @@ class HipParser:
 
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         saw_integral_sign = False
+        index = self.line_split_type_qualifiers_end(index)
         index = self.skip_cpp_attributes_at_pos(index)
         while (
             index < len(self.tokens)
@@ -5427,6 +5550,7 @@ class HipParser:
                 saw_integral_sign = True
             index += 1
 
+        index = self.skip_newlines_at_pos(index)
         index = self.skip_cpp_attributes_at_pos(index)
         if index >= len(self.tokens):
             return None
@@ -5665,11 +5789,13 @@ class HipParser:
         return isinstance(type_name, str) and type_name[:1].isupper()
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+            index = self.skip_newlines_at_pos(index)
         return index
 
     def skip_linkage_specifier_at_pos(self, index):

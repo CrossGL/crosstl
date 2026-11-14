@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,11 @@ NON_RUNTIME_CLAIMS = {
     "mlxUnitTests": False,
     "fullMlxTestSuite": False,
 }
+
+# Every plain store into ``dst``; the selected N=1 specialization has one.
+_DST_STORE = re.compile(r"\bdst\s*\[(?P<index>[^\]]*)\]\s*=(?!=)\s*(?P<value>[^;]*);")
+_STORE_INDEX = re.compile(r"\(\s*(?P<name>[A-Za-z_]\w*)\s*\+\s*uint\s*\(\s*i\s*\)\s*\)")
+_SOURCE_READ = re.compile(r"\bsrc\s*\[\s*0\s*\]")
 
 
 class MlxCopyOpenGLProofError(RuntimeError):
@@ -396,12 +402,32 @@ def _translated_artifact(
     return artifact, artifact_path
 
 
+def _is_thread_index(source: str, name: str) -> bool:
+    # The entry's `uint index [[thread_position_in_grid]]`, or the local copy
+    # GLSL takes of it because the kernel writes `index *= N` and GLSL inputs
+    # are read-only.
+    return name == "index" or (
+        re.search(rf"\buint\s+{re.escape(name)}\s*=\s*index\s*;", source) is not None
+    )
+
+
 def _validate_real_projection(artifact_path: Path) -> dict[str, Any]:
     source = artifact_path.read_text(encoding="utf-8")
-    expected_store = "dst[(index + uint(i))] = (src[0]).real;"
+    stores = list(_DST_STORE.finditer(source))
     _require(
-        source.count(expected_store) == 1,
+        len(stores) == 1
+        and re.sub(r"\s+", "", stores[0].group("value")) == "(src[0]).real",
         "generated GLSL must store exactly one projection of src[0].real",
+    )
+    store = stores[0]
+    store_index = _STORE_INDEX.fullmatch(store.group("index").strip())
+    _require(
+        store_index is not None and _is_thread_index(source, store_index.group("name")),
+        "generated GLSL copy store must index dst by the thread position",
+    )
+    _require(
+        len(_SOURCE_READ.findall(source)) == 1,
+        "generated GLSL must evaluate src[0] exactly once",
     )
     _require(
         "float(src[0])" not in source and "float((src[0]))" not in source,
@@ -416,7 +442,7 @@ def _validate_real_projection(artifact_path: Path) -> dict[str, Any]:
         "status": "passed",
         "sourceExpression": "static_cast<float>(src[0])",
         "generatedExpression": "(src[0]).real",
-        "store": expected_store,
+        "store": store.group(0),
         "singleEvaluation": True,
     }
 

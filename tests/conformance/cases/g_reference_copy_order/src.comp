@@ -1,0 +1,35 @@
+#version 450
+// An inout argument is copied back when the call returns: later operands, later calls and the store of the
+// enclosing assignment see the new value; a compound assignment reads its target after its value (glslang, Mesa
+// and DXC agree).
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { int a[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+shared int tile[64];
+int bump(inout int t) { t = t * 3 + 1; return t - 2; }
+int pair(int first, inout int second) { second = second + first; return second * 2; }
+int fromTile(uint l) { return bump(tile[l]) + tile[l]; }
+void main() {
+    uint l = gl_LocalInvocationIndex;
+    uint g = gl_GlobalInvocationID.x;
+    int x = a[g];
+    tile[l] = x;
+    tile[l] = bump(tile[l]) + 1;
+    ivec2 v = ivec2(x, x + 5);
+    ivec2 r = ivec2(bump(v.y), v.y);
+    int s = (bump(tile[l]) << 1) ^ tile[l];
+    int z = bump(v.x) - bump(v.x);
+    int p = pair(bump(tile[l]), tile[l]);
+    int c = (bump(v.y) != v.y) ? v.y : -1;
+    int f = fromTile(l);
+    v.x += bump(v.x);
+    tile[l] += bump(tile[l]);
+    o[8u * g] = r.x;
+    o[8u * g + 1u] = r.y;
+    o[8u * g + 2u] = s;
+    o[8u * g + 3u] = z;
+    o[8u * g + 4u] = p;
+    o[8u * g + 5u] = c;
+    o[8u * g + 6u] = f;
+    o[8u * g + 7u] = tile[l] + v.x;
+}

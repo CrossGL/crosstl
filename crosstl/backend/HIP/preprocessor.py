@@ -2,13 +2,16 @@
 
 from typing import Dict, List, Optional, Tuple
 
-from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
+from crosstl.backend.DirectX.macro_expansion import CPP_MACROS
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, LogicalLines
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_HIP_PRESERVED_INCLUDE__ "
 
 
 class HipPreprocessor(HLSLPreprocessor):
     """Small HIP preprocessor used before lexing imported source files."""
+
+    macro_dialect = CPP_MACROS
 
     DEFAULT_PLATFORM_DEFINES = {
         "__HIP_PLATFORM_AMD__": "1",
@@ -59,9 +62,16 @@ class HipPreprocessor(HLSLPreprocessor):
         )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
-        code = self._mask_comments(code)
         processed = super().preprocess(code, file_path=file_path)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+    def _split_logical_lines(self, code: str) -> List[str]:
+        # Comments are blanked after the lines are spliced and joined, so a comment that a directive line
+        # opens stays part of that directive.
+        lines = super()._split_logical_lines(code)
+        return LogicalLines(
+            [self._mask_comments(line) for line in lines], lines.physical
+        )
 
     def _mask_comments(self, code: str) -> str:
         result = []
@@ -127,7 +137,8 @@ class HipPreprocessor(HLSLPreprocessor):
             next_line = lines[start + consumed]
             if next_line.lstrip().startswith("#"):
                 break
-            line += " " + self._strip_macro_comments(next_line.lstrip())
+            # Keep the physical line break, so __LINE__ counts the lines the invocation spans.
+            line += "\n" + self._strip_macro_comments(next_line.lstrip())
             consumed += 1
 
         return line, consumed

@@ -414,7 +414,16 @@ class HLSLHalfStorage:
             self.resources[name] = dict(BINARY16_STORAGE)
 
     def header(self):
-        return resource_storage_header(self.resources) if self.resources else ""
+        if not self.resources:
+            return ""
+        try:
+            return resource_storage_header(self.resources)
+        except ValueError as exc:
+            raise DirectXHalfStorageError(
+                f"DirectX cannot record the binary16 storage of {len(self.resources)} "
+                f"buffers in one artifact: {exc}",
+                reason="resource-storage-contract-limit",
+            ) from exc
 
     def declarations(self):
         g = self.generator

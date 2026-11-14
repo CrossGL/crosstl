@@ -1,15 +1,9 @@
 #version 450 core
 #extension GL_EXT_fragment_invocation_density : require
 layout(location = 0) in vec2 in_UV;
-struct g_Constants {
-    mat4 WorldViewProj;
-    int PrimitiveShadingRate;
-    int DrawMode;
-};
-
 layout(binding = 0) uniform sampler2D g_Texture;
 // Constant Buffers
-layout(std140, binding = 0) uniform Uniforms {
+layout(std140, binding = 0) uniform g_Constants {
     mat4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;

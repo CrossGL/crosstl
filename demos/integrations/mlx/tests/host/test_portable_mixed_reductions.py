@@ -267,7 +267,7 @@ def test_mixed_trace_can_follow_other_native_workloads(evidence):
 def test_mixed_ci_requires_companions_without_reducing_standalone_coverage():
     import yaml
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -275,7 +275,7 @@ def test_mixed_ci_requires_companions_without_reducing_standalone_coverage():
     ).read_text()
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py",
         )
     job = yaml.safe_load(workflow)["jobs"]["reductions"]

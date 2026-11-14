@@ -516,13 +516,13 @@ def test_applicability_requires_width(tmp_path, target):
 
 
 def test_ci_requires_mixed_entry_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     selector = "tests/test_translator/test_project_subgroup_applicability.py"

@@ -94,7 +94,7 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
             root, root / "integer64", request.param, family="integer64"
         )
     assert set(index["descriptors"]) == set(packages.INTEGER64_ENTRIES)
-    assert len(index["descriptors"]) == 44 and len(packages.ENTRIES) == 93
+    assert len(index["descriptors"]) == 44 and len(packages.ENTRIES) == 97
     return root / "integer64", index
 
 
@@ -341,9 +341,7 @@ def evidence():
                 }
             )
         if entries:
-            values = expected
-            if case["entry"] in packages.INTEGER64_ABSOLUTE_ENTRIES:
-                values = np.abs(integer64_workloads.physical(np, arrays[0]))
+            values = integer64_workloads.written(np, case, arrays, expected)
             guard = (
                 runtime.BOOLEAN_GUARD
                 if expected.dtype == np.bool_

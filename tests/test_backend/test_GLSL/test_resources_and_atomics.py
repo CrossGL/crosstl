@@ -13,6 +13,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -65,6 +66,17 @@ def parse_crossgl(code: str):
 
 def normalize_codegen_snapshot(code: str):
     return "\n".join(line.rstrip() for line in dedent(code).strip().splitlines())
+
+
+def hlsl_matrix_from_columns(hlsl_type: str, columns: str):
+    """HLSL ``floatRxC`` built from its stored columns; HLSL constructors fill rows."""
+    scalar, rows, cols = re.fullmatch(r"([a-z]+)(\d)x(\d)", hlsl_type).groups()
+    return f"transpose({scalar}{cols}x{rows}({columns}))"
+
+
+def hlsl_matrix_column(matrix: str, column: int, rows: int):
+    """The HLSL swizzle that selects column ``column`` of a matrix with ``rows`` rows."""
+    return f"{matrix}." + "".join(f"_m{row}{column}" for row in range(rows))
 
 
 def glsl_dynamic_texel_offset_diagnostic(category, operation, _placeholder=None):
@@ -515,8 +527,22 @@ def test_codegen_ssbo_instance_arrays_use_structured_buffer_arrays():
     assert "writeBuffers[0].Store(" not in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
-    assert "array<const device int*, 2> readBuffers [[buffer(2)]]" in metal
-    assert "array<device int*, 2> writeBuffers [[buffer(4)]]" in metal
+    assert (
+        "const device int* readBuffers_0 [[buffer(2)]], const device int* readBuffers_1 [[buffer(3)]]"
+        in metal
+    )
+    assert (
+        "array<const device int*, 2> readBuffers = {readBuffers_0, readBuffers_1};"
+        in metal
+    )
+    assert (
+        "device int* writeBuffers_0 [[buffer(4)]], device int* writeBuffers_1 [[buffer(5)]]"
+        in metal
+    )
+    assert (
+        "array<device int*, 2> writeBuffers = {writeBuffers_0, writeBuffers_1};"
+        in metal
+    )
     assert "int value = readBuffers[1][0];" in metal
     assert "writeBuffers[0][0] = value + 1;" in metal
 
@@ -611,12 +637,20 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "valuesBlock.GetDimensions(len);" in hlsl
-    assert "layers[1].GetDimensions(layerLen);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert "len = cgl_buffer_count(valuesBlock);" in hlsl
+    assert "layerLen = cgl_buffer_count(layers[1]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
-    assert "array<constant uint*, 2> layersLength [[buffer(4)]]" in metal
+    assert (
+        "constant uint* layersLength_0 [[buffer(4)]], constant uint* layersLength_1 [[buffer(5)]]"
+        in metal
+    )
+    assert (
+        "array<constant uint*, 2> layersLength = {layersLength_0, layersLength_1};"
+        in metal
+    )
     assert "len = valuesBlockLength[0];" in metal
     assert "layerLen = layersLength[1][0];" in metal
     assert "unsupported Metal buffer dimensions" not in metal
@@ -659,18 +693,27 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "int value = buffers[dynamicIndex].Load(2);" in hlsl
     assert "buffers[dynamicIndex][3] = (value + 1);" in hlsl
     assert "buffers[dynamicIndex].Store(" not in hlsl
-    assert "buffers[dynamicIndex].GetDimensions(len);" in hlsl
+    assert "len = cgl_buffer_count(buffers[dynamicIndex]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal
     assert "buffers[dynamicIndex][3] = value + 1;" in metal
-    assert "array<constant uint*, 2> buffersLength [[buffer(3)]]" in metal
+    assert (
+        "constant uint* buffersLength_0 [[buffer(3)]], constant uint* buffersLength_1 [[buffer(4)]]"
+        in metal
+    )
+    assert (
+        "array<constant uint*, 2> buffersLength = {buffersLength_0, buffersLength_1};"
+        in metal
+    )
     assert "len = buffersLength[dynamicIndex][0];" in metal
     assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
+    # GLSL rejects a non-constant index into an implicitly sized block array, so
+    # the constant-valued index sizes the array as Metal does.
     assert (
-        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[];"
+        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[2];"
         in glsl
     )
     assert "int value = buffers[dynamicIndex].data[2];" in glsl
@@ -956,7 +999,7 @@ def test_codegen_mixed_ssbo_metal_fixed_vector_array_compound_store_uses_temp():
     assert "unsupported Metal GLSL buffer block compound store" not in metal
 
 
-def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_is_diagnostic():
+def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_uses_fmod():
     code = """
     #version 450 core
     layout(std430, binding = 67) buffer MetalFixedVectorOpsBlock {
@@ -975,11 +1018,10 @@ def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_is_diagnostic(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(
-        BufferBlockUnsupportedError,
-        match=r"GLSL buffer block compound store: operator %= is not supported for float",
-    ):
-        MetalCodeGen().generate(parse_crossgl(crossgl))
+    # CrossGL %= on floats is the truncated remainder, which MSL spells fmod.
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "fmod(float2(" in metal
+    assert "%=" not in metal
 
 
 def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
@@ -1008,7 +1050,7 @@ def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
         MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
-def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic():
+def test_codegen_mixed_ssbo_metal_float_mod_compound_uses_fmod():
     code = """
     #version 450 core
     layout(std430, binding = 62) buffer MetalFloatOpsBlock {
@@ -1026,11 +1068,10 @@ def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(
-        BufferBlockUnsupportedError,
-        match=r"GLSL buffer block compound store: operator %= is not supported for float",
-    ):
-        MetalCodeGen().generate(parse_crossgl(crossgl))
+    # CrossGL %= on floats is the truncated remainder, which MSL spells fmod.
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "= fmod((*reinterpret_cast<const device float*>(metalFloatOpsBlock" in metal
+    assert "%=" not in metal
 
 
 def test_codegen_mixed_ssbo_metal_integer_mod_compound_store_is_supported():
@@ -1129,7 +1170,8 @@ def test_codegen_mixed_ssbo_metal_non_square_matrix_metadata_uses_column_offsets
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* metalNonSquareMatrixBlock [[buffer(45)]]" in metal
-    assert "float3x2 t = float3x2(" in metal
+    # GLSL mat2x3 and MSL float2x3 are both two columns of three rows.
+    assert "float2x3 t = float2x3(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
         "(metalNonSquareMatrixBlock + 16))" in metal
@@ -1490,7 +1532,7 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     // Compute Shader
     [numthreads(1, 1, 1)]
     void CSMain() {
-        float2x2 transform = float2x2(asfloat(snapshotMatrixBlock.Load2(0)), asfloat(snapshotMatrixBlock.Load2(8)));
+        float2x2 transform = transpose(float2x2(asfloat(snapshotMatrixBlock.Load2(0)), asfloat(snapshotMatrixBlock.Load2(8))));
         float tail = asfloat(snapshotMatrixBlock.Load(16));
     }
     """
@@ -2610,18 +2652,20 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     }
     """
     expected_metal = """
+    #pragma METAL internals : enable
     #include <metal_stdlib>
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<device uchar*, 2> mixedBlocks [[buffer(72)]]) {
-        uint i = (*reinterpret_cast<const device uint*>(mixedBlocks[1] + 0));
-        float4 value = float4((*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
+    kernel void kernel_main(coherent device uchar* mixedBlocks_0 [[buffer(72)]], coherent device uchar* mixedBlocks_1 [[buffer(73)]]) {
+        array<coherent device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
+        uint i = (*reinterpret_cast<coherent const device uint*>(mixedBlocks[1] + 0));
+        float4 value = float4((*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
         float4 __crossgl_buffer_store_0 = value;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
     }
     """
     expected_glsl = """
@@ -2675,7 +2719,7 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     // Compute Shader
     [numthreads(1, 1, 1)]
     void CSMain() {
-        float2x2 t = float2x2(asfloat(readMixedBlocks[1].Load2(0)), asfloat(readMixedBlocks[1].Load2(8)));
+        float2x2 t = transpose(float2x2(asfloat(readMixedBlocks[1].Load2(0)), asfloat(readMixedBlocks[1].Load2(8))));
         float value = asfloat(readMixedBlocks[1].Load(16));
     }
     """
@@ -2684,7 +2728,8 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<const device uchar*, 2> readMixedBlocks [[buffer(73)]]) {
+    kernel void kernel_main(const device uchar* readMixedBlocks_0 [[buffer(73)]], const device uchar* readMixedBlocks_1 [[buffer(74)]]) {
+        array<const device uchar*, 2> readMixedBlocks = {readMixedBlocks_0, readMixedBlocks_1};
         __attribute__((unused)) float2x2 t = float2x2(float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 0)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 4))), float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 8)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 12))));
         __attribute__((unused)) float value = (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 16));
     }
@@ -2708,7 +2753,7 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer readMixedBlocks" not in hlsl
-    assert "device uchar* readMixedBlocks" not in metal
+    assert not re.search(r"(?<!const )device uchar\* readMixedBlocks", metal)
     assert normalize_codegen_snapshot(hlsl) == normalize_codegen_snapshot(expected_hlsl)
     assert normalize_codegen_snapshot(metal) == normalize_codegen_snapshot(
         expected_metal
@@ -2748,7 +2793,8 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<device uchar*, 3> unsizedMixed [[buffer(74)]]) {
+    kernel void kernel_main(device uchar* unsizedMixed_0 [[buffer(74)]], device uchar* unsizedMixed_1 [[buffer(75)]], device uchar* unsizedMixed_2 [[buffer(76)]]) {
+        array<device uchar*, 3> unsizedMixed = {unsizedMixed_0, unsizedMixed_1, unsizedMixed_2};
         uint i = (*reinterpret_cast<const device uint*>(unsizedMixed[2] + 0));
         __attribute__((unused)) float4 value = float4((*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 12))));
     }
@@ -2810,7 +2856,14 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_propagate_to_metal_helpers():
     assert "helperBlocks[2].Load2(0)" in hlsl
     assert "helperBlocks[2].Load((16 + i * 4))" in hlsl
 
-    assert "array<const device uchar*, 3> helperBlocks [[buffer(75)]]" in metal
+    assert (
+        "const device uchar* helperBlocks_0 [[buffer(75)]], const device uchar* helperBlocks_1 [[buffer(76)]], const device uchar* helperBlocks_2 [[buffer(77)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> helperBlocks = {helperBlocks_0, helperBlocks_1, helperBlocks_2};"
+        in metal
+    )
     assert "readValue(0u, helperBlocks)" in metal
     assert (
         "float readValue(uint i, array<const device uchar*, 3> helperBlocks)" in metal
@@ -2854,7 +2907,14 @@ def test_codegen_mixed_ssbo_helper_array_store_uses_indexed_byte_address_receive
     assert "writeValue(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "helperWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
-    assert "array<device uchar*, 3> helperWriteBlocks [[buffer(79)]]" in metal
+    assert (
+        "device uchar* helperWriteBlocks_0 [[buffer(79)]], device uchar* helperWriteBlocks_1 [[buffer(80)]], device uchar* helperWriteBlocks_2 [[buffer(81)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> helperWriteBlocks = {helperWriteBlocks_0, helperWriteBlocks_1, helperWriteBlocks_2};"
+        in metal
+    )
     assert "writeValue(i, float4(1.0), helperWriteBlocks);" in metal
     assert (
         "void writeValue(uint i, float4 value, "
@@ -2901,7 +2961,14 @@ def test_codegen_mixed_ssbo_helper_array_compound_store_uses_indexed_receiver():
         in hlsl
     )
 
-    assert "array<device uchar*, 2> helperCompoundBlocks [[buffer(80)]]" in metal
+    assert (
+        "device uchar* helperCompoundBlocks_0 [[buffer(80)]], device uchar* helperCompoundBlocks_1 [[buffer(81)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 2> helperCompoundBlocks = {helperCompoundBlocks_0, helperCompoundBlocks_1};"
+        in metal
+    )
     assert "addValue(i, helperCompoundBlocks);" in metal
     assert (
         "void addValue(uint i, array<device uchar*, 2> helperCompoundBlocks)" in metal
@@ -2985,10 +3052,23 @@ def test_codegen_mixed_ssbo_helper_matrix_array_store_uses_indexed_receiver():
     assert "RWByteAddressBuffer helperMatrixBlocks[3] : register(u82);" in hlsl
     assert "uint i = helperMatrixBlocks[2].Load(0);" in hlsl
     assert "writeTransform(i, value);" in hlsl
-    assert "helperMatrixBlocks[2].Store4((16 + i * 64), asuint(value[0]));" in hlsl
-    assert "helperMatrixBlocks[2].Store4((16 + i * 64 + 48), asuint(value[3]));" in hlsl
+    assert (
+        "helperMatrixBlocks[2].Store4((16 + i * 64), asuint(value._m00_m10_m20_m30));"
+        in hlsl
+    )
+    assert (
+        "helperMatrixBlocks[2].Store4((16 + i * 64 + 48), asuint(value._m03_m13_m23_m33));"
+        in hlsl
+    )
 
-    assert "array<device uchar*, 3> helperMatrixBlocks [[buffer(82)]]" in metal
+    assert (
+        "device uchar* helperMatrixBlocks_0 [[buffer(82)]], device uchar* helperMatrixBlocks_1 [[buffer(83)]], device uchar* helperMatrixBlocks_2 [[buffer(84)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> helperMatrixBlocks = {helperMatrixBlocks_0, helperMatrixBlocks_1, helperMatrixBlocks_2};"
+        in metal
+    )
     assert "writeTransform(i, value, helperMatrixBlocks);" in metal
     assert (
         "void writeTransform(uint i, float4x4 value, "
@@ -3034,11 +3114,18 @@ def test_codegen_mixed_ssbo_helper_matrix_array_compound_store_uses_temp():
     assert "helperMatrixCompoundBlocks[1].Load3((16 + i * 48 + 32))" in hlsl
     assert (
         "helperMatrixCompoundBlocks[1].Store3((16 + i * 48 + 32), "
-        "asuint(__crossgl_matrix_store_0[2]));" in hlsl
+        "asuint(__crossgl_matrix_store_0._m02_m12_m22));" in hlsl
     )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
-    assert "array<device uchar*, 2> helperMatrixCompoundBlocks [[buffer(83)]]" in metal
+    assert (
+        "device uchar* helperMatrixCompoundBlocks_0 [[buffer(83)]], device uchar* helperMatrixCompoundBlocks_1 [[buffer(84)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 2> helperMatrixCompoundBlocks = {helperMatrixCompoundBlocks_0, helperMatrixCompoundBlocks_1};"
+        in metal
+    )
     assert "addTransform(i, value, helperMatrixCompoundBlocks);" in metal
     assert (
         "void addTransform(uint i, float3x3 value, "
@@ -3167,7 +3254,14 @@ def test_codegen_mixed_ssbo_nested_helper_read_threads_metal_resource_array():
     assert "return leaf(i);" in hlsl
     assert "nestedReadBlocks[2].Load4((16 + i * 16))" in hlsl
 
-    assert "array<const device uchar*, 3> nestedReadBlocks [[buffer(86)]]" in metal
+    assert (
+        "const device uchar* nestedReadBlocks_0 [[buffer(86)]], const device uchar* nestedReadBlocks_1 [[buffer(87)]], const device uchar* nestedReadBlocks_2 [[buffer(88)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> nestedReadBlocks = {nestedReadBlocks_0, nestedReadBlocks_1, nestedReadBlocks_2};"
+        in metal
+    )
     assert "float4 value = middle(i, nestedReadBlocks);" in metal
     assert (
         "float4 leaf(uint i, array<const device uchar*, 3> nestedReadBlocks)" in metal
@@ -3218,7 +3312,14 @@ def test_codegen_mixed_ssbo_nested_helper_write_threads_metal_resource_array():
     assert "leaf(i, value);" in hlsl
     assert "nestedWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
-    assert "array<device uchar*, 3> nestedWriteBlocks [[buffer(87)]]" in metal
+    assert (
+        "device uchar* nestedWriteBlocks_0 [[buffer(87)]], device uchar* nestedWriteBlocks_1 [[buffer(88)]], device uchar* nestedWriteBlocks_2 [[buffer(89)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> nestedWriteBlocks = {nestedWriteBlocks_0, nestedWriteBlocks_1, nestedWriteBlocks_2};"
+        in metal
+    )
     assert "middle(i, float4(1.0), nestedWriteBlocks);" in metal
     assert (
         "void leaf(uint i, float4 value, array<device uchar*, 3> nestedWriteBlocks)"
@@ -3268,15 +3369,22 @@ def test_codegen_mixed_ssbo_nested_helper_matrix_compound_threads_resource_array
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer nestedMatrixBlocks[3] : register(u88);" in hlsl
-    assert "float2x2 value = float2x2(" in hlsl
+    assert "float2x2 value = transpose(float2x2(" in hlsl
     assert "middle(i, value);" in hlsl
     assert "float2x2 __crossgl_matrix_store_0 = (" in hlsl
     assert (
-        "nestedMatrixBlocks[2].Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0[1]));"
+        "nestedMatrixBlocks[2].Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0._m01_m11));"
         in hlsl
     )
 
-    assert "array<device uchar*, 3> nestedMatrixBlocks [[buffer(88)]]" in metal
+    assert (
+        "device uchar* nestedMatrixBlocks_0 [[buffer(88)]], device uchar* nestedMatrixBlocks_1 [[buffer(89)]], device uchar* nestedMatrixBlocks_2 [[buffer(90)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> nestedMatrixBlocks = {nestedMatrixBlocks_0, nestedMatrixBlocks_1, nestedMatrixBlocks_2};"
+        in metal
+    )
     assert "middle(i, value, nestedMatrixBlocks);" in metal
     assert (
         "void leaf(uint i, float2x2 value, array<device uchar*, 3> nestedMatrixBlocks)"
@@ -3330,7 +3438,14 @@ def test_codegen_mixed_ssbo_explicit_readonly_block_array_parameter_lowers():
     assert "return asfloat(localBlocks[2].Load4((16 + i * 16)));" in hlsl
     assert "ParamMixedBlock localBlocks[]" not in hlsl
 
-    assert "array<const device uchar*, 3> blocks [[buffer(89)]]" in metal
+    assert (
+        "const device uchar* blocks_0 [[buffer(89)]], const device uchar* blocks_1 [[buffer(90)]], const device uchar* blocks_2 [[buffer(91)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};"
+        in metal
+    )
     assert "float4 readFrom(array<const device uchar*, 3> localBlocks, uint i)" in metal
     assert "localBlocks[2] + (16 + i * 16 + 12)" in metal
     assert "ParamMixedBlock localBlocks[]" not in metal
@@ -3376,7 +3491,11 @@ def test_codegen_mixed_ssbo_explicit_writable_block_array_parameter_lowers():
     assert "localBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
     assert "ParamWriteBlock localBlocks[]" not in hlsl
 
-    assert "array<device uchar*, 3> blocks [[buffer(90)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(90)]], device uchar* blocks_1 [[buffer(91)]], device uchar* blocks_2 [[buffer(92)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert (
         "void writeTo(array<device uchar*, 3> localBlocks, uint i, float4 value)"
         in metal
@@ -3426,11 +3545,15 @@ def test_codegen_mixed_ssbo_explicit_matrix_block_array_parameter_compound_store
     )
     assert "float2x2 __crossgl_matrix_store_0 = (" in hlsl
     assert (
-        "localBlocks[2].Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0[1]));"
+        "localBlocks[2].Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0._m01_m11));"
         in hlsl
     )
 
-    assert "array<device uchar*, 3> blocks [[buffer(91)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(91)]], device uchar* blocks_1 [[buffer(92)]], device uchar* blocks_2 [[buffer(93)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert (
         "void addTo(array<device uchar*, 3> localBlocks, uint i, float2x2 value)"
         in metal
@@ -3571,11 +3694,15 @@ def test_codegen_mixed_ssbo_explicit_single_block_parameter_forwards_array_eleme
     assert "leaf(localBlock, i, value);" in hlsl
     assert "float2x2 __crossgl_matrix_store_0 = (" in hlsl
     assert (
-        "localBlock.Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0[1]));"
+        "localBlock.Store2((8 + i * 16 + 8), asuint(__crossgl_matrix_store_0._m01_m11));"
         in hlsl
     )
 
-    assert "array<device uchar*, 3> blocks [[buffer(94)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(94)]], device uchar* blocks_1 [[buffer(95)]], device uchar* blocks_2 [[buffer(96)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert "void leaf(device uchar* localBlock, uint i, float2x2 value)" in metal
     assert "void middle(device uchar* localBlock, uint i, float2x2 value)" in metal
     assert "middle(blocks[2], i, value);" in metal
@@ -3892,7 +4019,18 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
         match=r"GLSL buffer block declaration: UnsupportedResourceIndexBlock\b.*unsupported member flag",
     ):
         MetalCodeGen().generate(parse_crossgl(crossgl))
-    glsl = GLSLCodeGen().generate(shader_ast)
+    # samplers[readULayer(resourceBlock)] need not be the element paired with textures[resourceBlock.uLayer], and
+    # OpenGL binds one sampler state to each texture unit.
+    with pytest.raises(
+        OpenGLLoweringRefused,
+        match=r"texture 'textures' is sampled through a sampler selected at run time",
+    ):
+        GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    paired = crossgl.replace(
+        "samplers[readULayer(resourceBlock)]", "samplers[resourceBlock.uLayer]"
+    )
+    glsl = GLSLCodeGen().generate(parse_crossgl(paired))
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D outputImage;" in glsl
     assert "layout(std430, binding = 101) buffer UnsupportedResourceIndexBlock" in glsl
@@ -4601,9 +4739,9 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "signedValue)));" in glsl
     )
     assert (
-        "int sampleCount = (((textureSamples(colorImage) + "
-        "textureSamples(layerImage)) + textureSamples(countImage)) + "
-        "textureSamples(signedImage));" in glsl
+        "int sampleCount = (((imageSamples(colorImage) + "
+        "imageSamples(layerImage)) + imageSamples(countImage)) + "
+        "imageSamples(signedImage));" in glsl
     )
     assert (
         "vec4 direct = touchImages_glsl_colorImage_msColor_layerImage_msLayers_"
@@ -4626,7 +4764,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "imageStore(counters, readPixel(msImageBlock), readSample(msImageBlock), "
         "uvec4(readCount(msImageBlock)));" in glsl
     )
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
@@ -4686,8 +4824,8 @@ def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
     assert "layout(rgba32ui, binding = 1) uniform uimage2DMSArray rgbaU;" in glsl
     assert "ivec2 intSize = imageSize(rgbaI);" in glsl
     assert "ivec3 uintArraySize = imageSize(rgbaU);" in glsl
-    assert "int samples = (textureSamples(rgbaI) + textureSamples(rgbaU));" in glsl
-    assert "imageSamples(" not in glsl
+    assert "int samples = (imageSamples(rgbaI) + imageSamples(rgbaU));" in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats():
@@ -4790,13 +4928,13 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     assert "ivec2 queryColorSize(image2DMS images[4], int layer)" in glsl
     assert "int queryCounterSamples(uimage2DMSArray images[4], int layer)" in glsl
     assert "return imageSize(images[layer]);" in glsl
-    assert "return textureSamples(images[layer]);" in glsl
+    assert "return imageSamples(images[layer]);" in glsl
     assert "uvec4 count = imageLoad(counterLayers[layer], ivec3(0, 1, 2), 3);" in glsl
     assert (
         "imageStore(counterLayers[layer], ivec3(0, 1, 2), 3, (count + uvec4(1u)));"
         in glsl
     )
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
@@ -4868,7 +5006,8 @@ def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "textureSize(textures[4], 1)" in hlsl
-    assert "int2(textureQueryLevels(textures[2]))" in hlsl
+    # ivec2(int) splats; HLSL has no one-argument int2 constructor for a scalar.
+    assert "((int2)(textureQueryLevels(textures[2])))" in hlsl
     assert "result = leaf(textures, limit);" in hlsl
     assert "result = (result + leaf(textures, limit));" in hlsl
     assert "DoWhileNode(" not in hlsl
@@ -4996,7 +5135,7 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "imageSize(images[3])" in hlsl
-    assert "int2(textureSamples(images[1]))" in hlsl
+    assert "((int2)(textureSamples(images[1])))" in hlsl
     assert "imageSize(afterImage)" in hlsl
     assert "result = leaf(images, limit);" in hlsl
     assert "result = (result + leaf(images, limit));" in hlsl
@@ -5043,9 +5182,9 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert glsl.count("do {") == 4
     assert glsl.count("} while (false);") == 4
     assert "imageSize(images[3])" in glsl
-    assert "ivec2(textureSamples(images[1]))" in glsl
+    assert "ivec2(imageSamples(images[1]))" in glsl
     assert "imageSize(afterImage)" in glsl
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
     assert "DoWhileNode(" not in glsl
     assert "ForInNode(" not in glsl
     assert "image2DMS colorImages[]" not in glsl
@@ -5155,8 +5294,8 @@ def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
         image2D afterImage @rg32f;
 
         vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
-            return imageLoad(images[int(BASE + 2)], pixel)
-                + imageLoad(images[ivec2(1, 3).y], pixel);
+            return imageLoad(images[int(BASE + 2)], pixel).xy
+                + imageLoad(images[ivec2(1, 3).y], pixel).xy;
         }
 
         compute {
@@ -5990,7 +6129,7 @@ def test_codegen_nested_loop_helper_indices_infer_image_size():
                     result = result + imageLoad(
                         images[pickLayer(layers, i, j)],
                         pixel
-                    );
+                    ).xy;
                 }
             }
             return result;
@@ -7305,13 +7444,13 @@ def test_codegen_for_in_shadowed_counter_type_is_scoped_to_loop_body():
     assert "texture2d<int, access::read_write> vectorImage [[texture(1)]]" in metal
     assert "for (int value = 0; value < 1; ++value)" in metal
     assert "scalarImage.write(int4(value), uint2(int2(0, 0)));" in metal
-    assert "vectorImage.write(int4(value, 0, 0), uint2(int2(1, 0)));" in metal
+    assert "vectorImage.write(int4(value, 0, 1), uint2(int2(1, 0)));" in metal
 
     assert "layout(r32i, binding = 0) uniform iimage2D scalarImage;" in glsl
     assert "layout(rg32i, binding = 1) uniform iimage2D vectorImage;" in glsl
     assert "for (int value = 0; value < 1; ++value)" in glsl
     assert "imageStore(scalarImage, ivec2(0, 0), ivec4(value));" in glsl
-    assert "imageStore(vectorImage, ivec2(1, 0), ivec4(value, 0, 0));" in glsl
+    assert "imageStore(vectorImage, ivec2(1, 0), ivec4(value, 0, 1));" in glsl
 
 
 def test_codegen_loop_assigned_outer_vector_preserves_sampled_correlation():
@@ -7877,7 +8016,7 @@ def test_codegen_ternary_index_alias_initializers_infer_size():
 
         fragment {
             vec4 main(vec2 uv, bool outer, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, outer, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, outer, inner, clamp(dynamicLayer, 0, 5)) + texture(afterTexture, uv);
             }
         }
     }
@@ -7962,7 +8101,7 @@ def test_codegen_ternary_index_alias_assignments_infer_size():
 
         compute {
             void main(bool outer, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8058,7 +8197,7 @@ def test_codegen_branch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, inner, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8148,7 +8287,7 @@ def test_codegen_branch_merged_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8248,7 +8387,7 @@ def test_codegen_switch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int mode, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, mode, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, mode, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8347,7 +8486,7 @@ def test_codegen_match_merged_index_aliases_infer_image_size():
 
         compute {
             void main(int mode, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8442,7 +8581,7 @@ def test_codegen_for_loop_carried_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int limit, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, limit, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, limit, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8535,7 +8674,7 @@ def test_codegen_while_do_loop_carried_index_aliases_infer_image_size():
 
         compute {
             void main(int limit, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8639,7 +8778,7 @@ def test_codegen_helper_return_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8736,7 +8875,7 @@ def test_codegen_nested_helper_return_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9114,7 +9253,7 @@ def test_codegen_arithmetic_alias_helper_return_infers_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9381,7 +9520,7 @@ def test_codegen_switch_match_unsized_sampled_arrays_infer_case_literal_size():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 0, 4), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -9455,10 +9594,10 @@ def test_codegen_switch_match_unsized_image_arrays_infer_case_literal_size():
             }
             match mode {
                 0 => {
-                    result = result + imageLoad(images[layer], pixel);
+                    result = result + imageLoad(images[layer], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[2], pixel);
+                    result = result + imageLoad(images[2], pixel).xy;
                 }
             }
             imageStore(images[0], pixel, result);
@@ -9627,10 +9766,10 @@ def test_codegen_switch_match_image_array_returns_infer_case_literal_size():
             }
             match mode {
                 2 => {
-                    return result + imageLoad(images[2], pixel);
+                    return result + imageLoad(images[2], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[0], pixel);
+                    result = result + imageLoad(images[0], pixel).xy;
                 }
             }
             return result;
@@ -9661,8 +9800,8 @@ def test_codegen_switch_match_image_array_returns_infer_case_literal_size():
     assert "case 0: {" in hlsl
     assert "return images[3][pixel];" in hlsl
     assert "result = images[1][pixel];" in hlsl
-    assert "return (result + images[2][pixel]);" in hlsl
-    assert "result = (result + images[0][pixel]);" in hlsl
+    assert "return (result + images[2][pixel].xy);" in hlsl
+    assert "result = (result + images[0][pixel].xy);" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
 
     assert (
@@ -9811,11 +9950,11 @@ def test_codegen_switch_match_loop_transitive_image_arrays_infer_case_only_size(
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for (int i = 0; i < 1; i = i + 1) {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             int j = 0;
             while (j < 1) {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
                 j = j + 1;
             }
             return result;
@@ -9862,8 +10001,8 @@ def test_codegen_switch_match_loop_transitive_image_arrays_infer_case_only_size(
     assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
     assert "for (int i = 0; (i < 1); i = (i + 1))" in hlsl
     assert "while ((j < 1))" in hlsl
-    assert "result = (result + images[3][pixel]);" in hlsl
-    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = (result + images[3][pixel].xy);" in hlsl
+    assert "result = (result + images[2][pixel].xy);" in hlsl
     assert "result = leaf(images, pixel);" in hlsl
     assert "result = (result + leaf(images, pixel));" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
@@ -9971,10 +10110,10 @@ def test_codegen_switch_match_fixed_loop_image_transitive_conflicts_are_rejected
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for (int i = 0; i < 1; i = i + 1) {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             while (false) {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10137,10 +10276,10 @@ def test_codegen_switch_match_for_in_transitive_image_arrays_infer_size():
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
             vec2 result = vec2(0.0);
             for i in 0..1 {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             for j in limit {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10189,8 +10328,8 @@ def test_codegen_switch_match_for_in_transitive_image_arrays_infer_size():
     )
     assert "for (int i = 0; i < 1; ++i)" in hlsl
     assert "for (int j = 0; j < limit; ++j)" in hlsl
-    assert "result = (result + images[3][pixel]);" in hlsl
-    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = (result + images[3][pixel].xy);" in hlsl
+    assert "result = (result + images[2][pixel].xy);" in hlsl
     assert "result = leaf(images, pixel, limit);" in hlsl
     assert "result = (result + leaf(images, pixel, limit));" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
@@ -10298,10 +10437,10 @@ def test_codegen_switch_match_fixed_for_in_image_transitive_conflicts_are_reject
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
             vec2 result = vec2(0.0);
             for i in 0..1 {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             for j in limit {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10426,7 +10565,7 @@ def test_codegen_for_in_image_shadowed_const_restores_after_loop():
         vec2 imageLoop(image2D images[4] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for COUNT in 0..1 {
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             }
             return result;
         }
@@ -10469,7 +10608,7 @@ def test_codegen_for_in_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -10581,14 +10720,14 @@ def test_codegen_for_in_switch_match_image_shadowed_const_restores_after_loop():
             for COUNT in 0..1 {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[COUNT], pixel);
+                        result = result + imageLoad(images[COUNT], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[COUNT], pixel);
+                        result = result + imageLoad(images[COUNT], pixel).xy;
                     }
                     _ => {
                     }
@@ -10641,7 +10780,7 @@ def test_codegen_for_in_switch_match_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -10752,15 +10891,15 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
             vec2 result = vec2(0.0);
             while (false) {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             }
             do {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             } while (false);
             loop {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
                 break;
             }
             return result;
@@ -10813,7 +10952,7 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -10917,14 +11056,14 @@ def test_codegen_do_while_switch_match_image_arrays_infer_size():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11101,14 +11240,14 @@ def test_codegen_do_while_transitive_image_arrays_infer_size():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11336,12 +11475,12 @@ def test_codegen_for_in_do_while_transitive_image_arrays_infer_size():
             vec2 result = vec2(0.0);
             for i in 0..1 {
                 do {
-                    result = result + imageLoad(images[3], pixel);
+                    result = result + imageLoad(images[3], pixel).xy;
                 } while (false);
             }
             do {
                 for j in limit {
-                    result = result + imageLoad(images[1], pixel);
+                    result = result + imageLoad(images[1], pixel).xy;
                 }
             } while (false);
             return result;
@@ -11529,14 +11668,14 @@ def test_codegen_do_while_fixed_transitive_image_conflicts_are_rejected():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11680,7 +11819,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
             vec2 result = vec2(0.0);
             do {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             } while (false);
             return result;
         }
@@ -11748,7 +11887,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -12076,7 +12215,7 @@ def test_codegen_switch_match_shadowed_transitive_image_arrays_infer_size():
                     int COUNT = 0;
                     switch (mode) {
                         case 1:
-                            result = result + imageLoad(images[COUNT], pixel);
+                            result = result + imageLoad(images[COUNT], pixel).xy;
                             result = result + leaf(images, pixel);
                             break;
                         default:
@@ -12183,7 +12322,7 @@ def test_codegen_switch_match_sampled_arrays_ignore_dynamic_negative_indices():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 1, 3), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -12261,18 +12400,18 @@ def test_codegen_switch_match_image_arrays_ignore_dynamic_negative_indices():
             vec2 result = imageLoad(images[layer + 1], pixel);
             switch (mode) {
                 case 0:
-                    result = result + imageLoad(images[-1], pixel);
+                    result = result + imageLoad(images[-1], pixel).xy;
                     break;
                 default:
-                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                    result = result + imageLoad(images[BASE + OFFSET], pixel).xy;
                     break;
             }
             match mode {
                 1 => {
-                    result = result + imageLoad(images[layer - 1], pixel);
+                    result = result + imageLoad(images[layer - 1], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                    result = result + imageLoad(images[BASE + OFFSET], pixel).xy;
                 }
             }
             return result;
@@ -12618,7 +12757,7 @@ def test_codegen_switch_match_fixed_image_arrays_shadowed_case_const_stays_dynam
             match mode {
                 0 => {
                     int COUNT = 0;
-                    result = result + imageLoad(images[COUNT], pixel);
+                    result = result + imageLoad(images[COUNT], pixel).xy;
                 }
                 _ => {
                 }
@@ -13769,10 +13908,10 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)]);" in hlsl
-    assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
+    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)].x);" in hlsl
+    assert "uint uintCast = uint(values[int2(1, 1)].x);" in hlsl
     assert (
-        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)]);" in hlsl
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)].x);" in hlsl
     )
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
@@ -13793,21 +13932,6 @@ def test_codegen_allows_explicit_image_load_result_casts():
 @pytest.mark.parametrize(
     ("crossgl", "message"),
     [
-        (
-            """
-            shader HiddenUnsignedImageLoadFloatResult {
-                uimage2D counters @r32ui;
-                struct VSOutput { vec2 uv; };
-                fragment {
-                    vec4 main(VSOutput input) @ gl_FragColor {
-                        float old = imageLoad(counters, ivec2(0));
-                        return vec4(old);
-                    }
-                }
-            }
-            """,
-            "requires uint result context for r32ui images: expected float",
-        ),
         (
             """
             shader HiddenFloatImageLoadUnsignedResult {
@@ -13887,7 +14011,10 @@ def test_codegen_allows_matching_image_load_result_contexts():
     assert "float scalarFromRg = rgFloat[int2(0, 0)].x;" in hlsl
     assert "float2 rgExact = rgFloat[int2(1, 1)];" in hlsl
     assert "float4 rgbaExact = rgbaFloat[int2(2, 2)];" in hlsl
-    assert "float2 explicitScalarCast = ((float2)(scalarFloat[int2(3, 3)]));" in hlsl
+    assert (
+        "float2 explicitScalarCast = "
+        "float2(float4(scalarFloat[int2(3, 3)], 0.0, 0.0, 1.0).xy);" in hlsl
+    )
     assert "uint2 unsignedExact = rgUnsigned[int2(4, 4)];" in hlsl
 
     assert "float scalarFromRg = rgFloat.read(uint2(int2(0))).x;" in metal
@@ -13895,14 +14022,16 @@ def test_codegen_allows_matching_image_load_result_contexts():
     assert "float4 rgbaExact = rgbaFloat.read(uint2(int2(2)));" in metal
     assert (
         "float2 explicitScalarCast = "
-        "float2(scalarFloat.read(uint2(int2(3))).x);" in metal
+        "float2(scalarFloat.read(uint2(int2(3))).xy);" in metal
     )
     assert "uint2 unsignedExact = rgUnsigned.read(uint2(int2(4))).xy;" in metal
 
     assert "float scalarFromRg = imageLoad(rgFloat, ivec2(0)).x;" in glsl
     assert "vec2 rgExact = imageLoad(rgFloat, ivec2(1)).xy;" in glsl
     assert "vec4 rgbaExact = imageLoad(rgbaFloat, ivec2(2));" in glsl
-    assert "vec2 explicitScalarCast = vec2(imageLoad(scalarFloat, ivec2(3)).x);" in glsl
+    assert (
+        "vec2 explicitScalarCast = vec2(imageLoad(scalarFloat, ivec2(3)).xy);" in glsl
+    )
     assert "uvec2 unsignedExact = imageLoad(rgUnsigned, ivec2(4)).xy;" in glsl
 
 
@@ -13998,6 +14127,7 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
                 imageStore(rgbaTarget, ivec2(6), vec4(3.0));
                 imageStore(rgbaTarget, ivec2(7), 4.0);
                 imageStore(floatTarget, ivec2(8), float2(5.0));
+                imageStore(unsignedTarget, ivec2(9), uvec4(1u));
                 return vec4(0.0);
             }
         }
@@ -14011,38 +14141,39 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 0u);" in hlsl
+    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 1u);" in hlsl
     assert "unsignedTarget[int2(1, 1)] = uint2(2u, 2u);" in hlsl
-    assert "floatTarget[int2(2, 2)] = float2(1.0, 0.0);" in hlsl
+    assert "floatTarget[int2(2, 2)] = float2(1.0, 1.0);" in hlsl
     assert "floatTarget[int2(3, 3)] = float2(2.0, 2.0);" in hlsl
-    assert "floatTarget[int2(4, 4)] = source[int2(5, 5)];" in hlsl
+    assert (
+        "floatTarget[int2(4, 4)] = (float4(source[int2(5, 5)], 0.0, 1.0)).xy;" in hlsl
+    )
     assert "rgbaTarget[int2(6, 6)] = float4(3.0, 3.0, 3.0, 3.0);" in hlsl
     assert "rgbaTarget[int2(7, 7)] = float4(4.0, 4.0, 4.0, 4.0);" in hlsl
     assert "floatTarget[int2(8, 8)] = float2(5.0, 5.0);" in hlsl
+    # A four-component value is a whole texel (GLSL 4.60 section 8.12), of which
+    # an rg32ui image keeps the first two components.
+    assert "unsignedTarget[int2(9, 9)] = (uint4(1u, 1u, 1u, 1u)).xy;" in hlsl
 
-    assert "unsignedTarget.write(uint4(1u, 0u, 0u, 0u), uint2(int2(0)));" in metal
-    assert "unsignedTarget.write(uint4(uint2(2u), 0u, 0u), uint2(int2(1)));" in metal
-    assert "floatTarget.write(float4(1.0, 0.0, 0.0, 0.0), uint2(int2(2)));" in metal
-    assert "floatTarget.write(float4(float2(2.0), 0.0, 0.0), uint2(int2(3)));" in metal
-    assert (
-        "floatTarget.write(float4(source.read(uint2(int2(5))).xy, 0.0, 0.0), "
-        "uint2(int2(4)));" in metal
-    )
+    assert "unsignedTarget.write(uint4(1u), uint2(int2(0)));" in metal
+    assert "unsignedTarget.write(uint4(uint2(2u), 0u, 1u), uint2(int2(1)));" in metal
+    assert "floatTarget.write(float4(1.0), uint2(int2(2)));" in metal
+    assert "floatTarget.write(float4(float2(2.0), 0.0, 1.0), uint2(int2(3)));" in metal
+    assert "floatTarget.write(source.read(uint2(int2(5))), uint2(int2(4)));" in metal
     assert "rgbaTarget.write(float4(3.0), uint2(int2(6)));" in metal
     assert "rgbaTarget.write(float4(4.0), uint2(int2(7)));" in metal
-    assert "floatTarget.write(float4(float2(5.0), 0.0, 0.0), uint2(int2(8)));" in metal
+    assert "floatTarget.write(float4(float2(5.0), 0.0, 1.0), uint2(int2(8)));" in metal
+    assert "unsignedTarget.write(uint4(1u), uint2(int2(9)));" in metal
 
-    assert "imageStore(unsignedTarget, ivec2(0), uvec4(1u, 0u, 0u, 0u));" in glsl
-    assert "imageStore(unsignedTarget, ivec2(1), uvec4(uvec2(2u), 0u, 0u));" in glsl
-    assert "imageStore(floatTarget, ivec2(2), vec4(1.0, 0.0, 0.0, 0.0));" in glsl
-    assert "imageStore(floatTarget, ivec2(3), vec4(vec2(2.0), 0.0, 0.0));" in glsl
-    assert (
-        "imageStore(floatTarget, ivec2(4), "
-        "vec4(imageLoad(source, ivec2(5)).xy, 0.0, 0.0));" in glsl
-    )
+    assert "imageStore(unsignedTarget, ivec2(0), uvec4(1u));" in glsl
+    assert "imageStore(unsignedTarget, ivec2(1), uvec4(uvec2(2u), 0u, 1u));" in glsl
+    assert "imageStore(floatTarget, ivec2(2), vec4(1.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(3), vec4(vec2(2.0), 0.0, 1.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(4), imageLoad(source, ivec2(5)));" in glsl
     assert "imageStore(rgbaTarget, ivec2(6), vec4(3.0));" in glsl
     assert "imageStore(rgbaTarget, ivec2(7), vec4(4.0));" in glsl
-    assert "imageStore(floatTarget, ivec2(8), vec4(vec2(5.0), 0.0, 0.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(8), vec4(vec2(5.0), 0.0, 1.0));" in glsl
+    assert "imageStore(unsignedTarget, ivec2(9), uvec4(1u));" in glsl
 
 
 @pytest.mark.parametrize(
@@ -14178,21 +14309,6 @@ def test_codegen_rejects_mismatched_multicomponent_image_store_values(crossgl, m
             }
             """,
             "requires scalar or 2-component value for rg32f images",
-        ),
-        (
-            """
-            shader FourComponentStoredToRgImage {
-                uimage2D target @rg32ui;
-                struct VSOutput { vec2 uv; };
-                fragment {
-                    vec4 main(VSOutput input) @ gl_FragColor {
-                        imageStore(target, ivec2(0), uvec4(1u));
-                        return vec4(0.0);
-                    }
-                }
-            }
-            """,
-            "requires scalar or 2-component value for rg32ui images",
         ),
         (
             """
@@ -14816,7 +14932,7 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     )
     assert (
         "float4 arrayCall = shadowCubeArray.gather_compare(compareSampler, "
-        "(readCubeLayer(cubeBlock)).xyz, uint((readCubeLayer(cubeBlock)).w), "
+        "(readCubeLayer(cubeBlock)).xyz, uint(rint(clamp(float((readCubeLayer(cubeBlock)).w), 0.0, 2047.0))), "
         "readDepth(cubeBlock));" in metal
     )
     assert (
@@ -15053,20 +15169,19 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
         in glsl
     )
     assert (
-        "imageStore(rgFloat, imageBlock.pixel, vec4(imageBlock.scalarValue, "
-        "0.0, 0.0, 0.0));" in glsl
+        "imageStore(rgFloat, imageBlock.pixel, vec4(imageBlock.scalarValue));" in glsl
     )
     assert (
         "imageStore(rgFloat, readPixel(imageBlock), "
-        "vec4(readRg(imageBlock), 0.0, 0.0));" in glsl
+        "vec4(readRg(imageBlock), 0.0, 1.0));" in glsl
     )
     assert (
         "imageStore(unsignedLayers, imageBlock.pixelLayer, "
-        "uvec4(imageBlock.unsignedValue, 0u, 0u, 0u));" in glsl
+        "uvec4(imageBlock.unsignedValue));" in glsl
     )
     assert (
         "imageStore(unsignedLayers, readPixelLayer(imageBlock), "
-        "uvec4(readUnsignedRg(imageBlock), 0u, 0u));" in glsl
+        "uvec4(readUnsignedRg(imageBlock), 0u, 1u));" in glsl
     )
 
 
@@ -15102,7 +15217,14 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_named_constant_size():
 
     assert "constant int BASE = 1;" in metal
     assert "constant int LAYER = BASE + 2;" in metal
-    assert "array<device uchar*, 4> constMixed [[buffer(76)]]" in metal
+    assert (
+        "device uchar* constMixed_0 [[buffer(76)]], device uchar* constMixed_1 [[buffer(77)]], device uchar* constMixed_2 [[buffer(78)]], device uchar* constMixed_3 [[buffer(79)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 4> constMixed = {constMixed_0, constMixed_1, constMixed_2, constMixed_3};"
+        in metal
+    )
     assert "constMixed[LAYER] + (16 + i * 16)" in metal
 
     assert "const int LAYER = (BASE + 2);" in glsl
@@ -15223,13 +15345,13 @@ def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offs
     assert "uint count = fixedPlain.Load(0);" in hlsl
     assert "float3 axis = asfloat(fixedPlain.Load3(16));" in hlsl
     assert (
-        "float2x2 transform = float2x2(asfloat(fixedPlain.Load2(32)), "
-        "asfloat(fixedPlain.Load2(40)));" in hlsl
+        "float2x2 transform = transpose(float2x2(asfloat(fixedPlain.Load2(32)), "
+        "asfloat(fixedPlain.Load2(40))));" in hlsl
     )
     assert "fixedPlain.Store(0, (count + 1u));" in hlsl
     assert "fixedPlain.Store3(16, asuint(axis));" in hlsl
-    assert "fixedPlain.Store2(32, asuint(transform[0]));" in hlsl
-    assert "fixedPlain.Store2(40, asuint(transform[1]));" in hlsl
+    assert "fixedPlain.Store2(32, asuint(transform._m00_m10));" in hlsl
+    assert "fixedPlain.Store2(40, asuint(transform._m01_m11));" in hlsl
     assert "unsupported HLSL GLSL buffer block" not in hlsl
 
     assert "device uchar* fixedPlain [[buffer(116)]]" in metal
@@ -15296,13 +15418,13 @@ def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets():
     assert "RWByteAddressBuffer std140Block : register(u118);" in hlsl
     assert "uint i = std140Block.Load(0);" in hlsl
     assert (
-        "float2x2 basis = float2x2(asfloat(std140Block.Load2(16)), "
-        "asfloat(std140Block.Load2(32)));" in hlsl
+        "float2x2 basis = transpose(float2x2(asfloat(std140Block.Load2(16)), "
+        "asfloat(std140Block.Load2(32))));" in hlsl
     )
     assert "float weight = asfloat(std140Block.Load(80));" in hlsl
     assert "float value = asfloat(std140Block.Load((96 + i * 16)));" in hlsl
-    assert "std140Block.Store2(16, asuint(basis[0]));" in hlsl
-    assert "std140Block.Store2(32, asuint(basis[1]));" in hlsl
+    assert "std140Block.Store2(16, asuint(basis._m00_m10));" in hlsl
+    assert "std140Block.Store2(32, asuint(basis._m01_m11));" in hlsl
     assert "std140Block.Store(64, asuint(weight));" in hlsl
     assert "std140Block.Store((96 + i * 16), asuint(value));" in hlsl
     assert "unsupported HLSL GLSL buffer block" not in hlsl
@@ -15936,14 +16058,14 @@ def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():
     assert "uint count = fixedOnly.Load(0);" in hlsl
     assert "float3 axis = asfloat(fixedOnly.Load3(16));" in hlsl
     assert (
-        "float2x2 transform = float2x2(asfloat(fixedOnly.Load2(32)), "
-        "asfloat(fixedOnly.Load2(40)));" in hlsl
+        "float2x2 transform = transpose(float2x2(asfloat(fixedOnly.Load2(32)), "
+        "asfloat(fixedOnly.Load2(40))));" in hlsl
     )
     assert "float weight = asfloat(fixedOnly.Load(56));" in hlsl
     assert "fixedOnly.Store(0, (count + 1u));" in hlsl
     assert "fixedOnly.Store3(16, asuint(axis));" in hlsl
-    assert "fixedOnly.Store2(32, asuint(transform[0]));" in hlsl
-    assert "fixedOnly.Store2(40, asuint(transform[1]));" in hlsl
+    assert "fixedOnly.Store2(32, asuint(transform._m00_m10));" in hlsl
+    assert "fixedOnly.Store2(40, asuint(transform._m01_m11));" in hlsl
     assert "fixedOnly.Store(52, asuint(weight));" in hlsl
     assert "unsupported HLSL GLSL buffer block" not in hlsl
 
@@ -16458,8 +16580,8 @@ def test_codegen_mixed_ssbo_hlsl_mat2_metadata_before_runtime_array():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWByteAddressBuffer matrix2Block : register(u12);" in hlsl
     assert (
-        "float2x2 t = float2x2(asfloat(matrix2Block.Load2(0)), "
-        "asfloat(matrix2Block.Load2(8)));" in hlsl
+        "float2x2 t = transpose(float2x2(asfloat(matrix2Block.Load2(0)), "
+        "asfloat(matrix2Block.Load2(8))));" in hlsl
     )
     assert "float v = asfloat(matrix2Block.Load(16));" in hlsl
 
@@ -16484,8 +16606,8 @@ def test_codegen_mixed_ssbo_hlsl_mat2_metadata_store_uses_column_stores():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWByteAddressBuffer matrix2Block : register(u12);" in hlsl
-    assert "matrix2Block.Store2(0, asuint(t[0]));" in hlsl
-    assert "matrix2Block.Store2(8, asuint(t[1]));" in hlsl
+    assert "matrix2Block.Store2(0, asuint(t._m00_m10));" in hlsl
+    assert "matrix2Block.Store2(8, asuint(t._m01_m11));" in hlsl
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
 
@@ -16513,8 +16635,8 @@ def test_codegen_mixed_ssbo_hlsl_mat3_metadata_aligns_after_scalar():
     assert "RWByteAddressBuffer matrix3Block : register(u14);" in hlsl
     assert "float s = asfloat(matrix3Block.Load(0));" in hlsl
     assert (
-        "float3x3 t = float3x3(asfloat(matrix3Block.Load3(16)), "
-        "asfloat(matrix3Block.Load3(32)), asfloat(matrix3Block.Load3(48)));" in hlsl
+        "float3x3 t = transpose(float3x3(asfloat(matrix3Block.Load3(16)), "
+        "asfloat(matrix3Block.Load3(32)), asfloat(matrix3Block.Load3(48))));" in hlsl
     )
     assert "float v = asfloat(matrix3Block.Load(64));" in hlsl
 
@@ -16540,9 +16662,9 @@ def test_codegen_mixed_ssbo_hlsl_mat3_metadata_store_uses_column_stores():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWByteAddressBuffer matrix3Block : register(u14);" in hlsl
-    assert "matrix3Block.Store3(16, asuint(t[0]));" in hlsl
-    assert "matrix3Block.Store3(32, asuint(t[1]));" in hlsl
-    assert "matrix3Block.Store3(48, asuint(t[2]));" in hlsl
+    assert "matrix3Block.Store3(16, asuint(t._m00_m10_m20));" in hlsl
+    assert "matrix3Block.Store3(32, asuint(t._m01_m11_m21));" in hlsl
+    assert "matrix3Block.Store3(48, asuint(t._m02_m12_m22));" in hlsl
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
 
@@ -16602,11 +16724,16 @@ def test_codegen_mixed_ssbo_hlsl_non_square_matrix_metadata_layout(
     )
     assert f"RWByteAddressBuffer nonSquareBlock : register(u{binding});" in hlsl
     assert "float s = asfloat(nonSquareBlock.Load(0));" in hlsl
-    assert f"{hlsl_type} t = {hlsl_type}({column_loads});" in hlsl
+    assert (
+        f"{hlsl_type} t = {hlsl_matrix_from_columns(hlsl_type, column_loads)};" in hlsl
+    )
     assert f"float v = asfloat(nonSquareBlock.Load({data_offset}));" in hlsl
     assert column_offsets[0] == matrix_offset
     for column, offset in enumerate(column_offsets):
-        assert f"nonSquareBlock.{store_method}({offset}, asuint(t[{column}]));" in hlsl
+        assert (
+            f"nonSquareBlock.{store_method}({offset}, asuint({hlsl_matrix_column('t', column, components)}));"
+            in hlsl
+        )
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
 
@@ -16634,9 +16761,9 @@ def test_codegen_mixed_ssbo_hlsl_mat4_metadata_aligns_after_scalar():
     assert "RWByteAddressBuffer matrix4Block : register(u13);" in hlsl
     assert "float s = asfloat(matrix4Block.Load(0));" in hlsl
     assert (
-        "float4x4 t = float4x4(asfloat(matrix4Block.Load4(16)), "
+        "float4x4 t = transpose(float4x4(asfloat(matrix4Block.Load4(16)), "
         "asfloat(matrix4Block.Load4(32)), asfloat(matrix4Block.Load4(48)), "
-        "asfloat(matrix4Block.Load4(64)));" in hlsl
+        "asfloat(matrix4Block.Load4(64))));" in hlsl
     )
     assert "float v = asfloat(matrix4Block.Load(80));" in hlsl
 
@@ -16662,10 +16789,10 @@ def test_codegen_mixed_ssbo_hlsl_mat4_metadata_store_uses_column_stores():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWByteAddressBuffer matrix4Block : register(u13);" in hlsl
-    assert "matrix4Block.Store4(16, asuint(t[0]));" in hlsl
-    assert "matrix4Block.Store4(32, asuint(t[1]));" in hlsl
-    assert "matrix4Block.Store4(48, asuint(t[2]));" in hlsl
-    assert "matrix4Block.Store4(64, asuint(t[3]));" in hlsl
+    assert "matrix4Block.Store4(16, asuint(t._m00_m10_m20_m30));" in hlsl
+    assert "matrix4Block.Store4(32, asuint(t._m01_m11_m21_m31));" in hlsl
+    assert "matrix4Block.Store4(48, asuint(t._m02_m12_m22_m32));" in hlsl
+    assert "matrix4Block.Store4(64, asuint(t._m03_m13_m23_m33));" in hlsl
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
 
@@ -16726,8 +16853,14 @@ def test_codegen_mixed_ssbo_hlsl_readonly_matrix_arrays_use_column_loads(
     )
     assert f"ByteAddressBuffer readMatrixArrayBlock : register(t{binding});" in hlsl
     assert "RWByteAddressBuffer readMatrixArrayBlock" not in hlsl
-    assert f"{hlsl_type} first = {hlsl_type}({first_loads});" in hlsl
-    assert f"{hlsl_type} selected = {hlsl_type}({dynamic_loads});" in hlsl
+    assert (
+        f"{hlsl_type} first = {hlsl_matrix_from_columns(hlsl_type, first_loads)};"
+        in hlsl
+    )
+    assert (
+        f"{hlsl_type} selected = {hlsl_matrix_from_columns(hlsl_type, dynamic_loads)};"
+        in hlsl
+    )
     assert f"float tail = asfloat(readMatrixArrayBlock.Load({data_offset}));" in hlsl
 
 
@@ -16833,25 +16966,34 @@ def test_codegen_mixed_ssbo_hlsl_writable_matrix_arrays_use_column_stores():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWByteAddressBuffer matrixArrayBlock : register(u23);" in hlsl
     assert (
-        "float4x4 first = float4x4(asfloat(matrixArrayBlock.Load4(0)), "
+        "float4x4 first = transpose(float4x4(asfloat(matrixArrayBlock.Load4(0)), "
         "asfloat(matrixArrayBlock.Load4(16)), asfloat(matrixArrayBlock.Load4(32)), "
-        "asfloat(matrixArrayBlock.Load4(48)));" in hlsl
+        "asfloat(matrixArrayBlock.Load4(48))));" in hlsl
     )
     assert (
-        "float4x4 selected = float4x4("
+        "float4x4 selected = transpose(float4x4("
         "asfloat(matrixArrayBlock.Load4((i * 64))), "
         "asfloat(matrixArrayBlock.Load4((i * 64 + 16))), "
         "asfloat(matrixArrayBlock.Load4((i * 64 + 32))), "
-        "asfloat(matrixArrayBlock.Load4((i * 64 + 48))));" in hlsl
+        "asfloat(matrixArrayBlock.Load4((i * 64 + 48)))));" in hlsl
     )
-    assert "matrixArrayBlock.Store4(0, asuint(selected[0]));" in hlsl
-    assert "matrixArrayBlock.Store4(16, asuint(selected[1]));" in hlsl
-    assert "matrixArrayBlock.Store4(32, asuint(selected[2]));" in hlsl
-    assert "matrixArrayBlock.Store4(48, asuint(selected[3]));" in hlsl
-    assert "matrixArrayBlock.Store4((i * 64), asuint(first[0]));" in hlsl
-    assert "matrixArrayBlock.Store4((i * 64 + 16), asuint(first[1]));" in hlsl
-    assert "matrixArrayBlock.Store4((i * 64 + 32), asuint(first[2]));" in hlsl
-    assert "matrixArrayBlock.Store4((i * 64 + 48), asuint(first[3]));" in hlsl
+    assert "matrixArrayBlock.Store4(0, asuint(selected._m00_m10_m20_m30));" in hlsl
+    assert "matrixArrayBlock.Store4(16, asuint(selected._m01_m11_m21_m31));" in hlsl
+    assert "matrixArrayBlock.Store4(32, asuint(selected._m02_m12_m22_m32));" in hlsl
+    assert "matrixArrayBlock.Store4(48, asuint(selected._m03_m13_m23_m33));" in hlsl
+    assert "matrixArrayBlock.Store4((i * 64), asuint(first._m00_m10_m20_m30));" in hlsl
+    assert (
+        "matrixArrayBlock.Store4((i * 64 + 16), asuint(first._m01_m11_m21_m31));"
+        in hlsl
+    )
+    assert (
+        "matrixArrayBlock.Store4((i * 64 + 32), asuint(first._m02_m12_m22_m32));"
+        in hlsl
+    )
+    assert (
+        "matrixArrayBlock.Store4((i * 64 + 48), asuint(first._m03_m13_m23_m33));"
+        in hlsl
+    )
     assert "float tail = asfloat(matrixArrayBlock.Load(128));" in hlsl
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
@@ -16920,17 +17062,23 @@ def test_codegen_mixed_ssbo_hlsl_writable_non_square_matrix_arrays_use_column_st
     assert (
         f"RWByteAddressBuffer nonSquareMatrixArrayBlock : register(u{binding});" in hlsl
     )
-    assert f"{hlsl_type} first = {hlsl_type}({first_loads});" in hlsl
-    assert f"{hlsl_type} selected = {hlsl_type}({dynamic_loads});" in hlsl
+    assert (
+        f"{hlsl_type} first = {hlsl_matrix_from_columns(hlsl_type, first_loads)};"
+        in hlsl
+    )
+    assert (
+        f"{hlsl_type} selected = {hlsl_matrix_from_columns(hlsl_type, dynamic_loads)};"
+        in hlsl
+    )
     for column, offset in enumerate(column_offsets):
         assert (
             f"nonSquareMatrixArrayBlock.{store_method}({offset}, "
-            f"asuint(selected[{column}]));" in hlsl
+            f"asuint({hlsl_matrix_column('selected', column, components)}));" in hlsl
         )
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"nonSquareMatrixArrayBlock.{store_method}({offset}, "
-            f"asuint(first[{column}]));" in hlsl
+            f"asuint({hlsl_matrix_column('first', column, components)}));" in hlsl
         )
     assert (
         f"float tail = asfloat(nonSquareMatrixArrayBlock.Load({data_offset}));" in hlsl
@@ -16961,14 +17109,26 @@ def test_codegen_mixed_ssbo_hlsl_matrix_metadata_compound_store_uses_temp():
     assert "RWByteAddressBuffer matrixBlock : register(u32);" in hlsl
     assert (
         "float4x4 __crossgl_matrix_store_0 = "
-        "(float4x4(asfloat(matrixBlock.Load4(16)), "
+        "(transpose(float4x4(asfloat(matrixBlock.Load4(16)), "
         "asfloat(matrixBlock.Load4(32)), asfloat(matrixBlock.Load4(48)), "
-        "asfloat(matrixBlock.Load4(64))) + value);" in hlsl
+        "asfloat(matrixBlock.Load4(64)))) + value);" in hlsl
     )
-    assert "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0[0]));" in hlsl
-    assert "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0[1]));" in hlsl
-    assert "matrixBlock.Store4(48, asuint(__crossgl_matrix_store_0[2]));" in hlsl
-    assert "matrixBlock.Store4(64, asuint(__crossgl_matrix_store_0[3]));" in hlsl
+    assert (
+        "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0._m00_m10_m20_m30));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0._m01_m11_m21_m31));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(48, asuint(__crossgl_matrix_store_0._m02_m12_m22_m32));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(64, asuint(__crossgl_matrix_store_0._m03_m13_m23_m33));"
+        in hlsl
+    )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
 
@@ -17005,14 +17165,26 @@ def test_codegen_mixed_ssbo_hlsl_matrix_compound_supported_ops_use_temp(
     assert "RWByteAddressBuffer matrixBlock : register(u33);" in hlsl
     assert (
         "float4x4 __crossgl_matrix_store_0 = "
-        f"(float4x4(asfloat(matrixBlock.Load4(16)), "
+        f"(transpose(float4x4(asfloat(matrixBlock.Load4(16)), "
         f"asfloat(matrixBlock.Load4(32)), asfloat(matrixBlock.Load4(48)), "
-        f"asfloat(matrixBlock.Load4(64))) {binary_op} {rhs_expr});" in hlsl
+        f"asfloat(matrixBlock.Load4(64)))) {binary_op} {rhs_expr});" in hlsl
     )
-    assert "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0[0]));" in hlsl
-    assert "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0[1]));" in hlsl
-    assert "matrixBlock.Store4(48, asuint(__crossgl_matrix_store_0[2]));" in hlsl
-    assert "matrixBlock.Store4(64, asuint(__crossgl_matrix_store_0[3]));" in hlsl
+    assert (
+        "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0._m00_m10_m20_m30));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0._m01_m11_m21_m31));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(48, asuint(__crossgl_matrix_store_0._m02_m12_m22_m32));"
+        in hlsl
+    )
+    assert (
+        "matrixBlock.Store4(64, asuint(__crossgl_matrix_store_0._m03_m13_m23_m33));"
+        in hlsl
+    )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
 
@@ -17064,15 +17236,27 @@ def test_codegen_mixed_ssbo_hlsl_matrix_array_compound_store_uses_temp():
     assert "RWByteAddressBuffer matrixArrayBlock : register(u24);" in hlsl
     assert (
         "float4x4 __crossgl_matrix_store_0 = "
-        "(float4x4(asfloat(matrixArrayBlock.Load4(64)), "
+        "(transpose(float4x4(asfloat(matrixArrayBlock.Load4(64)), "
         "asfloat(matrixArrayBlock.Load4(80)), "
         "asfloat(matrixArrayBlock.Load4(96)), "
-        "asfloat(matrixArrayBlock.Load4(112))) + value);" in hlsl
+        "asfloat(matrixArrayBlock.Load4(112)))) + value);" in hlsl
     )
-    assert "matrixArrayBlock.Store4(64, asuint(__crossgl_matrix_store_0[0]));" in hlsl
-    assert "matrixArrayBlock.Store4(80, asuint(__crossgl_matrix_store_0[1]));" in hlsl
-    assert "matrixArrayBlock.Store4(96, asuint(__crossgl_matrix_store_0[2]));" in hlsl
-    assert "matrixArrayBlock.Store4(112, asuint(__crossgl_matrix_store_0[3]));" in hlsl
+    assert (
+        "matrixArrayBlock.Store4(64, asuint(__crossgl_matrix_store_0._m00_m10_m20_m30));"
+        in hlsl
+    )
+    assert (
+        "matrixArrayBlock.Store4(80, asuint(__crossgl_matrix_store_0._m01_m11_m21_m31));"
+        in hlsl
+    )
+    assert (
+        "matrixArrayBlock.Store4(96, asuint(__crossgl_matrix_store_0._m02_m12_m22_m32));"
+        in hlsl
+    )
+    assert (
+        "matrixArrayBlock.Store4(112, asuint(__crossgl_matrix_store_0._m03_m13_m23_m33));"
+        in hlsl
+    )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
 
@@ -17141,8 +17325,14 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_arrays_use_column_loads(
     assert f"ByteAddressBuffer runtimeMatrixBlock : register(t{binding});" in hlsl
     assert "RWByteAddressBuffer runtimeMatrixBlock" not in hlsl
     assert "float s = asfloat(runtimeMatrixBlock.Load(0));" in hlsl
-    assert f"{hlsl_type} first = {hlsl_type}({first_loads});" in hlsl
-    assert f"{hlsl_type} selected = {hlsl_type}({dynamic_loads});" in hlsl
+    assert (
+        f"{hlsl_type} first = {hlsl_matrix_from_columns(hlsl_type, first_loads)};"
+        in hlsl
+    )
+    assert (
+        f"{hlsl_type} selected = {hlsl_matrix_from_columns(hlsl_type, dynamic_loads)};"
+        in hlsl
+    )
 
 
 @pytest.mark.parametrize(
@@ -17210,17 +17400,23 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores(
     )
 
     assert f"RWByteAddressBuffer runtimeMatrixBlock : register(u{binding});" in hlsl
-    assert f"{hlsl_type} first = {hlsl_type}({first_loads});" in hlsl
-    assert f"{hlsl_type} selected = {hlsl_type}({dynamic_loads});" in hlsl
+    assert (
+        f"{hlsl_type} first = {hlsl_matrix_from_columns(hlsl_type, first_loads)};"
+        in hlsl
+    )
+    assert (
+        f"{hlsl_type} selected = {hlsl_matrix_from_columns(hlsl_type, dynamic_loads)};"
+        in hlsl
+    )
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(selected[{column}]));" in hlsl
+            f"asuint({hlsl_matrix_column('selected', column, components)}));" in hlsl
         )
     for column, offset in enumerate(column_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(first[{column}]));" in hlsl
+            f"asuint({hlsl_matrix_column('first', column, components)}));" in hlsl
         )
     assert "unsupported HLSL GLSL buffer block runtime matrix array store" not in hlsl
 
@@ -17286,12 +17482,13 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_compound_store_uses_temp(
     assert f"RWByteAddressBuffer runtimeMatrixBlock : register(u{binding});" in hlsl
     assert (
         f"{hlsl_type} __crossgl_matrix_store_0 = "
-        f"({hlsl_type}({dynamic_loads}) + selected);" in hlsl
+        f"({hlsl_matrix_from_columns(hlsl_type, dynamic_loads)} + selected);" in hlsl
     )
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(__crossgl_matrix_store_0[{column}]));" in hlsl
+            f"asuint({hlsl_matrix_column('__crossgl_matrix_store_0', column, components)}));"
+            in hlsl
         )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 

@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 98,
-        "endOffset": 2724,
+        "endLine": 96,
+        "endOffset": 2648,
         "file": "crosstl-out/vulkan/alpha_stitch.spvasm",
-        "length": 2724,
+        "length": 2648,
         "line": 1,
         "offset": 0
       },

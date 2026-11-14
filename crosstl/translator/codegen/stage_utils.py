@@ -1,18 +1,27 @@
 """Utilities for normalizing and matching shader stage qualifiers."""
 
-from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from ..host_workgroup_size import (  # noqa: F401
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
+from ..refusals import TargetRefusal
+from ..stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
 
 
 def stage_matches(target_stage, stage):
     """Return whether a stage should be emitted for the target stage."""
-    target_stage = normalize_stage_name(target_stage)
+    target_stage = requested_stage_name(target_stage)
     stage = normalize_stage_name(stage)
     return target_stage is None or stage == target_stage
 
 
 def should_emit_qualified_function(target_stage, qualifier):
     """Return whether a qualified function belongs in the target output."""
-    target_stage = normalize_stage_name(target_stage)
+    target_stage = requested_stage_name(target_stage)
     qualifier = normalize_stage_name(qualifier)
     return not (
         target_stage is not None
@@ -275,7 +284,7 @@ def deduplicate_named_declarations(nodes, kind):
             continue
 
         if existing != signature:
-            raise ValueError(f"Conflicting {kind} declaration for '{name}'")
+            raise TargetRefusal(f"Conflicting {kind} declaration for '{name}'")
 
     return declarations
 
@@ -356,7 +365,21 @@ def order_functions_by_dependencies(
     function_call_name,
     function_call_node_type,
     include_overloads=False,
+    keep_overload_family_order=False,
+    extra_callee_names=None,
 ):
+    """Order ``functions`` so that callees precede their callers.
+
+    With ``include_overloads`` a call depends on every overload of its callee's
+    name; otherwise only on a callee whose name is unique. With
+    ``keep_overload_family_order`` a call from one overload to another of the
+    same name adds no dependency, so the overloads of one name keep their
+    source order relative to each other. Without resolving the call, a
+    dependency on the whole family could otherwise move an overload ahead of
+    the one it calls. ``extra_callee_names(func)`` names further callees of
+    ``func`` that its call nodes do not spell, such as the specializations a
+    generic call resolves to.
+    """
     ordered = []
     visiting = set()
     visited = set()
@@ -390,6 +413,15 @@ def order_functions_by_dependencies(
 
             dependencies = functions_by_name.get(function_call_name(node), ())
             for dependency in dependencies:
+                if dependency is func:
+                    continue
+                if keep_overload_family_order and dependency.name == getattr(
+                    func, "name", None
+                ):
+                    continue
+                visit(dependency)
+        for name in extra_callee_names(func) if extra_callee_names else ():
+            for dependency in functions_by_name.get(name, ()):
                 if dependency is not func:
                     visit(dependency)
 
@@ -411,6 +443,7 @@ def compute_local_size(execution_config=None):
         if isinstance(value, (list, tuple)) and len(value) >= 3:
             return tuple(compute_local_size_value(item) for item in value[:3])
 
+    require_static_workgroup_size(config)
     return (
         compute_local_size_value(config.get("local_size_x", 1)),
         compute_local_size_value(config.get("local_size_y", 1)),
@@ -422,3 +455,24 @@ def compute_local_size_value(value):
     if hasattr(value, "value"):
         return str(value.value)
     return str(value)
+
+
+EARLY_FRAGMENT_TEST_NAMES = frozenset({"early_fragment_tests", "earlydepthstencil"})
+
+
+def requests_early_fragment_tests(function, stage) -> bool:
+    """Whether a fragment entry asks for depth and stencil tests before it runs.
+
+    CrossGL spells the request as the stage layout ``layout(early_fragment_tests) in;`` (GLSL 4.60 section 4.4.1.3),
+    which the MSL ``[[early_fragment_tests]]`` and HLSL ``[earlydepthstencil]`` imports produce; a function attribute
+    of either name counts as well.
+    """
+    for attribute in getattr(function, "attributes", None) or []:
+        if normalize_layout_entry_name(getattr(attribute, "name", None)) in (
+            EARLY_FRAGMENT_TEST_NAMES
+        ):
+            return True
+    return any(
+        stage_layout_entry(stage, name, "in") is not None
+        for name in EARLY_FRAGMENT_TEST_NAMES
+    )

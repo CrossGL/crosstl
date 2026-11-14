@@ -9,9 +9,23 @@ see the same tree.
 from __future__ import annotations
 
 import copy
+from typing import NamedTuple
 
 from .. import ast as A
 from .hub_types import call_name, is_pure_callee
+
+
+class StageSlot(NamedTuple):
+    """The slot of one stage in a :class:`~crosstl.translator.ast.StageMap`.
+
+    A CrossGL module may declare several blocks of one stage kind (two ``vertex`` blocks, each with its own entry
+    point), and the stage map keeps every one under the same key. The key alone names only the first, so a slot of
+    a stage map carries the block's position among the blocks of its kind too.
+    """
+
+    stage: object
+    index: int
+
 
 # Attributes that hold types, metadata or back links rather than structural children.
 SKIPPED_FIELDS = frozenset(
@@ -42,35 +56,67 @@ SKIPPED_FIELDS = frozenset(
     }
 )
 
+# The field kinds that hold replaceable children: tuples, sets and plain values hold none.
+_SLOT_KINDS = frozenset({A.FIELD_NODE, A.FIELD_LIST, A.FIELD_STAGES, A.FIELD_DICT})
+
 
 def child_slots(node):
     """Yield ``(field, key)`` once per distinct structural child; ``key`` is ``None`` for a direct attribute."""
     seen = set()
+    kinds = A.FIELD_KINDS
+    node_type = A.ASTNode
     for field, value in list(vars(node).items()):
-        if field in SKIPPED_FIELDS or id(value) in seen:
+        if field in SKIPPED_FIELDS:
             continue
-        if isinstance(value, A.ASTNode):
-            seen.add(id(value))
+        kind = kinds.get(type(value))
+        if kind is None:
+            kind = A.field_kind(value)
+        if kind not in _SLOT_KINDS:
+            continue
+        value_id = id(value)
+        if value_id in seen:
+            continue
+        seen.add(value_id)
+        if kind == A.FIELD_NODE:
             yield field, None
-        elif isinstance(value, list):
-            seen.add(id(value))
+        elif kind == A.FIELD_LIST:
             for index, item in enumerate(value):
-                if isinstance(item, A.ASTNode):
+                if isinstance(item, node_type):
                     yield field, index
-        elif isinstance(value, dict):
-            seen.add(id(value))
+        elif kind == A.FIELD_STAGES:
+            for stage in list(value.keys()):
+                for index, item in enumerate(value.all_for_stage(stage)):
+                    if isinstance(item, node_type):
+                        yield field, StageSlot(stage, index)
+        else:
             for key, item in list(value.items()):
-                if isinstance(item, A.ASTNode):
+                if isinstance(item, node_type):
                     yield field, key
 
 
 def get_child(node, field, key):
     value = getattr(node, field)
+    if isinstance(key, StageSlot):
+        return value.all_for_stage(key.stage)[key.index]
     return value if key is None else value[key]
+
+
+def field_slots(node, field):
+    """``(field, key)`` for each node held in ``node.field``: one slot for a node, one per item for a list.
+
+    A ``for`` header's update is a list when it has several comma-separated expressions (``++i, ++j``).
+    """
+    value = getattr(node, field, None)
+    if isinstance(value, list):
+        return [(field, index) for index, item in enumerate(value) if item is not None]
+    return [] if value is None else [(field, None)]
 
 
 def set_child(node, field, key, new):
     """Replace a child, updating every alias attribute that referred to the same object."""
+    if isinstance(key, StageSlot):
+        getattr(node, field).replace_stage(key.stage, key.index, new)
+        return
     if key is not None:
         getattr(node, field)[key] = new
         return

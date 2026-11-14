@@ -1,9 +1,17 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .codegen.array_utils import prepend_array_dimension
+from .matrix_shape import matrix_type_spelling
+from .refusals import CrossGLRefusal, CrossGLSyntaxError
 from .stage_utils import (
     SHADER_STAGE_NAMES,
     STAGE_NAME_ALIASES,
     normalize_stage_name,
+)
+from .storage_image_qualifiers import (
+    STORAGE_IMAGE_QUALIFIER_NAMES,
+    UnsupportedImageFormatError,
+    unknown_storage_image_attribute,
 )
 
 TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
@@ -54,6 +62,14 @@ TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
     "imageAtomicXor": 3,
     "imageAtomicExchange": 3,
     "imageAtomicCompSwap": 4,
+    "textureClamp": 3,
+    "textureOffsetClamp": 4,
+    "textureGradClamp": 5,
+    "textureGradOffsetClamp": 6,
+    "textureCompareClamp": 4,
+    "textureCompareOffsetClamp": 5,
+    "textureCompareGradClamp": 6,
+    "textureCompareGradOffsetClamp": 7,
 }
 
 TEXTURE_INTRINSICS_WITH_EXPLICIT_SAMPLERS = {
@@ -87,6 +103,14 @@ TEXTURE_INTRINSICS_WITH_EXPLICIT_SAMPLERS = {
     "textureGatherCompare",
     "textureGatherCompareOffset",
     "textureQueryLod",
+    "textureClamp",
+    "textureOffsetClamp",
+    "textureGradClamp",
+    "textureGradOffsetClamp",
+    "textureCompareClamp",
+    "textureCompareOffsetClamp",
+    "textureCompareGradClamp",
+    "textureCompareGradOffsetClamp",
 }
 
 TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
@@ -137,6 +161,14 @@ TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
     "imageAtomicXor": 4,
     "imageAtomicExchange": 4,
     "imageAtomicCompSwap": 5,
+    "textureClamp": 4,
+    "textureOffsetClamp": 5,
+    "textureGradClamp": 5,
+    "textureGradOffsetClamp": 6,
+    "textureCompareClamp": 4,
+    "textureCompareOffsetClamp": 5,
+    "textureCompareGradClamp": 6,
+    "textureCompareGradOffsetClamp": 7,
 }
 
 TEXTURE_INTRINSIC_ALLOWED_ARGUMENT_COUNTS = {
@@ -274,7 +306,16 @@ IMAGE_FORMAT_METADATA_NAMES = frozenset(
         "rgba32f",
         "rgba32i",
         "rgba32ui",
+        "rgb10_a2",
+        "rgb10_a2ui",
+        "r11f_g11f_b10f",
     }
+)
+
+STORAGE_IMAGE_BARE_ATTRIBUTE_NAMES = (
+    IMAGE_FORMAT_METADATA_NAMES
+    | frozenset(RESOURCE_ACCESS_METADATA_NAMES)
+    | STORAGE_IMAGE_QUALIFIER_NAMES
 )
 
 STORAGE_IMAGE_TYPE_NAMES = frozenset(
@@ -453,6 +494,7 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "domain": "domain",
     "local_size": "threadgroup_size",
     "max_total_threads_per_threadgroup": "max_total_threads_per_threadgroup",
+    "max_total_threadgroups_per_mesh_grid": "max_total_threadgroups_per_mesh_grid",
     "maxprimitivecount": "maxprimitivecount",
     "maxvertexcount": "maxvertexcount",
     "numthreads": "threadgroup_size",
@@ -471,6 +513,9 @@ STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
     "local_size_z": "in",
+    "local_size_x_id": "in",
+    "local_size_y_id": "in",
+    "local_size_z_id": "in",
     "invocations": "in",
     "max_vertices": "out",
     "maxvertexcount": "out",
@@ -940,9 +985,13 @@ def floating_coordinate_dimension(type_name):
     return dimensions.get(type_name)
 
 
+# 16-bit float scalars: the CrossGL name and the HLSL/GLSL spellings that codegen maps it to.
+_HALF_SCALAR_TYPES = frozenset({"float16", "float16_t", "min16float"})
+
+
 def is_floating_scalar_type(type_name):
     """Return true for known scalar floating-point types."""
-    return str(type_name) in {"float", "half", "double"}
+    return str(type_name) in {"float", "half", "double"} | _HALF_SCALAR_TYPES
 
 
 def is_integer_scalar_type(type_name):
@@ -952,7 +1001,10 @@ def is_integer_scalar_type(type_name):
 
 def is_numeric_scalar_type(type_name):
     """Return true for known scalar numeric types."""
-    return str(type_name) in {"float", "half", "double", "int", "uint"}
+    return (
+        str(type_name) in {"float", "half", "double", "int", "uint"}
+        or str(type_name) in _HALF_SCALAR_TYPES
+    )
 
 
 def expression_debug_name(expr):
@@ -1132,7 +1184,7 @@ def validate_function_metadata(function, context):
         previous_value = values_by_name.setdefault(canonical_name, attr_value)
         display_names.setdefault(canonical_name, attr_name)
         if previous_value != attr_value:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting {display_names[canonical_name]} metadata on {context}: "
                 f"{_metadata_value_phrase(previous_value)} vs "
                 f"{_metadata_value_phrase(attr_value)}"
@@ -1146,13 +1198,13 @@ def validate_node_metadata(node, context):
     names = _node_metadata_names(node)
     for group, description in METADATA_CONFLICT_GROUPS:
         if group <= names:
-            raise ValueError(f"Conflicting metadata on {context}: {description}")
+            raise CrossGLRefusal(f"Conflicting metadata on {context}: {description}")
 
     interpolation_modes = _normalized_metadata_names(
         names, INTERPOLATION_MODE_METADATA_NAMES
     )
     if len(set(interpolation_modes.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting interpolation mode metadata on {context}: "
             f"{_metadata_name_phrase(interpolation_modes)}"
         )
@@ -1161,21 +1213,21 @@ def validate_node_metadata(node, context):
         names, INTERPOLATION_SAMPLING_METADATA_NAMES
     )
     if len(set(interpolation_sampling.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting interpolation sampling metadata on {context}: "
             f"{_metadata_name_phrase(interpolation_sampling)}"
         )
 
     address_spaces = _normalized_metadata_names(names, ADDRESS_SPACE_METADATA_NAMES)
     if len(set(address_spaces.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting address space metadata on {context}: "
             f"{_metadata_name_phrase(address_spaces)}"
         )
 
     memory_layouts = _node_memory_layout_names(node)
     if len(set(memory_layouts.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting memory layout metadata on {context}: "
             f"{_metadata_name_phrase(memory_layouts)}"
         )
@@ -1184,7 +1236,7 @@ def validate_node_metadata(node, context):
         names, DECLARATION_ROLE_METADATA_NAMES
     )
     if len(set(declaration_roles.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting declaration role metadata on {context}: "
             f"{_metadata_name_phrase(declaration_roles)}"
         )
@@ -1192,7 +1244,7 @@ def validate_node_metadata(node, context):
 
     builtin_semantics = _node_builtin_semantic_metadata(node)
     if len(set(builtin_semantics.values())) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting builtin metadata on {context}: "
             f"{_metadata_name_phrase(builtin_semantics)}"
         )
@@ -1200,13 +1252,13 @@ def validate_node_metadata(node, context):
     access_names = _node_resource_access_names(node)
     if len(access_names) > 1:
         access_list = ", ".join(sorted(f"@{name}" for name in access_names))
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting resource access metadata on {context}: {access_list}"
         )
     if access_names and not _node_allows_resource_access_metadata(node):
         access_list = ", ".join(sorted(f"@{name}" for name in access_names))
         type_name = _type_debug_name(_node_declared_type(node)) or "<unknown>"
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Resource access metadata on {context} requires resource type: "
             f"{access_list} on {type_name}"
         )
@@ -1218,12 +1270,12 @@ def validate_node_metadata(node, context):
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
-        metadata_name = SINGLE_VALUE_METADATA_ALIASES.get(attr_name, attr_name)
-        if metadata_name not in SINGLE_VALUE_METADATA_NAMES:
+        metadata_name = _single_value_metadata_name(attr_name)
+        if metadata_name is None:
             continue
         attr_values = _attribute_metadata_values(attr)
         if len(attr_values) > 1:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Metadata '@{attr_name}' on {context} accepts at most one value: "
                 f"{_metadata_value_phrase(attr_values)}"
             )
@@ -1232,7 +1284,7 @@ def validate_node_metadata(node, context):
             continue
         previous_value = values_by_name.setdefault(metadata_name, attr_value)
         if previous_value != attr_value:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting {metadata_name} metadata on {context}: "
                 f"{previous_value} vs {attr_value}"
             )
@@ -1245,7 +1297,7 @@ def validate_node_metadata(node, context):
         attr_value = _attribute_metadata_values(attr)
         previous_value = multi_values_by_name.setdefault(attr_name, attr_value)
         if previous_value != attr_value:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting {attr_name} metadata on {context}: "
                 f"{_metadata_value_phrase(previous_value)} vs "
                 f"{_metadata_value_phrase(attr_value)}"
@@ -1265,7 +1317,7 @@ def validate_stage_layout_metadata(stage):
 
             required_direction = STAGE_LAYOUT_DIRECTION_REQUIREMENTS.get(entry_name)
             if required_direction and direction != required_direction:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Stage layout '{entry_name}' on {context} must use "
                     f"'{required_direction}' direction"
                 )
@@ -1277,7 +1329,7 @@ def validate_stage_layout_metadata(stage):
                 continue
             previous_value = entries_by_direction.setdefault(key, entry_value)
             if previous_value != entry_value:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Conflicting stage layout '{entry_name}' metadata on {context}: "
                     f"{previous_value} vs {entry_value}"
                 )
@@ -1298,7 +1350,7 @@ def validate_stage_layout_metadata(stage):
             conflicts = sorted(layout_names & group)
             if len(conflicts) > 1:
                 context = _stage_layout_context(stage, direction)
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Conflicting stage layout entries on {context}: "
                     f"{', '.join(conflicts)}"
                 )
@@ -1315,7 +1367,7 @@ def validate_stage_layout_metadata(stage):
             function_value = function_threadgroup_size[index]
             if layout_value != function_value:
                 context = _stage_layout_context(stage, "in")
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Conflicting stage threadgroup size metadata on {context}: "
                     f"{name}={layout_value} vs numthreads[{index}]={function_value}"
                 )
@@ -1379,7 +1431,7 @@ def _validate_stage_interface_pair(
             output_by_key, consumer_entry["keys"]
         )
         if producer_entry is None:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Missing cross-stage interface output from {producer_name} to "
                 f"{consumer_name} for {_stage_interface_key_phrase(consumer_entry)} "
                 f"consumed by {consumer_entry['context']}"
@@ -1397,7 +1449,7 @@ def _validate_stage_interface_pair(
             and _canonical_stage_interface_type(producer_type)
             != _canonical_stage_interface_type(consumer_type)
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting cross-stage interface type from {producer_name} to "
                 f"{consumer_name} for {_stage_interface_key_phrase(consumer_entry)}: "
                 f"{producer_entry['context']} is {producer_type}, "
@@ -1415,7 +1467,7 @@ def _stage_interface_entries_by_key(entries, stage_name, direction):
         for key in entry["keys"]:
             previous = entries_by_key.setdefault(key, entry)
             if previous is not entry:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Duplicate {direction} stage interface metadata on "
                     f"{stage_name} stage for {_format_stage_interface_key(key)}: "
                     f"{previous['context']} and {entry['context']}"
@@ -1442,7 +1494,7 @@ def _validate_stage_interface_key_consistency(
             key for key in consumer_entry.get("keys", ()) if key[0] == kind
         }
         if producer_keys and consumer_keys and producer_keys.isdisjoint(consumer_keys):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting cross-stage interface {kind} metadata from "
                 f"{producer_name} to {consumer_name}: "
                 f"{producer_entry['context']} has "
@@ -1462,7 +1514,7 @@ def _validate_stage_interface_interpolation(
         producer_value = producer_entry.get(kind)
         consumer_value = consumer_entry.get(kind)
         if producer_value and consumer_value and producer_value[1] != consumer_value[1]:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting cross-stage interface {description} from "
                 f"{producer_name} to {consumer_name} for "
                 f"{_stage_interface_key_phrase(consumer_entry)}: "
@@ -1495,12 +1547,16 @@ def _stage_interface_entries(shader, stage, stage_name, direction):
                 entry_point, struct_map, stage_name
             )
         )
-    else:
         entries.extend(
-            _function_parameter_stage_interface_entries(
+            _stream_parameter_stage_interface_entries(
                 entry_point, struct_map, stage_name
             )
         )
+    entries.extend(
+        _function_parameter_stage_interface_entries(
+            entry_point, struct_map, stage_name, direction
+        )
+    )
 
     return [entry for entry in entries if entry["keys"]]
 
@@ -1529,9 +1585,67 @@ def _function_return_stage_interface_entries(function, struct_map, stage_name):
     ]
 
 
-def _function_parameter_stage_interface_entries(function, struct_map, stage_name):
+_GEOMETRY_STREAM_TYPES = frozenset({"PointStream", "LineStream", "TriangleStream"})
+
+
+def _stream_parameter_stage_interface_entries(function, struct_map, stage_name):
+    """Members of the vertex structure an HLSL-style geometry entry point appends to its output stream.
+
+    Of several streams only the first, stream 0, is rasterized by default and links to the next stage; the others
+    feed stream output alone.
+    """
+    entries = []
+    streams = [
+        parameter
+        for parameter in getattr(function, "parameters", []) or []
+        if getattr(getattr(parameter, "param_type", None), "name", None)
+        in _GEOMETRY_STREAM_TYPES
+    ]
+    for parameter in streams[:1]:
+        parameter_type = getattr(parameter, "param_type", None)
+        for element_type in getattr(parameter_type, "generic_args", None) or []:
+            element_struct = _resolve_stage_interface_struct(element_type, struct_map)
+            if element_struct is None:
+                continue
+            entries.extend(
+                _stage_interface_entry(
+                    member,
+                    getattr(member, "member_type", None),
+                    f"{stage_name} stage stream vertex member "
+                    f"'{element_struct.name}.{getattr(member, 'name', '<anonymous>')}'",
+                )
+                for member in getattr(element_struct, "members", []) or []
+            )
+    return entries
+
+
+_OUTPUT_PARAMETER_QUALIFIERS = frozenset({"out", "inout"})
+_INPUT_PARAMETER_EXCLUDED_QUALIFIERS = frozenset({"out"})
+
+
+def _entry_parameter_has_direction(parameter, direction):
+    """Whether an entry-point parameter carries stage ``direction`` data.
+
+    HLSL-style entry points also return stage outputs through ``out`` and ``inout`` parameters
+    (``out float4 position : SV_Position``); an ``inout`` parameter is both an input and an output.
+    """
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", None) or []
+        if qualifier is not None
+    }
+    if direction == "out":
+        return bool(qualifiers & _OUTPUT_PARAMETER_QUALIFIERS)
+    return not qualifiers & _INPUT_PARAMETER_EXCLUDED_QUALIFIERS
+
+
+def _function_parameter_stage_interface_entries(
+    function, struct_map, stage_name, direction="in"
+):
     entries = []
     for parameter in getattr(function, "parameters", []) or []:
+        if not _entry_parameter_has_direction(parameter, direction):
+            continue
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
@@ -1590,6 +1704,9 @@ def _stage_interface_keys(node):
     for attr in attributes:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
         if _is_cross_stage_semantic_name(attr_name):
+            # A semantic without an index has index 0: D3D links COLOR to COLOR0.
+            if not attr_name[-1].isdigit():
+                attr_name += "0"
             keys.append(("semantic", attr_name))
     return tuple(keys)
 
@@ -1691,7 +1808,9 @@ def _stage_interface_type_name(type_node):
         size = (
             expression_debug_name(type_node.size) if type_node.size is not None else ""
         )
-        return f"{_stage_interface_type_name(type_node.element_type)}[{size}]"
+        return prepend_array_dimension(
+            _stage_interface_type_name(type_node.element_type), size
+        )
     if hasattr(type_node, "pointee_type"):
         return f"{_stage_interface_type_name(type_node.pointee_type)}*"
     if hasattr(type_node, "referenced_type"):
@@ -1702,20 +1821,14 @@ def _stage_interface_type_name(type_node):
         and hasattr(type_node, "cols")
     ):
         element_type = _stage_interface_type_name(type_node.element_type)
-        prefix = "dmat" if element_type == "double" else "mat"
-        if type_node.rows == type_node.cols:
-            return f"{prefix}{type_node.rows}"
-        return f"{prefix}{type_node.rows}x{type_node.cols}"
+        return matrix_type_spelling(type_node, element_type)
     if type_node.__class__.__name__ == "VectorType":
         element_type = _stage_interface_type_name(type_node.element_type)
-        vector_prefixes = {
-            "float": "vec",
-            "int": "ivec",
-            "uint": "uvec",
-            "double": "dvec",
-            "bool": "bvec",
-        }
-        return f"{vector_prefixes.get(element_type, element_type)}{type_node.size}"
+        prefix = _STAGE_INTERFACE_VECTOR_PREFIXES.get(element_type)
+        if prefix is None:
+            # Other lane types are spelled by the lane type itself, as in ``half3``.
+            return f"{element_type}{type_node.size}"
+        return f"{prefix}{type_node.size}"
     if hasattr(type_node, "name"):
         generic_args = getattr(type_node, "generic_args", []) or []
         if generic_args:
@@ -1725,23 +1838,28 @@ def _stage_interface_type_name(type_node):
     return str(type_node)
 
 
+_STAGE_INTERFACE_VECTOR_PREFIXES = {
+    "float": "vec",
+    "int": "ivec",
+    "uint": "uvec",
+    "double": "dvec",
+    "bool": "bvec",
+}
+# HLSL-style vector spellings of the stage interface types, keyed to the spelling they compare as.
+_HLSL_STYLE_INTERFACE_VECTORS = {
+    f"{scalar}{lanes}": f"{prefix}{lanes}"
+    for scalar, prefix in _STAGE_INTERFACE_VECTOR_PREFIXES.items()
+    if scalar != "bool"
+    for lanes in (2, 3, 4)
+}
+
+
 def _canonical_stage_interface_type(type_name):
+    """The key two stage interface types are compared by: one spelling per vector, the type name otherwise."""
     normalized = str(type_name)
-    aliases = {
-        "float2": "vec2",
-        "float3": "vec3",
-        "float4": "vec4",
-        "int2": "ivec2",
-        "int3": "ivec3",
-        "int4": "ivec4",
-        "uint2": "uvec2",
-        "uint3": "uvec3",
-        "uint4": "uvec4",
-        "double2": "dvec2",
-        "double3": "dvec3",
-        "double4": "dvec4",
-    }
-    return aliases.get(normalized, normalized)
+    if normalized in _HLSL_STYLE_INTERFACE_VECTORS:
+        return _HLSL_STYLE_INTERFACE_VECTORS[normalized]
+    return normalized
 
 
 def _node_metadata_names(node):
@@ -1815,20 +1933,21 @@ def validate_declaration_role_metadata(node, context, declaration_roles):
         requirement = "function parameter or role struct"
     else:
         requirement = "function parameter"
-    raise ValueError(
+    raise CrossGLRefusal(
         f"Declaration role metadata on {context} {role_list} " f"requires {requirement}"
     )
 
 
 def validate_image_format_metadata(node, context):
     """Validate storage-image format metadata appears on storage images only."""
+    _refuse_unknown_storage_image_formats(node, context)
     format_metadata = _node_image_format_metadata(node)
     if not format_metadata:
         return
 
     if len(format_metadata) > 1:
         format_list = ", ".join(sorted(f"@{name}" for name in format_metadata))
-        raise ValueError(f"Conflicting format metadata on {context}: {format_list}")
+        raise CrossGLRefusal(f"Conflicting format metadata on {context}: {format_list}")
 
     node_type = _node_declared_type(node)
     if _is_storage_image_type(node_type):
@@ -1836,7 +1955,7 @@ def validate_image_format_metadata(node, context):
 
     format_list = ", ".join(sorted(f"@{name}" for name in format_metadata))
     type_name = _type_debug_name(node_type) or "<unknown>"
-    raise ValueError(
+    raise CrossGLRefusal(
         f"Image format metadata on {context} requires storage image type: "
         f"{format_list} on {type_name}"
     )
@@ -1855,7 +1974,7 @@ def validate_descriptor_index_metadata(node, context):
 
         attr_values = _attribute_metadata_values(attr)
         if len(attr_values) != 1:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"{attr_name} metadata on {context} requires exactly one "
                 f"descriptor index value: @{attr_name}"
                 f"{_metadata_value_phrase(attr_values)}"
@@ -1871,10 +1990,35 @@ def validate_descriptor_index_metadata(node, context):
 
 def _raise_descriptor_role_error(role, required_role, node, context):
     type_name = _type_debug_name(_node_declared_type(node)) or "<unknown>"
-    raise ValueError(
+    raise CrossGLRefusal(
         f"{role} metadata on {context} requires {required_role}: "
         f"@{role} on {type_name}"
     )
+
+
+def _refuse_unknown_storage_image_formats(node, context):
+    """Refuse a bare attribute on a storage image that names no format or qualifier."""
+    node_type = _node_declared_type(node)
+    while getattr(node_type, "element_type", None) is not None and not (
+        _is_storage_image_type(node_type)
+    ):
+        node_type = node_type.element_type
+    if not _is_storage_image_type(node_type):
+        return
+    unknown = unknown_storage_image_attribute(
+        getattr(node, "attributes", None),
+        STORAGE_IMAGE_BARE_ATTRIBUTE_NAMES,
+        _normalized_metadata_name,
+    )
+    if unknown is not None:
+        raise UnsupportedImageFormatError(unknown, context)
+    for attr in getattr(node, "attributes", None) or []:
+        if _normalized_metadata_name(getattr(attr, "name", None)) != "format":
+            continue
+        value = _normalized_metadata_name(_first_attribute_metadata_value(attr))
+        if value is not None and value != "unknown":
+            if value not in IMAGE_FORMAT_METADATA_NAMES:
+                raise UnsupportedImageFormatError(f"format({value})", context)
 
 
 def _node_image_format_metadata(node):
@@ -1950,6 +2094,8 @@ def _is_texture_descriptor_type(type_node):
             "sampler1d",
             "sampler2d",
             "sampler3d",
+            # A texel buffer is a texture resource; ``isamplerBuffer`` and ``usamplerBuffer`` match above.
+            "samplerbuffer",
             "samplercube",
             "texture",
             "usampler",
@@ -2047,9 +2193,12 @@ def _node_builtin_semantic_metadata(node):
             builtin_name = _normalized_metadata_name(_attribute_metadata_value(attr))
             if not builtin_name:
                 continue
-            metadata[f"builtin({builtin_name})"] = BUILTIN_SEMANTIC_METADATA_NAMES.get(
-                builtin_name, builtin_name
-            )
+            # The key two built-in attributes are compared by. A name the table has no other spelling for is its
+            # own key; codegen refuses the names no target has.
+            semantic = builtin_name
+            if builtin_name in BUILTIN_SEMANTIC_METADATA_NAMES:
+                semantic = BUILTIN_SEMANTIC_METADATA_NAMES[builtin_name]
+            metadata[f"builtin({builtin_name})"] = semantic
             continue
 
         builtin_name = _builtin_semantic_attribute_name(raw_name)
@@ -2072,7 +2221,7 @@ def _builtin_semantic_attribute_name(name):
 def validate_hlsl_semantic_metadata(node, context):
     semantic_metadata = _node_hlsl_semantic_metadata(node)
     if len(semantic_metadata) > 1:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Conflicting semantic metadata on {context}: "
             f"{_metadata_attribute_phrase(semantic_metadata)}"
         )
@@ -2180,7 +2329,7 @@ def validate_function_stage_layout_metadata(stage):
             layout_value = layout_entries[key]
             if layout_value != function_value:
                 context = _stage_layout_context(stage, direction)
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Conflicting stage/function metadata on {context}: "
                     f"layout {entry_name}={layout_value} vs "
                     f"{attr_name}={function_value}"
@@ -2195,7 +2344,7 @@ def validate_stage_layout_entry_placement(stage, direction, entry_name):
     if entry_name in TESSELLATION_CONTROL_STAGE_LAYOUT_ENTRIES and (
         stage_name != "tessellation_control" or direction != "out"
     ):
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Stage layout '{entry_name}' on {context} requires "
             "tessellation_control stage 'out' layout"
         )
@@ -2203,7 +2352,7 @@ def validate_stage_layout_entry_placement(stage, direction, entry_name):
     if entry_name in TESSELLATION_EVALUATION_STAGE_LAYOUT_ENTRIES and (
         stage_name != "tessellation_evaluation" or direction != "in"
     ):
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Stage layout '{entry_name}' on {context} requires "
             "tessellation_evaluation stage 'in' layout"
         )
@@ -2221,7 +2370,7 @@ def validate_stage_function_attribute_placement(stage, function, attr_name):
         attr_name in TESSELLATION_CONTROL_FUNCTION_ATTRIBUTE_NAMES
         and stage_name != "tessellation_control"
     ):
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Function metadata '@{attr_name}' on {context} requires "
             "tessellation_control stage"
         )
@@ -2230,7 +2379,7 @@ def validate_stage_function_attribute_placement(stage, function, attr_name):
         "tessellation_control",
         "tessellation_evaluation",
     }:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Function metadata '@{attr_name}' on {context} requires "
             "tessellation stage"
         )
@@ -2239,7 +2388,7 @@ def validate_stage_function_attribute_placement(stage, function, attr_name):
         attr_name in TESSELLATION_EVALUATION_FUNCTION_FLAG_NAMES
         and stage_name != "tessellation_evaluation"
     ):
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Function metadata '@{attr_name}' on {context} requires "
             "tessellation_evaluation stage"
         )
@@ -2267,7 +2416,7 @@ def validate_stage_shader_attribute_metadata(stage):
             values = _attribute_metadata_values(attr)
             attr_display = _shader_attribute_display(attr)
             if len(values) != 1:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Function metadata '{attr_display}' on {context} requires "
                     "exactly one shader stage value"
                 )
@@ -2275,14 +2424,14 @@ def validate_stage_shader_attribute_metadata(stage):
             requested_stage = _canonical_shader_stage_attribute_name(values[0])
             if requested_stage not in SHADER_STAGE_ATTRIBUTE_NAMES:
                 valid_stages = ", ".join(sorted(SHADER_STAGE_ATTRIBUTE_NAMES))
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Function metadata '{attr_display}' on {context} uses "
                     f"unknown shader stage '{values[0]}'; expected one of: "
                     f"{valid_stages}"
                 )
 
             if requested_stage != stage_name:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Function metadata '{attr_display}' on {context} conflicts "
                     f"with {stage_name} stage"
                 )
@@ -2308,7 +2457,7 @@ def validate_tessellation_patch_parameter_metadata(stage):
             "tessellation_control",
             "tessellation_evaluation",
         }:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Patch type '{display_type}' parameter '{parameter_name}' on "
                 f"{context} requires tessellation_control or "
                 "tessellation_evaluation stage"
@@ -2318,7 +2467,7 @@ def validate_tessellation_patch_parameter_metadata(stage):
             "tessellation_control",
             "tessellation_evaluation",
         }:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Patch type '{display_type}' parameter '{parameter_name}' on "
                 f"{context} requires tessellation_control or "
                 "tessellation_evaluation stage"
@@ -2331,7 +2480,7 @@ def validate_tessellation_patch_parameter_metadata(stage):
             and control_points is not None
             and output_control_points != control_points
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "Conflicting tessellation output control-point metadata on "
                 f"{context}: {patch_display_type} must match "
                 f"outputcontrolpoints({output_control_points}); OutputPatch "
@@ -2364,7 +2513,7 @@ def validate_tessellation_patch_cross_stage_metadata(shader):
         control_patch_type = _tessellation_control_output_patch_type(
             control_stage, control_points
         )
-        raise ValueError(
+        raise CrossGLRefusal(
             "Conflicting tessellation patch control-point metadata from "
             "tessellation_control to tessellation_evaluation: "
             f"{patch_display_type} must match tessellation_control output "
@@ -2412,7 +2561,7 @@ def _validate_function_stage_layout_flag(
         conflicts = sorted((direction_layout_names & group) - {canonical_entry})
         if conflicts:
             context = _stage_layout_context(stage, direction)
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Conflicting stage/function metadata on {context}: "
                 f"layout {', '.join(conflicts)} vs {attr_name}({attr_value})"
             )
@@ -2439,6 +2588,15 @@ def _stage_layout_names_by_direction(stage):
             if entry_name:
                 direction_names.add(entry_name)
     return names
+
+
+def _single_value_metadata_name(attr_name):
+    """The single-value metadata ``@attr_name`` sets, or ``None`` when it sets none."""
+    if attr_name in SINGLE_VALUE_METADATA_ALIASES:
+        return SINGLE_VALUE_METADATA_ALIASES[attr_name]
+    if attr_name in SINGLE_VALUE_METADATA_NAMES:
+        return attr_name
+    return None
 
 
 def _normalized_metadata_name(name):
@@ -2716,26 +2874,26 @@ def validate_shader_cbuffers(shader):
     )
     if duplicate_names:
         names = ", ".join(sorted(duplicate_names))
-        raise SyntaxError(f"Duplicate cbuffer name(s): {names}")
+        raise CrossGLSyntaxError(f"Duplicate cbuffer name(s): {names}")
 
     duplicate_members = collect_duplicate_cbuffer_member_names(
         getattr(shader, "cbuffers", []) or []
     )
     if duplicate_members:
         names = ", ".join(sorted(duplicate_members))
-        raise SyntaxError(f"Ambiguous cbuffer member name(s): {names}")
+        raise CrossGLSyntaxError(f"Ambiguous cbuffer member name(s): {names}")
 
     declaration_conflicts = collect_cbuffer_declaration_name_conflicts(shader)
     if declaration_conflicts:
         names = ", ".join(sorted(declaration_conflicts))
-        raise SyntaxError(
+        raise CrossGLSyntaxError(
             f"Cbuffer name(s) conflict with existing declaration(s): {names}"
         )
 
     global_member_conflicts = collect_cbuffer_member_global_conflicts(shader)
     if global_member_conflicts:
         names = ", ".join(sorted(global_member_conflicts))
-        raise SyntaxError(
+        raise CrossGLSyntaxError(
             f"Cbuffer member name(s) conflict with global declaration(s): {names}"
         )
     return validate_shader_metadata(shader)

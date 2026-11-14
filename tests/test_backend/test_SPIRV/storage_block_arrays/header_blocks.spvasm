@@ -1,0 +1,91 @@
+; An array of SPIR-V blocks, from glslangValidator -V on this GLSL:
+;   #version 450
+;   layout(local_size_x = 64) in;
+;   layout(std430, binding = 0) buffer Block { uint count; float data[]; } bufs[2];
+;   layout(std430, binding = 2) buffer Out { float result[]; } outb;
+;   void main() {
+;       uint i = gl_GlobalInvocationID.x;
+;       outb.result[i] = bufs[i & 1u].data[i] + float(bufs[1].count) + float(bufs[0].data.length());
+;   }
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %4 "main" %11
+               OpExecutionMode %4 LocalSize 64 1 1
+               OpName %4 "main"
+               OpName %8 "i"
+               OpName %11 "gl_GlobalInvocationID"
+               OpName %18 "Out"
+               OpMemberName %18 0 "result"
+               OpName %20 "outb"
+               OpName %25 "Block"
+               OpMemberName %25 0 "count"
+               OpMemberName %25 1 "data"
+               OpName %29 "bufs"
+               OpDecorate %11 BuiltIn GlobalInvocationId
+               OpDecorate %17 ArrayStride 4
+               OpDecorate %18 BufferBlock
+               OpMemberDecorate %18 0 Offset 0
+               OpDecorate %20 Binding 2
+               OpDecorate %20 DescriptorSet 0
+               OpDecorate %24 ArrayStride 4
+               OpDecorate %25 BufferBlock
+               OpMemberDecorate %25 0 Offset 0
+               OpMemberDecorate %25 1 Offset 4
+               OpDecorate %29 Binding 0
+               OpDecorate %29 DescriptorSet 0
+               OpDecorate %51 BuiltIn WorkgroupSize
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeInt 32 0
+          %7 = OpTypePointer Function %6
+          %9 = OpTypeVector %6 3
+         %10 = OpTypePointer Input %9
+         %11 = OpVariable %10 Input
+         %12 = OpConstant %6 0
+         %13 = OpTypePointer Input %6
+         %16 = OpTypeFloat 32
+         %17 = OpTypeRuntimeArray %16
+         %18 = OpTypeStruct %17
+         %19 = OpTypePointer Uniform %18
+         %20 = OpVariable %19 Uniform
+         %21 = OpTypeInt 32 1
+         %22 = OpConstant %21 0
+         %24 = OpTypeRuntimeArray %16
+         %25 = OpTypeStruct %6 %24
+         %26 = OpConstant %6 2
+         %27 = OpTypeArray %25 %26
+         %28 = OpTypePointer Uniform %27
+         %29 = OpVariable %28 Uniform
+         %31 = OpConstant %6 1
+         %33 = OpConstant %21 1
+         %35 = OpTypePointer Uniform %16
+         %38 = OpTypePointer Uniform %6
+         %43 = OpTypePointer Uniform %25
+         %50 = OpConstant %6 64
+         %51 = OpConstantComposite %9 %50 %31 %31
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+          %8 = OpVariable %7 Function
+         %14 = OpAccessChain %13 %11 %12
+         %15 = OpLoad %6 %14
+               OpStore %8 %15
+         %23 = OpLoad %6 %8
+         %30 = OpLoad %6 %8
+         %32 = OpBitwiseAnd %6 %30 %31
+         %34 = OpLoad %6 %8
+         %36 = OpAccessChain %35 %29 %32 %33 %34
+         %37 = OpLoad %16 %36
+         %39 = OpAccessChain %38 %29 %33 %22
+         %40 = OpLoad %6 %39
+         %41 = OpConvertUToF %16 %40
+         %42 = OpFAdd %16 %37 %41
+         %44 = OpAccessChain %43 %29 %22
+         %45 = OpArrayLength %6 %44 1
+         %46 = OpBitcast %21 %45
+         %47 = OpConvertSToF %16 %46
+         %48 = OpFAdd %16 %42 %47
+         %49 = OpAccessChain %35 %20 %22 %23
+               OpStore %49 %48
+               OpReturn
+               OpFunctionEnd

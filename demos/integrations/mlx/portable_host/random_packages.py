@@ -35,10 +35,7 @@ def dispatch_contract(key_count, bytes_per_key, execution):
     layout = RandomOutputLayout(key_count, bytes_per_key)
     if bytes_per_key < 4 or layout.native_byte_count > MAX_NATIVE_BYTES:
         raise ValueError("Random cache requires bounded native byte storage")
-    launch = {
-        "workgroupCount": layout.workgroup_count,
-        "workgroupSize": [1, 1, 1],
-    }
+    launch = layout.execution
     if execution != launch or any(
         type(value) is not int for values in execution.values() for value in values
     ):
@@ -59,8 +56,10 @@ def _checked_contract(contract):
 
 
 def _region(contract):
+    count = contract["execution"]["workgroupCount"]
+    size = contract["execution"]["workgroupSize"]
     (region,) = plan_dispatch_regions(
-        contract["execution"]["workgroupCount"], (1, 1, 1)
+        [groups * width for groups, width in zip(count, size)], size
     )
     return region.to_json()
 
@@ -126,7 +125,7 @@ def build_packages(root, target, output, *, contract=None):
             targets=(target,),
             output_dir=f"{work.name}/out",
             entry_points={SOURCE: ENTRIES},
-            workgroup_size=(1, 1, 1),
+            workgroup_size=tuple(contract["execution"]["workgroupSize"]),
             metadata_preconditions=[
                 dict(
                     source=SOURCE,

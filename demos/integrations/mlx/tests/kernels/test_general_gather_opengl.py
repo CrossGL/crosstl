@@ -124,13 +124,13 @@ def test_opengl_indexed_general_gather_executes_natively(package, tmp_path, layo
 
 
 def test_opengl_gather_gate_requires_native_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate indexed OpenGL gather and resource aggregates"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

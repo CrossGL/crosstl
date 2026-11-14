@@ -24,6 +24,12 @@ def helper_name(intrinsic: str, lanes: int) -> str:
     return base if lanes == 1 else f"{base}{lanes}"
 
 
+def canonical_intrinsic(intrinsic: str) -> str:
+    """The first intrinsic whose polyfill is ``intrinsic``'s helper, so intrinsics sharing one are defined once."""
+    helper = HELPERS[intrinsic]
+    return next(name for name, other in HELPERS.items() if other is helper)
+
+
 def helper_source(intrinsic: str, lanes: int) -> str:
     """The CrossGL definition of the helper for ``lanes`` lanes."""
     helper = HELPERS[intrinsic]
@@ -82,6 +88,19 @@ def is_helper(function) -> bool:
     return bool(annotations.get(HELPER_MARK))
 
 
+def float_to_integer_helper_names() -> frozenset:
+    """The helpers that convert binary32 to a 32-bit integer (``cgl_rule_sat_ftoi``, ``cgl_rule_sat_ftou2``, ...).
+
+    A generator that guards ``float(int(x))`` against folding to ``trunc(x)`` treats a call of one of them as the
+    ``int(x)`` it replaces. The ``cgl_rule_`` prefix is reserved, so no program function has these names.
+    """
+    return frozenset(
+        helper_name(intrinsic, lanes)
+        for intrinsic in ("__cgl_sat_ftoi", "__cgl_sat_ftou")
+        for lanes in (1, 2, 3, 4)
+    )
+
+
 class HelperSet:
     """The helpers one program needs; ``inject`` adds them, scalar before vector, ahead of the program's functions."""
 
@@ -95,6 +114,7 @@ class HelperSet:
         }
 
     def call(self, intrinsic, lanes, operands):
+        intrinsic = canonical_intrinsic(intrinsic)
         if lanes not in (1, 2, 3, 4):
             raise self.error(
                 f"{intrinsic} on {lanes} lanes has no helper for {self.target}",

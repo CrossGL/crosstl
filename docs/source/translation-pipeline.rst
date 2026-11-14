@@ -2,7 +2,8 @@ Translation Pipeline
 ====================
 
 The public ``crosstl.translate`` function is a thin orchestration layer around
-the source registry, parser frontends, and target code generators.
+two registries: source frontends in ``crosstl.translator.source_registry`` and
+target code generators in ``crosstl.translator.codegen.registry``.
 
 Pipeline steps
 --------------
@@ -16,6 +17,14 @@ Pipeline steps
 6. Resolve the target backend through the backend registry.
 7. Generate target source from the canonical AST.
 8. Optionally format and save the generated source.
+
+Frontend
+--------
+
+The CrossGL lexer and parser produce the canonical AST in
+``crosstl.translator.ast``. That AST represents shader stages, declarations,
+statements, expressions, resources, attributes, and backend-specific metadata.
+See :doc:`lexer` and :doc:`ast`.
 
 Source selection
 ----------------

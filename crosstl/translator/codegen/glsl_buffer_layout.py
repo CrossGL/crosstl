@@ -3,6 +3,7 @@
 from inspect import Parameter, signature
 
 from ..ast import ArrayNode
+from ..matrix_shape import matrix_type_spelling
 
 
 def align_to(value, alignment):
@@ -87,16 +88,21 @@ GLSL_BUFFER_COMPOUND_BINARY_OPERATORS = {
 GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS = {"+=", "-=", "*=", "/="}
 
 
+GLSL_BUFFER_FLOAT_COMPONENT_TYPES = frozenset({"float", "float16_t"})
+GLSL_BUFFER_INTEGER_COMPONENT_TYPES = frozenset(
+    {"int", "uint", "int16_t", "uint16_t", "int64_t", "uint64_t", "int8_t", "uint8_t"}
+)
+
+
 def glsl_buffer_compound_binary_operator(operator, component_type):
     binary_operator = GLSL_BUFFER_COMPOUND_BINARY_OPERATORS.get(operator)
     if binary_operator is None:
         return None
-    if (
-        component_type == "float"
-        and operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS
-    ):
-        return None
-    if component_type in {"float", "int", "uint"}:
+    if component_type in GLSL_BUFFER_FLOAT_COMPONENT_TYPES:
+        if operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS:
+            return None
+        return binary_operator
+    if component_type in GLSL_BUFFER_INTEGER_COMPONENT_TYPES:
         return binary_operator
     return None
 
@@ -107,6 +113,7 @@ def std430_scalar_type_info(component_type, component_size=4):
         "align": component_size,
         "components": 1,
         "component_type": component_type,
+        "component_size": component_size,
     }
 
 
@@ -116,6 +123,7 @@ def std430_vector_type_info(component_type, components, component_size=4):
         "align": component_size * (2 if components == 2 else 4),
         "components": components,
         "component_type": component_type,
+        "component_size": component_size,
     }
     if components == 3:
         info["array_stride"] = 4 * component_size
@@ -133,6 +141,7 @@ def std430_matrix_type_info(columns, rows):
         "matrix_rows": rows,
         "column_stride": column_stride,
         "component_type": "float",
+        "component_size": 4,
     }
 
 
@@ -145,6 +154,7 @@ def std140_matrix_type_info(columns, rows):
         "matrix_rows": rows,
         "column_stride": column_stride,
         "component_type": "float",
+        "component_size": 4,
     }
 
 
@@ -156,6 +166,13 @@ def std430_scalar_vector_type_entries():
         "uint": std430_scalar_type_info("uint"),
         "int64_t": std430_scalar_type_info("int64_t", 8),
         "uint64_t": std430_scalar_type_info("uint64_t", 8),
+        # GL_EXT_shader_16bit_storage and GL_EXT_shader_8bit_storage: the base
+        # alignment of a scalar is its size (GLSL 4.60 section 7.6.2.2 rule 1).
+        "int16_t": std430_scalar_type_info("int16_t", 2),
+        "uint16_t": std430_scalar_type_info("uint16_t", 2),
+        "float16_t": std430_scalar_type_info("float16_t", 2),
+        "int8_t": std430_scalar_type_info("int8_t", 1),
+        "uint8_t": std430_scalar_type_info("uint8_t", 1),
     }
     vector_prefixes = {
         "bool": (("bvec", "bool"), 4),
@@ -164,6 +181,11 @@ def std430_scalar_vector_type_entries():
         "uint": (("uvec", "uint"), 4),
         "int64_t": (("i64vec", "int64_t"), 8),
         "uint64_t": (("u64vec", "uint64_t"), 8),
+        "int16_t": (("i16vec",), 2),
+        "uint16_t": (("u16vec",), 2),
+        "float16_t": (("f16vec",), 2),
+        "int8_t": (("i8vec",), 1),
+        "uint8_t": (("u8vec",), 1),
     }
     for component_type, (prefixes, component_size) in vector_prefixes.items():
         for components in range(2, 5):
@@ -206,8 +228,9 @@ def std140_matrix_type_entries():
 
 
 STD430_SCALAR_TYPE_ALIASES = {
-    "int8_t": "int",
-    "int16_t": "int",
+    "int8": "int8_t",
+    "int16": "int16_t",
+    "short": "int16_t",
     "int32_t": "int",
     "i64": "int64_t",
     "int64": "int64_t",
@@ -215,8 +238,11 @@ STD430_SCALAR_TYPE_ALIASES = {
     "long": "int",
     "signed long": "int",
     "ptrdiff_t": "int",
-    "uint8_t": "uint",
-    "uint16_t": "uint",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
+    "ushort": "uint16_t",
+    "float16": "float16_t",
+    "half": "float16_t",
     "uint32_t": "uint",
     "u64": "uint64_t",
     "uint64": "uint64_t",
@@ -227,8 +253,21 @@ STD430_SCALAR_TYPE_ALIASES = {
 }
 
 
+# The value types the std430 and std140 tables lay out, under the names they use.
+STD430_LAYOUT_VALUE_TYPE_NAMES = frozenset(
+    {**std430_scalar_vector_type_entries(), **std430_matrix_type_entries()}
+)
+
+
 def std430_layout_type_name(type_name):
-    return STD430_SCALAR_TYPE_ALIASES.get(str(type_name), str(type_name))
+    """The name the layout tables give the value type ``type_name``, or ``None`` when it is not a value type they lay
+    out (a structure, for instance, is laid out from its members)."""
+    type_name = str(type_name)
+    if type_name in STD430_SCALAR_TYPE_ALIASES:
+        return STD430_SCALAR_TYPE_ALIASES[type_name]
+    if type_name in STD430_LAYOUT_VALUE_TYPE_NAMES:
+        return type_name
+    return None
 
 
 def std430_value_type_info(type_name):
@@ -353,14 +392,16 @@ def glsl_buffer_struct_type_info(
             array_count = literal_int_value(member_info["array_size"])
             if array_count is None:
                 return None
-            members[member_name] = {
-                **member_info,
-                "offset": offset,
-                "stride": glsl_buffer_array_stride(member_info, layout),
-                "array_count": array_count,
-                "runtime_array": False,
-            }
-            offset += members[member_name]["stride"] * array_count
+            dimensions = glsl_buffer_array_dimensions(
+                member_info, layout, literal_int_value
+            )
+            if dimensions is None:
+                return None
+            stride, inner = dimensions
+            members[member_name] = glsl_buffer_array_member(
+                member_info, offset, stride, inner, array_count
+            )
+            offset += stride * array_count
             max_align = max(max_align, member_align)
             continue
 
@@ -401,12 +442,25 @@ def glsl_buffer_block_member_type(
     member_type = getattr(member, "member_type", None)
     is_array = False
     array_size = None
+    inner_array_sizes = []
     if member_type is not None:
         if str(type(member_type)).find("ArrayType") != -1:
             is_array = True
             array_size = member_type.size
             member_type = member_type.element_type
+            # ``T a[2][3]`` nests outermost first: two ``T[3]`` (GLSL 4.60 section 4.1.9).
+            while str(type(member_type)).find("ArrayType") != -1:
+                inner_array_sizes.append(member_type.size)
+                member_type = member_type.element_type
         type_name = convert_type_node_to_string(member_type)
+        if type(member_type).__name__ == "MatrixType" and getattr(
+            getattr(member_type, "element_type", None), "name", "float"
+        ) in {"float", "double"}:
+            # Lay matrices out by their CrossGL spelling: target spellings disagree on
+            # which of the two numbers counts the columns.
+            type_name = matrix_type_spelling(
+                member_type, member_type.element_type.name, short_square=False
+            )
     elif isinstance(member, ArrayNode):
         is_array = True
         array_size = member.size
@@ -418,10 +472,14 @@ def glsl_buffer_block_member_type(
 
     type_name = str(type_name)
     layout_type_name = std430_layout_type_name(type_name)
-    type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
-    if type_info is None and structs_by_name is not None:
+    type_info = None
+    if layout_type_name is not None:
+        type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
+    elif structs_by_name is not None:
+        # Not a value type: a structure is laid out, and named, as declared.
+        layout_type_name = type_name
         type_info = glsl_buffer_struct_type_info(
-            layout_type_name,
+            type_name,
             structs_by_name,
             convert_type_node_to_string,
             literal_int_value or (lambda value: None),
@@ -432,7 +490,7 @@ def glsl_buffer_block_member_type(
         )
     if type_info is None:
         return None
-    return {
+    member_info = {
         "type": type_name,
         "layout_type": layout_type_name,
         **type_info,
@@ -440,6 +498,65 @@ def glsl_buffer_block_member_type(
         "is_array": is_array,
         "array_size": array_size,
     }
+    if inner_array_sizes:
+        member_info["inner_array_sizes"] = tuple(inner_array_sizes)
+    return member_info
+
+
+def glsl_buffer_array_dimensions(member_info, layout, literal_int_value):
+    """``(outer stride, inner dimensions)`` of array member ``member_info``, or ``None``.
+
+    An array of arrays is an array of its inner array type, so each dimension's stride is
+    the next dimension's extent times its stride, and the innermost stride is the element's
+    std140 or std430 array stride. Inner dimensions are ``(count, stride)`` pairs, outermost
+    first. ``None`` means an inner extent is not a positive literal integer.
+    """
+    stride = glsl_buffer_array_stride(member_info, layout)
+    inner = []
+    for size in reversed(member_info.get("inner_array_sizes") or ()):
+        count = literal_int_value(size)
+        if count is None or count <= 0:
+            return None
+        inner.insert(0, (count, stride))
+        stride *= count
+    return stride, tuple(inner)
+
+
+def glsl_buffer_array_member(member_info, offset, stride, inner, array_count):
+    """The descriptor of an array member at ``offset``; ``array_count`` is ``None`` for a runtime array."""
+    member = {**member_info, "offset": offset, "stride": stride}
+    if array_count is not None:
+        member["array_count"] = array_count
+    member["runtime_array"] = array_count is None
+    if inner:
+        member["inner_arrays"] = inner
+    return member
+
+
+# Component widths every byte-offset lowering reads and writes with its own types.
+DEFAULT_GLSL_BUFFER_COMPONENT_SIZES = frozenset({4, 8})
+
+
+def glsl_buffer_member_leaves(member_info):
+    """The scalar, vector and matrix layouts inside ``member_info``, in declaration order."""
+    nested = member_info.get("members")
+    if not nested:
+        yield member_info
+        return
+    for child in nested.values():
+        yield from glsl_buffer_member_leaves(child)
+
+
+def glsl_buffer_component_size_refusal(member_info, component_sizes):
+    """Why a lowering limited to ``component_sizes`` cannot hold ``member_info``, or ``None``."""
+    for leaf in glsl_buffer_member_leaves(member_info):
+        size = leaf.get("component_size", 4)
+        if size not in component_sizes:
+            return (
+                f"{size * 8}-bit {leaf.get('component_type')} components have no "
+                "lowering for this target"
+            )
+    return None
 
 
 def record_glsl_buffer_block_lowering_failure(
@@ -463,7 +580,20 @@ def collect_lowered_glsl_buffer_blocks(
     map_type,
     target_type_key,
     unsupported_type_message,
+    component_refusal=None,
 ):
+    """Lay out each std140 or std430 buffer block in ``global_vars`` for byte-offset access.
+
+    ``component_refusal(member_info)`` names why the target cannot read or write a
+    member, or returns ``None``; by default only 32- and 64-bit components lower.
+    """
+    if component_refusal is None:
+
+        def component_refusal(member_info):
+            return glsl_buffer_component_size_refusal(
+                member_info, DEFAULT_GLSL_BUFFER_COMPONENT_SIZES
+            )
+
     blocks = {}
     var_failures = {}
     struct_failures = {}
@@ -512,8 +642,24 @@ def collect_lowered_glsl_buffer_blocks(
                 failure_reason = "unsupported unnamed buffer block member"
                 members = {}
                 break
+            refusal = component_refusal(member_info)
+            if refusal is not None:
+                failure_reason = f"unsupported member {member_name}: {refusal}"
+                members = {}
+                break
             if member_info["is_array"]:
                 offset = align_to(offset, glsl_buffer_array_align(member_info, layout))
+                dimensions = glsl_buffer_array_dimensions(
+                    member_info, layout, literal_int_value
+                )
+                if dimensions is None:
+                    failure_reason = (
+                        f"unsupported member {member_name}: inner array sizes "
+                        "must be literal integers"
+                    )
+                    members = {}
+                    break
+                stride, inner = dimensions
                 if member_info["array_size"] is None:
                     if index != len(struct_members) - 1:
                         failure_reason = (
@@ -523,12 +669,9 @@ def collect_lowered_glsl_buffer_blocks(
                         members = {}
                         break
                     runtime_array_name = member_name
-                    members[member_name] = {
-                        **member_info,
-                        "offset": offset,
-                        "stride": glsl_buffer_array_stride(member_info, layout),
-                        "runtime_array": True,
-                    }
+                    members[member_name] = glsl_buffer_array_member(
+                        member_info, offset, stride, inner, None
+                    )
                     continue
 
                 array_count = literal_int_value(member_info["array_size"])
@@ -539,14 +682,10 @@ def collect_lowered_glsl_buffer_blocks(
                     )
                     members = {}
                     break
-                members[member_name] = {
-                    **member_info,
-                    "offset": offset,
-                    "stride": glsl_buffer_array_stride(member_info, layout),
-                    "array_count": array_count,
-                    "runtime_array": False,
-                }
-                offset += members[member_name]["stride"] * array_count
+                members[member_name] = glsl_buffer_array_member(
+                    member_info, offset, stride, inner, array_count
+                )
+                offset += stride * array_count
                 continue
             offset = align_to(offset, member_info["align"])
             members[member_name] = {

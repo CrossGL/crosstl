@@ -11,7 +11,7 @@ void main() {
         vec2 uv;
         uv.x = mix(tex.x, tex.z, glyphuv.x);
         uv.y = mix(tex.y, tex.w, glyphuv.y);
-        text = texture(tex0, uv.xy).x;
+        text = texture(tex0, uv).x;
     }
     color_out = vec4(vec3(text), clamp((text + 0.5), 0.0, 1.0));
     fragColor = color_out;

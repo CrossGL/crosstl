@@ -347,14 +347,14 @@ def test_half_product_controls_execute(tmp_path, profile, mode):
 
 
 def test_half_product_controls_keep_required_native_gate():
+    from tests import workflow_text
     from tests.ci_helpers import assert_paths_covered
-    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate DirectX half conversions"
     )
     assert "test_directx_half_conversion.py" in step
@@ -368,6 +368,6 @@ def test_half_product_controls_keep_required_native_gate():
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_half_conversion.py",
         )

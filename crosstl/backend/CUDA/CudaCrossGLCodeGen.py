@@ -2,9 +2,24 @@
 
 import re
 
+from ...translator.integer_literals import crossgl_legacy_octal
+from ..assignment_operands import grouped_operand
+from ..import_refusals import CudaImportRefused, ImportRefusalMixin
+from ..namespace_constants import is_c_family_namespace_constant
+from ..no_contraction import (
+    PRECISE_FUNCTION_ATTRIBUTE,
+    function_requires_no_contraction,
+)
+from ..thread_hierarchy import (
+    global_invocation_axis,
+    kernel_workgroup_size_attribute,
+    normalize_threadgroup_size_option,
+)
+from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BlockNode,
     CastNode,
     DesignatedInitializerNode,
     EnumNode,
@@ -16,10 +31,20 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .directed_rounding import refuse_directed_rounding
+from .keyword_renames import source_identifier_names, unused_identifier_name
+from .local_memory_spaces import crossgl_zero_value
+from .reference_parameters import ReferenceParameters
 
 
-class CudaToCrossGLConverter:
-    """Serialize CUDA backend AST nodes back into CrossGL source."""
+class CudaToCrossGLConverter(ImportRefusalMixin):
+    """Serialize CUDA backend AST nodes back into CrossGL source.
+
+    A CUDA construct with no faithful CrossGL form is refused with :class:`CudaImportRefused`; no CrossGL program is
+    returned while a refusal is pending.
+    """
+
+    IMPORT_REFUSAL_TYPE = CudaImportRefused
 
     CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_CUDA",
@@ -158,6 +183,21 @@ class CudaToCrossGLConverter:
         "surfCubemapLayeredread": "imageCubeArray",
         "surfCubemapLayeredwrite": "imageCubeArray",
     }
+    CUDA_SURFACE_BOUNDARY_MODES = {
+        "cudaBoundaryModeTrap": "trap",
+        "cudaBoundaryModeClamp": "clamp",
+        "cudaBoundaryModeZero": "zero",
+    }
+    # The coordinates of each surface shape that are texel coordinates, before a layer index or cubemap face.
+    CUDA_SURFACE_TEXEL_DIMENSIONS = {
+        "1D": 1,
+        "1DLayered": 1,
+        "2D": 2,
+        "2DLayered": 2,
+        "3D": 3,
+        "Cubemap": 2,
+        "CubemapLayered": 2,
+    }
     CUDA_SURFACE_VALUE_BYTE_SIZES = {
         "char": 1,
         "signed char": 1,
@@ -227,9 +267,20 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
+    # ``let`` and ``match`` are CrossGL lexer keywords like ``kernel`` and ``var``.
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "buffer",
+        "in",
+        "kernel",
+        "let",
+        "match",
+        "precision",
+        "var",
+    }
 
-    def __init__(self):
+    def __init__(self, threadgroup_size=None):
+        # The host picks a CUDA kernel's block size at launch time; this option names it.
+        self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
         self.identifier_name_scopes = [{}]
@@ -247,13 +298,22 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
+        self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
+        """Render ``ast_node`` as CrossGL, or raise :class:`CudaImportRefused` listing every construct it cannot carry."""
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -277,8 +337,12 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
+        self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.visit(ast_node)
+        self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
 
     def visit(self, node):
@@ -306,6 +370,9 @@ class CudaToCrossGLConverter:
         text = str(value)
         if "'" in text and bool(text) and (text[0].isdigit() or text.startswith(".")):
             return True
+        if re.fullmatch(r"0\d+", text):
+            # A leading zero makes an integer literal octal (C++17 [lex.icon]).
+            return True
         return (
             re.fullmatch(
                 r"(?i)(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)(?:u|l|ul|lu|ull|llu)",
@@ -321,13 +388,13 @@ class CudaToCrossGLConverter:
             text,
         )
         if match is None:
-            return text
+            return crossgl_legacy_octal(text)
 
         digits, suffix = match.groups()
         if "u" in suffix.lower():
             unsigned_suffix = "U" if "U" in suffix else "u"
-            return f"{digits}{unsigned_suffix}"
-        return digits
+            return crossgl_legacy_octal(f"{digits}{unsigned_suffix}")
+        return crossgl_legacy_octal(digits)
 
     def is_cuda_char_literal_text(self, value):
         return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None
@@ -394,8 +461,20 @@ class CudaToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
+
+    def rename_keyword_record_names(self, type_text):
+        """Rename the structs that a type spelling such as ``let [2]`` names."""
+        return re.sub(
+            r"[A-Za-z_]\w*",
+            lambda word: (
+                self.sanitize_identifier_name(word.group())
+                if word.group() in self.cuda_record_names
+                else word.group()
+            ),
+            type_text,
+        )
 
     def format_crossgl_array_extent(self, size):
         size = str(size).strip()
@@ -429,7 +508,7 @@ class CudaToCrossGLConverter:
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char.isalnum() or char == "_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
@@ -437,7 +516,11 @@ class CudaToCrossGLConverter:
             elif not parts or parts[-1] != "_":
                 parts.append("_")
 
-        sanitized = "".join(parts).strip("_") or "anonymous"
+        raw_name = str(name)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
@@ -4023,9 +4106,14 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
-                self.visit(var)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(var)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
 
+        self.reference_parameters = ReferenceParameters(node)
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
@@ -4055,8 +4143,20 @@ class CudaToCrossGLConverter:
         else:
             self.emit(f"// {node.directive} {node.content}")
 
+    def cuda_kernel_buffer_element_type(self, cuda_type):
+        """The CrossGL element type of the buffer a kernel pointer parameter binds."""
+        element_type = self.convert_cuda_pointer_element_type(cuda_type)
+        return self.crossgl_safe_generic_type_argument(element_type)
+
     def visit_StructNode(self, node):
         struct_name = self.convert_cuda_record_name_to_crossgl(node.name)
+        layouts = getattr(self, "emitted_buffer_layouts", None)
+        if layouts is not None:
+            layouts.struct(
+                struct_name,
+                getattr(node, "attributes", None),
+                getattr(node, "is_union", False),
+            )
         self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
@@ -4065,13 +4165,19 @@ class CudaToCrossGLConverter:
                 node.name, member.vtype, member.name
             )
             member_name = self.sanitize_identifier_name(member.name)
+            if layouts is not None:
+                # CUDA stores a three-component vector member at its scalar alignment; see buffer_layout_import.
+                layouts.member(struct_name, member_type, member_name, len(self.output))
             self.emit(f"{member_type} {member_name};")
 
         self.indent_level -= 1
         self.emit("};")
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
@@ -4127,9 +4233,14 @@ class CudaToCrossGLConverter:
                 )
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
+                mode = self.function_reference_parameters().mode(node, index)
+                if mode:
+                    param_type = f"{mode} {param_type}"
                 params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
+            if function_requires_no_contraction(node):
+                self.emit(PRECISE_FUNCTION_ATTRIBUTE)
             self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
@@ -4146,9 +4257,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4181,9 +4294,16 @@ class CudaToCrossGLConverter:
                 self.emit(f"// CUDA grid constant parameter: {param.name}")
 
         self.emit("@compute")
-        self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
+        if function_requires_no_contraction(kernel):
+            self.emit(PRECISE_FUNCTION_ATTRIBUTE)
+        self.emit(
+            kernel_workgroup_size_attribute(self.threadgroup_size, whole_groups=True)
+        )
 
         params = []
+        buffer_params = (
+            {}
+        )  # index in params -> (context, element type) of a buffer parameter
         self.push_resource_object_hint_scope(
             self.collect_resource_object_type_hints(
                 kernel, self.collect_declared_variable_names(kernel)
@@ -4196,12 +4316,15 @@ class CudaToCrossGLConverter:
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
                 if "*" in param.vtype:
-                    element_type = self.convert_cuda_pointer_element_type(param.vtype)
-                    element_type = self.crossgl_safe_generic_type_argument(element_type)
+                    element_type = self.cuda_kernel_buffer_element_type(param.vtype)
                     storage_type = self.format_crossgl_type_syntax(
                         f"array<{element_type}>"
                     )
                     binding = self.global_resource_binding_count + len(params)
+                    buffer_params[len(params)] = (
+                        f"CUDA kernel {kernel.name} parameter {param.name}",
+                        element_type,
+                    )
                     params.append(
                         f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
                     )
@@ -4214,7 +4337,10 @@ class CudaToCrossGLConverter:
 
             self.emit(f"fn {kernel.name}(")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
             for i, param in enumerate(params):
+                if layouts is not None and i in buffer_params:
+                    layouts.buffer(*buffer_params[i], len(self.output))
                 if i == len(params) - 1:
                     self.emit(f"{param}")
                 else:
@@ -4223,11 +4349,6 @@ class CudaToCrossGLConverter:
             self.emit(") {")
 
             self.indent_level += 1
-            self.emit("let thread_id = gl_GlobalInvocationID;")
-            self.emit("let block_id = gl_WorkGroupID;")
-            self.emit("let thread_local_id = gl_LocalInvocationID;")
-            self.emit("let block_dim = gl_WorkGroupSize;")
-            self.emit("")
 
             self.push_packed_argument_scope()
             self.push_type_alias_scope()
@@ -4242,9 +4363,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4308,8 +4431,8 @@ class CudaToCrossGLConverter:
                     f"{node.name} maps to a tiled partition of the current workgroup"
                 )
             else:
-                self.emit(
-                    f"// cooperative_groups {group_kind} for {node.name} not directly supported in CrossGL"
+                self.refuse_import(
+                    f"CUDA cooperative_groups {group_kind} '{node.name}': CrossGL has no group of this kind"
                 )
             return
 
@@ -4319,6 +4442,15 @@ class CudaToCrossGLConverter:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        dim3_value = self.format_cuda_dim3_initializer(node)
+        if dim3_value is not None:
+            self.register_warp_mask_value(node.name, output_name, None)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {dim3_value};")
+                return
+            self.emit(f"var {output_name}: {var_type} = {dim3_value};")
+            return
         if node.value:
             runtime_expression = self.format_cuda_runtime_expression(node.value)
             if runtime_expression is not None:
@@ -4331,10 +4463,46 @@ class CudaToCrossGLConverter:
 
             value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def format_cuda_dim3_initializer(self, node):
+        """Return a ``vec3<u32>`` for a defaulted or braced ``dim3`` declaration.
+
+        CUDA sets every ``dim3`` component that is not given to 1, so
+        ``dim3 unit;`` is (1, 1, 1) and ``dim3 block = {16, 16};`` is (16, 16, 1).
+        Return None for any other declaration.
+        """
+        if (
+            self.strip_type_qualifiers(getattr(node, "vtype", "") or "").strip()
+            != "dim3"
+        ):
+            return None
+        value = getattr(node, "value", None)
+        if value is None:
+            args = []
+        elif isinstance(value, InitializerListNode) and len(value.elements) <= 3:
+            args = [self.visit(element) for element in value.elements]
+        else:
+            return None
+        padded_args = list(args) + ["1"] * (3 - len(args))
+        return f"vec3<u32>({', '.join(padded_args)})"
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})
@@ -4517,6 +4685,14 @@ class CudaToCrossGLConverter:
     def register_type_alias(self, name, alias_type):
         self.type_alias_scopes[-1][name] = alias_type
 
+    def function_reference_parameters(self):
+        """The :class:`ReferenceParameters` of the program being converted."""
+        analysis = getattr(self, "reference_parameters", None)
+        if analysis is None:
+            analysis = ReferenceParameters(None)
+            self.reference_parameters = analysis
+        return analysis
+
     def resolve_type_alias(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)
         for scope in reversed(self.type_alias_scopes):
@@ -4624,6 +4800,21 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
+        if (
+            node.value is None
+            and self.function_body_depth > 0
+            and "static" in node.qualifiers
+        ):
+            # A function-scope static __constant__ local has static storage,
+            # so without an initializer every element is zero, and device
+            # code cannot write constant memory. Emit it as a function-scope
+            # constant of zeros: it must neither take a resource binding
+            # (which would also collide with the kernel parameters) nor be
+            # read uninitialized by a later backend. A block-scope extern
+            # declaration names a namespace-scope variable the host may have
+            # written, so it is not one.
+            self.emit(f"let {node.name}: {var_type} = {crossgl_zero_value(var_type)};")
+            return
         binding = self.allocate_global_resource_binding()
         if node.value:
             value = self.visit(node.value)
@@ -4667,12 +4858,15 @@ class CudaToCrossGLConverter:
         self.register_warp_mask_value(raw_name, output_left, assigned_value)
 
     def visit_BinaryOpNode(self, node):
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+        axis = global_invocation_axis(node)
+        if axis is not None:
+            return f"gl_GlobalInvocationID.{axis}"
+        left = grouped_operand(self, node.left)
+        right = grouped_operand(self, node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        operand = self.visit(node.operand)
+        operand = grouped_operand(self, node.operand)
         if node.op.startswith("post"):
             return f"({operand}{node.op[4:]})"
         else:
@@ -4703,6 +4897,9 @@ class CudaToCrossGLConverter:
             return self.format_cuda_comma_expression(node.args)
 
         args = [self.visit(arg) for arg in node.args]
+        if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
+            # The type operand of ``sizeof(let)`` names the struct as its declaration does.
+            args = [self.rename_keyword_record_names(args[0])]
         args_str = ", ".join(args)
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
@@ -4718,12 +4915,16 @@ class CudaToCrossGLConverter:
                 return integer_intrinsic
 
         if self.is_user_defined_function(raw_name):
+            # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (
                 self.convert_cuda_function_name_to_crossgl(raw_name)
-                if isinstance(raw_name, str) and raw_name.startswith("::")
+                if raw_name.startswith("::") or self.is_simple_identifier(raw_name)
                 else raw_name
             )
             return f"{func_name}({args_str})"
+        if self.is_simple_identifier(raw_name) and raw_name in self.cuda_record_names:
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_cuda_type_to_crossgl(raw_name)}({args_str})"
 
         load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
             raw_name, node.args, args
@@ -4747,6 +4948,7 @@ class CudaToCrossGLConverter:
         if warp_intrinsic is not None:
             return warp_intrinsic
 
+        refuse_directed_rounding(raw_name)
         fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
         if fp16_intrinsic is not None:
             return fp16_intrinsic
@@ -4795,18 +4997,14 @@ class CudaToCrossGLConverter:
         return self.format_cuda_time_function_diagnostic(display_name, args)
 
     def format_cuda_time_function_diagnostic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda time function {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA time function {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            "0",
         )
 
     def format_cuda_comma_expression(self, args):
-        args_text = ", ".join(self.visit(arg) for arg in args)
-        return (
-            f"(/* CUDA comma expression {args_text} "
-            "not directly supported in CrossGL */ 0)"
-        )
+        # CrossGL has the C comma operator: ``(a, b)`` evaluates ``a``, then yields ``b``.
+        return f"({', '.join(self.visit(arg) for arg in args)})"
 
     def format_cuda_nanosleep_call(self, function_name, args):
         if not isinstance(function_name, str):
@@ -4818,10 +5016,12 @@ class CudaToCrossGLConverter:
         if normalized_name != "__nanosleep":
             return None
 
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda nanosleep __nanosleep({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        # The sleep is a scheduling hint whose duration lies in [0, 2 * ns] (CUDA C++ Programming Guide,
+        # "Nanosleep Function"), so a sleep of zero is one of its executions; the argument is still evaluated.
+        if len(args) == 1:
+            return f"({args[0]})"
+        return self.refuse_import(
+            f"CUDA __nanosleep({', '.join(args)}) takes one argument", "0"
         )
 
     def format_cuda_load_cache_intrinsic_call(
@@ -4850,10 +5050,10 @@ class CudaToCrossGLConverter:
         if len(raw_args) == 1:
             return f"(*{formatted_args[0]})"
 
-        args_text = ", ".join(formatted_args)
-        return (
-            f"(/* cuda load cache intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
+            "address",
+            "0",
         )
 
     def format_cuda_memory_fence_call(self, function_name, args):
@@ -5011,10 +5211,10 @@ class CudaToCrossGLConverter:
         return self.format_unsupported_cuda_block_sync_vote(function_name, args)
 
     def format_unsupported_cuda_block_sync_vote(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda thread block sync vote {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA thread block sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
+            "reduces a predicate",
+            "0",
         )
 
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
@@ -5211,10 +5411,9 @@ class CudaToCrossGLConverter:
         return f"(({operand} >> {shift}) & 0xffu)"
 
     def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda integer intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        return self.refuse_import(
+            f"CUDA integer intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
+            "0",
         )
 
     def format_cuda_byte_perm_intrinsic(self, left, right, selector):
@@ -5490,10 +5689,8 @@ class CudaToCrossGLConverter:
     ):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f": {formatted_args}" if formatted_args else ""
-        return (
-            f"// cooperative_groups {group_kind}.{member} "
-            f"not directly supported in CrossGL{arg_suffix}"
+        return self.refuse_import(
+            f"CUDA cooperative_groups {group_kind}.{member}({formatted_args}) has no CrossGL form"
         )
 
     def format_unsupported_cooperative_group_expression(
@@ -5501,10 +5698,9 @@ class CudaToCrossGLConverter:
     ):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f"({formatted_args})" if formatted_args else ""
-        return (
-            f"(/* cooperative_groups {group_kind}.{member}{arg_suffix} "
-            f"not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"CUDA cooperative_groups {group_kind}.{member}({formatted_args}) has no CrossGL form",
+            fallback,
         )
 
     def format_cuda_async_sync_call(self, node):
@@ -5582,16 +5778,17 @@ class CudaToCrossGLConverter:
     def format_unsupported_cuda_async_statement(self, kind, member, args=None):
         args = args or []
         formatted_args = ", ".join(self.visit(arg) for arg in args)
-        arg_suffix = f": {formatted_args}" if formatted_args else ""
-        return f"// cuda {kind}.{member} not directly supported in CrossGL{arg_suffix}"
-
-    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
-        return (
-            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        return self.refuse_import(
+            f"CUDA {kind}.{member}({formatted_args}) has no CrossGL form"
         )
 
+    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
+        return self.refuse_import(f"CUDA {kind}.{member} has no CrossGL form", fallback)
+
     def format_cuda_async_sync_declaration(self, name, metadata):
-        return f"// cuda {metadata['kind']} {name} not directly supported in CrossGL"
+        return self.refuse_import(
+            f"CUDA {metadata['kind']} '{name}': CrossGL has no asynchronous copy object"
+        )
 
     def cuda_async_sync_declaration_metadata(self, node):
         declared_metadata = self.cuda_async_sync_metadata_from_type(node.vtype)
@@ -5791,7 +5988,9 @@ class CudaToCrossGLConverter:
                 "surfCubemapread": 3,
                 "surfCubemapLayeredread": 3,
             }[base_name]
-            return self.format_cuda_surface_read(args, dimensions, value_type)
+            return self.format_cuda_surface_read(
+                args, dimensions, value_type, base_name
+            )
 
         if base_name in {
             "surf1Dwrite",
@@ -5812,7 +6011,7 @@ class CudaToCrossGLConverter:
                 "surfCubemapLayeredwrite": 3,
             }[base_name]
             return self.format_cuda_surface_write(
-                args, dimensions, value_type, raw_args
+                args, dimensions, value_type, raw_args, base_name
             )
 
         return None
@@ -5917,15 +6116,22 @@ class CudaToCrossGLConverter:
             "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
         )
 
-    def format_cuda_surface_read(self, args, dimensions, value_type):
+    def format_cuda_surface_read(self, args, dimensions, value_type, base_name):
         if len(args) < dimensions + 1:
             return None
         surface_name = args[0]
         coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
         coord_args.extend(args[2 : dimensions + 1])
-        return f"imageLoad({surface_name}, {self.format_vector_constructor(f'vec{dimensions}', coord_args, 'i32')})"
+        coord = self.format_cuda_surface_coordinate(
+            base_name, surface_name, coord_args, dimensions, args[dimensions + 1 :]
+        )
+        if coord is None:
+            return None
+        return f"imageLoad({surface_name}, {coord})"
 
-    def format_cuda_surface_write(self, args, dimensions, value_type, raw_args=None):
+    def format_cuda_surface_write(
+        self, args, dimensions, value_type, raw_args=None, base_name=None
+    ):
         if len(args) < dimensions + 2:
             return None
         if value_type is None and raw_args:
@@ -5934,8 +6140,87 @@ class CudaToCrossGLConverter:
         surface_name = args[1]
         coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
         coord_args.extend(args[3 : dimensions + 2])
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        coord = self.format_cuda_surface_coordinate(
+            base_name, surface_name, coord_args, dimensions, args[dimensions + 2 :]
+        )
+        if coord is None:
+            return None
         return f"imageStore({surface_name}, {coord}, {value})"
+
+    def format_cuda_surface_coordinate(
+        self, base_name, surface_name, coord_args, dimensions, mode_args
+    ):
+        """The image coordinate of a surface access, or ``None`` to keep the CUDA call as it is.
+
+        ``mode_args`` holds the arguments after the coordinates: none, or the boundary mode. With no mode or
+        ``cudaBoundaryModeTrap``, the default, the coordinate is used as it is. ``cudaBoundaryModeClamp`` clamps it
+        to the surface. ``cudaBoundaryModeZero``, under which a load out of range reads zero and a store out of
+        range is skipped, has no CrossGL form yet, and neither does a mode that is not one of the three names (a
+        variable, say). The call then stays as CUDA wrote it, and every target refuses it as an undeclared
+        function instead of reading or writing the surface without the mode.
+        """
+        if not mode_args:
+            mode = "trap"
+        elif len(mode_args) == 1:
+            mode = self.cuda_surface_boundary_mode(mode_args[0])
+        else:
+            mode = None
+        if mode == "trap":
+            return self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        if mode == "clamp":
+            return self.format_cuda_surface_clamped_coordinate(
+                base_name, surface_name, coord_args, dimensions
+            )
+        return None
+
+    def cuda_surface_boundary_mode(self, mode_text):
+        """Return 'trap', 'clamp' or 'zero' for a boundary-mode argument."""
+        if not isinstance(mode_text, str):
+            return None
+        text = str(mode_text).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        if text.startswith("::"):
+            text = text[2:]
+        if "::" in text:
+            text = text.rsplit("::", 1)[-1]
+        return self.CUDA_SURFACE_BOUNDARY_MODES.get(text)
+
+    def format_cuda_surface_clamped_coordinate(
+        self, base_name, surface_name, coord_args, dimensions
+    ):
+        """``coord_args`` clamped to the texels of ``surface_name``, as ``cudaBoundaryModeClamp`` reads them.
+
+        Each texel coordinate is clamped to ``[0, size - 1]``, so a negative one reads the first texel. A layer
+        index or a cubemap face is not a texel coordinate and is left as it is: ``imageSize`` of a cubemap has no
+        face component, and that of a layered cubemap counts cubes, not faces.
+        """
+        texel_dimensions = self.CUDA_SURFACE_TEXEL_DIMENSIONS[
+            base_name.removeprefix("surf").removesuffix("read").removesuffix("write")
+        ]
+        size = f"imageSize({surface_name})"
+        if texel_dimensions == dimensions:
+            coord = self.format_vector_constructor(
+                f"vec{dimensions}", coord_args, "i32"
+            )
+            if dimensions == 1:
+                return f"clamp({coord}, 0, {size} - 1)"
+            zeros = ", ".join(["0"] * dimensions)
+            ones = ", ".join(["1"] * dimensions)
+            return (
+                f"clamp({coord}, vec{dimensions}<i32>({zeros}), "
+                f"{size} - vec{dimensions}<i32>({ones}))"
+            )
+        if texel_dimensions == 1:
+            clamped = [f"clamp({coord_args[0]}, 0, {size}.x - 1)"]
+        else:
+            clamped = [
+                f"clamp({coord_args[index]}, 0, {size}.{'xyz'[index]} - 1)"
+                for index in range(texel_dimensions)
+            ]
+        return self.format_vector_constructor(
+            f"vec{dimensions}", clamped + list(coord_args[texel_dimensions:]), "i32"
+        )
 
     def strip_surface_byte_offset(self, expression, value_type):
         text = str(expression).strip()
@@ -6012,9 +6297,7 @@ class CudaToCrossGLConverter:
         return (text, f"{text}u", f"{text}U", f"{text}ul", f"{text}UL")
 
     def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
-        return (
-            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
-        )
+        return self.refuse_import(f"CUDA {kind}.{member} has no CrossGL form", fallback)
 
     def format_vector_constructor(self, vector_name, args, element_type="f32"):
         if vector_name == "vec1":
@@ -6047,9 +6330,8 @@ class CudaToCrossGLConverter:
 
     def format_cuda_fold_expression(self, args):
         expression = args[0] if args else ""
-        return (
-            f"0 /* CUDA fold expression {expression} is not directly supported "
-            "in CrossGL */"
+        return self.refuse_import(
+            f"CUDA fold expression {expression}: CrossGL has no parameter packs", "0"
         )
 
     def is_get_method_call(self, node):
@@ -6094,20 +6376,43 @@ class CudaToCrossGLConverter:
 
     def visit_DeleteNode(self, node):
         target = self.visit(node.expression)
-        if node.is_array:
-            self.emit(f"// delete array: {target}")
-        else:
-            self.emit(f"// delete: {target}")
+        form = "delete[]" if node.is_array else "delete"
+        self.refuse_import(f"CUDA {form} {target}: CrossGL has no device heap")
 
     def visit_TypeAliasNode(self, node):
+        """Write ``typedef``/``using`` as a CrossGL ``typedef`` (#3309).
+
+        CrossGL has no ``decltype``, so such an alias stays a comment and its
+        uses are refused downstream as undeclared types.
+        """
         self.register_type_alias(node.name, node.alias_type)
-        if str(node.alias_type).strip().startswith(("struct ", "union ")):
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        alias_name = self.sanitize_identifier_name(node.name)
+        elaborated = re.fullmatch(
+            r"(?:struct|union)\s+([A-Za-z_]\w*)", str(node.alias_type).strip()
+        )
+        if elaborated is not None:
+            # ``typedef struct Pair PairT;`` names the record ``Pair``; the
+            # self-alias ``typedef struct Q {...} Q;`` declares nothing new.
+            alias_type = elaborated.group(1)
+            if alias_type == node.name:
+                return
+            alias_type = self.rename_keyword_record_names(alias_type)
+        elif str(node.alias_type).strip().startswith(("struct ", "union ")):
             alias_type = node.alias_type
         elif self.is_decltype_type_name(node.alias_type):
-            alias_type = node.alias_type
+            self.emit(f"// typedef {node.alias_type} {node.name};")
+            return
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
-        self.emit(f"// typedef {alias_type} {node.name};")
+            layouts = getattr(self, "emitted_buffer_layouts", None)
+            if (
+                layouts is not None
+                and not getattr(node, "array_sizes", None)
+                and not getattr(node, "declarator_type_suffix", "")
+            ):
+                layouts.alias(alias_name, alias_type)
+        self.emit(f"typedef {alias_type} {alias_name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
@@ -6139,37 +6444,51 @@ class CudaToCrossGLConverter:
             "atomicDec": "atomicDec",
         }
 
-        crossgl_func = atomic_map.get(operation, operation)
+        # The parser builds this node only for ATOMIC_FUNCTION_NAMES, whose base names atomic_map covers.
+        crossgl_func = atomic_map[operation]
         expression = f"{crossgl_func}({args_str})"
-        if scope is not None:
-            return (
-                f"(/* cuda {scope}-scope atomic {node.operation} lowered to "
-                f"{crossgl_func}; scope not preserved */ {expression})"
+        if scope == "system":
+            return self.refuse_import(
+                f"CUDA {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
+                "atomic for the host and peer devices",
+                expression,
             )
+        # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
+        # thread on the device, which includes the block.
         return expression
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
+        elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
+            # __syncwarp over the whole warp waits for every lane and orders their memory accesses, as
+            # subgroupBarrier does for the subgroup.
+            self.emit("subgroupBarrier();")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
+            self.refuse_import(
+                f"CUDA __syncwarp({args}): CrossGL has no barrier over a subset of the subgroup"
+            )
         else:
-            self.emit(f"// {node.sync_type}();")
+            self.refuse_import(f"CUDA {node.sync_type}() has no CrossGL form")
+
+    def is_full_warp_mask(self, args):
+        """Whether ``__syncwarp`` arguments name every lane: none, or the literal mask ``0xffffffff``."""
+        if not args:
+            return True
+        if len(args) != 1:
+            return False
+        value = self.visit(args[0]).strip().rstrip("uUlL")
+        try:
+            return int(value, 0) == 0xFFFFFFFF
+        except ValueError:
+            return False
 
     def visit_CudaAsmNode(self, node):
         volatility = " volatile" if node.is_volatile else ""
-        self.emit(f"// CUDA inline PTX{volatility}: {node.template}")
-        if node.outputs:
-            self.emit(
-                f"// CUDA inline PTX outputs: {self.format_cuda_asm_operands(node.outputs)}"
-            )
-        if node.inputs:
-            self.emit(
-                f"// CUDA inline PTX inputs: {self.format_cuda_asm_operands(node.inputs)}"
-            )
-        if node.clobbers:
-            self.emit(f"// CUDA inline PTX clobbers: {', '.join(node.clobbers)}")
+        self.refuse_import(
+            f"CUDA inline PTX asm{volatility}({node.template}): CrossGL has no inline assembly"
+        )
 
     def format_cuda_asm_operands(self, operands):
         formatted = []
@@ -6199,7 +6518,8 @@ class CudaToCrossGLConverter:
             "warpSize": "32",  # Constant in CrossGL
         }
 
-        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
+        # The parser builds this node only for the five built-in tokens builtin_map covers.
+        base_name = builtin_map[node.builtin_name]
         if node.component:
             return f"{base_name}.{node.component}"
         else:
@@ -6232,6 +6552,22 @@ class CudaToCrossGLConverter:
 
         value = self.visit(node.value)
         return f"{''.join(designators)} = {value}"
+
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
 
     def visit_IfNode(self, node):
         condition = self.visit(node.condition)
@@ -6394,9 +6730,9 @@ class CudaToCrossGLConverter:
         self.emit("continue;")
 
     def visit_TernaryOpNode(self, node):
-        condition = self.visit(node.condition)
-        true_expr = self.visit(node.true_expr)
-        false_expr = self.visit(node.false_expr)
+        condition = grouped_operand(self, node.condition)
+        true_expr = grouped_operand(self, node.true_expr)
+        false_expr = grouped_operand(self, node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):
@@ -6618,6 +6954,9 @@ class CudaToCrossGLConverter:
         scoped_type = self.convert_cuda_scoped_type_to_crossgl(cuda_type)
         if scoped_type is not None:
             return scoped_type
+        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(cuda_type)
         return cuda_type
 
     def unqualified_leading_cuda_std_type_name(self, cuda_type):

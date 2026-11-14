@@ -30,6 +30,15 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.alias_template_types import fold_expression_decltypes
+from crosstl.backend.Metal.auto_placeholders import (
+    deduced_auto_type,
+    is_auto_placeholder,
+)
+from crosstl.backend.Metal.deduction_operand_types import (
+    is_unary_sign_position,
+    operand_expression_type,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -37,12 +46,38 @@ from crosstl.backend.Metal.function_specialization import (
     _normalize_metal_type_text,
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
+    unique_specialization_identifier,
+)
+from crosstl.backend.Metal.integral_constant_tags import (
+    concretize_integral_constant_tags,
+)
+from crosstl.backend.Metal.member_lowering_layers import (
+    lower_members_with_late_specializations,
+)
+from crosstl.backend.Metal.orphaned_explicit_specializations import (
+    prune_orphaned_explicit_specializations,
+)
+from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
+from crosstl.backend.Metal.return_type_enablers import fold_concrete_enablers
+from crosstl.backend.Metal.template_overloads import (
+    declared_type_names,
+    select_instantiated_overload,
+)
+from crosstl.backend.Metal.text_scanners import (
+    brace_block_spans,
+    mask_comments_and_literals,
+    strip_comments_outside_strings,
+)
+from crosstl.backend.Metal.variable_templates import (
+    materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
     dxc_file_path,
+    dxc_host_workgroup_size_check_arguments,
     dxc_library_command_tool,
     dxc_long_path_command,
     dxc_profile_for_source,
@@ -73,11 +108,26 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.namespace_alias_scopes import (
+    alias_visible_at,
+    alias_visible_in_scope,
+    reopened_namespace_scopes,
+)
+from crosstl.project.source_closure_memo import (
+    memoized_entry_discovery,
+    memoized_preprocessor_run,
+    memoized_source_host_interface,
+)
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointError,
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
     project_translation_implementation_identity,
+)
+from crosstl.project.workgroup_linearization import (
+    linearize_compute_workgroups,
+    linearized_workgroup_size,
+    record_workgroup_linearization,
 )
 from crosstl.translator.artifact_contracts import with_artifact_contract_header
 from crosstl.translator.ast import (
@@ -93,6 +143,7 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.array_utils import prepend_array_dimension
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.entry_selection import prepare_entry_scoped_target
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
@@ -128,6 +179,14 @@ from crosstl.translator.frozen_specializations import (
     frozen_specialization_header,
     frozen_specializations,
 )
+from crosstl.translator.immutable_storage import (
+    ImmutableStorageContract,
+    ImmutableStorageError,
+    parse_immutable_storage,
+    program_functions,
+    resolve_immutable_storage,
+    with_immutable_storage_header,
+)
 from crosstl.translator.metadata_preconditions import (
     MetadataPreconditionError,
     MetadataRangePrecondition,
@@ -138,6 +197,11 @@ from crosstl.translator.metadata_preconditions import (
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.resource_identity import source_resource_identity
 from crosstl.translator.semantics import apply_rule_carrying
+from crosstl.translator.semantics.declared_identifiers import (
+    deferring_undeclared_identifier_refusals,
+    generate_refusing_undeclared_identifiers,
+    recorded_undeclared_identifier,
+)
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -1521,6 +1585,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "indexRangeAssertionCount",
         "metadataPreconditions",
         "metadataPreconditionCount",
+        "immutableStorage",
+        "immutableStorageCount",
         "workgroupAccessAssertions",
         "workgroupAccessAssertionCount",
         "includeDirs",
@@ -1591,7 +1657,9 @@ WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 ENTRY_WORKGROUP_SIZE_RULES_CONFIG_KEY = "entry_workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
-WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl"))
+# Targets that fix the workgroup size in the shader, so a configured project size must reach them.
+WORKGROUP_SIZE_FIXED_TARGETS = frozenset(("directx", "opengl", "vulkan"))
+WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl", "vulkan"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
 DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
@@ -1883,6 +1951,7 @@ REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
     (
         "workgroupSize",
+        "targetWorkgroupSize",
         "sourceEntryPoints",
         "entryPoints",
         "provenance",
@@ -1900,6 +1969,7 @@ REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
         "materializedEntryPoint",
         "targetEntryPoint",
         "workgroupSize",
+        "targetWorkgroupSize",
         "subgroupWidth",
         "rule",
         "subgroupWidthRule",
@@ -3081,7 +3151,7 @@ DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
 }
 DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE = {"cs": "cs_6_6"}
 DIRECTX_HLSL_FUNCTION_RE = re.compile(
-    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
+    r"(?P<attributes>(?:(?:\s*+\[[^\]]+\])+\s*+)?)"
     r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
     r"(?P<name>[A-Za-z_]\w*)\s*"
     r"\((?P<parameters>[^;{}]*)\)"
@@ -7648,6 +7718,7 @@ class ProjectConfig:
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
     metadata_preconditions: Sequence[Any] = ()
+    immutable_storage: Sequence[Any] = ()
     workgroup_access_assertions: Sequence[Any] = ()
     translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
@@ -7780,6 +7851,19 @@ class ProjectConfig:
                 )
                 for condition in parse_metadata_preconditions(
                     self.metadata_preconditions
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "immutable_storage",
+            tuple(
+                replace(
+                    contract, source=_normalize_project_relative_path(contract.source)
+                )
+                for contract in parse_immutable_storage(
+                    self.immutable_storage,
+                    field_name="ProjectConfig.immutable_storage",
                 )
             ),
         )
@@ -8936,6 +9020,10 @@ class ProjectPortabilityReport:
                     item.to_json() for item in self.config.metadata_preconditions
                 ],
                 "metadataPreconditionCount": len(self.config.metadata_preconditions),
+                "immutableStorage": [
+                    item.to_json() for item in self.config.immutable_storage
+                ],
+                "immutableStorageCount": len(self.config.immutable_storage),
                 "workgroupAccessAssertions": [
                     assertion.to_json()
                     for assertion in self.config.workgroup_access_assertions
@@ -9288,6 +9376,7 @@ def load_project_config(
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
         metadata_preconditions=project.get("metadata_preconditions", ()),
+        immutable_storage=project.get("immutable_storage", ()),
         workgroup_access_assertions=workgroup_access_assertions,
     )
 
@@ -9591,6 +9680,23 @@ def _metadata_precondition_pattern_diagnostics(config, units):
     ]
 
 
+def _immutable_storage_pattern_diagnostics(config, units):
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.immutable-storage-pattern-unmatched",
+            message=(
+                f"Immutable storage source pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            details={"pattern": pattern},
+        )
+        for pattern in sorted({item.source for item in config.immutable_storage})
+        if not any(fnmatch.fnmatch(unit.relative_path, pattern) for unit in units)
+    ]
+
+
 def _metadata_precondition_source_matches(config, units):
     """Resolve source selectors without assuming configured entries exist.
 
@@ -9686,7 +9792,8 @@ def _discover_project_source_entries(
 ) -> tuple[SourceEntryDiscovery, list[ProjectDiagnostic]]:
     try:
         source = path.read_text(encoding="utf-8")
-        discovery = source_spec.discover_entry_points(
+        discovery = memoized_entry_discovery(
+            source_spec,
             source,
             file_path=str(path),
             include_paths=_frontend_include_dirs(config),
@@ -9870,6 +9977,7 @@ def scan_project(
     diagnostics.extend(_entry_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     diagnostics.extend(_metadata_precondition_pattern_diagnostics(scan_config, units))
+    diagnostics.extend(_immutable_storage_pattern_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -11917,6 +12025,7 @@ def _workgroup_execution_identity(
     variant: str | None,
     source_entry_points: Sequence[str],
     workgroup_size: Sequence[int],
+    target_workgroup_size: Sequence[int] | None = None,
 ) -> dict[str, str]:
     payload = {
         "source": source,
@@ -11925,6 +12034,8 @@ def _workgroup_execution_identity(
         "sourceEntryPoints": sorted(source_entry_points),
         "workgroupSize": list(workgroup_size),
     }
+    if target_workgroup_size is not None:
+        payload["targetWorkgroupSize"] = list(target_workgroup_size)
     encoded = json.dumps(
         payload,
         ensure_ascii=True,
@@ -12105,6 +12216,13 @@ def _target_entry_points_for_crossgl_stages(
             str(getattr(getattr(stage, "entry_point", None), "name", "main")): "main"
             for stage in stages
         }
+    if target == "vulkan":
+        # A SPIR-V module keeps every compute entry, each under its own name.
+        names = (
+            str(getattr(getattr(stage, "entry_point", None), "name", "main"))
+            for stage in stages
+        )
+        return {name: name for name in names}
     if target not in {"directx", "metal"}:
         return {}
     codegen = get_codegen(target)
@@ -13876,25 +13994,61 @@ def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates, key=lambda candidate: _relpath(candidate, config.root))
 
 
-def _runtime_reference_for_match(
-    *,
-    config: ProjectConfig,
-    path: Path,
-    line_number: int,
-    match: re.Match[str],
-    backend: str,
-    kind: str,
-    fallback_symbol: str | None,
-) -> dict[str, Any]:
-    symbol = fallback_symbol or match.group(1)
-    return {
-        "path": _relpath(path, config.root),
-        "line": line_number,
-        "column": match.start() + 1,
-        "backend": backend,
-        "kind": kind,
-        "symbol": symbol,
-    }
+_runtime_text_reference_cache: OrderedDict[
+    tuple[str, bool], tuple[tuple[int, int, str, str, str], ...]
+] = OrderedDict()
+_runtime_text_reference_cache_lock = Lock()
+RUNTIME_TEXT_REFERENCE_CACHE_LIMIT = 8192
+
+
+def _runtime_text_references(
+    text: str, *, build_candidate: bool
+) -> tuple[tuple[int, int, str, str, str], ...]:
+    """Return (line, column, backend, kind, symbol) matches in one file's text.
+
+    The result is a pure function of the text and whether the file is a build
+    description, so repeated scans of an unchanged repository reuse it.
+    """
+
+    key = (
+        hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
+        build_candidate,
+    )
+    with _runtime_text_reference_cache_lock:
+        cached = _runtime_text_reference_cache.get(key)
+        if cached is not None:
+            _runtime_text_reference_cache.move_to_end(key)
+            return cached
+    rules = [
+        rule
+        for rule in RUNTIME_REFERENCE_RULES
+        if build_candidate or rule[1] != "build-system"
+    ]
+    matches: list[tuple[int, int, str, str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for backend, kind, pattern, fallback_symbol in rules:
+            for match in pattern.finditer(line):
+                matches.append(
+                    (
+                        line_number,
+                        match.start() + 1,
+                        backend,
+                        kind,
+                        fallback_symbol or match.group(1),
+                    )
+                )
+                if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                    break
+            if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                break
+        if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+            break
+    result = tuple(matches)
+    with _runtime_text_reference_cache_lock:
+        _runtime_text_reference_cache[key] = result
+        while len(_runtime_text_reference_cache) > RUNTIME_TEXT_REFERENCE_CACHE_LIMIT:
+            _runtime_text_reference_cache.popitem(last=False)
+    return result
 
 
 def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
@@ -13903,30 +14057,25 @@ def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
         try:
             if path.stat().st_size > RUNTIME_REFERENCE_FILE_SIZE_LIMIT:
                 continue
-            lines = path.read_text(encoding="utf-8").splitlines()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for line_number, line in enumerate(lines, start=1):
-            for backend, kind, pattern, fallback_symbol in RUNTIME_REFERENCE_RULES:
-                if (
-                    kind == "build-system"
-                    and not _is_runtime_build_reference_candidate(path)
-                ):
-                    continue
-                for match in pattern.finditer(line):
-                    references.append(
-                        _runtime_reference_for_match(
-                            config=config,
-                            path=path,
-                            line_number=line_number,
-                            match=match,
-                            backend=backend,
-                            kind=kind,
-                            fallback_symbol=fallback_symbol,
-                        )
-                    )
-                    if len(references) >= RUNTIME_REFERENCE_LIMIT:
-                        return references
+        relative_path = _relpath(path, config.root)
+        for line, column, backend, kind, symbol in _runtime_text_references(
+            text, build_candidate=_is_runtime_build_reference_candidate(path)
+        ):
+            references.append(
+                {
+                    "path": relative_path,
+                    "line": line,
+                    "column": column,
+                    "backend": backend,
+                    "kind": kind,
+                    "symbol": symbol,
+                }
+            )
+            if len(references) >= RUNTIME_REFERENCE_LIMIT:
+                return references
     return references
 
 
@@ -14039,6 +14188,18 @@ def _is_template_hostile_target(target: str) -> bool:
 
 
 def _metal_preprocess_without_template_materialization(
+    preprocessor: Any, code: str, *, file_path: str
+) -> str:
+    return memoized_preprocessor_run(
+        preprocessor,
+        code,
+        file_path=file_path,
+        source_backend="metal",
+        run=_expand_metal_without_template_materialization,
+    )
+
+
+def _expand_metal_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
     from crosstl.backend.Metal.preprocessor import PRESERVED_INCLUDE_SENTINEL
@@ -14501,6 +14662,20 @@ def _materialize_inherited_source_template_helpers(
         template.name
         for template in preprocessor._find_template_functions(materialized)
     )
+    # An explicit specialization replaces the primary's body for its arguments
+    # ([temp.expl.spec]/1), including for helpers reached through inherited
+    # template parameters.
+    explicit_specializations = (
+        preprocessor._find_explicit_template_function_specializations(materialized)
+    )
+    materialized_type_aliases = (
+        preprocessor._collect_local_type_alias_bindings(
+            materialized,
+            [(0, len(materialized))],
+        )
+        if explicit_specializations
+        else {}
+    )
     generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     generated_order: list[tuple[str, tuple[str, ...]]] = []
     specialization_records: list[dict[str, Any]] = []
@@ -14572,13 +14747,31 @@ def _materialize_inherited_source_template_helpers(
             return materialized_name
 
         active.add(key)
-        child_replacements: dict[str, str] = {}
-        for child_name in sorted(
-            _plain_template_function_call_names(
-                preprocessor,
-                template,
-                template_names,
+        explicit_specialization = (
+            _explicit_template_function_specialization_for_selected_overload(
+                preprocessor=preprocessor,
+                explicit_specializations=explicit_specializations,
+                template=template,
+                function_name=name,
+                arguments=list(key[1]),
+                parameter_declarations=parameter_declarations,
+                declaration_source=materialized,
+                declaration_type_aliases=materialized_type_aliases,
             )
+            if explicit_specializations
+            else None
+        )
+        child_replacements: dict[str, str] = {}
+        for child_name in (
+            sorted(
+                _plain_template_function_call_names(
+                    preprocessor,
+                    template,
+                    template_names,
+                )
+            )
+            if explicit_specialization is None
+            else ()
         ):
             child_materialized_name = ensure_helper(
                 child_name,
@@ -14588,12 +14781,20 @@ def _materialize_inherited_source_template_helpers(
             if child_materialized_name is not None:
                 child_replacements[child_name] = child_materialized_name
 
-        source = preprocessor._materialize_template_function_with_name(
-            template,
-            list(key[1]),
-            materialized_name,
-            host_name=None,
-        )
+        if explicit_specialization is not None:
+            source = (
+                preprocessor._materialize_explicit_template_function_specialization(
+                    explicit_specialization,
+                    materialized_name,
+                )
+            )
+        else:
+            source = preprocessor._materialize_template_function_with_name(
+                template,
+                list(key[1]),
+                materialized_name,
+                host_name=None,
+            )
         if child_replacements:
             replacements = _plain_template_call_replacements(
                 preprocessor,
@@ -15236,6 +15437,8 @@ def _materialize_implicit_template_function_calls(
     ] = {}
     specializations: list[dict[str, Any]] = []
     seen_implicit_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    implicit_names: dict[tuple[str, tuple[str, ...]], str] = {}
+    source_identifiers: set[str] | None = None
     for function_name, arguments, span in implicit_calls:
         template = templates_by_name.get(function_name)
         if template is None or not preprocessor._template_arguments_satisfy_parameters(
@@ -15267,11 +15470,26 @@ def _materialize_implicit_template_function_calls(
                 )
                 if inherited_key == key:
                     continue
-        materialized_name = preprocessor._template_specialization_identifier(
-            function_name,
-            list(key[1]),
-        )
-        materialized_name = known_materializations.get(key, materialized_name)
+        materialized_name = known_materializations.get(key) or implicit_names.get(key)
+        if materialized_name is None:
+            # A source function may already own the readable name, such as a
+            # concrete pick_float beside template pick; never define it twice.
+            if source_identifiers is None:
+                source_identifiers = set(
+                    re.findall(
+                        r"[A-Za-z_][A-Za-z0-9_]*",
+                        mask_comments_and_literals(materialized),
+                    )
+                )
+            materialized_name = unique_specialization_identifier(
+                preprocessor._template_specialization_identifier(
+                    function_name,
+                    list(key[1]),
+                ),
+                source_identifiers,
+                [*known_materializations.values(), *implicit_names.values()],
+            )
+            implicit_names[key] = materialized_name
         implicit_replacements.append((span[0], span[1], materialized_name))
         if key in seen_implicit_specializations:
             continue
@@ -15694,6 +15912,17 @@ def _metal_generic_type_parts(
     )
 
 
+def _metal_canonical_generic_base(base: str) -> str:
+    """Spell a generic type name without its global or Metal-library qualifier.
+
+    ``metal::vec<T, 2>``, ``::metal::vec<T, 2>`` and ``vec<T, 2>`` name the same
+    Metal standard-library template, so deduction must not treat a qualified
+    parameter spelling as a different type from an unqualified argument type.
+    Other namespaces stay significant.
+    """
+    return re.sub(r"^(?:::)?(?:metal::)?", "", base.strip())
+
+
 def _metal_merge_template_binding(
     bindings: dict[str, str],
     parameter: str,
@@ -15866,7 +16095,9 @@ def _collect_metal_template_type_bindings(
     actual_base, actual_args = _metal_generic_type_parts(preprocessor, actual)
     if not expected_args:
         return _metal_concrete_parameter_type_compatible(expected, actual)
-    if expected_base != actual_base:
+    if _metal_canonical_generic_base(expected_base) != _metal_canonical_generic_base(
+        actual_base
+    ):
         return not actual_args
     if len(expected_args) > len(actual_args):
         return False
@@ -16388,6 +16619,38 @@ def _metal_concrete_function_definition_fingerprints(
     return fingerprints
 
 
+def _metal_at_line_start(source: str, position: int) -> bool:
+    line_start = source.rfind("\n", 0, position) + 1
+    return not source[line_start:position].strip()
+
+
+def _metal_statement_start(source: str, start: int, end: int) -> int:
+    """Return where the statement in ``source[start:end]`` begins.
+
+    A statement span runs from the previous ``;``, so it can begin with the
+    trailing comment of the line before (``int n = 8; // size``).  Comments are
+    not part of the statement ([lex.comment]), so skip them and whitespace, and
+    so is a preserved directive line such as ``#pragma clang loop``, which ends
+    without a semicolon.
+    """
+    position = start
+    while position < end:
+        if source[position].isspace():
+            position += 1
+        elif source[position] == "#" and _metal_at_line_start(source, position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
+        elif source.startswith("//", position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
+        elif source.startswith("/*", position):
+            comment_end = source.find("*/", position + 2, end)
+            position = end if comment_end == -1 else comment_end + 2
+        else:
+            return position
+    return start
+
+
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     statement_start = start
@@ -16418,7 +16681,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
             and angle_depth == 0
             and brace_depth == 0
         ):
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
@@ -16474,7 +16739,9 @@ def _metal_scoped_statement_spans(
             continue
         ch = source[i]
         if ch == ";" and paren_depth == bracket_depth == 0:
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
@@ -16485,7 +16752,12 @@ def _metal_scoped_statement_spans(
         elif ch == "]":
             bracket_depth = max(0, bracket_depth - 1)
         elif ch == "{" and paren_depth == bracket_depth == 0:
-            prefix = source[statement_start:i].strip()
+            # A comment before a nested block is not a statement prefix, and
+            # neither is a preserved directive line that precedes it.
+            prefix = strip_comments_outside_strings(
+                source[_metal_statement_start(source, statement_start, i) : i],
+                _read_metal_string_for_project,
+            ).strip()
             # Direct-list initializers share brace syntax with statement blocks.
             # Only statement blocks reset the declaration scan boundary.
             opens_statement_scope = (
@@ -16585,15 +16857,18 @@ def _metal_local_variable_declaration(
     type_text, name = parsed
     if "." in type_text or "->" in type_text:
         return None
-    if type_text == "auto" and initializer is not None:
-        inferred = _metal_expression_type(
-            preprocessor,
-            initializer,
-            type_environment,
-            return_types,
+    if is_auto_placeholder(type_text):
+        inferred = (
+            _metal_expression_type(
+                preprocessor,
+                initializer,
+                type_environment,
+                return_types,
+            )
+            if initializer is not None
+            else None
         )
-        if inferred:
-            type_text = inferred
+        type_text = deduced_auto_type(type_text, inferred)
     return name, _normalize_metal_type_text(type_text)
 
 
@@ -17006,7 +17281,15 @@ def _metal_local_using_alias(
 def _metal_rewrite_identifier_tokens(
     text: str,
     replacements: Mapping[str, str],
+    *,
+    skip_template_names: bool = False,
 ) -> tuple[str, bool]:
+    """Replace identifier tokens outside member and scope contexts.
+
+    With ``skip_template_names``, a token followed by ``<`` is kept: a plain
+    alias cannot take template arguments, so such a token names the template an
+    alias like ``using Op = Op<T>;`` refers to.
+    """
     if not replacements:
         return text, False
 
@@ -17031,6 +17314,12 @@ def _metal_rewrite_identifier_tokens(
                     "->",
                 }
             replacement = None if member_context else replacements.get(token)
+            if replacement is not None and skip_template_names:
+                following = j
+                while following < len(text) and text[following].isspace():
+                    following += 1
+                if following < len(text) and text[following] == "<":
+                    replacement = None
             if replacement is None:
                 parts.append(token)
             else:
@@ -17068,9 +17357,20 @@ def _metal_rewrite_embedded_identifier_parts(
                 i = j
                 continue
             embedded_parts = token.split("_")
-            rewritten_parts = [
-                str(replacements.get(part, part)) for part in embedded_parts
-            ]
+            rewritten_parts = []
+            for index, part in enumerate(embedded_parts):
+                replacement = str(replacements.get(part, part))
+                replacement_parts = replacement.split("_")
+                if (
+                    len(replacement_parts) > 1
+                    and replacement_parts[0] == part
+                    and embedded_parts[index : index + len(replacement_parts)]
+                    == replacement_parts
+                ):
+                    # ``using Op = Op<T>;`` mangles to ``Op_T``: a part already
+                    # followed by its replacement's arguments is resolved.
+                    replacement = part
+                rewritten_parts.append(replacement)
             rewritten = "_".join(rewritten_parts)
             parts.append(rewritten)
             changed = changed or rewritten != token
@@ -17185,7 +17485,11 @@ def _metal_resolve_type_identifiers(
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, alias_changed = _metal_rewrite_identifier_tokens(
+            text,
+            alias_values,
+            skip_template_names=True,
+        )
         text, constant_changed = _metal_rewrite_identifier_tokens(
             text,
             constant_values,
@@ -17642,6 +17946,26 @@ def _metal_expression_type(
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
 ) -> str | None:
+    """The concrete type of ``expression``, or None.
+
+    A local whose ``auto`` was not deduced keeps the placeholder in the type
+    environment; it is not a type, so it never types an expression (it would
+    otherwise become a template argument such as ``min<uint, auto>``).
+    """
+    inferred = _metal_expression_type_or_placeholder(
+        preprocessor, expression, type_environment, return_types
+    )
+    if inferred is None or is_auto_placeholder(inferred) or "decltype" in inferred:
+        return None
+    return inferred
+
+
+def _metal_expression_type_or_placeholder(
+    preprocessor: Any,
+    expression: str,
+    type_environment: Mapping[str, str],
+    return_types: Mapping[str, str],
+) -> str | None:
     text = _metal_strip_outer_parentheses(expression).rstrip(";").strip()
     if not text:
         return None
@@ -17649,6 +17973,13 @@ def _metal_expression_type(
     literal_type = _metal_literal_type(text)
     if literal_type is not None:
         return literal_type
+
+    # `reinterpret_cast<device T*>(p)` and `(device T*)p` have the target
+    # pointer type, so an `auto` local initialized from one deduces like an
+    # explicitly typed pointer ([dcl.type.auto.deduct]).
+    pointer_conversion = pointer_conversion_type(preprocessor, text)
+    if pointer_conversion is not None:
+        return _normalize_metal_type_text(pointer_conversion)
 
     static_cast = re.match(r"(?:static_cast|as_type)\s*<(?P<type>[^>]+)>\s*\(", text)
     if static_cast is not None:
@@ -17737,8 +18068,23 @@ def _metal_expression_type(
                 indexed_type = element_type
             return indexed_type
 
+    # `x++`, `x--`, `++x` and `--x` have the type of `x` ([expr.post.incr],
+    # [expr.pre.incr]).
+    update_match = re.fullmatch(
+        r"(?:\+\+|--)\s*(?P<prefix>[A-Za-z_][A-Za-z0-9_]*)"
+        r"|(?P<postfix>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)",
+        text,
+    )
+    if update_match is not None:
+        return type_environment.get(
+            update_match.group("prefix") or update_match.group("postfix")
+        )
+    # `p + n` and `p - n` keep a pointer's type. Any other `a + b` is arithmetic
+    # and is typed by the operator rule below (`uint + long` is `long`).
     pointer_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*[+\-]", text)
-    if pointer_match is not None and pointer_match.group("name") in type_environment:
+    if pointer_match is not None and "*" in type_environment.get(
+        pointer_match.group("name"), ""
+    ):
         return type_environment[pointer_match.group("name")]
 
     address_match = re.match(r"&\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b", text)
@@ -17747,8 +18093,16 @@ def _metal_expression_type(
         if base_type:
             return f"{base_type}*"
 
+    def infer_operand(operand: str) -> str | None:
+        return _metal_expression_type(
+            preprocessor, operand, type_environment, return_types
+        )
+
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return type_environment.get(text)
+        declared = type_environment.get(text)
+        if declared is not None:
+            return declared
+        return operand_expression_type(preprocessor, text, infer_operand)
 
     brace_start = text.find("{")
     if brace_start > 0:
@@ -17787,19 +18141,8 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in (
-                "double",
-                "float",
-                "half",
-                "ulong",
-                "uint",
-                "long",
-                "int",
-            ):
-                if preferred in inferred:
-                    return preferred
-            return next((item for item in inferred if item), None)
-    return None
+            return arithmetic_result_type(preprocessor, inferred, operator_text)
+    return operand_expression_type(preprocessor, text, infer_operand)
 
 
 def _split_metal_expression_operator(expression: str, operator_text: str) -> list[str]:
@@ -17836,6 +18179,9 @@ def _split_metal_expression_operator(expression: str, operator_text: str) -> lis
             and bracket_depth == 0
             and angle_depth == 0
             and brace_depth == 0
+            and not (
+                operator_text in {"+", "-"} and is_unary_sign_position(expression, i)
+            )
         ):
             parts.append("".join(current).strip())
             current = []
@@ -18189,6 +18535,21 @@ def _infer_plain_template_helper_arguments(
         if inference_template_arguments
         else ({}, {})
     )
+    if inference_template_arguments and not explicit_variadic_bindings:
+        # Only the supplied arguments are explicit. A parameter after them is
+        # deduced from the call first and takes its default only when it cannot
+        # be deduced; the default may also name a deduced parameter
+        # (``typename Indexer::IndexT``). Defaults are applied after deduction.
+        supplied = set(
+            (getattr(template, "template_parameters", []) or [])[
+                : len(inference_template_arguments)
+            ]
+        )
+        explicit_bindings = {
+            parameter: value
+            for parameter, value in explicit_bindings.items()
+            if parameter in supplied
+        }
     # Explicit template arguments are fixed before function-parameter overload
     # viability is checked. A by-value parameter that is exactly one fixed type
     # parameter may therefore accept ordinary source scalar conversion
@@ -18480,22 +18841,36 @@ def _metal_reachable_function_return_types(
     template_spans: Sequence[tuple[int, int]],
     reachable_function_spans: Sequence[tuple[int, int]],
 ) -> dict[str, str]:
+    # A call's type is its selected overload's return type. Without overload
+    # resolution here, a name is typed only when every definition of it states
+    # the same return type and no function template shares the name; otherwise
+    # the last definition would type calls that select another overload.
     reachable = set(reachable_function_spans)
-    return_types: dict[str, str] = {}
+    declared: dict[str, set[str | None]] = {}
+    reached: set[str] = set()
     for function in preprocessor._find_non_template_function_definitions(
         source,
         list(template_spans),
     ):
-        if function.span not in reachable:
-            continue
         return_type = _metal_function_return_type(
             preprocessor,
             _metal_function_header(source, function),
             function.name,
         )
-        if return_type:
-            return_types[function.name] = return_type
-    return return_types
+        declared.setdefault(function.name, set()).add(return_type or None)
+        if function.span in reachable:
+            reached.add(function.name)
+    template_names = {
+        template.name for template in preprocessor._find_template_functions(source)
+    }
+    return {
+        name: next(iter(return_types))
+        for name, return_types in sorted(declared.items())
+        if name in reached
+        and name not in template_names
+        and len(return_types) == 1
+        and None not in return_types
+    }
 
 
 def _materialize_plain_template_helper_calls(
@@ -19023,32 +19398,7 @@ def _metal_diagnostic_template_call_noop_replacements(
 
 
 def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    stack: list[int] = []
-    i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        if source[i] == "{":
-            stack.append(i)
-        elif source[i] == "}" and stack:
-            spans.append((stack.pop(), i + 1))
-        i += 1
-    return spans
+    return brace_block_spans(source, preprocessor._read_string)
 
 
 def _metal_enclosing_block_span(
@@ -19690,6 +20040,14 @@ def _metal_matching_angle_end(expression: str, start: int) -> int | None:
     return None
 
 
+_METAL_USING_SCAN_STOPS = re.compile(r"[\"']|//|/\*|using")
+_METAL_USING_NAMESPACE_DIRECTIVE = re.compile(
+    r"using\s+namespace\s+"
+    r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;"
+)
+
+
 def _metal_using_namespace_directives(
     preprocessor: Any,
     source: str,
@@ -19698,35 +20056,34 @@ def _metal_using_namespace_directives(
     known_namespaces: set[str],
 ) -> list[tuple[int, tuple[int, int] | None, str]]:
     directives: list[tuple[int, tuple[int, int] | None, str]] = []
+    search = _METAL_USING_SCAN_STOPS.search
     i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
+    while True:
+        stop = search(source, i)
+        if stop is None:
+            break
+        i = stop.start()
+        token = stop.group()
+        if token == "//":
             end = source.find("\n", i + 2)
             if end == -1:
                 break
             i = end + 1
             continue
-        if source.startswith("/*", i):
+        if token == "/*":
             end = source.find("*/", i + 2)
             if end == -1:
                 break
             i = end + 2
             continue
-        if not source.startswith("using", i) or (
-            i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_")
-        ):
+        if token != "using":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_"):
             i += 1
             continue
-        match = re.match(
-            r"using\s+namespace\s+"
-            r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
-            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;",
-            source[i:],
-        )
+        match = _METAL_USING_NAMESPACE_DIRECTIVE.match(source, i)
         if match is None:
             i += len("using")
             continue
@@ -19748,7 +20105,7 @@ def _metal_using_namespace_directives(
             candidates[-1],
         )
         directives.append((i, directive_scope, resolved))
-        i += match.end()
+        i = match.end()
     return directives
 
 
@@ -20215,37 +20572,50 @@ def _lower_metal_struct_members_with_generated_aliases(
         if alias_declarations is not None
         else _metal_template_alias_declarations(preprocessor, source)
     )
-    if prematerialize:
-        source = preprocessor._materialize_explicit_template_struct_instantiations(
-            source,
+
+    def materialize(text: str) -> str:
+        return preprocessor._materialize_explicit_template_struct_instantiations(
+            text,
             work_budget=work_budget,
             allow_partial_object_specializations=True,
         )
-    preexisting_template_spans = preprocessor._find_template_declaration_spans(source)
-    preexisting_function_headers = frozenset(
-        re.sub(
-            r"\s+",
-            " ",
-            _metal_function_header(source, function).strip(),
+
+    def lower(text: str) -> str:
+        preexisting_template_spans = preprocessor._find_template_declaration_spans(text)
+        preexisting_function_headers = frozenset(
+            re.sub(
+                r"\s+",
+                " ",
+                _metal_function_header(text, function).strip(),
+            )
+            for function in preprocessor._find_non_template_function_definitions(
+                text,
+                list(preexisting_template_spans),
+            )
         )
-        for function in preprocessor._find_non_template_function_definitions(
-            source,
-            list(preexisting_template_spans),
+        lowered = preprocessor._lower_struct_member_functions(text)
+        canonicalized = _canonicalize_relocated_metal_template_aliases(
+            preprocessor,
+            lowered,
+            captured_declarations,
+            preexisting_function_headers=preexisting_function_headers,
         )
-    )
-    lowered = preprocessor._lower_struct_member_functions(source)
-    canonicalized = _canonicalize_relocated_metal_template_aliases(
+        if canonicalized == lowered and not rematerialize:
+            return lowered
+        return materialize(canonicalized)
+
+    from crosstl.backend.Metal.preprocessor import MetalStructMethodError
+
+    if prematerialize:
+        source = materialize(source)
+    # A lowered member body can name a struct specialization nothing else
+    # names; lower again with it materialized up front (see the helper).
+    return lower_members_with_late_specializations(
         preprocessor,
-        lowered,
-        captured_declarations,
-        preexisting_function_headers=preexisting_function_headers,
-    )
-    if canonicalized == lowered and not rematerialize:
-        return lowered
-    return preprocessor._materialize_explicit_template_struct_instantiations(
-        canonicalized,
-        work_budget=work_budget,
-        allow_partial_object_specializations=True,
+        source,
+        lower,
+        materialize,
+        MetalStructMethodError,
     )
 
 
@@ -20575,7 +20945,7 @@ def _inline_metal_concrete_using_template_aliases(
         scoped_aliases = {
             str(alias["name"]): str(alias["type"])
             for alias in aliases
-            if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+            if alias_visible_in_scope(alias, i, scope_end)
         }
         scoped_constants = _metal_local_integer_constants_before(
             source,
@@ -20607,6 +20977,9 @@ def _inline_metal_concrete_using_template_aliases(
                 "start": i,
                 "end": semicolon + 1,
                 "scope_end": scope_end,
+                "reopened_scopes": reopened_namespace_scopes(
+                    scope_span, semicolon + 1, namespace_spans
+                ),
             }
         )
         alias_spans.append((i, semicolon + 1))
@@ -20648,7 +21021,7 @@ def _inline_metal_concrete_using_template_aliases(
         qualified_candidates = [
             alias
             for alias in aliases
-            if alias["name"] == ident and alias["end"] <= i and i < alias["scope_end"]
+            if alias["name"] == ident and alias_visible_at(alias, i)
         ]
         qualified = None
         if qualified_candidates and source[i + consumed : i + consumed + 2] == "::":
@@ -20681,7 +21054,7 @@ def _inline_metal_concrete_using_template_aliases(
                 scoped_aliases = {
                     str(alias["name"]): str(alias["type"])
                     for alias in aliases
-                    if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+                    if alias_visible_in_scope(alias, i, scope_end)
                 }
                 scoped_constants = _metal_local_integer_constants_before(
                     source,
@@ -20987,43 +21360,7 @@ def _template_materialization_unsupported_location(
 
 @functools.lru_cache(maxsize=8)
 def _masked_metal_non_code_text(source: str) -> str:
-    chars = list(source)
-    i = 0
-    while i < len(chars):
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                end = len(chars)
-            for index in range(i, end):
-                chars[index] = " "
-            i = end
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                end = len(chars) - 2
-            for index in range(i, min(end + 2, len(chars))):
-                if chars[index] != "\n":
-                    chars[index] = " "
-            i = end + 2
-            continue
-        if chars[i] in {"'", '"'}:
-            quote = chars[i]
-            chars[i] = " "
-            i += 1
-            while i < len(chars):
-                current = chars[i]
-                if current != "\n":
-                    chars[i] = " "
-                if current == "\\":
-                    i += 2
-                    continue
-                i += 1
-                if current == quote:
-                    break
-            continue
-        i += 1
-    return "".join(chars)
+    return mask_comments_and_literals(source)
 
 
 def _metal_template_type_declarations(
@@ -21312,22 +21649,49 @@ def _unresolved_metal_template_placeholders_in_type(
     type_text: str,
     template_parameter_names: set[str],
     concrete_type_names: set[str] | None = None,
+    template_type_names: set[str] | None = None,
+    materialized_specializations: Mapping[str, Sequence[Any]] | None = None,
 ) -> list[str]:
     normalized = _strip_metal_type_qualifiers(type_text)
     if "." in normalized or "->" in normalized:
         return []
 
     concrete_names = concrete_type_names or set()
+    # A declared struct or template name is a type, whatever its spelling
+    # (``MD<float>``, ``RGB``), not a placeholder for a template argument.
+    declared_names = concrete_names | (template_type_names or set())
+    registry = materialized_specializations or {}
+    identifier_pattern = r"[A-Za-z_][A-Za-z0-9_]*"
+
+    def looks_like_placeholder(identifier: str) -> bool:
+        return (
+            identifier not in declared_names
+            and _metal_looks_like_template_placeholder_identifier(identifier)
+        )
+
+    def embedded_parts(token: str, depth: int = 0) -> list[str]:
+        # A materialized specialization records its template arguments, so read
+        # them instead of splitting the mangled name on underscores: an argument
+        # such as ``__Add<uint>`` would otherwise leave a bare ``Add`` fragment.
+        specialization = registry.get(token)
+        if specialization is None or len(specialization) < 2 or depth > 8:
+            return token.split("_")[1:]
+        parts: list[str] = []
+        for argument in specialization[1]:
+            for part in re.findall(identifier_pattern, str(argument)):
+                if part in concrete_names and part in registry:
+                    parts.extend(embedded_parts(part, depth + 1))
+                else:
+                    parts.append(part)
+        return parts
+
     missing: list[str] = []
-    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+    for token in re.findall(identifier_pattern, normalized):
         if token in concrete_names:
             embedded_missing = [
                 part
-                for part in token.split("_")[1:]
-                if (
-                    part in template_parameter_names
-                    or _metal_looks_like_template_placeholder_identifier(part)
-                )
+                for part in embedded_parts(token)
+                if (part in template_parameter_names or looks_like_placeholder(part))
             ]
             for part in embedded_missing:
                 if part not in missing:
@@ -21335,8 +21699,7 @@ def _unresolved_metal_template_placeholders_in_type(
             if not embedded_missing:
                 continue
         if (
-            token in template_parameter_names
-            or _metal_looks_like_template_placeholder_identifier(token)
+            token in template_parameter_names or looks_like_placeholder(token)
         ) and token not in missing:
             missing.append(token)
     return missing
@@ -21575,6 +21938,8 @@ def _unresolved_metal_standalone_template_type_records(
             type_text,
             template_parameter_names,
             concrete_type_names,
+            declared_template_type_names,
+            getattr(preprocessor, "_materialized_struct_specializations", None),
         )
         if not missing:
             return
@@ -21950,9 +22315,13 @@ def _metal_dispatch_bool_callbacks_defer_to_frontend(
     template: Any,
     templates: Sequence[Any],
     template_spans: Sequence[tuple[int, int]],
-    reachable_function_spans: Sequence[tuple[int, int]],
+    reachable_function_spans: Sequence[tuple[int, int]] | None,
 ) -> bool:
     if not _metal_dispatch_bool_callback_contract(preprocessor, template):
+        return False
+    if not reachable_function_spans:
+        # Without a concrete entry root there are no reachable call sites to
+        # prove the callback contract against, so the helper is not deferred.
         return False
     if sum(candidate.name == template.name for candidate in templates) != 1:
         return False
@@ -22420,6 +22789,14 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
+    template_overloads: dict[str, list[Any]] = {}
+    for template in templates:
+        template_overloads.setdefault(template.name, []).append(template)
+    overload_type_names = (
+        declared_type_names(preprocessed)
+        if any(len(group) > 1 for group in template_overloads.values())
+        else frozenset()
+    )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
@@ -22427,7 +22804,12 @@ def _project_template_materialization_for_artifact(
         tuple[str, tuple[tuple[str, str], ...], str]
     ] = set()
     for instantiation in source_instantiations:
-        template = template_lookup.get(instantiation.function_name)
+        template = select_instantiated_overload(
+            preprocessor,
+            overload_type_names,
+            template_overloads.get(instantiation.function_name, ()),
+            instantiation.template_arguments,
+        )
         if template is None:
             continue
         raw_arguments = list(instantiation.template_arguments)
@@ -23194,7 +23576,16 @@ def _project_template_materialization_for_artifact(
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)
-
+    if late_helper_specializations:
+        # A late helper body can still spell struct template-ids
+        # (``device S<uchar>*``, ``Op op;``). Bind them to concrete structs and
+        # lower the members those structs bring, such as a functor call.
+        materialized = _lower_metal_struct_members_with_generated_aliases(
+            preprocessor,
+            materialized,
+            work_budget=explicit_work_budget,
+            prematerialize=True,
+        )
     removable_template_names = {
         *deferred_constexpr_template_names,
         *late_materialized_template_names,
@@ -23211,6 +23602,8 @@ def _project_template_materialization_for_artifact(
                 late_template_replacements,
             )
         materialized = preprocessor._evaluate_static_assertions(materialized)
+    # Every concrete body exists now; read value variable templates at their uses.
+    materialized = materialize_value_variable_templates(preprocessor, materialized)
 
     # Missing-argument records gathered before late member lowering are only
     # provisional.  Drop one when every reachable call for that helper was
@@ -23247,6 +23640,9 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._prune_unreferenced_template_struct_declarations(
             materialized
         )
+    # Every tag argument is bound now; a concrete metal::bool_constant<true> becomes a declared tag struct
+    # (integral_constant_tags.py).
+    materialized = concretize_integral_constant_tags(preprocessor, materialized)
     unsupported_target_artifact = (
         target_artifact if post_materialization_unsupported else None
     )
@@ -23311,6 +23707,13 @@ def _project_template_materialization_for_artifact(
         and not stripped_diagnostic_helpers
     ):
         return None
+    # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
+    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py). Canonicalized
+    # alias templates can leave `decltype(float(0) + int(0))`, which names one built-in type (alias_template_types.py).
+    materialized = fold_expression_decltypes(
+        preprocessor, fold_concrete_enablers(preprocessor, materialized)
+    )
+    materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:
         message = _template_materialization_unsupported_message(
@@ -26816,9 +27219,6 @@ def _entry_scoped_specialization_names(
             intermediate = reverse_codegen.generate(source_ast)
             crossgl_ast = cgl_spec.parse(
                 intermediate,
-                source_options={
-                    "strict_function_bodies": unit.source_backend != "mojo"
-                },
             )
         return _entry_scoped_specialization_names_from_crossgl_ast(
             crossgl_ast, entry_point, target
@@ -27224,9 +27624,6 @@ def _crossgl_ast_for_project_target(
 
     ast = cgl_spec.parse(
         intermediate,
-        source_options={
-            "strict_function_bodies": original_source_backend != "mojo",
-        },
     )
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
@@ -27234,6 +27631,99 @@ def _crossgl_ast_for_project_target(
     ast = fold_frozen_specialization_branches(ast, frozen_constants)
     apply_rule_carrying(ast, original_source_backend, target)
     return ast
+
+
+def _apply_project_workgroup_linearization(
+    execution: Mapping[str, Any],
+    ast: Any,
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    selected_entry_point: str | None,
+) -> Mapping[str, Any]:
+    """Linearize workgroups ``target`` cannot declare and record the declared size.
+
+    Subgroup-width and host-dispatch executions keep their contracts unchanged, so their target generators still
+    reject such a shape.
+    """
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    provenance = execution.get("provenance")
+    if (
+        "subgroupWidthProvenance" in execution
+        or any("subgroupWidth" in entry for entry in entries)
+        or (
+            isinstance(provenance, Mapping)
+            and provenance.get("kind") == "host-dispatch-contract"
+        )
+    ):
+        return execution
+    records = linearize_compute_workgroups(
+        ast, target=target, entry_point=selected_entry_point
+    )
+    if not records:
+        return execution
+    updated = record_workgroup_linearization(execution, records)
+    if entries:
+        refreshed = []
+        for entry in updated["entryPoints"]:
+            if isinstance(entry, Mapping) and "targetWorkgroupSize" in entry:
+                entry = dict(entry)
+                entry["identity"] = _workgroup_rule_entry_identity(
+                    source=unit.relative_path,
+                    source_hash=unit.source_hash,
+                    target=target,
+                    variant=variant,
+                    entry=entry,
+                )
+            refreshed.append(entry)
+        updated["entryPoints"] = refreshed
+        updated["identity"] = _workgroup_rule_execution_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            source_entry_points=updated.get("sourceEntryPoints", ()),
+            entry_points=refreshed,
+            provenance=updated.get("provenance", {}),
+        )
+    elif "targetWorkgroupSize" in updated:
+        updated["identity"] = _workgroup_execution_identity(
+            source=unit.relative_path,
+            target=target,
+            variant=variant,
+            source_entry_points=updated.get("sourceEntryPoints", ()),
+            workgroup_size=updated["workgroupSize"],
+            target_workgroup_size=updated["targetWorkgroupSize"],
+        )
+    return updated
+
+
+def _target_workgroup_size_contract_reasons(
+    prefix: str, container: Mapping[str, Any], target: Any
+) -> list[str]:
+    if "targetWorkgroupSize" not in container:
+        return []
+    field_name = f"{prefix}.targetWorkgroupSize"
+    value = container.get("targetWorkgroupSize")
+    reasons = _workgroup_size_contract_reasons(field_name, value)
+    if reasons:
+        return reasons
+    size = container.get("workgroupSize")
+    if not isinstance(size, list) or _workgroup_size_contract_reasons(
+        "workgroupSize", size
+    ):
+        return [f"{field_name} requires a concrete workgroupSize"]
+    expected = linearized_workgroup_size(str(target), size)
+    if expected is None or list(expected) != list(value):
+        return [
+            f"{field_name} must be the linearized workgroupSize the target " "declares"
+        ]
+    return []
 
 
 def _project_workgroup_execution_metadata(
@@ -27693,6 +28183,7 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     metadata_preconditions: Sequence[Any] = (),
     metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]] | None = None,
+    immutable_storage: Sequence[ImmutableStorageContract] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
@@ -27827,6 +28318,19 @@ def _generate_project_target_from_crossgl_ast(
     configure_metadata = getattr(codegen, "set_metadata_preconditions", None)
     if callable(configure_metadata):
         configure_metadata(resolved_metadata)
+    resolved_immutable = []
+    if immutable_storage:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if len(stages) != 1:
+            raise ImmutableStorageError(
+                "Immutable storage requires one selected compute entry."
+            )
+        resolved_immutable = _entry_immutable_storage(
+            stages[0].entry_point, immutable_storage, selected_ast, entry_point
+        )
+    configure_immutable = getattr(codegen, "set_immutable_storage", None)
+    if callable(configure_immutable):
+        configure_immutable(resolved_immutable)
     if software_subgroup_applicability is not None:
         entries = (
             codegen.hlsl_software_subgroup_stage_entries(selected_ast)
@@ -27916,16 +28420,23 @@ def _generate_project_target_from_crossgl_ast(
         if provenance is not None:
             provenance["dispatchRegionProgram"] = program
     validate_pointer_reinterpretation_target(selected_ast, target)
-    if remaining_entry_point is None:
-        generated = codegen.generate(selected_ast)
-    else:
+
+    def generate():
+        if remaining_entry_point is None:
+            return codegen.generate(selected_ast)
         generate_entry = getattr(codegen, "generate_entry", None)
         if not callable(generate_entry):
             raise ValueError(
                 "Entry-scoped artifact generation is not supported for the "
                 "requested target backend"
             )
-        generated = generate_entry(selected_ast, remaining_entry_point)
+        return generate_entry(selected_ast, remaining_entry_point)
+
+    # The recorded undeclared name is refused by _finalize_project_generated_artifact, after the scans for
+    # host constructs an importer left in the output, which name the construct.
+    generated = generate_refusing_undeclared_identifiers(
+        ast, generate, refuse_after=False
+    )
     if format_output:
         try:
             from crosstl.formatter import format_shader_code
@@ -27935,9 +28446,31 @@ def _generate_project_target_from_crossgl_ast(
             generated = format_shader_code(generated, target, str(output_path))
     if resolved_metadata and not callable(configure_metadata):
         generated = with_metadata_precondition_header(generated, resolved_metadata)
+    if resolved_immutable and not callable(configure_immutable):
+        generated = with_immutable_storage_header(generated, resolved_immutable)
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
         output_file.write(generated)
     return generated
+
+
+def _entry_immutable_storage(function, contracts, ast, entry_point):
+    """Resolve the contracts naming the selected entry's source entry point.
+
+    The source entry comes from the retained resource identities. Without them
+    a contract naming the entry cannot resolve, so translation fails closed.
+    """
+    entries = {
+        origin["entryPoint"]
+        for parameter in function.parameters
+        for origin in (source_resource_identity(parameter),)
+        if origin is not None
+    } or {entry_point, function.name} - {None}
+    return resolve_immutable_storage(
+        function,
+        [item for item in contracts if item.entry_point in entries],
+        getattr(ast, "structs", ()),
+        program_functions(ast),
+    )
 
 
 def _project_target_workgroup_entries(
@@ -27996,7 +28529,9 @@ def _validate_project_workgroup_target_output(
     ]
     if execution_entries:
         expected_by_target = {
-            str(entry.get("targetEntryPoint")): tuple(entry.get("workgroupSize", ()))
+            str(entry.get("targetEntryPoint")): tuple(
+                entry.get("targetWorkgroupSize", entry.get("workgroupSize", ()))
+            )
             for entry in execution_entries
             if _is_non_empty_string(entry.get("targetEntryPoint"))
         }
@@ -28063,7 +28598,9 @@ def _validate_project_workgroup_target_output(
 
     if "workgroupSize" not in execution:
         return
-    expected = tuple(execution.get("workgroupSize", ()))
+    expected = tuple(
+        execution.get("targetWorkgroupSize", execution.get("workgroupSize", ()))
+    )
     reflected = reflect_target_host_interface(output_path, target=target)
     reflected_sizes = []
     for entry_point in _record_sequence(reflected.get("entryPoints")):
@@ -28392,6 +28929,7 @@ def _finalize_project_generated_artifact(
     generated_source: str,
     source_entry_point: str | None = None,
     report_output_path: Path | None = None,
+    undeclared_identifier_refusal: Exception | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     report_output_path = report_output_path or output_path
     header = frozen_specialization_header(artifact.get("specializationConstants", []))
@@ -28415,6 +28953,9 @@ def _finalize_project_generated_artifact(
         artifact["error"] = diagnostics[0].message
         _remove_artifact_output_files(output_path)
         return [artifact], diagnostics
+    if undeclared_identifier_refusal is not None:
+        # Generation succeeded on a name the program never declares; no scan above named a construct instead.
+        raise undeclared_identifier_refusal
 
     if source_entry_point is not None:
         reflected = reflect_target_host_interface(output_path, target=target)
@@ -28686,6 +29227,7 @@ def _translate_project_impl(
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
             metadata_preconditions=config.metadata_preconditions,
+            immutable_storage=config.immutable_storage,
             workgroup_access_assertions=config.workgroup_access_assertions,
         )
     config = _config_with_selected_variants(config, variants)
@@ -28923,6 +29465,13 @@ def _translate_project_impl(
                     )
                     if target in {"opengl", "directx"}
                     else ()
+                )
+                # Only targets whose dispatch paths enforce the contract carry it.
+                immutable_storage = tuple(
+                    item
+                    for item in config.immutable_storage
+                    if target in {"metal", "directx", "opengl"}
+                    and fnmatch.fnmatch(unit.relative_path, item.source)
                 )
                 software_subgroup_width = None
                 software_subgroup_applicability = None
@@ -29416,9 +29965,7 @@ def _translate_project_impl(
                         translation_defines = (
                             defines if unit.source_backend in {"cgl", "crossgl"} else {}
                         )
-                        translation_source_options = {
-                            "strict_function_bodies": unit.source_backend != "mojo"
-                        }
+                        translation_source_options = {}
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),
@@ -29447,7 +29994,7 @@ def _translate_project_impl(
                     )
                     requires_workgroup_specialization = workgroup_input_supported and (
                         (
-                            target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                            target in WORKGROUP_SIZE_FIXED_TARGETS
                             and _project_input_requires_workgroup_specialization(
                                 input_path=translation_input_path,
                                 source_backend=translation_source_backend,
@@ -29569,6 +30116,15 @@ def _translate_project_impl(
                                     variant=variant,
                                 )
                             )
+                        if execution is not None and dispatch_region is None:
+                            execution = _apply_project_workgroup_linearization(
+                                execution,
+                                crossgl_ast,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                                selected_entry_point=selected_entry_point,
+                            )
                         if execution is not None:
                             if dispatch_region is not None:
                                 _validate_project_dispatch_region_execution(
@@ -29656,6 +30212,7 @@ def _translate_project_impl(
                                                 metadata_source_matches,
                                             ),
                                             metadata_source_matches=metadata_source_matches,
+                                            immutable_storage=immutable_storage,
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
@@ -29712,6 +30269,11 @@ def _translate_project_impl(
                                             report_output_path=(
                                                 published_split_output_path
                                             ),
+                                            undeclared_identifier_refusal=(
+                                                recorded_undeclared_identifier(
+                                                    crossgl_ast
+                                                )
+                                            ),
                                         )
                                     )
                                     artifact_records.extend(records)
@@ -29745,6 +30307,7 @@ def _translate_project_impl(
                                         index_range_assertions=(index_range_assertions),
                                         metadata_preconditions=metadata_preconditions,
                                         metadata_source_matches=metadata_source_matches,
+                                        immutable_storage=immutable_storage,
                                         workgroup_access_assertions=(
                                             workgroup_access_assertions
                                         ),
@@ -29794,6 +30357,7 @@ def _translate_project_impl(
                     if generated_source is None and (
                         index_range_assertions
                         or metadata_preconditions
+                        or immutable_storage
                         or any(
                             record.get("frozen") for record in specialization_constants
                         )
@@ -29835,6 +30399,7 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             metadata_preconditions=metadata_preconditions,
                             metadata_source_matches=metadata_source_matches,
+                            immutable_storage=immutable_storage,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
                             software_subgroup_applicability=software_subgroup_applicability,
@@ -29853,10 +30418,17 @@ def _translate_project_impl(
                                 directx_groupshared_bool_storage
                             ),
                         )
-                    if generated_source is None:
-                        generated_source = translate(
-                            str(translation_input_path), **translate_kwargs
+                    undeclared_identifier_refusal = None
+                    if generated_source is not None:
+                        undeclared_identifier_refusal = recorded_undeclared_identifier(
+                            crossgl_ast
                         )
+                    else:
+                        with deferring_undeclared_identifier_refusals() as deferred:
+                            generated_source = translate(
+                                str(translation_input_path), **translate_kwargs
+                            )
+                        undeclared_identifier_refusal = next(iter(deferred), None)
                     if not generated_records_finalized:
                         artifact_records, generated_diagnostics = (
                             _finalize_project_generated_artifact(
@@ -29868,6 +30440,9 @@ def _translate_project_impl(
                                 generated_source=generated_source,
                                 source_entry_point=selected_entry_point,
                                 report_output_path=published_output_path,
+                                undeclared_identifier_refusal=(
+                                    undeclared_identifier_refusal
+                                ),
                             )
                         )
                         staged_artifact_paths.update(
@@ -30002,6 +30577,19 @@ def _tool_status(target: str) -> dict[str, Any]:
         "status": "available" if available else "unavailable",
         "tools": resolved,
     }
+
+
+def _toolchain_unavailable_message(toolchain: Mapping[str, Any]) -> str:
+    """Name every tool an unavailable validation toolchain is missing from ``PATH``."""
+    missing_tools = [
+        str(tool["name"])
+        for tool in toolchain.get("tools", ())
+        if isinstance(tool, Mapping) and tool.get("name") and not tool.get("available")
+    ]
+    if not missing_tools:
+        return f"No validation toolchain is available for target {toolchain['target']}"
+    verb = "is" if len(missing_tools) == 1 else "are"
+    return f"{', '.join(missing_tools)} {verb} not on PATH"
 
 
 def _status_counts(
@@ -31492,7 +32080,7 @@ def _validate_artifacts(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
-                    message=f"No validation toolchain is available for target {toolchain['target']}",
+                    message=_toolchain_unavailable_message(toolchain),
                     location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],
@@ -32531,16 +33119,16 @@ def _runtime_manifest_source_host_interface(
         return None
 
     try:
-        ast = source_spec.parse(
+        host_interface = memoized_source_host_interface(
+            source_spec,
             source_path.read_text(encoding="utf-8"),
             file_path=str(source_path),
+            reflect=_runtime_host_interface_from_ast,
+            reflect_options={"parser": parser_name or "", "source": "source-artifact"},
         )
     except Exception:
         return None
 
-    host_interface = _runtime_host_interface_from_ast(
-        ast, parser=parser_name or "", source="source-artifact"
-    )
     if (
         host_interface["entryPointCount"] == 0
         and host_interface["resourceCount"] == 0
@@ -33073,7 +33661,9 @@ def _runtime_manifest_execution_host_interface(
         if not isinstance(execution_entry, Mapping):
             continue
         name = execution_entry.get("targetEntryPoint")
-        size = execution_entry.get("workgroupSize")
+        size = execution_entry.get(
+            "targetWorkgroupSize", execution_entry.get("workgroupSize")
+        )
         subgroup_width = execution_entry.get("subgroupWidth")
         if not _is_non_empty_string(name) or (
             not isinstance(size, list) and subgroup_width is None
@@ -35491,7 +36081,7 @@ def _runtime_host_interface_type_name(type_node: Any) -> str | None:
             getattr(type_node, "element_type", None)
         )
         size = _runtime_host_interface_json_value(getattr(type_node, "size", None))
-        return f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+        return prepend_array_dimension(element_type, size)
     if hasattr(type_node, "name"):
         name = str(getattr(type_node, "name"))
         generic_args = [
@@ -36619,6 +37209,11 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                             ]
                         }
                         if "metadataMemberPreconditions" in provenance
+                        else {}
+                    ),
+                    **(
+                        {"immutableStorage": provenance["immutableStorage"]}
+                        if "immutableStorage" in provenance
                         else {}
                     ),
                 }
@@ -48212,6 +48807,7 @@ def _project_config_for_scan_validation(
         },
         variant_specialization_constants=variant_specializations,
         metadata_preconditions=project.get("metadataPreconditions", ()),
+        immutable_storage=project.get("immutableStorage", ()),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
             name: value
@@ -49688,6 +50284,20 @@ def _artifact_execution_contract_reasons(
         execution,
         REPORT_ARTIFACT_EXECUTION_FIELDS,
     )
+    reasons.extend(
+        _target_workgroup_size_contract_reasons(
+            execution_prefix, execution, record.get("target")
+        )
+    )
+    for entry_index, entry in enumerate(_record_sequence(execution.get("entryPoints"))):
+        if isinstance(entry, Mapping):
+            reasons.extend(
+                _target_workgroup_size_contract_reasons(
+                    f"{execution_prefix}.entryPoints[{entry_index}]",
+                    entry,
+                    record.get("target"),
+                )
+            )
     if "entryPoints" in execution:
         provenance = execution.get("provenance")
         if isinstance(provenance, Mapping) and provenance.get("kind") == (
@@ -49918,6 +50528,7 @@ def _artifact_execution_contract_reasons(
             ),
             source_entry_points=source_entry_points,
             workgroup_size=workgroup_size,
+            target_workgroup_size=execution.get("targetWorkgroupSize"),
         )
         if identity != expected_identity:
             reasons.append(
@@ -54078,6 +54689,16 @@ def _project_metadata_contract_reasons(
                 )
         except ValueError as exc:
             reasons.append(str(exc))
+    if "immutableStorage" in project or "immutableStorageCount" in project:
+        try:
+            values = parse_immutable_storage(project.get("immutableStorage", ()))
+            count = project.get("immutableStorageCount")
+            if type(count) is not int or count != len(values):
+                reasons.append(
+                    "project.immutableStorageCount must match project.immutableStorage"
+                )
+        except ValueError as exc:
+            reasons.append(str(exc))
     if _optional_project_field(project, "workgroupAccessAssertions", required=False):
         try:
             parse_workgroup_access_assertions(
@@ -58089,7 +58710,10 @@ def _directx_dxc_smoke_commands(
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         source = ""
-    compiler_arguments = dxc_compiler_arguments_for_source(source)
+    compiler_arguments = (
+        *dxc_compiler_arguments_for_source(source),
+        *dxc_host_workgroup_size_check_arguments(source),
+    )
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [

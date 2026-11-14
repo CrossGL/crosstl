@@ -9,11 +9,13 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.ast import BinaryOpNode
+from crosstl.translator.codegen.glsl_refusals import WebGLLoweringRefused
 from crosstl.translator.codegen.webgl_codegen import (
     WebGLArithmeticConversionError,
     WebGLBooleanCompoundAssignmentError,
     WebGLBooleanOrderedIntrinsicError,
     WebGLCodeGen,
+    WebGLPreciseQualifierError,
     WebGLStructConstructionError,
 )
 from crosstl.translator.lexer import Lexer
@@ -1154,13 +1156,37 @@ def test_webgl_codegen_rejects_storage_buffer_resources(buffer_type):
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=(
             "WebGL target does not support storage buffer resource "
             rf"'values' \({buffer_type}\)"
         ),
     ):
         WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_resource_refusals_carry_the_webgl_diagnostic_code():
+    shader = """
+    shader WebGLTypedStorageBufferRefusal {
+        StructuredBuffer<float> values;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(values[0]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLLoweringRefused) as refused:
+        WebGLCodeGen().generate(parse_shader(shader))
+
+    assert refused.value.code == "project.translate.webgl-lowering-unsupported"
+    assert refused.value.project_diagnostic_code == refused.value.code
+    assert refused.value.reasons == (
+        "WebGL target does not support storage buffer resource 'values' "
+        "(StructuredBuffer)",
+    )
 
 
 def test_webgl_codegen_rejects_glsl_buffer_blocks():
@@ -1179,7 +1205,7 @@ def test_webgl_codegen_rejects_glsl_buffer_blocks():
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match="WebGL target does not support GLSL buffer block resource 'data'",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
@@ -1199,7 +1225,7 @@ def test_webgl_codegen_rejects_storage_image_resources():
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=(
             "WebGL target does not support storage image resource "
             r"'target' \(image2D\)"
@@ -1237,7 +1263,7 @@ def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300(
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=(
             "WebGL target does not support sampled resource "
             rf"'colorTex' \({diagnostic_type}\)"
@@ -1251,7 +1277,8 @@ def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300(
     (
         ("double value = 1.0;", "double"),
         ("dvec2 value = dvec2(1.0);", "dvec2"),
-        ("dmat2x2 value = dmat2x2(1.0);", "dmat2x2"),
+        ("dmat2x2 value = dmat2x2(1.0);", "dmat2"),
+        ("dmat3 value;", "dmat3"),
     ),
 )
 def test_webgl_codegen_rejects_64_bit_float_types(declaration, diagnostic_type):
@@ -1267,7 +1294,7 @@ def test_webgl_codegen_rejects_64_bit_float_types(declaration, diagnostic_type):
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=(
             "WebGL target does not support 64-bit floating-point type "
             rf"'{diagnostic_type}'"
@@ -1290,7 +1317,7 @@ def test_webgl_codegen_rejects_storage_image_intrinsics():
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match="WebGL target does not support storage image intrinsic 'imageLoad'",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
@@ -1318,7 +1345,7 @@ def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=(
             "WebGL target requires GLSL ES 3.00 and does not support "
             "texture gather intrinsic"
@@ -1341,7 +1368,7 @@ def test_webgl_codegen_rejects_atomics():
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match="WebGL target does not support atomic operation 'atomicAdd'",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
@@ -1412,7 +1439,7 @@ def test_webgl_codegen_rejects_clip_and_cull_distance_writes(
     """
 
     with pytest.raises(
-        ValueError,
+        WebGLLoweringRefused,
         match=rf"WebGL target does not support vertex built-in output '{builtin}'",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
@@ -1501,3 +1528,35 @@ def test_webgl_boolean_min_max_reports_unrepresentable_operand_shapes():
     assert exc_info.value.operation == "min"
     assert exc_info.value.operand_types == ("bvec2", "bvec3")
     assert exc_info.value.reason == "operand-type-mismatch"
+
+
+def test_webgl_rejects_arithmetic_that_must_be_evaluated_as_written():
+    # GLSL ES 3.00 has no precise qualifier, so a precise helper cannot keep
+    # its evaluation order; before this check the output used the keyword.
+    shader = """
+    shader PreciseHelper {
+        @precise
+        float stable(float a, float b, float c) {
+            return a * b + c;
+        }
+        struct FragmentInput { vec2 uv @location(0); }
+        struct FragmentOutput { vec4 color @location(0); }
+        fragment {
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                output.color = vec4(stable(input.uv.x, input.uv.y, 0.5));
+                return output;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLPreciseQualifierError) as exc_info:
+        WebGLCodeGen().generate(parse_shader(shader))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.webgl-precise-unsupported"
+    )
+    assert exc_info.value.version_line == "#version 300 es"
+    relaxed = WebGLCodeGen().generate(parse_shader(shader.replace("@precise\n", "")))
+    assert "precise" not in relaxed

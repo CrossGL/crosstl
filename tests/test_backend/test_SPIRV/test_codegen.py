@@ -2347,12 +2347,12 @@ OpDecorate %size BuiltIn WorkgroupSize
 %fn = OpTypeFunction %void
 %uint = OpTypeInt 32 0
 %v3uint = OpTypeVector %uint 3
-%arr = OpTypeArray %uint %total
-%Block = OpTypeStruct %arr
 %width = OpSpecConstant %uint 8
 %height = OpSpecConstant %uint 4
 %one = OpConstant %uint 1
 %total = OpSpecConstantOp %uint IAdd %width %height
+%arr = OpTypeArray %uint %total
+%Block = OpTypeStruct %arr
 %size = OpSpecConstantComposite %v3uint %width %height %one
 %main = OpFunction %void None %fn
 %label = OpLabel
@@ -5736,8 +5736,8 @@ def test_resource_array_parameter_qualifiers_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "void sampleResources(in Texture2D textures[4], "
-        "inout RWTexture2D<uint> outputs[2])" in generated_code
+        "void sampleResources(in sampler2D textures[4], "
+        "inout uimage2D outputs[2])" in generated_code
     )
 
 
@@ -5752,7 +5752,7 @@ def test_function_parameter_array_suffixes_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "void sampleResources(Texture2D textures[4], RWTexture2D<uint> outputs[2])"
+        "void sampleResources(sampler2D textures[4], uimage2D outputs[2])"
         in generated_code
     )
 
@@ -5901,7 +5901,7 @@ def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     generated_code = generate_code(ast)
 
     assert "void vs_main() @stage_entry" in generated_code
-    assert "gl_Position = float4(0, 0, 0, 1);" in generated_code
+    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
 
     reparsed = parse_crossgl(generated_code)
     vertex_stage = reparsed.stages[ShaderStage.VERTEX]
@@ -6047,7 +6047,7 @@ def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_p
     assert generated_code.count("void main()") == 2
     assert "float2 uv @output @location(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
-    assert "Texture2D albedo @set(0) @binding(1);" in generated_code
+    assert "sampler2D albedo @set(0) @binding(1);" in generated_code
 
     reparsed = parse_crossgl(generated_code)
     downstream_code = VulkanSPIRVCodeGen().generate(reparsed)
@@ -6211,7 +6211,7 @@ def test_spirv_cross_decoration_group_resource_layout_codegen_reparse():
 
     assert ("BufferBlock", []) in ast.spirv_decorations["%Values"]
     assert ("0", "Offset", ["0"]) in ast.spirv_member_decorations["%Values"]
-    assert "RWStructuredBuffer<values> values @set(0) @binding(2);" in generated_code
+    assert "RWStructuredBuffer<Values> values @set(0) @binding(2);" in generated_code
     assert "float member0[];" in generated_code
     parse_crossgl(generated_code)
 
@@ -6269,7 +6269,7 @@ def test_spirv_cross_block_name_alias_global_codegen_reparse():
     parse_crossgl(generated_code)
     assert "struct A_C1 {" in generated_code
     assert "RWStructuredBuffer<A_C1> C1 @set(0) @binding(1);" in generated_code
-    assert "cbuffer A_C2 @set(0) @binding(2) {" in generated_code
+    assert "cbuffer A_C2 @set(0) @binding(2) @buffer_layout(std430) {" in generated_code
     assert generated_code.count("struct A {") == 1
 
 
@@ -6320,7 +6320,10 @@ def test_spirv_cross_block_name_namespace_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "struct VertexInput {" in generated_code
-    assert "cbuffer VertexInput_ubo @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer VertexInput_ubo @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "struct VertexInput_ssbo {" in generated_code
     assert "RWStructuredBuffer<VertexInput_ssbo> ssbo @set(0) @binding(1);" in (
         generated_code
@@ -6334,8 +6337,8 @@ def test_glslang_private_global_variables_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "float4 outColor @output @location(0);" in generated_code
-    assert "float4 privateColor;" in generated_code
-    assert "float privateWeight = 1.0;" in generated_code
+    assert "static float4 privateColor;" in generated_code
+    assert "static float privateWeight = 1.0;" in generated_code
     assert "privateColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "outColor = privateColor;" in generated_code
     assert "outColor = loaded;" not in generated_code
@@ -6350,9 +6353,12 @@ def test_glslang_layout_nested_member_private_global_collision_codegen_reparse()
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer Block140 @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer Block140 @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "S s;" in generated_code
-    assert "S s_private_s;" in generated_code
+    assert "static S s_private_s;" in generated_code
     assert "s_private_s = s_private_s;" in generated_code
     assert "S s;\n    // Vertex Shader" not in generated_code
 
@@ -6422,8 +6428,8 @@ def test_glslang_matrix_transpose_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "float3x4 sum34 @input @location(0);" in generated_code
-    assert "float4x3 m43 @output @location(0);" in generated_code
+    assert "mat3x4 sum34 @input @location(0);" in generated_code
+    assert "mat4x3 m43 @output @location(0);" in generated_code
     assert "m43 = transpose(sum34);" in generated_code
     assert "m43 = transposed;" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -6437,7 +6443,7 @@ def test_spirv_spec_outer_product_codegen_reparse():
     parse_crossgl(generated_code)
     assert "float3 column @input @location(0);" in generated_code
     assert "float2 row @input @location(1);" in generated_code
-    assert "float3x2 basis @output @location(0);" in generated_code
+    assert "mat3x2 basis @output @location(0);" in generated_code
     assert "basis = outerProduct(column, row);" in generated_code
     assert "basis = outer;" not in generated_code
     assert "spirv_OuterProduct" not in generated_code
@@ -6536,7 +6542,9 @@ def test_glslang_precise_dot_codegen_reparse():
     parse_crossgl(generated_code)
     assert "float outValue @output @location(0);" in generated_code
     assert "float4 inputVec @input @location(0);" in generated_code
-    assert "outValue = dot(inputVec, inputVec);" in generated_code
+    # The NoContraction result is a precise local; named after its id, it must not hide dot().
+    assert "float value_dot @precise = dot(inputVec, inputVec);" in generated_code
+    assert "outValue = value_dot;" in generated_code
     assert "outValue = dot;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -6612,7 +6620,9 @@ def test_spirv_tools_array_return_composite_construct_codegen_reparse():
         "return {float4(0.0, 0.0, 0.0, 0.0), "
         "float4(1.0, 1.0, 1.0, 1.0)};" in generated_code
     )
-    assert "outValue = ff()[1][2];" in generated_code
+    # The call is evaluated once, into a local, rather than where its element is read.
+    assert "float4 call[2] = ff();" in generated_code
+    assert "outValue = call[1][2];" in generated_code
     assert "%array_v4" not in generated_code
     assert "OpCompositeConstruct" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -6864,7 +6874,10 @@ def test_spirv_assembly_push_constant_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer PushConstants @push_constant {" in generated_code
+    assert (
+        "cbuffer PushConstants @push_constant @buffer_layout(std430) {"
+        in generated_code
+    )
     assert "float4x4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
@@ -6875,7 +6888,9 @@ def test_spirv_assembly_uniform_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer Camera @set(0) @binding(2) {" in generated_code
+    assert (
+        "cbuffer Camera @set(0) @binding(2) @buffer_layout(std140) {" in generated_code
+    )
     assert "float4x4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
@@ -6887,8 +6902,8 @@ def test_spirv_duplicate_push_constant_member_names_are_aliased_for_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer PushA @push_constant {" in generated_code
-    assert "cbuffer PushB @push_constant {" in generated_code
+    assert "cbuffer PushA @push_constant @buffer_layout(std430) {" in generated_code
+    assert "cbuffer PushB @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint bank0_data;" in generated_code
     assert "uint bank1_data;" in generated_code
     assert "uint data;" not in generated_code
@@ -6902,8 +6917,8 @@ def test_spirv_duplicate_uniform_and_push_constant_member_names_are_aliased():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer UBO @set(0) @binding(1) {" in generated_code
-    assert "cbuffer PC @push_constant {" in generated_code
+    assert "cbuffer UBO @set(0) @binding(1) @buffer_layout(std140) {" in generated_code
+    assert "cbuffer PC @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint ubo_v5;" in generated_code
     assert "uint ubo_v7;" in generated_code
     assert "uint pc_v5;" in generated_code
@@ -6971,7 +6986,10 @@ def test_spirv_tools_anonymous_resource_block_codegen_reparse():
     assert (
         "RWStructuredBuffer<BufferOut> value_19 @set(0) @binding(1);" in generated_code
     )
-    assert "cbuffer BufferIn @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer BufferIn @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "uint i;" in generated_code
     assert "uint result @output @location(0);" in generated_code
     assert "value_19[0].o = i;" in generated_code
@@ -6987,9 +7005,9 @@ def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer var_ @set(0) @binding(0) {" in generated_code
-    assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
-    assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
+    assert "cbuffer var_ @set(0) @binding(0) @buffer_layout(std140) {" in generated_code
+    assert "RWStructuredBuffer<struct_> in_ @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<struct_> out_ @set(0) @binding(2);" in generated_code
     assert "cbuffer var @set" not in generated_code
     assert "RWStructuredBuffer<in> in @set" not in generated_code
     assert "RWStructuredBuffer<out> out @set" not in generated_code
@@ -7048,9 +7066,11 @@ def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
         "const uint WORKGROUP_TOTAL = (WORKGROUP_WIDTH + WORKGROUP_HEIGHT);"
         in generated_code
     )
+    # The WorkgroupSize composite overrides LocalSize 1 1 1 and is the gl_WorkGroupSize built-in.
+    assert "gl_WorkGroupSize @gl_WorkGroupSize" not in generated_code
     assert (
-        "const uint3 gl_WorkGroupSize @gl_WorkGroupSize = "
-        "uint3(WORKGROUP_WIDTH, WORKGROUP_HEIGHT, 1);" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "OpSpecConstant" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7062,7 +7082,15 @@ def test_glslang_workgroup_size_array_lengths_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "groupshared uint keys[7][(2 * 5)];" in generated_code
+    # The arrays follow the specialized workgroup size, as GLSL's shared uint keys[gl_WorkGroupSize.z] does.
+    assert (
+        "groupshared uint keys[gl_WorkGroupSize.z]"
+        "[(gl_WorkGroupSize.x * gl_WorkGroupSize.y)];" in generated_code
+    )
+    assert (
+        "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7, local_size_x_id = 18, "
+        "local_size_y_id = 10, local_size_z_id = 19) in;" in generated_code
+    )
     assert "uint3(2, 5, 7)[0]" not in generated_code
     assert "uint3(2, 5, 7)[1]" not in generated_code
     assert "uint3(2, 5, 7)[2]" not in generated_code
@@ -7080,9 +7108,11 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
         "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7) in;"
         in generated_code
     )
-    assert "spirvControlBarrier(2, 2, 264);" in generated_code
-    assert "spirvMemoryBarrier(1, 3400);" in generated_code
-    assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "groupMemoryBarrier();" in generated_code
+    assert "spirvControlBarrier" not in generated_code
+    assert "spirvMemoryBarrier" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -7182,8 +7212,9 @@ def test_glslang_image_texel_pointer_atomic_iadd_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWTexture2D<uint> img @set(0) @binding(0) @r32ui;" in generated_code
-    assert "atomicAdd(spirvImageTexelPointer(img, int2(0, 1), 0), 3);" in generated_code
+    assert "uimage2D img @set(0) @binding(0) @r32ui;" in generated_code
+    assert "imageAtomicAdd(img, int2(0, 1), 3u);" in generated_code
+    assert "spirvImageTexelPointer" not in generated_code
     assert "texelPtr" not in generated_code
     assert "OpImageTexelPointer" not in generated_code
     assert "OpAtomicIAdd" not in generated_code
@@ -7232,7 +7263,7 @@ def test_spirv_assembly_uniform_constant_resources_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "%combined" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7367,8 +7398,7 @@ def test_spirv_assembly_storage_image_format_codegen():
 
     parse_crossgl(generated_code)
     assert (
-        "RWTexture2D<uint> storageImage @set(0) @binding(0) @r32ui @readonly;"
-        in generated_code
+        "uimage2D storageImage @set(0) @binding(0) @r32ui @readonly;" in generated_code
     )
     assert "%storage_image" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7381,7 +7411,7 @@ def test_spirv_assembly_storage_image_array_format_codegen():
 
     parse_crossgl(generated_code)
     assert (
-        "RWTexture2D<uint> storageImages[4] @set(0) @binding(0) @r32ui @readonly;"
+        "uimage2D storageImages[4] @set(0) @binding(0) @r32ui @readonly;"
         in generated_code
     )
     assert "storageImages[4] @set(0) @binding(0) @readonly;" not in generated_code
@@ -7395,9 +7425,7 @@ def test_spirv_assembly_storage_image_buffer_format_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert (
-        "RWBuffer<uint> storageBuffer @set(0) @binding(2) @readonly;" in generated_code
-    )
+    assert "uimageBuffer storageBuffer @set(0) @binding(2) @readonly;" in generated_code
     assert "@r32ui" not in generated_code
     assert "%storage_buffer" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7411,11 +7439,10 @@ def test_spirv_non_32bit_integer_images_preserve_resource_family_codegen_reparse
     parse_crossgl(generated_code)
     assert "usampler2D shortTex @set(0) @binding(0);" in generated_code
     assert (
-        "RWTexture2D<int> signedStorage @set(0) @binding(1) @r16i @writeonly;"
-        in generated_code
+        "iimage2D signedStorage @set(0) @binding(1) @r16i @writeonly;" in generated_code
     )
     assert "Texture2D shortTex" not in generated_code
-    assert "RWTexture2D signedStorage" not in generated_code
+    assert "\n    image2D signedStorage" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -7425,13 +7452,13 @@ def test_spirv_descriptor_indexing_nonuniform_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D textures[4] @set(0) @binding(0);" in generated_code
+    assert "texture2D textures[4] @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "int materialIndex @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
         "outColor = textureLod("
-        "Texture2D(textures[nonuniformEXT(materialIndex)], linearSampler), "
+        "textures[nonuniformEXT(materialIndex)], linearSampler, "
         "uv, 0.0);"
     ) in generated_code
     assert "textures[materialIndex]" not in generated_code
@@ -7445,7 +7472,7 @@ def test_glslang_image_write_sample_operand_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWTexture2DMS image @set(0) @binding(0) @rgba16f;" in generated_code
+    assert "image2DMS image @set(0) @binding(0) @rgba16f;" in generated_code
     assert (
         "imageStore(image, int2(0, 1), 2, float4(1.0, 0.0, 0.0, 1.0));"
         in generated_code
@@ -7463,7 +7490,7 @@ def test_spirv_tools_image_read_write_lod_operand_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWTexture2D<uint> storageImage @set(0) @binding(0);" in generated_code
+    assert "uimage2D storageImage @set(0) @binding(0);" in generated_code
     assert "uint4 outColor @output @location(0);" in generated_code
     assert (
         "outColor = spirvImageLoadLod(storageImage, uint2(0, 1), 0);" in generated_code
@@ -7554,7 +7581,7 @@ def test_spirv_cross_image_query_size_lod_codegen():
     generated_code = generate_code(ast)
 
     assert "int2 Size @output @location(0);" in generated_code
-    assert "Texture2D uTexture @set(0) @binding(0);" in generated_code
+    assert "sampler2D uTexture @set(0) @binding(0);" in generated_code
     assert (
         "Size = (textureSize(uTexture, 0) + textureSize(uTexture, 1));"
         in generated_code
@@ -7570,7 +7597,7 @@ def test_spirv_tools_image_query_size_codegen():
 
     parse_crossgl(generated_code)
     assert "int2 Size @output @location(0);" in generated_code
-    assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
+    assert "texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7584,7 +7611,7 @@ def test_spirv_tools_image_query_format_codegen_reparse():
     parse_crossgl(generated_code)
     assert "uint formatOut @output @location(0);" in generated_code
     assert "uint orderOut @output @location(1);" in generated_code
-    assert "Texture2D queryImage @set(0) @binding(0);" in generated_code
+    assert "texture2D queryImage @set(0) @binding(0);" in generated_code
     assert "formatOut = spirvImageQueryFormat(queryImage);" in generated_code
     assert "orderOut = spirvImageQueryOrder(queryImage);" in generated_code
     assert "formatOut = format;" not in generated_code
@@ -7602,8 +7629,8 @@ def test_spirv_image_query_lod_levels_samples_codegen_reparse():
     assert "float2 lodOut @output @location(0);" in generated_code
     assert "int levelsOut @output @location(1);" in generated_code
     assert "int samplesOut @output @location(2);" in generated_code
-    assert "Texture2D queryTex @set(0) @binding(0);" in generated_code
-    assert "Texture2DMS msTex @set(0) @binding(1);" in generated_code
+    assert "sampler2D queryTex @set(0) @binding(0);" in generated_code
+    assert "texture2DMS msTex @set(0) @binding(1);" in generated_code
     assert "lodOut = textureQueryLod(queryTex, uv);" in generated_code
     assert "levelsOut = textureQueryLevels(queryTex);" in generated_code
     assert "samplesOut = textureSamples(msTex);" in generated_code
@@ -7619,7 +7646,7 @@ def test_spirv_tools_image_read_sample_operand_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWTexture2DMS var_image @set(0) @binding(1);" in generated_code
+    assert "image2DMS var_image @set(0) @binding(1);" in generated_code
     assert "float4 color @output @location(0);" in generated_code
     assert "color = imageLoad(var_image, uint2(1, 2), 2);" in generated_code
     assert "imageLoad(var_image, uint2(1, 2));" not in generated_code
@@ -7632,7 +7659,7 @@ def test_spirv_cross_sparse_texture_resident_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D uSamp @set(0) @binding(0);" in generated_code
+    assert "sampler2D uSamp @set(0) @binding(0);" in generated_code
     assert "float2 vUV @input @location(0);" in generated_code
     assert "float4 FragColor @output @location(0);" in generated_code
     assert (
@@ -7663,7 +7690,7 @@ def test_spirv_sparse_dref_sample_keeps_dref_helper_name_codegen_reparse():
     assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
     assert (
         "depthOut = spirvSparseTexel("
-        "spirvImageSparseSampleDrefLod(shadowTex, coord, coord[2], 0.0));"
+        "spirvImageSparseSampleDrefLod(shadowTex, coord.xy, coord[2], 0.0));"
         in generated_code
     )
     assert "spirvImageSparseSampleDrefCompare" not in generated_code
@@ -7676,7 +7703,7 @@ def test_spirv_tools_sparse_image_read_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWTexture2D<uint> storageImage @set(0) @binding(0);" in generated_code
+    assert "uimage2D storageImage @set(0) @binding(0);" in generated_code
     assert "uint4 outColor @output @location(0);" in generated_code
     assert (
         "outColor = spirvSparseTexel("
@@ -7699,8 +7726,8 @@ def test_spirv_tools_sparse_image_fetch_gather_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D imageVar @set(0) @binding(0);" in generated_code
-    assert "Texture2D sampledVar @set(0) @binding(1);" in generated_code
+    assert "texture2D imageVar @set(0) @binding(0);" in generated_code
+    assert "sampler2D sampledVar @set(0) @binding(1);" in generated_code
     assert "float4 fetchOut @output @location(0);" in generated_code
     assert "float4 gatherOut @output @location(1);" in generated_code
     assert "bool residentOut @output @location(2);" in generated_code
@@ -7734,11 +7761,12 @@ def test_glslang_dref_sample_preserves_compare_operand_codegen_reparse():
     assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
     assert "float depthOut @output @location(0);" in generated_code
     assert (
-        "depthOut = textureCompareLod(shadowTex, coord, coord[2], 0.0);"
+        "depthOut = textureCompareLod(shadowTex, coord.xy, coord[2], 0.0);"
         in generated_code
     )
     assert (
-        "depthOut = textureLod(shadowTex, coord, coord[2], 0.0);" not in generated_code
+        "depthOut = textureLod(shadowTex, coord.xy, coord[2], 0.0);"
+        not in generated_code
     )
     assert "Unhandled statement type" not in generated_code
 
@@ -7753,7 +7781,7 @@ def test_glslang_dref_lod_offset_sample_preserves_const_offset_codegen_reparse()
     assert "float depthOut @output @location(0);" in generated_code
     assert (
         "depthOut = textureCompareLodOffset("
-        "shadowTex, coord, coord[2], 0.0, int2(1, 2));" in generated_code
+        "shadowTex, coord.xy, coord[2], 0.0, int2(1, 2));" in generated_code
     )
     assert "depthOut = textureLodOffset(" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7765,7 +7793,7 @@ def test_spirv_tools_implicit_lod_bias_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = texture(colorTex, uv, 0.25);" in generated_code
@@ -7780,11 +7808,11 @@ def test_spirv_implicit_lod_min_lod_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
-        "outColor = spirvTextureOffsetMinLod(colorTex, uv, int2(1, 2), 0.5);"
+        "outColor = textureOffsetClamp(colorTex, uv, int2(1, 2), 0.5);"
         in generated_code
     )
     assert "outColor = textureOffset(colorTex, uv, 0.5);" not in generated_code
@@ -7797,7 +7825,7 @@ def test_glslang_texture_lod_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7813,7 +7841,7 @@ def test_glslang_texture_proj_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float3 uvq @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = textureProjOffset(colorTex, uvq, int2(1, 2));" in generated_code
@@ -7840,7 +7868,7 @@ def test_glslang_texel_fetch_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "int2 pixel @input @location(0) @flat;" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7856,7 +7884,7 @@ def test_glslang_texel_fetch_ms_preserves_sample_operand_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2DMS colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2DMS colorTex @set(0) @binding(0);" in generated_code
     assert "int2 pixel @input @location(0) @flat;" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = texelFetch(colorTex, pixel, 2);" in generated_code
@@ -7870,7 +7898,7 @@ def test_glslang_texture_gather_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7926,7 +7954,7 @@ def test_spirv_cross_integer_bitcast_codegen_reparse():
     assert (
         "output[0].unsignedValue = asuint(gl_GlobalInvocationID[0]);" in generated_code
     )
-    assert "output[0].signedValue = asint(4294967295);" in generated_code
+    assert "output[0].signedValue = asint(4294967295u);" in generated_code
     assert "spirvBitcast_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -8071,9 +8099,15 @@ def test_glsl_std450_struct_extinst_codegen_reparse():
     assert "struct FrexpResult" in generated_code
     assert "float significand;" in generated_code
     assert "int exponent;" in generated_code
+    assert "float modf_parts_fract = modf(inputValue, modf_parts_whole);" in (
+        generated_code
+    )
     assert (
-        "outputValue = (modf(inputValue).fractional + frexp(inputValue).significand);"
+        "float frexp_parts_significand = frexp(inputValue, frexp_parts_exponent);"
         in generated_code
+    )
+    assert "outputValue = (modf_parts_fract + frexp_parts_significand);" in (
+        generated_code
     )
     assert "spirv_GLSL_std_450_ModfStruct" not in generated_code
     assert "spirv_GLSL_std_450_instruction_52" not in generated_code
@@ -8086,8 +8120,9 @@ def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_codegen_reparse()
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert 'debugPrintfEXT("unsigned == %u", foo);' in generated_code
-    assert "debugPrintfEXT(value_fmt" not in generated_code
+    assert 'printf("unsigned == %u", foo);' in generated_code
+    assert "debugPrintfEXT" not in generated_code
+    assert "printf(value_fmt" not in generated_code
     assert "spirv_NonSemantic_DebugPrintf_1" not in generated_code
     assert "OpString" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -8244,8 +8279,8 @@ def test_spirv_assembly_local_size_id_codegen():
 
     assert "compute {" in generated_code
     assert (
-        "layout(local_size_x = WORKGROUP_WIDTH, local_size_y = WORKGROUP_HEIGHT, "
-        "local_size_z = 1) in;" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
     assert "const uint WORKGROUP_HEIGHT @constant_id(1) = 4;" in generated_code
@@ -8511,10 +8546,14 @@ def test_spirv_tools_extended_arithmetic_codegen_reparse():
     assert "uint outCarry @output @location(1);" in generated_code
     assert "int outLow @output @location(2);" in generated_code
     assert "int outHigh @output @location(3);" in generated_code
-    assert "outSum = spirvIAddCarry(0, 1)[0];" in generated_code
-    assert "outCarry = spirvIAddCarry(0, 1)[1];" in generated_code
-    assert "outLow = spirvSMulExtended(2, 3)[0];" in generated_code
-    assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
+    # The struct members become the result and the out operands of GLSL's built-ins (GLSL 4.60 section 8.8).
+    assert "uint add_sum = uaddCarry(0, 1, add_carry);" in generated_code
+    assert "outSum = add_sum;" in generated_code
+    assert "outCarry = add_carry;" in generated_code
+    assert "imulExtended(2, 3, mul_msb, mul_lsb);" in generated_code
+    assert "outLow = mul_lsb;" in generated_code
+    assert "outHigh = mul_msb;" in generated_code
+    assert "spirv" not in generated_code.lower().replace("spirv_", "")
     assert "OpIAddCarry" not in generated_code
     assert "OpSMulExtended" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -8558,10 +8597,13 @@ def test_spirv_loop_phi_complex_incoming_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert len(generated_code) < 2000
-    assert 'spirvPhi(seed, "entry", next, "body")' in generated_code
-    assert 'spirvPhi((inputValue + inputValue), "entry", next, "body")' not in (
-        generated_code
-    )
+    # The loop-carried phi is a variable assigned on the entry edge and on the back edge.
+    assert "float carry;" in generated_code
+    assert "carry = (inputValue + inputValue);" in generated_code
+    assert "while ((carry < 1.0)) {" in generated_code
+    assert "carry = ((carry + carry) + 1.0);" in generated_code
+    assert "outColor = float4(carry, carry, carry, 1.0);" in generated_code
+    assert "spirvPhi" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -8575,7 +8617,7 @@ def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_pat
         str(shader_path), backend="cgl", format_output=False
     )
 
-    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
 
 
@@ -8678,7 +8720,7 @@ def test_naga_empty_global_name_fallback_identifier_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWStructuredBuffer<global_> global_ @set(0) @binding(0);" in generated_code
+    assert "RWStructuredBuffer<block> global_ @set(0) @binding(0);" in generated_code
     assert "global_[0].member0 = (global_[0].member0 + 1);" in generated_code
     assert "struct global {" not in generated_code
 
@@ -8706,7 +8748,8 @@ def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path
         str(shader_path), backend="cgl", format_output=False
     )
 
-    assert generated_code == "shader main {\n}\n"
+    # SPIR-V defines wrapping integer arithmetic, which the CrossGL program declares (rule_pragmas.py).
+    assert generated_code == "#pragma cgl_rules(wrap)\nshader main {\n}\n"
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():
@@ -9036,8 +9079,8 @@ def test_vulkan_resource_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "albedoTex"
     assert ast.global_variables[1].vtype == "samplerCube"
     assert ast.global_variables[1].name == "skybox"
-    assert "Texture2D albedoTex;" in generated_code
-    assert "TextureCube skybox;" in generated_code
+    assert "sampler2D albedoTex;" in generated_code
+    assert "samplerCube skybox;" in generated_code
 
 
 def test_vulkan_one_dimensional_sampler_uniforms_emit_crossgl_resources():
@@ -9054,8 +9097,8 @@ def test_vulkan_one_dimensional_sampler_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "ramp"
     assert ast.global_variables[1].vtype == "sampler1DArray"
     assert ast.global_variables[1].name == "ramps"
-    assert "Texture1D ramp;" in generated_code
-    assert "Texture1DArray ramps;" in generated_code
+    assert "sampler1D ramp;" in generated_code
+    assert "sampler1DArray ramps;" in generated_code
 
 
 def test_vulkan_integer_one_dimensional_sampler_uniforms_preserve_crossgl_resource_types():
@@ -9228,10 +9271,10 @@ def test_vulkan_one_dimensional_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "line"
     assert ast.global_variables[1].data_type == "image1DArray"
     assert ast.global_variables[1].variable_name == "lines"
-    assert "RWTexture1D line;" in generated_code
-    assert "RWTexture1DArray lines;" in generated_code
-    assert "image1D line;" not in generated_code
-    assert "image1DArray lines;" not in generated_code
+    assert "image1D line;" in generated_code
+    assert "image1DArray lines;" in generated_code
+    assert "RWTexture1D line;" not in generated_code
+    assert "RWTexture1DArray lines;" not in generated_code
 
 
 def test_vulkan_image2d_array_uniform_emits_crossgl_resource():
@@ -9245,8 +9288,8 @@ def test_vulkan_image2d_array_uniform_emits_crossgl_resource():
 
     assert ast.global_variables[0].data_type == "image2DArray"
     assert ast.global_variables[0].variable_name == "layers"
-    assert "RWTexture2DArray layers;" in generated_code
-    assert "image2DArray layers;" not in generated_code
+    assert "image2DArray layers;" in generated_code
+    assert "RWTexture2DArray layers;" not in generated_code
 
 
 def test_vulkan_typed_2d_image_uniforms_emit_crossgl_resources():
@@ -9263,10 +9306,10 @@ def test_vulkan_typed_2d_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedImage"
     assert ast.global_variables[1].data_type == "uimage2D"
     assert ast.global_variables[1].variable_name == "counters"
-    assert "RWTexture2D<int> signedImage;" in generated_code
-    assert "RWTexture2D<uint> counters;" in generated_code
-    assert "iimage2D signedImage;" not in generated_code
-    assert "uimage2D counters;" not in generated_code
+    assert "iimage2D signedImage;" in generated_code
+    assert "uimage2D counters;" in generated_code
+    assert "RWTexture2D<int> signedImage;" not in generated_code
+    assert "RWTexture2D<uint> counters;" not in generated_code
 
 
 def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
@@ -9280,13 +9323,10 @@ def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "RWTexture2D<uint> counters @set(3) @binding(7) @r32ui @coherent @readonly;"
+        "uimage2D counters @set(3) @binding(7) @r32ui @coherent @readonly;"
         in generated_code
     )
-    assert (
-        "RWTexture2D outImage @set(4) @binding(8) @rgba32f @writeonly;"
-        in generated_code
-    )
+    assert "image2D outImage @set(4) @binding(8) @rgba32f @writeonly;" in generated_code
     assert "uimage2D counters @binding" not in generated_code
     assert "image2D outImage @binding" not in generated_code
 
@@ -9301,7 +9341,7 @@ def test_vulkan_storage_image_symbolic_binding_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "RWTexture2D outImage @set(RESOURCE_SET) @binding(OUT_IMAGE_BINDING) "
+        "image2D outImage @set(RESOURCE_SET) @binding(OUT_IMAGE_BINDING) "
         "@rgba32f @writeonly;" in generated_code
     )
 
@@ -9324,14 +9364,14 @@ def test_vulkan_typed_1d_image_uniforms_emit_crossgl_resources():
         "iimage1DArray",
         "uimage1DArray",
     ]
-    assert "RWTexture1D<int> signedLine;" in generated_code
-    assert "RWTexture1D<uint> counters;" in generated_code
-    assert "RWTexture1DArray<int> signedLayers;" in generated_code
-    assert "RWTexture1DArray<uint> layerCounters;" in generated_code
-    assert "iimage1D signedLine;" not in generated_code
-    assert "uimage1D counters;" not in generated_code
-    assert "iimage1DArray signedLayers;" not in generated_code
-    assert "uimage1DArray layerCounters;" not in generated_code
+    assert "iimage1D signedLine;" in generated_code
+    assert "uimage1D counters;" in generated_code
+    assert "iimage1DArray signedLayers;" in generated_code
+    assert "uimage1DArray layerCounters;" in generated_code
+    assert "RWTexture1D<int> signedLine;" not in generated_code
+    assert "RWTexture1D<uint> counters;" not in generated_code
+    assert "RWTexture1DArray<int> signedLayers;" not in generated_code
+    assert "RWTexture1DArray<uint> layerCounters;" not in generated_code
 
 
 def test_vulkan_typed_3d_image_uniforms_emit_crossgl_resources():
@@ -9348,10 +9388,10 @@ def test_vulkan_typed_3d_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedVolume"
     assert ast.global_variables[1].data_type == "uimage3D"
     assert ast.global_variables[1].variable_name == "counters"
-    assert "RWTexture3D<int> signedVolume;" in generated_code
-    assert "RWTexture3D<uint> counters;" in generated_code
-    assert "iimage3D signedVolume;" not in generated_code
-    assert "uimage3D counters;" not in generated_code
+    assert "iimage3D signedVolume;" in generated_code
+    assert "uimage3D counters;" in generated_code
+    assert "RWTexture3D<int> signedVolume;" not in generated_code
+    assert "RWTexture3D<uint> counters;" not in generated_code
 
 
 def test_vulkan_typed_cube_image_uniforms_emit_crossgl_resources():
@@ -9372,14 +9412,14 @@ def test_vulkan_typed_cube_image_uniforms_emit_crossgl_resources():
         "iimageCubeArray",
         "uimageCubeArray",
     ]
-    assert "RWTextureCube<int> signedCube;" in generated_code
-    assert "RWTextureCube<uint> cubeCounters;" in generated_code
-    assert "RWTextureCubeArray<int> signedCubeLayers;" in generated_code
-    assert "RWTextureCubeArray<uint> cubeLayerCounters;" in generated_code
-    assert "iimageCube signedCube;" not in generated_code
-    assert "uimageCube cubeCounters;" not in generated_code
-    assert "iimageCubeArray signedCubeLayers;" not in generated_code
-    assert "uimageCubeArray cubeLayerCounters;" not in generated_code
+    assert "iimageCube signedCube;" in generated_code
+    assert "uimageCube cubeCounters;" in generated_code
+    assert "iimageCubeArray signedCubeLayers;" in generated_code
+    assert "uimageCubeArray cubeLayerCounters;" in generated_code
+    assert "RWTextureCube<int> signedCube;" not in generated_code
+    assert "RWTextureCube<uint> cubeCounters;" not in generated_code
+    assert "RWTextureCubeArray<int> signedCubeLayers;" not in generated_code
+    assert "RWTextureCubeArray<uint> cubeLayerCounters;" not in generated_code
 
 
 def test_vulkan_typed_2d_array_image_uniforms_emit_crossgl_resources():
@@ -9396,10 +9436,10 @@ def test_vulkan_typed_2d_array_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedLayers"
     assert ast.global_variables[1].data_type == "uimage2DArray"
     assert ast.global_variables[1].variable_name == "counters"
-    assert "RWTexture2DArray<int> signedLayers;" in generated_code
-    assert "RWTexture2DArray<uint> counters;" in generated_code
-    assert "iimage2DArray signedLayers;" not in generated_code
-    assert "uimage2DArray counters;" not in generated_code
+    assert "iimage2DArray signedLayers;" in generated_code
+    assert "uimage2DArray counters;" in generated_code
+    assert "RWTexture2DArray<int> signedLayers;" not in generated_code
+    assert "RWTexture2DArray<uint> counters;" not in generated_code
 
 
 def test_vulkan_typed_2d_ms_image_uniforms_emit_crossgl_resources():
@@ -9416,10 +9456,10 @@ def test_vulkan_typed_2d_ms_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedSamples"
     assert ast.global_variables[1].data_type == "uimage2DMS"
     assert ast.global_variables[1].variable_name == "sampleCounters"
-    assert "RWTexture2DMS<int> signedSamples;" in generated_code
-    assert "RWTexture2DMS<uint> sampleCounters;" in generated_code
-    assert "iimage2DMS signedSamples;" not in generated_code
-    assert "uimage2DMS sampleCounters;" not in generated_code
+    assert "iimage2DMS signedSamples;" in generated_code
+    assert "uimage2DMS sampleCounters;" in generated_code
+    assert "RWTexture2DMS<int> signedSamples;" not in generated_code
+    assert "RWTexture2DMS<uint> sampleCounters;" not in generated_code
 
 
 def test_vulkan_typed_2d_ms_array_image_uniforms_emit_crossgl_resources():
@@ -9436,10 +9476,10 @@ def test_vulkan_typed_2d_ms_array_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedLayers"
     assert ast.global_variables[1].data_type == "uimage2DMSArray"
     assert ast.global_variables[1].variable_name == "sampleCounters"
-    assert "RWTexture2DMSArray<int> signedLayers;" in generated_code
-    assert "RWTexture2DMSArray<uint> sampleCounters;" in generated_code
-    assert "iimage2DMSArray signedLayers;" not in generated_code
-    assert "uimage2DMSArray sampleCounters;" not in generated_code
+    assert "iimage2DMSArray signedLayers;" in generated_code
+    assert "uimage2DMSArray sampleCounters;" in generated_code
+    assert "RWTexture2DMSArray<int> signedLayers;" not in generated_code
+    assert "RWTexture2DMSArray<uint> sampleCounters;" not in generated_code
 
 
 def test_vulkan_image_cube_array_uniform_emits_crossgl_resource():
@@ -9453,8 +9493,8 @@ def test_vulkan_image_cube_array_uniform_emits_crossgl_resource():
 
     assert ast.global_variables[0].data_type == "imageCubeArray"
     assert ast.global_variables[0].variable_name == "cubes"
-    assert "RWTextureCubeArray cubes;" in generated_code
-    assert "imageCubeArray cubes;" not in generated_code
+    assert "imageCubeArray cubes;" in generated_code
+    assert "RWTextureCubeArray cubes;" not in generated_code
 
 
 def test_vulkan_multisample_sampler_uniforms_emit_crossgl_resources():
@@ -9471,10 +9511,9 @@ def test_vulkan_multisample_sampler_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "msTex"
     assert ast.global_variables[1].data_type == "sampler2DMSArray"
     assert ast.global_variables[1].variable_name == "msTexArray"
-    assert "Texture2DMS msTex;" in generated_code
-    assert "Texture2DMSArray msTexArray;" in generated_code
-    assert "sampler2DMS msTex;" not in generated_code
-    assert "sampler2DMSArray msTexArray;" not in generated_code
+    # CrossGL spells the combined multisample samplers as GLSL does.
+    assert "sampler2DMS msTex;" in generated_code
+    assert "sampler2DMSArray msTexArray;" in generated_code
 
 
 def test_vulkan_multisample_image_uniforms_emit_crossgl_resources():
@@ -9491,10 +9530,10 @@ def test_vulkan_multisample_image_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "msImage"
     assert ast.global_variables[1].data_type == "image2DMSArray"
     assert ast.global_variables[1].variable_name == "msImages"
-    assert "RWTexture2DMS msImage;" in generated_code
-    assert "RWTexture2DMSArray msImages;" in generated_code
-    assert "image2DMS msImage;" not in generated_code
-    assert "image2DMSArray msImages;" not in generated_code
+    assert "image2DMS msImage;" in generated_code
+    assert "image2DMSArray msImages;" in generated_code
+    assert "RWTexture2DMS msImage;" not in generated_code
+    assert "RWTexture2DMSArray msImages;" not in generated_code
 
 
 def test_vulkan_image_buffer_uniform_emits_crossgl_resource():
@@ -9508,8 +9547,8 @@ def test_vulkan_image_buffer_uniform_emits_crossgl_resource():
 
     assert ast.global_variables[0].data_type == "imageBuffer"
     assert ast.global_variables[0].variable_name == "data"
-    assert "RWBuffer data;" in generated_code
-    assert "imageBuffer data;" not in generated_code
+    assert "imageBuffer data;" in generated_code
+    assert "RWBuffer data;" not in generated_code
 
 
 def test_vulkan_typed_image_buffer_uniforms_emit_crossgl_resources():
@@ -9526,10 +9565,10 @@ def test_vulkan_typed_image_buffer_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "signedData"
     assert ast.global_variables[1].data_type == "uimageBuffer"
     assert ast.global_variables[1].variable_name == "unsignedData"
-    assert "RWBuffer<int> signedData;" in generated_code
-    assert "RWBuffer<uint> unsignedData;" in generated_code
-    assert "iimageBuffer signedData;" not in generated_code
-    assert "uimageBuffer unsignedData;" not in generated_code
+    assert "iimageBuffer signedData;" in generated_code
+    assert "uimageBuffer unsignedData;" in generated_code
+    assert "RWBuffer<int> signedData;" not in generated_code
+    assert "RWBuffer<uint> unsignedData;" not in generated_code
 
 
 def test_vulkan_sampler_buffer_uniform_emits_crossgl_resource():
@@ -9543,8 +9582,8 @@ def test_vulkan_sampler_buffer_uniform_emits_crossgl_resource():
 
     assert ast.global_variables[0].data_type == "samplerBuffer"
     assert ast.global_variables[0].variable_name == "data"
-    assert "Buffer data;" in generated_code
-    assert "samplerBuffer data;" not in generated_code
+    assert "samplerBuffer data;" in generated_code
+    assert " Buffer data;" not in generated_code
 
 
 def test_vulkan_integer_sampler_buffer_uniforms_preserve_crossgl_resource_types():
@@ -9674,7 +9713,7 @@ def test_vulkan_precision_declarations_do_not_emit_crossgl_resources():
 
     assert len(ast.global_variables) == 1
     assert ast.global_variables[0].data_type == "sampler2D"
-    assert "Texture2D albedoTex;" in generated_code
+    assert "sampler2D albedoTex;" in generated_code
     assert "precision" not in generated_code
 
 
@@ -9851,7 +9890,6 @@ def test_struct_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
         assert "VertexOutput output;" in generated_code
     except SyntaxError:
         pytest.fail("Struct parsing or code generation not implemented.")
@@ -9870,8 +9908,7 @@ def test_if_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("If statement parsing or code generation not implemented.")
 
@@ -9889,8 +9926,7 @@ def test_for_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("For loop parsing or code generation not implemented.")
 
@@ -10014,8 +10050,7 @@ def test_while_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("While loop parsing or code generation not implemented.")
 
@@ -10090,8 +10125,7 @@ def test_else_if_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Else-if statement parsing or code generation not implemented.")
 
@@ -10289,8 +10323,7 @@ def test_bitwise_and_ops_codegen():
             print(f"{i}: {token}")
 
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise AND operator parsing or code generation not implemented.")
 
@@ -10311,8 +10344,7 @@ def test_bitwise_or_ops_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise OR operator parsing or code generation not implemented.")
 
@@ -10333,8 +10365,7 @@ def test_bitwise_xor_ops_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise XOR operator parsing or code generation not implemented.")
 
@@ -10354,8 +10385,7 @@ def test_bitwise_not_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise NOT operator parsing or code generation not implemented.")
 
@@ -10395,7 +10425,6 @@ def test_bitwise_shift_ops_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
         assert "uint result1 = (value << 1);" in generated_code
         assert "uint result2 = (value >> 1);" in generated_code
         assert "if (((result1 == 8) && (result2 == 2)))" in generated_code
@@ -10481,8 +10510,7 @@ def test_double_dtype_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Double data type parsing or code generation not implemented.")
 

@@ -66,6 +66,7 @@ _UINT_OPS = {
     "^": lambda a, b: a ^ b,
     "<<": lambda a, b: a << b,
     ">>": lambda a, b: a >> b,
+    "%": lambda a, b: a % b,
 }
 
 
@@ -75,15 +76,15 @@ class HelperInterpreter:
     def __init__(self, skew=0):
         self.skew = skew
         self.calls = 0
-        self.functions = {
-            base: H.helper_function(base, 1) for base in H.SCALAR_HELPERS
-        }
+        self.functions = {base: H.helper_function(base, 1) for base in H.SCALAR_HELPERS}
 
     def perturb(self, value):
         if not np.isfinite(value) or value == 0:
             return value
         self.calls += 1
-        steps = (self.calls * 7919) % (2 * self.skew + 1) - self.skew if self.skew else 0
+        steps = (
+            (self.calls * 7919) % (2 * self.skew + 1) - self.skew if self.skew else 0
+        )
         direction = np.float32(np.inf if steps > 0 else -np.inf)
         for _ in range(abs(steps)):
             value = np.nextafter(value, direction, dtype=np.float32)
@@ -147,7 +148,9 @@ class HelperInterpreter:
         if isinstance(node, A.IdentifierNode):
             return frame[node.name]
         if isinstance(node, A.TernaryOpNode):
-            chosen = node.true_expr if self.expr(node.condition, frame) else node.false_expr
+            chosen = (
+                node.true_expr if self.expr(node.condition, frame) else node.false_expr
+            )
             return self.expr(chosen, frame)
         if isinstance(node, A.UnaryOpNode):
             value = self.expr(node.operand, frame)
@@ -164,9 +167,13 @@ class HelperInterpreter:
     def binary(self, node, frame):
         op = node.op
         if op == "&&":
-            return bool(self.expr(node.left, frame)) and bool(self.expr(node.right, frame))
+            return bool(self.expr(node.left, frame)) and bool(
+                self.expr(node.right, frame)
+            )
         if op == "||":
-            return bool(self.expr(node.left, frame)) or bool(self.expr(node.right, frame))
+            return bool(self.expr(node.left, frame)) or bool(
+                self.expr(node.right, frame)
+            )
         left, right = self.expr(node.left, frame), self.expr(node.right, frame)
         comparisons = {
             "<": lambda: left < right,
@@ -189,6 +196,8 @@ class HelperInterpreter:
             assert right < 32, (op, right)
         if op == "-":
             assert left >= right, "uint underflow in a helper"
+        if op == "%":
+            assert right != 0, "uint remainder by zero in a helper"
         return _UINT_OPS[op](left, right) & MASK
 
     def function_call(self, node, frame):
@@ -222,7 +231,9 @@ def round_half(value: Fraction) -> float:
     magnitude = abs(value)
     if magnitude >= HALF_MAX_EDGE:
         return sign * float("inf")
-    exponent = max(magnitude.numerator.bit_length() - magnitude.denominator.bit_length(), -14)
+    exponent = max(
+        magnitude.numerator.bit_length() - magnitude.denominator.bit_length(), -14
+    )
     while Fraction(2) ** exponent > magnitude and exponent > -14:
         exponent -= 1
     while Fraction(2) ** (exponent + 1) <= magnitude:
@@ -243,19 +254,31 @@ def finite_halves():
 def assert_same(actual, expected, what):
     actual_bits = _bits(np.float32(actual))
     expected_bits = _bits(np.float32(expected))
-    assert actual_bits == expected_bits, f"{what}: got {actual!r}, expected {expected!r}"
+    assert (
+        actual_bits == expected_bits
+    ), f"{what}: got {actual!r}, expected {expected!r}"
 
 
 # Unit tests ----------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "name, lanes",
-    [("half", 1), ("float16", 1), ("float16_t", 1), ("f16", 1), ("f16vec3", 3), ("half4", 4), ("vec2<f16>", 2)],
+    [
+        ("half", 1),
+        ("float16", 1),
+        ("float16_t", 1),
+        ("f16", 1),
+        ("f16vec3", 3),
+        ("half4", 4),
+        ("vec2<f16>", 2),
+    ],
 )
 def test_half_spellings(name, lanes):
     assert half_from_name(name).lanes == lanes
 
 
-@pytest.mark.parametrize("name", ["float", "min16float", "double", "half4x4", "bfloat16_t"])
+@pytest.mark.parametrize(
+    "name", ["float", "min16float", "double", "half4x4", "bfloat16_t"]
+)
 def test_other_types_are_not_half(name):
     assert half_from_name(name) is None
 
@@ -277,7 +300,15 @@ def test_round_helper_matches_numpy_conversion():
             np.array(
                 [
                     (base + offset) & MASK
-                    for base in (0x33000000, 0x33800000, 0x38800000, 0x387FF000, 0x3F801000, 0x477FF000, 0x477FE000)
+                    for base in (
+                        0x33000000,
+                        0x33800000,
+                        0x38800000,
+                        0x387FF000,
+                        0x3F801000,
+                        0x477FF000,
+                        0x477FE000,
+                    )
                     for offset in (-1, 0, 1, 0x1000, 0x2000)
                 ]
                 + [0x7F800000, 0xFF800000, 0x7FC00000, 0x80000000, 0, 1],
@@ -297,7 +328,12 @@ def test_round_helper_matches_numpy_conversion():
 def _midpoint_pairs(rng, count):
     """Pairs whose exact quotient lies next to a binary16 midpoint (or on one), plus random pairs."""
     values = halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count))
-    pairs = list(zip(values, halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count))))
+    pairs = list(
+        zip(
+            values,
+            halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count)),
+        )
+    )
     for numerator in (1, 3, 5, 7, 1025, 2047, 683, 1.5, 0.75):
         for denominator in (3, 7, 11, 1023, 2045, 0.6669921875, 3.0517578125e-05):
             pairs.append((float(np.float16(numerator)), float(np.float16(denominator))))
@@ -308,7 +344,11 @@ def _midpoint_pairs(rng, count):
 def test_division_helper_is_correctly_rounded(skew):
     interpreter = HelperInterpreter(skew)
     rng = np.random.default_rng(1 + skew)
-    for a, b in _midpoint_pairs(rng, 1500) + [(65504.0, 2.0**-24), (2.0**-24, 65504.0), (-0.0, 3.0)]:
+    for a, b in _midpoint_pairs(rng, 1500) + [
+        (65504.0, 2.0**-24),
+        (2.0**-24, 65504.0),
+        (-0.0, 3.0),
+    ]:
         expected = round_half(Fraction(a) / Fraction(b))
         if a == 0:
             expected = float(np.float16(a) / np.float16(b))
@@ -324,9 +364,13 @@ def test_square_root_helper_is_correctly_rounded(skew):
         # A binary16 square root is never within 2^-23 (relative) of a binary16 midpoint, so rounding the binary64
         # root exactly gives the correctly rounded result.
         expected = round_half(Fraction(math.sqrt(float(value))))
-        assert_same(interpreter.call("cgl_half_sqrt", value), expected, f"sqrt({value!r})")
+        assert_same(
+            interpreter.call("cgl_half_sqrt", value), expected, f"sqrt({value!r})"
+        )
     assert np.isnan(interpreter.call("cgl_half_sqrt", np.float32(-1.0)))
-    assert_same(interpreter.call("cgl_half_sqrt", np.float32(np.inf)), np.inf, "sqrt(inf)")
+    assert_same(
+        interpreter.call("cgl_half_sqrt", np.float32(np.inf)), np.inf, "sqrt(inf)"
+    )
 
 
 def _fma_triples(rng, count):
@@ -358,7 +402,9 @@ def _fma_triples(rng, count):
     for _ in range(1500):
         exponent = int(rng.integers(-13, 15))
         midpoint = (2 * int(rng.integers(1024, 2048)) + 1) * 2.0 ** (exponent - 11)
-        c = float(np.float16(rng.uniform(-1, 1) * 2.0 ** int(rng.integers(-24, exponent))))
+        c = float(
+            np.float16(rng.uniform(-1, 1) * 2.0 ** int(rng.integers(-24, exponent)))
+        )
         a = float(np.float16(rng.uniform(1, 2) * 2.0 ** int(rng.integers(-6, 6))))
         b = float(np.float16((midpoint - c) / a))
         triples.append((a, b, c))
@@ -377,7 +423,61 @@ def test_fma_helper_is_correctly_rounded():
         expected = round_half(exact)
         if exact == 0:
             expected = float(np.float32(np.float32(a) * np.float32(b) + np.float32(c)))
-        assert_same(interpreter.call("cgl_half_fma", a, b, c), expected, f"fma({a!r}, {b!r}, {c!r})")
+        assert_same(
+            interpreter.call("cgl_half_fma", a, b, c),
+            expected,
+            f"fma({a!r}, {b!r}, {c!r})",
+        )
+
+
+def _remainder_pairs(rng, count):
+    """Random binary16 pairs, and every sign of pairs of extreme significands and exponents (29 binades apart)."""
+    halves = finite_halves()
+    pairs = list(zip(rng.choice(halves, count), rng.choice(halves, count)))
+    small = halves[np.abs(halves) < 2.0**-8]
+    pairs += list(zip(rng.choice(halves, count), rng.choice(small, count)))
+    edges = [
+        65504.0,
+        2.0**-24,
+        2.0**-14,
+        2.0**-14 - 2.0**-24,
+        1.0,
+        1.0 + 2.0**-10,
+        3.0,
+        2047.0,
+        0.099975586,
+    ]
+    pairs += [
+        (a * s, b * t) for a in edges for b in edges for s in (1, -1) for t in (1, -1)
+    ]
+    return [(np.float32(a), np.float32(b)) for a, b in pairs]
+
+
+def test_remainder_helper_is_exact():
+    """``fmod`` of binary16 values is exact (IEEE 754-2019 section 5.3.1); binary64 ``math.fmod`` is the reference."""
+    interpreter = HelperInterpreter()
+    rng = np.random.default_rng(29)
+    for a, b in _remainder_pairs(rng, 3000):
+        if b == 0:
+            assert np.isnan(interpreter.call("cgl_half_fmod", a, b)), (a, b)
+            continue
+        expected = math.fmod(float(a), float(b))
+        assert_same(
+            interpreter.call("cgl_half_fmod", a, b), expected, f"fmod({a!r}, {b!r})"
+        )
+    inf, nan = np.float32(np.inf), np.float32(np.nan)
+    for a, b in [
+        (inf, 2.0),
+        (-inf, -2.0),
+        (nan, 2.0),
+        (2.0, nan),
+        (1.0, 0.0),
+        (-0.0, -0.0),
+    ]:
+        assert np.isnan(interpreter.call("cgl_half_fmod", np.float32(a), np.float32(b)))
+    for a in (np.float32(-0.0), np.float32(1.5), np.float32(-65504.0)):
+        assert_same(interpreter.call("cgl_half_fmod", a, inf), a, f"fmod({a!r}, inf)")
+        assert_same(interpreter.call("cgl_half_fmod", a, -inf), a, f"fmod({a!r}, -inf)")
 
 
 @pytest.mark.parametrize(
@@ -392,7 +492,9 @@ def test_fma_helper_is_correctly_rounded():
 def test_helpers_pass_the_conformance_inputs(helper, inputs, reference, arity):
     """The GPU conformance inputs, interpreted: the oracle there must hold for the helper itself."""
     values = inputs()
-    interpreter = HelperInterpreter(skew=2 if helper in ("cgl_half_div", "cgl_half_sqrt") else 0)
+    interpreter = HelperInterpreter(
+        skew=2 if helper in ("cgl_half_div", "cgl_half_sqrt") else 0
+    )
     for operands, expected in zip(values.reshape(-1, arity), reference(values)):
         actual = interpreter.call(helper, *operands)
         assert_same(actual, expected, f"{helper}{tuple(float(v) for v in operands)}")
@@ -436,10 +538,7 @@ def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
     output = crosstl.translate(str(path), backend=backend, format_output=False)
-    # WGSL from Metal kernels has an unrelated interface defect (scalar invocation-id builtins), so only WGSL from
-    # GLSL is checked natively.
-    if backend == "vulkan" or suffix == ".comp":
-        validate(tmp_path, output, backend)
+    validate(tmp_path, output, backend)
     return output
 
 
@@ -557,12 +656,98 @@ def test_half_bit_casts_use_the_binary16_encoding(tmp_path):
     assert "cgl_half_to_bits" in names and "cgl_half_from_bits" in names
 
 
+def test_metal_half_and_float_operands_make_a_binary32_operation(tmp_path):
+    # MSL half converts to float in a mixed operation, so ``c * y`` and the enclosing ``1.0h + ...`` are float3.
+    body = (
+        "    const half c = half(a[i]);\n"
+        "    float3 y = float3(a[i], a[i + 1], a[i + 2]);\n"
+        "    float3 d = float3(1.0h + c * y);\n"
+        "    o[i] = d.x + d.y + d.z;"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert names == ["cgl_half_round"]
+    assert "cgl_half_round((1.0 + (c * y)))" not in wgsl
+    assert "d: vec3<f32> = vec3<f32>((1.0 + (c * y)));" in wgsl
+
+
+def test_half_remainders_use_the_exact_helper(tmp_path):
+    # MSL converts ``a[i + 2u]`` to half, so ``v * a[i + 2u]`` and ``fmod`` of it with a half are half operations.
+    body = (
+        "    half h = half(a[i]);\n"
+        "    half3 v = half3(a[i + 1u]);\n"
+        "    half3 w = fmod(v * a[i + 2u], half(1.0h));\n"
+        "    o[i] = float(fmod(h, half(0.75h))) + float(metal::fmod(v, h).y) + float(w.z);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert names == [
+        "cgl_half_round",
+        "cgl_half_index",
+        "cgl_half_fmod",
+        "cgl_half_round3",
+        "cgl_half_fmod3",
+    ]
+    assert "cgl_half_fmod(h, 0.75)" in wgsl
+    assert "cgl_half_fmod3(v, vec3<f32>(h))" in wgsl
+    assert "fmod(" not in wgsl.replace("cgl_half_fmod", "")
+
+
+def test_half_and_float_remainders_stay_binary32_operations(tmp_path):
+    # A half and a float scalar make a float remainder; the half operand converts exactly.
+    body = "    half h = half(a[i]);\n    float f = a[i + 1u];\n    o[i] = fmod(h, f);"
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert "cgl_half_fmod" not in names
+
+
+def test_hlsl_half_remainder_operator_uses_the_exact_helper(tmp_path):
+    source = """RWStructuredBuffer<float> o : register(u0);
+StructuredBuffer<float> a : register(t0);
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x;
+    float16_t h = float16_t(a[i]);
+    float16_t2 v = float16_t2(a[i + 1u], a[i + 2u]);
+    o[i] = float(h % float16_t(0.75)) + float((v % h).y);
+}
+"""
+    for backend in ("wgsl", "vulkan"):
+        output = translate(tmp_path, source, backend, ".hlsl")
+        if backend == "wgsl":
+            assert "cgl_half_fmod(h, 0.75)" in output
+            assert "cgl_half_fmod2(v, vec2<f32>(h))" in output
+
+
+def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_path):
+    # ``(l + s)`` becomes a rounding call. MSL converts the float scalar ``w`` to the vector's ``half`` (MSL section
+    # 2.12), so the product is a rounded half4 too, and so is the compound assignment's sum.
+    body = (
+        "    half4 l = half4(a[i]);\n"
+        "    half4 s = half4(a[i + 1]);\n"
+        "    float w = a[i + 2];\n"
+        "    l += (l + s) * w;\n"
+        "    o[i] = float(max(l + s, half4(0.0h)).x);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert "cgl_half_round4" in names
+    assert (
+        "l = cgl_half_round4((l + cgl_half_round4((cgl_half_round4((l + s)) "
+        "* cgl_half_round(f32(w))))));" in wgsl
+    )
+    assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
+
+
 @pytest.mark.parametrize(
     "body, reason",
     [
-        ("    half4x4 m = half4x4(1.0h);\n    o[i] = float(m[0][0]);", "matrix"),
+        (
+            "    half4x4 m = half4x4(half(a[i]));\n    o[i] = float((m / half(2.0h))[0][0]);",
+            "matrix-division",
+        ),
         ("    half h = half(a[i]);\n    o[i] = float(h++);", "step-value"),
-        ("    half h = half(a[i]);\n    o[i] = float(fmod(h, half(2.0h)));", "remainder"),
+        (
+            "    half h = half(a[i]);\n    half whole;\n"
+            "    o[i] = float(modf(h, whole)) + float(whole);",
+            "remainder",
+        ),
         ("    half2 h = half2(a[i]);\n    o[i] = float(as_type<uint>(h));", "bitcast"),
     ],
 )
@@ -577,7 +762,12 @@ def test_unsupported_half_constructs_are_refused(tmp_path, target, body, reason)
 def test_reserved_helper_names_are_refused(tmp_path):
     helpers = "float cgl_half_round(float x) { return x; }\n"
     with pytest.raises(HalfFloatUnsupportedError) as raised:
-        glsl(tmp_path, "    float16_t h = float16_t(a[i]);\n    o[i] = float(h);", "vulkan", helpers)
+        glsl(
+            tmp_path,
+            "    float16_t h = float16_t(a[i]);\n    o[i] = float(h);",
+            "vulkan",
+            helpers,
+        )
     assert raised.value.reason_code == "reserved-name"
 
 
@@ -587,7 +777,11 @@ def test_helpers_are_emitted_once_in_dependency_order(tmp_path):
         "    o[i] = float(x / float16_t(3.0) + sqrt(x) + x / float16_t(7.0));"
     )
     output = glsl(tmp_path, body, "wgsl")
-    names = [line.split("(")[0][3:] for line in output.splitlines() if line.startswith("fn cgl_half")]
+    names = [
+        line.split("(")[0][3:]
+        for line in output.splitlines()
+        if line.startswith("fn cgl_half")
+    ]
     assert names == [
         "cgl_half_round",
         "cgl_half_index",
@@ -621,3 +815,178 @@ def test_hlsl_float_literals_adopt_the_half_type(tmp_path):
     )
     wgsl = translate(tmp_path, source, "wgsl", ".hlsl")
     assert "cgl_half_round((cgl_half_round((h * 0.0999755859375)) + 1.0))" in wgsl
+
+
+def test_initializers_outside_function_bodies_are_legalized(tmp_path):
+    """Program constants, globals and static struct member initializers round to binary16 like local ones."""
+    helpers = (
+        "constant half scale = 0.1h;\n"
+        "template <typename T> struct Bounds;\n"
+        "template <> struct Bounds<half> {\n"
+        "  static constexpr constant half lowest = -metal::numeric_limits<half>::max();\n"
+        "  static constexpr constant half third = 0.1h;\n"
+        "  static constexpr constant half infinity = metal::numeric_limits<half>::infinity();\n"
+        "};\n"
+    )
+    body = (
+        "    half h = max(half(a[i]) * scale, Bounds<half>::lowest);\n"
+        "    o[i] = float(h) + float(Bounds<half>::third) + float(Bounds<half>::infinity);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body, helpers)
+    assert names == ["cgl_half_round"]
+    assert "scale: f32 = 0.0999755859375;" in wgsl
+    assert "-65504.0" in wgsl and "f32(0.0999755859375)" in wgsl
+    assert "cgl_half_round(f32(bitcast<f32>(2139095040u)))" in wgsl
+    glsl_helpers = "const float16_t bias = float16_t(0.1);\n"
+    body = "    float16_t h = float16_t(a[i]) + bias;\n    o[i] = float(h);"
+    wgsl, _ = helpers_in(tmp_path, glsl, body, glsl_helpers)
+    assert "0.0999755859375" in wgsl
+
+
+HALF_MATRIX_KERNEL = """#include <metal_stdlib>
+using namespace metal;
+struct Frame {{ float3x3 normal_matrix; }};
+half3x3 scaled(half3x3 m, half s) {{ return m * s; }}
+kernel void k(device const float* a [[buffer(0)]], device float* o [[buffer(1)]],
+              constant Frame& frame [[buffer(2)]], uint i [[thread_position_in_grid]]) {{
+{body}
+}}
+"""
+
+
+def test_half_matrices_hold_binary16_elements(tmp_path):
+    """A half matrix is a float matrix of binary16 values: conversions round per element, products round once."""
+    body = (
+        "    half3x3 m = half3x3(frame.normal_matrix);\n"
+        "    half3 c = half3(a[i], a[i + 1], a[i + 2]);\n"
+        "    half3x3 k(c, c * c, half3(1.0h));\n"
+        "    half3x3 p = m * k + transpose(k);\n"
+        "    p = scaled(p, half(a[i]));\n"
+        "    p *= 2;\n"
+        "    p[1] = c;\n"
+        "    half3 v = p * c;\n"
+        "    o[i] = float(v.x) + float(determinant(p)) + float(p[0][1]);"
+    )
+    source = HALF_MATRIX_KERNEL.format(body=body)
+    wgsl = translate(tmp_path, source, "wgsl", ".metal")
+    translate(tmp_path, source, "vulkan", ".metal")
+    names = re.findall(r"^fn (cgl_half\w+)\(", wgsl, flags=re.M)
+    assert names == ["cgl_half_round", "cgl_half_round3", "cgl_half_round3x3"]
+    assert (
+        "return mat3x3<f32>(cgl_half_round3(x0[0]), cgl_half_round3(x0[1]), "
+        "cgl_half_round3(x0[2]));" in wgsl
+    )
+    assert "var m: mat3x3<f32> = cgl_half_round3x3(frame.normal_matrix);" in wgsl
+    assert (
+        "var k: mat3x3<f32> = mat3x3<f32>(c, cgl_half_round3((c * c)), vec3<f32>(1.0));"
+        in wgsl
+    )
+    assert (
+        "var p: mat3x3<f32> = cgl_half_round3x3((cgl_half_round3x3((m * k)) + transpose(k)));"
+        in wgsl
+    )
+    assert "return cgl_half_round3x3((m * s));" in wgsl
+    assert "p = cgl_half_round3x3((p * 2.0));" in wgsl
+    assert "p[1] = c;" in wgsl
+    assert "var v: vec3<f32> = cgl_half_round3((p * c));" in wgsl
+    assert "cgl_half_round(determinant(p))" in wgsl
+
+
+def test_non_square_half_matrices_keep_their_shape(tmp_path):
+    """``f16mat3x2`` has three columns of two rows: ``m * v3`` is a half2 and ``v2 * m`` a half3."""
+    helpers = (
+        "f16mat3x2 grow(f16mat2 m) { return f16mat3x2(m[0], m[1], f16vec2(1.0hf)); }\n"
+    )
+    body = (
+        "    f16mat2 s = f16mat2(a[i], a[i + 1], a[i + 2], a[i + 3]);\n"
+        "    f16mat3x2 m = grow(s);\n"
+        "    f16vec2 v = m * f16vec3(float16_t(a[i]), 2.0hf, 3.0hf);\n"
+        "    f16vec3 w = f16vec2(1.0hf, 0.5hf) * m;\n"
+        "    mat3x2 f = mat3x2(m);\n"
+        "    o[i] = float(v.x + w.z) + f[2][1];"
+    )
+    wgsl, names = helpers_in(tmp_path, glsl, body, helpers)
+    assert names == ["cgl_half_round", "cgl_half_round2", "cgl_half_round3"]
+    assert "return mat3x2<f32>(m[0], m[1], vec2<f32>(1.0));" in wgsl
+    assert (
+        "var s: mat2x2<f32> = mat2x2<f32>(cgl_half_round(f32(inp.a[i])), "
+        "cgl_half_round(f32(inp.a[(i + 1)]))" in wgsl
+    )
+    assert "var v: vec2<f32> = cgl_half_round2((m * vec3<f32>(" in wgsl
+    assert "var w: vec3<f32> = cgl_half_round3((vec2<f32>(1.0, 0.5) * m));" in wgsl
+    assert "var f: mat3x2<f32> = mat3x2<f32>(m);" in wgsl
+
+
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    m++;\n    o[i] = float(m[0][0]);",
+            "matrix-step",
+        ),
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    m = matrixCompMult(m, m);\n    o[i] = float(m[0][0]);",
+            "matrix-builtin",
+        ),
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    f16mat2 n = m * f16mat3(1.0hf);\n    o[i] = float(n[0][0]);",
+            "matrix-shape",
+        ),
+    ],
+)
+@pytest.mark.parametrize("target", TARGETS)
+def test_unsupported_half_matrix_constructs_are_refused(tmp_path, target, body, reason):
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        glsl(tmp_path, body, target)
+    assert raised.value.reason_code == reason
+
+
+def test_half_matrices_in_buffers_and_unshaped_spellings_are_refused(tmp_path):
+    source = METAL_KERNEL.replace(
+        "uint i [[thread_position_in_grid]]",
+        "device half3x3* p [[buffer(2)]], uint i [[thread_position_in_grid]]",
+    ).format(helpers="", body="    o[i] = float(p[0][0][0]);")
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        translate(tmp_path, source, "wgsl", ".metal")
+    assert raised.value.reason_code == "matrix-storage"
+    # ``half3x3`` has three columns in MSL and three rows in HLSL; CrossGL spells half matrices f16matCxR.
+    register_default_sources()
+    program = SOURCE_REGISTRY.get("cgl").parse(
+        "shader s { compute { void main() { half3x3 m = half3x3(1.0); } } }"
+    )
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        legalize_half_floats(program, "cgl", "vulkan")
+    assert raised.value.reason_code == "matrix"
+
+
+def test_matrix_helpers_follow_their_column_helpers():
+    assert H.helper_name("cgl_half_round", (3, 2)) == "cgl_half_round3x2"
+    assert H.closure({("cgl_half_round", (3, 2)), ("cgl_half_div", 2)}) == [
+        ("cgl_half_round", 1),
+        ("cgl_half_index", 1),
+        ("cgl_half_value", 1),
+        ("cgl_half_midpoint", 1),
+        ("cgl_half_div", 1),
+        ("cgl_half_round", 2),
+        ("cgl_half_div", 2),
+        ("cgl_half_round", (3, 2)),
+    ]
+    with pytest.raises(ValueError):
+        H.helper_source("cgl_half_div", (2, 2))
+
+
+def test_for_header_with_several_declarations(tmp_path):
+    """``for (int a = 0, b = 4; ...)`` holds a list of declarations, which the legalizer walks one by one."""
+    source = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void k(device half *o [[buffer(0)]], uint i [[thread_position_in_grid]]) {\n"
+        "    half acc = 0.0h;\n"
+        "    for (half a = 0.5h, b = 4.0h; a < b; a += 1.0h) {\n"
+        "        acc += o[int(a)] * a;\n"
+        "    }\n"
+        "    o[i] = acc;\n"
+        "}\n"
+    )
+    spirv = translate(tmp_path, source, "vulkan", ".metal")
+    assert "OpLoopMerge" in spirv
