@@ -127,22 +127,26 @@ def _rebased(type_node, index, base):
     return A.BinaryOpNode(index, "-", _convert(type_node, A.IdentifierNode(base)))
 
 
-def _respell_reads(node, spelling):
-    """Replace every read of the built-in by name below ``node`` with ``spelling(node)``."""
+def _respell_reads(node, spelling, name=RELATIVE_VERTEX_ID):
+    """Replace every read of the built-in ``name`` by name below ``node`` with ``spelling()``."""
     for field, key in list(child_slots(node)):
         child = get_child(node, field, key)
-        if isinstance(child, A.IdentifierNode) and child.name == RELATIVE_VERTEX_ID:
+        if isinstance(child, A.IdentifierNode) and child.name == name:
             set_child(node, field, key, spelling())
-        elif (
-            isinstance(child, A.BuiltinVariableNode)
-            and child.builtin_name == RELATIVE_VERTEX_ID
-        ):
+        elif isinstance(child, A.BuiltinVariableNode) and child.builtin_name == name:
             set_child(node, field, key, spelling())
         elif isinstance(child, A.ASTNode):
-            _respell_reads(child, spelling)
+            _respell_reads(child, spelling, name)
 
 
 class _Lowering:
+    """Lowers a built-in that excludes a draw base to the target's base-inclusive index minus the base."""
+
+    builtin = RELATIVE_VERTEX_ID
+    index = _VERTEX_INDEX
+    base = _BASE_VERTEX
+    base_stem = "cgl_base_vertex"
+
     def __init__(self, program, target):
         self.program = program
         self.target = target
@@ -158,21 +162,23 @@ class _Lowering:
                 self.target,
             )
 
+    def unsupported(self, detail):
+        return RelativeVertexIdUnsupportedError(detail, self.target)
+
     def member(self, struct):
         """The member of ``struct`` carrying the value, refusing one in a nested structure."""
         found = None
         if struct is None:
             return None
         for member in getattr(struct, "members", None) or []:
-            if _carries(member, RELATIVE_VERTEX_ID):
+            if _carries(member, self.builtin):
                 found = member
                 continue
             nested = self.structs.get(_type_name(getattr(member, "member_type", None)))
             if nested is not None and nested is not struct and self.member(nested):
-                raise RelativeVertexIdUnsupportedError(
+                raise self.unsupported(
                     f"structure '{struct.name}' carries it in its nested member '{member.name}'; pass it as an "
-                    "entry-point parameter or a member of the stage input structure itself",
-                    self.target,
+                    "entry-point parameter or a member of the stage input structure itself"
                 )
         return found
 
@@ -180,7 +186,7 @@ class _Lowering:
         parameters = list(entry.parameters or [])
         direct, wrapped = [], []
         for parameter in parameters:
-            if _carries(parameter, RELATIVE_VERTEX_ID):
+            if _carries(parameter, self.builtin):
                 direct.append(parameter)
                 continue
             struct = self.structs.get(_type_name(parameter.param_type))
@@ -188,19 +194,19 @@ class _Lowering:
             if member is not None:
                 wrapped.append((parameter, member))
         if not direct and not wrapped:
-            return
+            return []
         self.refuse_missing_base(f"vertex entry point '{entry.name}'")
         taken = _names(entry)
-        base = next((p.name for p in parameters if _carries(p, _BASE_VERTEX)), None)
+        base = next((p.name for p in parameters if _carries(p, self.base)), None)
         if base is None:
-            base = _fresh(taken, "cgl_base_vertex")
+            base = _fresh(taken, self.base_stem)
             if entry.parameters is None:
                 entry.parameters = []
             entry.parameters.append(
                 A.ParameterNode(
                     base,
                     A.PrimitiveType("int"),
-                    attributes=[A.AttributeNode(_BASE_VERTEX)],
+                    attributes=[A.AttributeNode(self.base)],
                 )
             )
         prologue = []
@@ -216,7 +222,7 @@ class _Lowering:
                 )
             )
             parameter.name = index
-            _respell(parameter, RELATIVE_VERTEX_ID, _VERTEX_INDEX)
+            _respell(parameter, self.builtin, self.index)
         for parameter, member in wrapped:
             value = _fresh(taken, f"cgl_{parameter.name}")
             prologue.append(
@@ -235,6 +241,7 @@ class _Lowering:
             )
             parameter.name = value
         entry.body.statements[0:0] = prologue
+        return [member for _parameter, member in wrapped]
 
     def run(self):
         for stage in _stages(self.program):
@@ -245,14 +252,14 @@ class _Lowering:
                 self.lower_entry(entry)
         for struct in iter_structs(self.program):
             for member in getattr(struct, "members", None) or []:
-                _respell(member, RELATIVE_VERTEX_ID, _VERTEX_INDEX)
+                _respell(member, self.builtin, self.index)
         for function in iter_functions(self.program):
-            _respell_reads(function, lambda: self.read_by_name(function))
+            _respell_reads(function, lambda: self.read_by_name(function), self.builtin)
 
     def read_by_name(self, function):
         self.refuse_missing_base(f"function '{function.name}'")
         return A.BinaryOpNode(
-            A.IdentifierNode(_VERTEX_INDEX), "-", A.IdentifierNode(_BASE_VERTEX)
+            A.IdentifierNode(self.index), "-", A.IdentifierNode(self.base)
         )
 
 
