@@ -6813,7 +6813,7 @@ class TestHipCodeGen:
         assert "textureDesc.filterMode = hipFilterModePoint;" in result
         assert "var manualFilter: i32 = textureDesc.filterMode;" in result
         assert "viewDesc.width = 64;" in result
-        assert "var manualWidth: u32 = viewDesc.width;" in result
+        assert "var manualWidth: u64 = viewDesc.width;" in result
         assert "var resErr: hipError_t = hipSuccess;" in result
         assert (
             "ints[5] = (/* HIP device query: "
@@ -6830,7 +6830,7 @@ class TestHipCodeGen:
             "textureObject.resourceViewDesc.lastLayer(texObj) */ 0);"
         ) in result
         assert "(aliasViewDesc.firstLayer++);" in result
-        assert "var manualLayer: u32 = aliasViewDesc.firstLayer;" in result
+        assert "var manualLayer: u64 = aliasViewDesc.firstLayer;" in result
         assert "ints[0] = resourceDesc.resType;" not in result
         assert "ints[1] = textureDesc.filterMode;" not in result
         assert "dims[0] = viewDesc.width;" not in result
@@ -6838,8 +6838,8 @@ class TestHipCodeGen:
         assert "ints[6] = aliasTextureDesc.maxAnisotropy;" not in result
         assert "dims[7] = aliasViewDesc.lastLayer;" not in result
         assert "var manualFilter: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
-        assert "var manualLayer: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
+        assert "var manualLayer: u64 = (/* HIP device query:" not in result
 
     def test_hip_texture_object_nested_descriptor_member_reads_emit_metadata_expressions(
         self,
@@ -6923,7 +6923,7 @@ class TestHipCodeGen:
         assert "textureDesc.addressMode[0] = hipAddressModeClamp;" in result
         assert "var manualAddress: i32 = textureDesc.addressMode[0];" in result
         assert "resourceDesc.res.pitch2D.width = 32;" in result
-        assert "var manualPitchWidth: u32 = resourceDesc.res.pitch2D.width;" in result
+        assert "var manualPitchWidth: u64 = resourceDesc.res.pitch2D.width;" in result
         assert "ptrs[0] = resourceDesc.res.linear.devPtr;" in result
         assert "ptrs[1] = resourceDesc.res.pitch2D.devPtr;" in result
         assert "var resErr: hipError_t = hipSuccess;" in result
@@ -6950,7 +6950,7 @@ class TestHipCodeGen:
         assert "textureObject.resourceDesc.res.mipmap.mipmap(texObj)" not in result
         assert "textureObject.resourceDesc.res.array.array(texObj)" not in result
         assert "var manualAddress: i32 = (/* HIP device query:" not in result
-        assert "var manualPitchWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualPitchWidth: u64 = (/* HIP device query:" not in result
         assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
 
     def test_hip_texture_object_descriptor_unmapped_fields_remain_raw(self):
@@ -7179,14 +7179,14 @@ class TestHipCodeGen:
         assert "channelDesc.x = 32;" in result
         assert "var manualChannelX: i32 = channelDesc.x;" in result
         assert "arrayDesc.Width = 99;" in result
-        assert "var manualWidth: u32 = arrayDesc.Width;" in result
+        assert "var manualWidth: u64 = arrayDesc.Width;" in result
         assert "(array3DDesc.Flags++);" in result
         assert "var manualFlags: i32 = array3DDesc.Flags;" in result
         assert "ints[0] = channelDesc.x;" not in result
         assert "dims[0] = arrayDesc.Width;" not in result
         assert "dims[2] = array3DDesc.Width;" not in result
         assert "var manualChannelX: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
         assert "var manualFlags: i32 = (/* HIP device query:" not in result
 
     def test_hip_array_info_descriptor_extent_member_reads_emit_metadata_expressions(
@@ -7251,7 +7251,7 @@ class TestHipCodeGen:
         assert "desc.x = 16;" in result
         assert "var manualDescX: i32 = desc.x;" in result
         assert "extent.width = 64;" in result
-        assert "var manualWidth: u32 = extent.width;" in result
+        assert "var manualWidth: u64 = extent.width;" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert (
             "ints[5] = (/* HIP device query: " "array.info.channelDesc.f(array) */ 0);"
@@ -7264,7 +7264,7 @@ class TestHipCodeGen:
             in result
         )
         assert "(statusExtent.depth++);" in result
-        assert "var manualDepth: u32 = statusExtent.depth;" in result
+        assert "var manualDepth: u64 = statusExtent.depth;" in result
         assert "ints[0] = desc.x;" not in result
         assert "dims[0] = extent.width;" not in result
         assert "flagsOut[0] = flags;" not in result
@@ -7272,8 +7272,8 @@ class TestHipCodeGen:
         assert "dims[3] = statusExtent.height;" not in result
         assert "flagsOut[1] = statusFlags;" not in result
         assert "var manualDescX: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
-        assert "var manualDepth: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
+        assert "var manualDepth: u64 = (/* HIP device query:" not in result
 
     def test_hip_descriptor_array_outputs_clear_stale_metadata(self):
         code = """
@@ -9157,12 +9157,12 @@ class TestHipCodeGen:
             "device: device */ 0);"
         ) in result
         assert (
-            "var total: u32 = (/* HIP device property: totalGlobalMem */ 0);"
+            "var total: u64 = (/* HIP device property: totalGlobalMem */ 0);"
         ) in result
         assert "props.multiProcessorCount = 7;" in result
         assert "var sms: i32 = props.multiProcessorCount;" not in result
         assert "var warp: i32 = props.warpSize;" not in result
-        assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
+        assert "var total: u64 = propsPtr->totalGlobalMem;" not in result
 
     def test_hip_device_property_string_array_outputs_clear_stale_metadata(self):
         code = """
@@ -9307,7 +9307,7 @@ class TestHipCodeGen:
             "out[0] = (/* HIP device query: totalMem, device: device */ 0);" in result
         )
         assert "total = 1024;" in result
-        assert "var manualTotal: u32 = total;" in result
+        assert "var manualTotal: u64 = total;" in result
         assert (
             "// HIP get device compute capability: major output: major, "
             "minor output: minor, device: (device + 1)"
@@ -9328,15 +9328,15 @@ class TestHipCodeGen:
         ) in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert (
-            "var fromStatus: u32 = (/* HIP device query: totalMem, "
+            "var fromStatus: u64 = (/* HIP device query: totalMem, "
             "device: (device + 2) */ 0);"
         ) in result
         assert "out[0] = total;" not in result
         assert "var packed: i32 = ((major * 10) + minor);" not in result
-        assert "var manualTotal: u32 = (/* HIP device query:" not in result
+        assert "var manualTotal: u64 = (/* HIP device query:" not in result
         assert "var manualMajor: i32 = (/* HIP device query:" not in result
         assert "var manualMinor: i32 = (/* HIP device query:" not in result
-        assert "var fromStatus: u32 = statusTotal;" not in result
+        assert "var fromStatus: u64 = statusTotal;" not in result
 
     def test_hip_device_current_and_count_reads_emit_metadata_expressions(self):
         code = """
@@ -9460,14 +9460,14 @@ class TestHipCodeGen:
             "value: limitValue"
         ) in result
         assert "limitValue = 4096;" in result
-        assert "var manualLimit: u32 = limitValue;" in result
+        assert "var manualLimit: u64 = limitValue;" in result
         assert (
             "// HIP get device limit: output: statusLimit, "
             "limit: hipLimitPrintfFifoSize"
         ) in result
         assert "var errLimit: hipError_t = hipSuccess;" in result
         assert (
-            "var statusLimitValue: u32 = "
+            "var statusLimitValue: u64 = "
             "(/* HIP device query: limit.hipLimitPrintfFifoSize */ 0);"
         ) in result
         assert "// HIP get device flags: output: flags" in result
@@ -9484,7 +9484,7 @@ class TestHipCodeGen:
         assert "var capturedFlags: u32 = flags;" not in result
         assert "var manualDevice: i32 = (/* HIP device query:" not in result
         assert "var manualBusDevice: i32 = (/* HIP device query:" not in result
-        assert "var manualLimit: u32 = (/* HIP device query:" not in result
+        assert "var manualLimit: u64 = (/* HIP device query:" not in result
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
 
     def test_hip_cache_and_shared_memory_config_reads_emit_metadata_expressions(
@@ -10275,7 +10275,7 @@ class TestHipCodeGen:
             "stream.captureDependencyCount(stream) */ 0);"
         ) in result
         assert "numDeps = 4;" in result
-        assert "var manualNumDeps: u32 = numDeps;" in result
+        assert "var manualNumDeps: u64 = numDeps;" in result
         assert "var errRange: hipError_t = hipSuccess;" in result
         assert (
             "out[10] = (/* HIP device query: streamPriorityRange.least */ 0);" in result
@@ -10313,7 +10313,7 @@ class TestHipCodeGen:
         assert "var manualGreatestPriority: i32 = (/* HIP device query:" not in result
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
         assert "var manualPriority: i32 = (/* HIP device query:" not in result
-        assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
+        assert "var manualNumDeps: u64 = (/* HIP device query:" not in result
 
     def test_hip_stream_capture_outputs_clear_stale_metadata(self):
         code = """
@@ -10854,7 +10854,7 @@ class TestHipCodeGen:
         assert "basePtr = devicePtr;" in result
         assert "rangeSize = 3;" in result
         assert "var manualBase: ptr<void> = basePtr;" in result
-        assert "var manualRangeSize: u32 = rangeSize;" in result
+        assert "var manualRangeSize: u64 = rangeSize;" in result
         assert (
             "// HIP pointer attribute: output: pointerAttrValue, "
             "attribute: hipPointerAttributeMemoryType, pointer: devicePtr"
@@ -10908,15 +10908,15 @@ class TestHipCodeGen:
             "virtualMemory.allocationGranularity("
             "prop, hipMemAllocationGranularityMinimum) */ 0);"
         ) in result
-        assert "var manualFreeMem: u32 = freeMem;" in result
-        assert "var manualTotalMem: u32 = totalMem;" in result
+        assert "var manualFreeMem: u64 = freeMem;" in result
+        assert "var manualTotalMem: u64 = totalMem;" in result
         assert "var manualPointerAttrValue: i32 = pointerAttrValue;" in result
-        assert "var manualPointerSize: u32 = pointerSize;" in result
+        assert "var manualPointerSize: u64 = pointerSize;" in result
         assert "var manualAccessFlags: u64 = accessFlags;" in result
-        assert "var manualPoolAttrValue: u32 = poolAttrValue;" in result
+        assert "var manualPoolAttrValue: u64 = poolAttrValue;" in result
         assert "var manualPoolAccessFlags: u64 = poolAccessFlags;" in result
         assert "var manualHostFlags: u32 = hostFlags;" in result
-        assert "var manualAllocationGranularity: u32 = allocationGranularity;" in result
+        assert "var manualAllocationGranularity: u64 = allocationGranularity;" in result
         assert "var errElapsed: hipError_t = hipSuccess;" in result
         assert (
             "times[1] = (/* HIP device query: " "event.elapsedTime(start, stop) */ 0);"
@@ -10945,8 +10945,8 @@ class TestHipCodeGen:
         assert "sizes[6] = statusPointerSize;" not in result
         assert "attrs[1] = statusPointerAttrValue;" not in result
         assert "var manualElapsedMs: f32 = (/* HIP device query:" not in result
-        assert "var manualFreeMem: u32 = (/* HIP device query:" not in result
-        assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
+        assert "var manualFreeMem: u64 = (/* HIP device query:" not in result
+        assert "var manualPointerSize: u64 = (/* HIP device query:" not in result
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
     def test_hip_memory_pointer_array_outputs_clear_stale_metadata(self):
@@ -11277,7 +11277,7 @@ class TestHipCodeGen:
         assert "// HIP get symbol size: output: symbolSize, symbol: symbol" in result
         assert "sizes[0] = (/* HIP device query: symbol.size(symbol) */ 0);" in result
         assert "symbolSize = 1;" in result
-        assert "var manualSymbolSize: u32 = symbolSize;" in result
+        assert "var manualSymbolSize: u64 = symbolSize;" in result
         assert (
             "// HIP memory range get attribute: output: rangeValue, "
             "output bytes: 4, "
@@ -11331,7 +11331,7 @@ class TestHipCodeGen:
         assert "sizes[1] = statusSymbolSize;" not in result
         assert "values[2] = statusRangeValue;" not in result
         assert "values[3] = statusFunctionAttribute;" not in result
-        assert "var manualSymbolSize: u32 = (/* HIP device query:" not in result
+        assert "var manualSymbolSize: u64 = (/* HIP device query:" not in result
         assert "var manualRangeValue: i32 = (/* HIP device query:" not in result
         assert "var manualFunctionAttribute: i32 = (/* HIP device query:" not in result
         assert "var manualArrayFlags: u32 = (/* HIP device query:" not in result
@@ -14227,7 +14227,7 @@ class TestHipCodeGen:
             in result
         )
         assert "alignment = 4;" in result
-        assert "var manualAlignment: u32 = alignment;" in result
+        assert "var manualAlignment: u64 = alignment;" in result
         assert (
             "ints[0] = (/* HIP device query: "
             "textureReference.addressMode(texRef, 1) */ 0);"
@@ -14305,7 +14305,7 @@ class TestHipCodeGen:
         assert "flagsOut[1] = statusFlags;" not in result
         assert "floats[3] = statusMinClamp;" not in result
         assert "floats[4] = statusMaxClamp;" not in result
-        assert "var manualAlignment: u32 = (/* HIP device query:" not in result
+        assert "var manualAlignment: u64 = (/* HIP device query:" not in result
         assert (
             "var manualAddressMode: hipTextureAddressMode = (/* HIP device query:"
             not in result
@@ -16914,7 +16914,7 @@ class TestHipCodeGen:
         assert (
             "@group(0) @binding(1) var<storage, read_write> mask: array<u64>" in result
         )
-        assert "@group(0) @binding(3) var<uniform> size: u32" in result
+        assert "@group(0) @binding(3) var<uniform> size: u64" in result
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
         assert (
             "var lid: u32 = (gl_LocalInvocationID.x % int(gl_SubgroupSize));" in result
@@ -16944,7 +16944,7 @@ class TestHipCodeGen:
 
         assert "void prepare(inout array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(array<f32> h) {" in result
+        assert "u64 count(array<f32> h) {" in result
         assert "return h.size();" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
