@@ -2,6 +2,13 @@
 # Tests for matrix aggregate initializer column-vector path (issue #3718)
 # -----------------------------------------------------------------
 
+
+def _write_shader(tmp_path, source, name):
+    path = tmp_path / name
+    path.write_text(source)
+    return path
+
+
 _MAT2_COL_VEC_CGL = """
 shader MatColVec {{
     buffer float* out;
@@ -70,8 +77,10 @@ def test_directx_mat2_column_vector_initializer(tmp_path):
         str(_write_shader(tmp_path, _MAT2_COL_VEC_CGL, "mat2_col.cgl")),
         backend="directx",
     )
-    # The column-vector path should produce a transposed constructor, not scalar padding.
-    assert "float2" in code and "transpose" in code
+    # The column-vector path wraps each element in float2(...) and uses transpose()
+    # so the HLSL constructor receives row vectors instead of scalar zero-padding.
+    assert "float2(" in code
+    assert "transpose(" in code
     assert "(float2)0" not in code
 
 
@@ -82,7 +91,8 @@ def test_directx_mat4_column_vector_initializer(tmp_path):
         str(_write_shader(tmp_path, _MAT4_COL_VEC_CGL, "mat4_col.cgl")),
         backend="directx",
     )
-    assert "float4" in code and "transpose" in code
+    assert "float4(" in code
+    assert "transpose(" in code
     assert "(float4)0" not in code
 
 
@@ -97,9 +107,3 @@ def test_directx_mixed_matrix_initializer_raises(tmp_path):
             backend="directx",
         )
     assert exc_info.value.reason == "element-count-mismatch"
-
-
-def _write_shader(tmp_path, source, name):
-    path = tmp_path / name
-    path.write_text(source)
-    return path
