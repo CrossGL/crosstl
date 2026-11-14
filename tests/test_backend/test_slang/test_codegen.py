@@ -425,6 +425,32 @@ def test_non_main_compute_shader_entry_codegen_preserves_stage_entry():
     assert not compute_stage.local_functions
 
 
+def test_non_main_graphics_shader_entries_preserve_stage_entry():
+    code = """
+    struct VOut { float4 pos : SV_Position; };
+
+    [shader("vertex")]
+    VOut vsMain(uint iid : SV_InstanceID) {
+        VOut o;
+        o.pos = float4(float(iid), 0.0, 0.0, 1.0);
+        return o;
+    }
+
+    [shader("fragment")]
+    float4 fsMain(VOut i) : SV_Target {
+        return float4(1.0, 0.0, 0.0, 1.0);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "VOut vsMain(uint iid @ gl_InstanceID) @ stage_entry" in generated_code
+    assert "vec4 fsMain(VOut i) @ gl_FragColor @ stage_entry" in generated_code
+    parsed = cgl_translator.parse(generated_code)
+    assert parsed.stages[ShaderStage.VERTEX].entry_point.name == "vsMain"
+    assert parsed.stages[ShaderStage.FRAGMENT].entry_point.name == "fsMain"
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty
