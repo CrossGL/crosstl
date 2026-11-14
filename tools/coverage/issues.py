@@ -520,6 +520,34 @@ def plan(
     return state.actions
 
 
+def applied(issues: Iterable[Issue], done: Iterable[tuple[Action, int]]) -> list[Issue]:
+    """The managed ``issues`` once each action in ``done`` has changed the issue with the number paired with it.
+
+    A ``create`` adds an open issue under its new number. The other kinds set the key, title and body, add the
+    action's labels to those the issue has, and change the state as their kind says.
+    """
+    state = {issue.number: issue for issue in issues}
+    for action, number in done:
+        old = state.get(number)
+        if action.kind == "create" or old is None:
+            state[number] = Issue(
+                number, action.key, "open", action.title, action.body, action.labels
+            )
+            continue
+        labels = old.labels + tuple(
+            label for label in action.labels if label not in old.labels
+        )
+        state[number] = replace(
+            old,
+            key=action.key,
+            state={"close": "closed", "reopen": "open"}.get(action.kind, old.state),
+            title=action.title,
+            body=action.body,
+            labels=labels,
+        )
+    return list(state.values())
+
+
 def reconcile(
     report: dict,
     github: GitHub,
@@ -529,14 +557,18 @@ def reconcile(
     log: Callable[[str], None] = print,
 ) -> list[Action]:
     """Plan and, unless ``dry_run``, apply, logging each action as it happens; returns the actions."""
-    actions = plan(report, github.managed(), github.repository, new_bugs)
+    known = github.managed()
+    actions = plan(report, known, github.repository, new_bugs)
+    done: list[tuple[Action, int]] = []
     for action in actions:
         if not dry_run:
-            github.apply(action)
+            done.append((action, github.apply(action)))
         log(action.describe())
-    if not dry_run and any(action.kind == "create" for action in actions):
-        # New bug issues have numbers now; link them from the tracking issues within this run.
-        follow_up = plan(report, github.managed(), github.repository, 0)
+    if any(action.kind == "create" for action, _ in done):
+        # New bug issues have numbers now; link them from the tracking issues within this run. The follow-up plans
+        # against the issues as this run left them rather than listing them again, because GitHub's issue list can
+        # leave out an issue created a few seconds earlier.
+        follow_up = plan(report, applied(known, done), github.repository, 0)
         for action in follow_up:
             github.apply(action)
             log(action.describe())
