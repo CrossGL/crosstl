@@ -1346,6 +1346,54 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             return "int"
         return None
 
+    def visit_MemberAccessNode(self, node):
+        width = self.opencl_vector_width(node.object)
+        swizzle = self.opencl_vector_swizzle(str(node.member), width)
+        if swizzle is not None:
+            return f"{self.visit(node.object)}.{swizzle}"
+        return super().visit_MemberAccessNode(node)
+
+    def opencl_vector_width(self, expression):
+        if isinstance(expression, MemberAccessNode):
+            parent_width = self.opencl_vector_width(expression.object)
+            swizzle = self.opencl_vector_swizzle(str(expression.member), parent_width)
+            if swizzle is not None:
+                return len(swizzle)
+        type_name = self.expression_declared_type(expression)
+        if not type_name:
+            return None
+        converted = self.convert_hip_type_to_crossgl(str(type_name))
+        match = re.search(
+            r"vec(\d+)|(?:char|short|int|long|half|float|double)(\d+)$", converted
+        )
+        if match is None:
+            return None
+        return int(match.group(1) or match.group(2))
+
+    def opencl_vector_swizzle(self, member, width):
+        if width is None or width > 4:
+            return None
+        numeric = re.fullmatch(r"[sS]([0-9a-fA-F]+)", member)
+        if numeric is not None:
+            indices = [int(component, 16) for component in numeric.group(1)]
+        elif member in {"lo", "hi", "even", "odd"}:
+            if width not in {2, 4}:
+                return None
+            if member == "lo":
+                indices = list(range(width // 2))
+            elif member == "hi":
+                indices = list(range(width // 2, width))
+            elif member == "even":
+                indices = list(range(0, width, 2))
+            else:
+                indices = list(range(1, width, 2))
+        else:
+            return None
+        if any(index >= width or index >= 4 for index in indices):
+            return None
+        components = "xyzw"
+        return "".join(components[index] for index in indices)
+
     def emit_statement(self, stmt):
         if self.is_opencl_prefetch_call(stmt):
             for arg in stmt.args:
