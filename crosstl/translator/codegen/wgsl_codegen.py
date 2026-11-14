@@ -5041,7 +5041,12 @@ class WGSLCodeGen(
             )
             if vector_type is not None:
                 return vector_type
-            if self.scalar_type_name(argument_types[0]) is not None:
+            scalar_names = [self.scalar_type_name(t) for t in argument_types]
+            for target in ("f32", "u32", "i32"):
+                for t, s in zip(argument_types, scalar_names):
+                    if s == target:
+                        return t
+            if scalar_names and scalar_names[0] is not None:
                 return argument_types[0]
         return None
 
