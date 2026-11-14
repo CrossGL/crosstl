@@ -14,6 +14,9 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics.dxr_ray_interfaces import DXR_SYSTEM_VALUE_CALLS
+from crosstl.translator.semantics.metal_ray_dispatch import (
+    MetalRayDispatchUnsupportedError,
+)
 from tests.spirv_friendly_names import friendly_spirv
 
 NAMES = sorted(DXR_SYSTEM_VALUE_CALLS)
@@ -164,3 +167,70 @@ def test_hlsl_import_calls_the_user_function_and_reads_the_real_intrinsic(tmp_pa
     assert "BuiltIn RayTmaxKHR" in spirv, spirv
     assert "BuiltIn WorldRayOriginKHR" not in spirv, spirv
     _spirv_val(tmp_path, spirv)
+
+
+# Every DXR system-value intrinsic takes no arguments, so only a zero-parameter definition hides one; an overload
+# with parameters sits next to the intrinsic and both calls keep their meaning.
+CGL_OVERLOAD = """
+shader main {
+    struct Payload {
+        vec4 color @ ray_payload_read(caller) @ ray_payload_write(anyhit, closesthit);
+    }
+    vec3 WorldRayOrigin(float k) { return vec3(k, k, k); }
+    ray_closest_hit {
+        void main(inout Payload payload @ payload, in BuiltInTriangleIntersectionAttributes attributes @ hit_attribute) {
+            payload.color = vec4(WorldRayOrigin() + WorldRayOrigin(2.0), 1.0);
+        }
+    }
+}
+"""
+
+HLSL_OVERLOAD = """
+struct [raypayload] Payload { float4 color : read(caller) : write(anyhit, closesthit); };
+float3 WorldRayOrigin(float k) { return float3(k, k, k); }
+[shader("closesthit")]
+void ClosestHitMain(inout Payload payload, in BuiltInTriangleIntersectionAttributes attributes) {
+    payload.color = float4(WorldRayOrigin() + WorldRayOrigin(2.0), 1.0);
+}
+"""
+
+OVERLOADS = [("hit.cgl", CGL_OVERLOAD, None), ("hit.hlsl", HLSL_OVERLOAD, "directx")]
+
+
+@pytest.mark.parametrize("name, source, source_backend", OVERLOADS)
+def test_opengl_overload_with_parameters_keeps_the_intrinsic(
+    tmp_path, name, source, source_backend
+):
+    code = _translate(tmp_path, source, name, "opengl", source_backend)
+    assert re.search(r"\bvec3 WorldRayOrigin\(float k\)", code), code
+    assert re.search(r"gl_WorldRayOriginEXT \+ WorldRayOrigin\(2\.0\)", code), code
+    _glslang(tmp_path, code, "rchit")
+
+
+@pytest.mark.parametrize("name, source, source_backend", OVERLOADS)
+def test_vulkan_overload_with_parameters_keeps_the_intrinsic(
+    tmp_path, name, source, source_backend
+):
+    code = _translate(tmp_path, source, name, "vulkan", source_backend)
+    assert "BuiltIn WorldRayOriginKHR" in code, code
+    # The one-argument call reaches the program's function with its argument.
+    assert re.search(r"OpFunctionCall %v3float %\w+ %\w+", code), code
+    _spirv_val(tmp_path, code)
+
+
+@pytest.mark.parametrize("name, source, source_backend", OVERLOADS)
+def test_hlsl_overload_with_parameters_is_not_renamed(
+    tmp_path, name, source, source_backend
+):
+    code = _translate(tmp_path, source, name, "directx", source_backend)
+    assert re.search(r"\bfloat3 WorldRayOrigin\(float k\)", code), code
+    assert re.search(r"WorldRayOrigin\(\) \+ WorldRayOrigin\(2\.0\)", code), code
+    assert "WorldRayOrigin_" not in code, code
+
+
+@pytest.mark.parametrize("name, source, source_backend", OVERLOADS)
+def test_metal_overload_with_parameters_still_refuses_the_ray_state_read(
+    tmp_path, name, source, source_backend
+):
+    with pytest.raises(MetalRayDispatchUnsupportedError, match=r"WorldRayOrigin\(\)"):
+        _translate(tmp_path, source, name, "metal", source_backend)

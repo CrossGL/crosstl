@@ -10,9 +10,10 @@ reference to it, is renamed on a copy of the AST before HLSL emission. The
 rename appends underscores until the name is unused, which keeps the program's
 own spellings recognisable.
 
-A function the program defines under the name of a DXR system-value intrinsic
-(``WorldRayOrigin``, ``RayTCurrent``, ``ObjectToWorld``, ...) is renamed the
-same way. DXC resolves a call to such a name to the intrinsic when the two
+A zero-parameter function the program defines under the name of a DXR
+system-value intrinsic (``WorldRayOrigin``, ``RayTCurrent``, ``ObjectToWorld``,
+...) is renamed the same way; an overload with parameters keeps its name, since
+the intrinsic takes none and DXC tells the two calls apart. DXC resolves a call to such a name to the intrinsic when the two
 return types differ (a ``float4 ObjectToWorld()`` call is read as the
 ``float3x4`` intrinsic and fails to convert), so the program's own function is
 given a name no intrinsic has.
@@ -464,7 +465,9 @@ class _Declarations:
                     self.callee_members.append(function)
             if isinstance(node, FunctionNode):
                 functions.append(node)
-                if isinstance(name, str):
+                # Only a zero-parameter definition shadows a DXR system-value intrinsic; renaming an
+                # overload with parameters would break the intrinsic call next to it.
+                if isinstance(name, str) and not node.parameters:
                     self.functions.add(name)
             if isinstance(node, StructNode) and isinstance(name, str):
                 struct_names.add(name)

@@ -154,13 +154,16 @@ def _type_name(type_node):
 
 
 def defined_function_names(program):
-    """Names of the functions ``program`` defines. A call to one of them calls that function, even when DXR has
-    an intrinsic of the same name: HLSL resolves it to the program's function, and a target that reads the
-    intrinsic's value instead silently computes something else."""
+    """Names of the zero-parameter functions ``program`` defines. A call to one of them calls that function,
+    even when DXR has an intrinsic of the same name: HLSL resolves it to the program's function, and a target
+    that reads the intrinsic's value instead silently computes something else. Every DXR system-value
+    intrinsic takes no arguments, so an overload with parameters does not hide it: ``WorldRayOrigin()`` next
+    to the program's ``WorldRayOrigin(float)`` still reads the built-in."""
     return frozenset(
         function.name
         for function in _functions(program)
         if isinstance(getattr(function, "name", None), str)
+        and not getattr(function, "parameters", None)
     )
 
 
@@ -216,8 +219,8 @@ class _Lowering:
         self.stage = stage
         self.label = _stage_label(stage)
         self.taken = {struct.name for struct in program.structs or []}
+        self.taken.update(function.name for function in _functions(program))
         self.defined = defined_function_names(program)
-        self.taken.update(self.defined)
         self.types = {}
         for function in _functions(program):
             for node in _walk(function):
