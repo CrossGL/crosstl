@@ -12,6 +12,7 @@ from ..dialect import (
 )
 from ..model import (
     COOP_COLUMNS,
+    GENERIC_POINTER,
     SLANG_ENUMERATORS,
     WIDE_INTEGERS,
     Type,
@@ -312,6 +313,10 @@ class CrossGL(Dialect):
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
 
+    def constant_memory(self, kind: Type, name: str) -> str:
+        # The CUDA and HIP generators write a uniform as a __constant__ variable.
+        return f"uniform {self.type(kind)} {name};"
+
     def assignment(
         self, name: str, kind: Type, arguments: list[str]
     ) -> tuple[list[str], str] | None:
@@ -338,8 +343,10 @@ class CrossGL(Dialect):
         held = tuple_element(opaque)
         return (held[0], "{}._0") if held else descriptor_reading(opaque)
 
-    # CrossGL spells Direct3D's hit object as HLSL does.
+    # CrossGL spells Direct3D's hit object as HLSL does, and a pointer to any memory as ptr<void>.
     def holding(self, opaque: str) -> str:
+        if opaque == GENERIC_POINTER:
+            return "ptr<void>"
         return OBJECTS[HIT_OBJECT].spelling if opaque == HIT_OBJECT else ""
 
 

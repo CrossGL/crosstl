@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 
 from .dialect import Buffer, Dialect, Handle, ProbeError
-from .model import Type
+from .model import GENERIC_POINTER, Type
 
 
 class CUDA(Dialect):
@@ -47,6 +47,17 @@ class CUDA(Dialect):
 
     def inout_argument(self) -> str:
         return "&outp[i]"
+
+    def workgroup(self, kind: Type, name: str) -> str:
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"__shared__ {self.type(kind.element)} {name}{count};"
+
+    def constant_memory(self, kind: Type, name: str) -> str:
+        return f"__constant__ {self.type(kind)} {name};"
+
+    def holding(self, opaque: str) -> str:
+        # A generic pointer, which the address space conversions return.
+        return "void*" if opaque == GENERIC_POINTER else ""
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = [f"{kind}* {name}" for kind, name in buffers]
