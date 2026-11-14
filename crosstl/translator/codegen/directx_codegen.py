@@ -32496,6 +32496,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name == "buffer_store" and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
+            rendered_value = self.hlsl_precise_buffer_store_value(
+                args[2], rendered_value
+            )
             index = self.hlsl_resource_pointer_offset_index(buffer, index, args[0])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             source_element_type = self.hlsl_typed_buffer_element_type(
@@ -32605,7 +32608,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_buffer_helper_resource_type(args[0]),
                 {"AppendStructuredBuffer"},
             )
-            value = self.generate_expression_with_expected(args[1], logical)
+            value = self.hlsl_precise_buffer_store_value(
+                args[1], None
+            ) or self.generate_expression_with_expected(args[1], logical)
             if logical is not None and self.hlsl_half_storage.lowered(logical):
                 value = self.hlsl_half_storage.convert(logical, value, encode=True)
             return f"{buffer}.Append({value})"
