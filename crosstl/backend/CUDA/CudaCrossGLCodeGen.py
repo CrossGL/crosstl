@@ -27,6 +27,7 @@ from .CudaAst import (
     VariableNode,
 )
 from .keyword_renames import source_identifier_names, unused_identifier_name
+from .directed_rounding import refuse_directed_rounding
 from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 
@@ -4928,6 +4929,7 @@ class CudaToCrossGLConverter:
         if warp_intrinsic is not None:
             return warp_intrinsic
 
+        refuse_directed_rounding(raw_name)
         fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
         if fp16_intrinsic is not None:
             return fp16_intrinsic

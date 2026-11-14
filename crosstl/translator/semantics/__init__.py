@@ -154,8 +154,9 @@ from .row_major_struct_members import (
     orient_row_major_buffer_struct_members,
     orient_row_major_struct_members,
 )
+from .program_families import discharge_program_families
 from .rule_pragmas import take_declared_families
-from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
+from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES, source_families
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_brace_values import (
     ScalarBraceInitializerError,
@@ -457,7 +458,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
     operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
-    target but CrossGL (:mod:`.spirv_instructions`). The AST is
+    target but CrossGL (:mod:`.spirv_instructions`). Families a target meets for the whole program, such as
+    ``fp_ieee``, are discharged last (:mod:`.program_families`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
@@ -584,6 +586,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
+    discharge_program_families(
+        program, source_families(report.source) | declared_families, report
+    )
     annotations = getattr(program, "annotations", None)
     if isinstance(annotations, dict):
         annotations["rule_carrying"] = report.to_json()

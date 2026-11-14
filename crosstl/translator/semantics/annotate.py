@@ -40,6 +40,7 @@ from .rule_table import (
     CONVERT_SAT_GENERIC,
     FTOI_NAN,
     INTRINSIC_FAMILY,
+    PROGRAM_FAMILIES,
     UDIV_ZERO,
     WRAP,
     source_families,
@@ -90,7 +91,10 @@ class Annotator:
     def __init__(self, program, source, report, declared_families=frozenset()):
         self.program = program
         # A CrossGL program declares the families of the language it was imported from (rule_pragmas.py).
-        self.families = source_families(source) | frozenset(declared_families)
+        # Families discharged for the whole program annotate no operation (program_families.py).
+        self.families = (
+            source_families(source) | frozenset(declared_families)
+        ) - PROGRAM_FAMILIES
         self.scope = TypeScope(program)
         self.report = report
         self.constants: dict[str, int] = {}
