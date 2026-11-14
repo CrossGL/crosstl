@@ -12,6 +12,7 @@ import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
@@ -1422,19 +1423,32 @@ def test_metal_multi_entry_resource_names_are_scoped_for_opengl(tmp_path):
         """,
     )
 
-    generated = crosstl.translate(
-        str(source_path), backend="opengl", format_output=False
+    # One GLSL compilation unit has one compute main, so the whole file is refused and each entry is its own
+    # artifact, with its own resources.
+    with pytest.raises(OpenGLRepeatedStageEntryError) as refusal:
+        crosstl.translate(str(source_path), backend="opengl", format_output=False)
+    assert refusal.value.stage_entries == (
+        ("compute", "read_kernel"),
+        ("compute", "write_kernel"),
     )
-
-    _assert_generated_output_is_usable(generated)
-    assert "readonly buffer CBuffer { float C[]; };" in generated
-    assert "readonly buffer inpBuffer { float inp[]; };" in generated
-    assert "buffer write_kernel_CBuffer { uint write_kernel_C[]; };" in generated
-    assert "buffer write_kernel_inpBuffer { uint write_kernel_inp[]; };" in generated
-    assert "float v = (C[index] + inp[index]);" in generated
-    assert "write_kernel_C[index] = write_kernel_inp[index];" in generated
-    assert "buffer CBuffer { uint C[]; };" not in generated
-    assert "Conflicting OpenGL resource declaration" not in generated
+    artifacts = crosstl.translate_entries(
+        str(source_path), "opengl", ["read_kernel", "write_kernel"], format_output=False
+    )
+    assert list(artifacts) == ["read_kernel", "write_kernel"]
+    for name, generated in artifacts.items():
+        _assert_generated_output_is_usable(generated)
+        assert generated.count("void main()") == 1
+        assert generated == crosstl.translate(
+            str(source_path), backend="opengl", format_output=False, entry_point=name
+        )
+    read, write = artifacts["read_kernel"], artifacts["write_kernel"]
+    assert "float v = (C[index] + inp[index]);" in read
+    assert "uint C[]" not in read and "float C[]" not in write
+    assert (
+        "C[index] = inp[index];" in write
+        and "float" not in write.split("void main()")[1]
+    )
+    assert "Conflicting OpenGL resource declaration" not in read + write
 
 
 def test_slang_non_main_compute_entry_lowers_dispatch_id_to_opengl(tmp_path):

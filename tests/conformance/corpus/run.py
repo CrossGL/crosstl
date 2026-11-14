@@ -182,12 +182,18 @@ def translate_all(jobs, workers, timeout, progress=None, journal=None):
     """
     results, lock = load_translations(journal), threading.Lock()
     artifacts = {job["id"]: Path(job["artifact"]) for job in jobs}
-    # A recorded translation counts only while its artifact is still on disk.
+    # A recorded translation counts only while its artifacts are still on disk.
     results = {
         identity: entry
         for identity, entry in results.items()
         if identity in artifacts
-        and (entry.get("status") != "translated" or artifacts[identity].is_file())
+        and (
+            entry.get("status") != "translated"
+            or all(
+                path.is_file()
+                for path in translated_artifacts(entry, artifacts[identity])
+            )
+        )
     }
     pending = queue.Queue()
     for job in sorted(
@@ -234,19 +240,43 @@ def translate_all(jobs, workers, timeout, progress=None, journal=None):
     return results
 
 
+def translated_artifacts(translation, artifact):
+    """The artifacts of a translated cell: one, or one per entry when the target holds one entry per stage."""
+    entries = translation.get("entryArtifacts")
+    if entries:
+        return [Path(entry["artifact"]) for entry in entries]
+    return [Path(artifact)]
+
+
+def check_translation(translation, artifact, target, stages):
+    """The native verdict of a translated cell; an entry-per-artifact cell is accepted only if every entry is."""
+    entries = translation.get("entryArtifacts")
+    if not entries:
+        return checks.check(artifact, target, stages)
+    commands, logs = [], []
+    for entry in entries:
+        verdict = checks.check(entry["artifact"], target, (entry["stage"],))
+        commands.extend(verdict["commands"])
+        if verdict["verdict"] != "accepted":
+            log = f"entry {entry['entry']}: {verdict['log']}"
+            return {**verdict, "commands": commands, "log": log}
+        logs.append(verdict["log"])
+    return {"verdict": "accepted", "commands": commands, "log": "\n".join(logs)}
+
+
 def classify(translation, verdict, artifact, target):
     """Outcome of one cell from its translation result and native verdict."""
     status = translation["status"]
     if status != "translated":
         return status
     if verdict["verdict"] == "accepted":
-        text = Path(artifact).read_text(errors="replace")
-        entries = checks.count_entries(text, target)
-        return (
-            "usable"
-            if translation.get("markers", 0) == 0 and entries > 0
-            else "degraded"
+        paths = translated_artifacts(translation, artifact)
+        # Every artifact must declare its entry point.
+        usable = all(
+            checks.count_entries(path.read_text(errors="replace"), target) > 0
+            for path in paths
         )
+        return "usable" if translation.get("markers", 0) == 0 and usable else "degraded"
     return {
         "rejected": "invalid",
         "timeout": "validator-timeout",
@@ -288,7 +318,7 @@ def measure(units, targets, output, workers, timeout, progress=None, resume=Fals
         unit, target, artifact = cells[identity]
         translation = translations[identity]
         verdict = (
-            checks.check(artifact, target, unit.stages)
+            check_translation(translation, artifact, target, unit.stages)
             if translation["status"] == "translated"
             else {"verdict": None, "commands": [], "log": ""}
         )

@@ -67,6 +67,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..explicit_specializations import functions_by_called_name
 from ..float_limit_constants import render_float_limit_constant
 from ..immutable_storage import (
     checked_immutable_storage,
@@ -3606,11 +3607,7 @@ class HLSLCodeGen(
         functions = list(getattr(ast, "functions", []) or [])
         for _stage_type, stage in getattr(ast, "stages", {}).items():
             functions.extend(getattr(stage, "local_functions", []) or [])
-        functions_by_name = {}
-        for function in functions:
-            name = getattr(function, "name", None)
-            if name:
-                functions_by_name.setdefault(name, []).append(function)
+        functions_by_name = functions_by_called_name(functions)
 
         reachable_names = set()
         pending = [entry_function]
@@ -3630,6 +3627,9 @@ class HLSLCodeGen(
                 if not candidates:
                     continue
                 reachable_names.add(name)
+                reachable_names.update(
+                    candidate.name for candidate in candidates if candidate.name
+                )
                 pending.extend(candidates)
         return reachable_names
 

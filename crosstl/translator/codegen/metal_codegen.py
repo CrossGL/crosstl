@@ -54,6 +54,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..explicit_specializations import functions_by_called_name
 from ..math_namespaces import (
     METAL_FAST_MATH_FUNCTIONS,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -2094,11 +2095,7 @@ class MetalCodeGen(
         functions = list(getattr(ast, "functions", []) or [])
         for _stage_type, stage in getattr(ast, "stages", {}).items():
             functions.extend(getattr(stage, "local_functions", []) or [])
-        functions_by_name = {}
-        for function in functions:
-            name = getattr(function, "name", None)
-            if name:
-                functions_by_name.setdefault(name, []).append(function)
+        functions_by_name = functions_by_called_name(functions)
 
         reachable_names = set()
         pending = [entry_function]
@@ -2118,6 +2115,9 @@ class MetalCodeGen(
                 if not candidates:
                     continue
                 reachable_names.add(name)
+                reachable_names.update(
+                    candidate.name for candidate in candidates if candidate.name
+                )
                 pending.extend(candidates)
         return reachable_names
 

@@ -18,6 +18,7 @@ from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.backend.Metal.template_function_parameters import (
     template_function_pointer_parameter,
 )
+from tests.stage_entry_helpers import translate_each_entry
 
 KERNEL = textwrap.dedent("""
     #include <metal_stdlib>
@@ -124,13 +125,18 @@ _VALIDATORS = {
 @pytest.mark.parametrize("backend", sorted(_VALIDATORS))
 def test_instantiations_reach_every_target(tmp_path, backend):
     file_name, commands = _VALIDATORS[backend]
-    code = _translate(tmp_path, backend)
+    source = tmp_path / "apply.metal"
+    source.write_text(KERNEL, encoding="utf-8")
+    artifacts = translate_each_entry(source, backend)
+    # GLSL holds one compute entry per unit, so each instantiation is its own artifact.
+    assert len(artifacts) == (2 if backend == "opengl" else 1)
     missing = [command[0] for command in commands if shutil.which(command[0]) is None]
     if missing:
         pytest.skip(f"{', '.join(missing)} not installed")
-    (tmp_path / file_name).write_text(code, encoding="utf-8")
-    for command in commands:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=300, cwd=tmp_path
-        )
-        assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+    for code in artifacts.values():
+        (tmp_path / file_name).write_text(code, encoding="utf-8")
+        for command in commands:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=300, cwd=tmp_path
+            )
+            assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]

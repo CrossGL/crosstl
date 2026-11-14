@@ -11,6 +11,7 @@ import crosstl
 import crosstl._crosstl as crosstl_module
 import crosstl.project.pipeline as pipeline
 from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
+from tests.stage_entry_helpers import translate_each_entry
 
 COMPUTE = """#include <metal_stdlib>
 using namespace metal;
@@ -94,7 +95,12 @@ def test_a_selected_entry_point_takes_the_full_translation(tmp_path, monkeypatch
 
 
 def test_a_failed_discovery_takes_the_full_translation(tmp_path, monkeypatch):
-    from crosstl.translator.source_registry import SOURCE_REGISTRY
+    from crosstl.translator.source_registry import (
+        SOURCE_REGISTRY,
+        register_default_sources,
+    )
+
+    register_default_sources()
 
     def fail(*_args, **_kwargs):
         raise RuntimeError("discovery failed")
@@ -118,10 +124,11 @@ def test_a_source_with_a_vertex_or_fragment_entry_translates_as_before(tmp_path)
 
 
 def test_other_targets_are_not_prechecked(tmp_path):
-    code = crosstl.translate(
-        write(tmp_path, COMPUTE), backend="opengl", format_output=False
+    artifacts = translate_each_entry(
+        write(tmp_path, COMPUTE), "opengl", format_output=False
     )
-    assert "local_size_x" in code or "void main" in code
+    assert len(artifacts) == 2
+    assert all("local_size_x" in code for code in artifacts.values())
 
 
 def test_project_translation_reports_the_stage_refusal(tmp_path):

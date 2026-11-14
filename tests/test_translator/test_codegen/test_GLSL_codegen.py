@@ -74,6 +74,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLWorkgroupPointerError,
     OpenGLWorkgroupSizeError,
 )
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
@@ -19173,7 +19174,7 @@ def test_glsl_direct_vertex_varying_links_to_fragment_input_by_location():
     assert "fragColor = texture(colorMap, uv);" in generated_code
 
 
-def test_glsl_multiple_direct_fragment_entries_reuse_color_output_location():
+def test_glsl_repeated_fragment_entries_are_refused_and_each_writes_location_zero():
     code = """
     shader MultipleFragmentEntries {
         fragment {
@@ -19190,12 +19191,27 @@ def test_glsl_multiple_direct_fragment_entries_reuse_color_output_location():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+    # One GLSL unit has one fragment main, so the second entry has no whole-file translation.
+    with pytest.raises(OpenGLRepeatedStageEntryError) as raised:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+    assert raised.value.stage == "fragment"
+    assert raised.value.entry_points == ("main", "overlay")
 
-    assert generated_code.count("layout(location = 0) out vec4 fragColor;") == 1
-    assert "out_fragColor" not in generated_code
-    assert "fragColor = vec4(1.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "fragColor = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    for color in ("vec4(1.0, 0.0, 0.0, 1.0)", "vec4(0.0, 1.0, 0.0, 1.0)"):
+        single = f"""
+        shader SingleFragmentEntry {{
+            fragment {{
+                vec4 main() @gl_FragColor {{
+                    return {color};
+                }}
+            }}
+        }}
+        """
+        generated_code = GLSLCodeGen().generate(crosstl.translator.parse(single))
+
+        assert generated_code.count("layout(location = 0) out vec4 fragColor;") == 1
+        assert "out_fragColor" not in generated_code
+        assert f"fragColor = {color};" in generated_code
 
 
 def test_glsl_color_semantic_maps_to_explicit_stage_io_locations():
@@ -19418,7 +19434,7 @@ def test_glsl_vertex_output_location_range_overlap_raises():
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
 
 
-def test_glsl_direct_vertex_output_conflicts_with_struct_output_location():
+def test_glsl_direct_and_struct_vertex_entries_in_one_unit_are_refused():
     float_type = PrimitiveType("float")
     vec2_type = VectorType(float_type, 2)
     output_struct = StructNode(
@@ -19447,14 +19463,10 @@ def test_glsl_direct_vertex_output_conflicts_with_struct_output_location():
         functions=[struct_entry, direct_entry],
     )
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Conflicting OpenGL vertex output location for 'vertexOutput': "
-            "location 5 overlaps 'out_uv' location 5"
-        ),
-    ):
+    # Two vertex entries cannot share one GLSL unit, whose outputs would otherwise collide at location 5.
+    with pytest.raises(OpenGLRepeatedStageEntryError) as raised:
         GLSLCodeGen().generate_stage(ast, "vertex")
+    assert raised.value.entry_points == ("structMain", "directMain")
 
 
 def test_glsl_psoutput_duplicate_fragment_output_location_raises():
@@ -25731,7 +25743,7 @@ def test_compute_stage_uses_execution_config_local_size():
     )
 
 
-def test_combined_same_stage_compute_output_keeps_single_native_layout_and_main():
+def test_combined_same_stage_compute_output_is_refused():
     shader = """
     shader MultiCompute {
         compute {
@@ -25746,11 +25758,11 @@ def test_combined_same_stage_compute_output_keeps_single_native_layout_and_main(
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
-
-    assert generated_code.count("layout(local_size_x") == 1
-    assert generated_code.count("void main()") == 1
-    assert "void compute_main()" in generated_code
+    # The second entry used to become a function nothing called, with its workgroup size dropped.
+    with pytest.raises(OpenGLRepeatedStageEntryError) as raised:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert raised.value.stage == "compute"
+    assert raised.value.entry_points == ("main", "spawn")
 
 
 @pytest.mark.parametrize("attribute", ["numthreads", "local_size", "workgroup_size"])
@@ -27854,12 +27866,17 @@ def test_glsl_software_subgroup_rejects_multiple_or_non_compute_entries():
     }
     """
 
-    for code in (multiple_compute, mixed_stages):
-        with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
-            GLSLCodeGen(software_subgroup_width=32).generate(
-                parse_code(tokenize_code(code))
-            )
-        assert raised.value.reason == "entry-point-contract-invalid"
+    with pytest.raises(OpenGLRepeatedStageEntryError) as repeated:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(multiple_compute))
+        )
+    assert repeated.value.stage == "compute"
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(mixed_stages))
+        )
+    assert raised.value.reason == "entry-point-contract-invalid"
 
 
 @pytest.mark.parametrize(

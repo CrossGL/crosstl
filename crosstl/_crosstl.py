@@ -1,6 +1,7 @@
 """High-level translation API and command-line entry point for CrossGL Translator."""
 
 import argparse
+import copy
 import importlib
 import importlib.util
 import inspect
@@ -237,19 +238,27 @@ def translate(
     return generated_code
 
 
-def _translate_with_codegen(
+@dataclass
+class _TargetProgram:
+    """A source translated as far as the target: the rule-carried CrossGL ``program`` a target is generated from,
+    or the CrossGL ``code`` itself when CrossGL is the target."""
+
+    requested_backend: str
+    normalized_backend: str
+    program: Any = None
+    code: Optional[str] = None
+
+
+def _target_program(
     file_path,
-    backend="cgl",
-    save_shader=None,
-    format_output=True,
-    source_backend=None,
+    backend,
+    source_backend,
     *,
-    include_paths=None,
-    defines=None,
-    source_options=None,
-    entry_point=None,
+    include_paths,
+    defines,
+    source_options,
+    entry_point,
 ):
-    target_codegen = None
     file_path = os.fspath(file_path)
     if not isinstance(file_path, str):
         raise TypeError(
@@ -328,31 +337,12 @@ def _translate_with_codegen(
         source_options=source_options,
     )
 
+    target = _TargetProgram(requested_backend, normalized_backend)
     if source_spec.name == "cgl":
         if normalized_backend in ["cgl", "crossgl"]:
-            generated_code = shader_code
-        else:
-            codegen = get_codegen(requested_backend)
-            apply_rule_carrying(ast, source_spec.name, normalized_backend)
-            lower_default_arguments(ast)
-            selected_ast, remaining_entry_point = prepare_entry_scoped_target(
-                codegen,
-                ast,
-                (
-                    _validated_entry_point(entry_point)
-                    if entry_point is not None
-                    else None
-                ),
-            )
-            validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
-            generated_code = _generate_target_code(
-                codegen,
-                selected_ast,
-                remaining_entry_point,
-                normalized_backend,
-                program=ast,
-            )
-            target_codegen = codegen
+            target.code = shader_code
+            return target
+        program = ast
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             codegen = source_spec.create_reverse_codegen(source_options)
@@ -376,66 +366,143 @@ def _translate_with_codegen(
             )
             if source_spec.name == "opencl":
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
-        else:
-            reverse_codegen = source_spec.create_reverse_codegen(source_options)
-            if reverse_codegen is None:
-                raise ValueError(
-                    f"Unsupported translation scenario: {file_path} to {backend}"
-                )
-            # Translate to CrossGL first, then to target backend
-            lower_default_arguments(ast)
-            intermediate_code = reverse_codegen.generate(ast)
-            cgl_spec = SOURCE_REGISTRY.get("cgl")
-            if not cgl_spec:
-                raise ValueError("CrossGL parser not available for intermediate step")
-            cgl_ast = cgl_spec.parse(intermediate_code)
-            if source_spec.name == "opencl" and normalized_backend != "webgl":
-                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
-                validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
-            if source_spec.name == "cuda" and normalized_backend in {
-                "directx",
-                "metal",
-                "vulkan",
-            }:
-                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
-            if source_spec.name == "hip" and normalized_backend == "directx":
-                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
-            codegen = get_codegen(requested_backend)
-            apply_rule_carrying(cgl_ast, source_spec.name, normalized_backend)
-            lower_default_arguments(cgl_ast)
-            selected_ast, remaining_entry_point = prepare_entry_scoped_target(
-                codegen,
-                cgl_ast,
-                (
-                    _validated_entry_point(entry_point)
-                    if entry_point is not None
-                    else None
-                ),
+            target.code = generated_code
+            return target
+        reverse_codegen = source_spec.create_reverse_codegen(source_options)
+        if reverse_codegen is None:
+            raise ValueError(
+                f"Unsupported translation scenario: {file_path} to {backend}"
             )
-            validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
-            generated_code = _generate_target_code(
-                codegen,
-                selected_ast,
-                remaining_entry_point,
-                normalized_backend,
-                program=cgl_ast,
-            )
-            target_codegen = codegen
+        # Translate to CrossGL first, then to target backend
+        lower_default_arguments(ast)
+        intermediate_code = reverse_codegen.generate(ast)
+        cgl_spec = SOURCE_REGISTRY.get("cgl")
+        if not cgl_spec:
+            raise ValueError("CrossGL parser not available for intermediate step")
+        cgl_ast = cgl_spec.parse(intermediate_code)
+        if source_spec.name == "opencl" and normalized_backend != "webgl":
+            cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+            validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
+        if source_spec.name == "cuda" and normalized_backend in {
+            "directx",
+            "metal",
+            "vulkan",
+        }:
+            cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+        if source_spec.name == "hip" and normalized_backend == "directx":
+            cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+        program = cgl_ast
+    apply_rule_carrying(program, source_spec.name, normalized_backend)
+    lower_default_arguments(program)
+    target.program = program
+    return target
 
+
+def _generate_for_target(target, entry_point, program=None):
+    """Generate one artifact of ``target``: the whole program, or the entry ``entry_point``."""
+    program = target.program if program is None else program
+    codegen = get_codegen(target.requested_backend)
+    selected_ast, remaining_entry_point = prepare_entry_scoped_target(
+        codegen,
+        program,
+        _validated_entry_point(entry_point) if entry_point is not None else None,
+    )
+    validate_pointer_reinterpretation_target(selected_ast, target.normalized_backend)
+    code = _generate_target_code(
+        codegen,
+        selected_ast,
+        remaining_entry_point,
+        target.normalized_backend,
+        program=program,
+    )
+    return code, codegen
+
+
+def _finish_output(code, normalized_backend, format_output, save_shader):
     if (
         format_output
         and FORMATTER_AVAILABLE
         and normalized_backend not in ["cgl", "crossgl"]
     ):
-        generated_code = format_shader_code(
-            generated_code, normalized_backend, save_shader
-        )
-
+        code = format_shader_code(code, normalized_backend, save_shader)
     if save_shader is not None:
         with open(save_shader, "w", encoding="utf-8", newline="") as file:
-            file.write(generated_code)
+            file.write(code)
+    return code
 
-    return generated_code, target_codegen
+
+def _translate_with_codegen(
+    file_path,
+    backend="cgl",
+    save_shader=None,
+    format_output=True,
+    source_backend=None,
+    *,
+    include_paths=None,
+    defines=None,
+    source_options=None,
+    entry_point=None,
+):
+    target = _target_program(
+        file_path,
+        backend,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+    codegen = None
+    if target.code is not None:
+        generated_code = target.code
+    else:
+        generated_code, codegen = _generate_for_target(target, entry_point)
+    generated_code = _finish_output(
+        generated_code, target.normalized_backend, format_output, save_shader
+    )
+    return generated_code, codegen
+
+
+def translate_entries(
+    file_path: str,
+    backend: str,
+    entry_points: Sequence[str],
+    format_output: bool = True,
+    source_backend: Optional[str] = None,
+    *,
+    include_paths: Optional[Sequence[str]] = None,
+    defines: Optional[Mapping[str, str]] = None,
+    source_options: Optional[Mapping[str, Any]] = None,
+) -> dict:
+    """Translate each of ``entry_points`` to its own artifact, reading and importing the source once.
+
+    Each artifact is what :func:`translate` with that ``entry_point`` returns; a target whose compilation unit
+    holds one entry per stage, such as GLSL, refuses a whole file with two entries of a stage and needs this.
+    Returns the artifacts by entry name, in the order given.
+    """
+    names = [_validated_entry_point(name) for name in entry_points]
+    target = _target_program(
+        file_path,
+        backend,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=names[0] if names else None,
+    )
+    artifacts = {}
+    for name in names:
+        program = target.program
+        if not callable(
+            getattr(get_codegen(target.requested_backend), "entry_scoped_ast", None)
+        ):
+            # A generator legalizes the program it is given in place; entry_scoped_ast returns a copy instead.
+            program = copy.deepcopy(program)
+        code, _codegen = _generate_for_target(target, name, program=program)
+        artifacts[name] = _finish_output(
+            code, target.normalized_backend, format_output, None
+        )
+    return artifacts
 
 
 def _generate_target_code(codegen, ast, entry_point, backend=None, program=None):

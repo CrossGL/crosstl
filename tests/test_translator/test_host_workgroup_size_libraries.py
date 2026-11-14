@@ -8,6 +8,7 @@ kernels of the library keep their own sizes.
 import pytest
 
 import crosstl
+from tests.stage_entry_helpers import translate_each_entry
 
 HEADER = "#include <metal_stdlib>\nusing namespace metal;\n"
 
@@ -70,7 +71,9 @@ def _write(tmp_path, name, source):
     "name, source", [("rotate.cgl", STAGE_BLOCK), ("kernels.metal", KERNELS)]
 )
 def test_no_target_refuses_a_host_sized_kernel(tmp_path, backend, name, source):
-    assert crosstl.translate(_write(tmp_path, name, source), backend=backend)
+    # GLSL holds one compute entry per unit, so a file with two kernels is translated per kernel there.
+    artifacts = translate_each_entry(_write(tmp_path, name, source), backend)
+    assert artifacts and all(artifacts.values())
 
 
 def test_selected_entry_is_left_to_its_generator(tmp_path):

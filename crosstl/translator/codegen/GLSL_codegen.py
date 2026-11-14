@@ -4,7 +4,7 @@ import math
 import re
 import struct
 from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from types import SimpleNamespace
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..explicit_specializations import functions_by_called_name
 from ..float_limit_constants import render_float_limit_constant
 from ..immutable_storage import (
     checked_immutable_storage,
@@ -363,6 +364,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
@@ -1748,6 +1750,8 @@ class GLSLCodeGen(
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    # One compilation unit holds one entry per stage, main (glsl_stage_entries.refuse_repeated_stage_entries).
+    one_entry_per_stage = True
     # Desktop GLSL converts integer literals to float and uint implicitly.
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
@@ -3733,7 +3737,17 @@ class GLSLCodeGen(
             ),
             None,
         )
-        scoped_ast = deepcopy(ast)
+        # Copy only what the entry can use: another entry's function or stage is never reachable from it, and
+        # copying every entry for every entry made translating a file entry by entry quadratic.
+        scoped_ast = copy(ast)
+        scoped_ast.functions = [
+            function
+            for function in getattr(ast, "functions", []) or []
+            if function_stage_name(function) not in stage_entry_types
+            or function is selected_function
+        ]
+        scoped_ast.stages = StageMap()
+        scoped_ast = deepcopy(scoped_ast)
         selected_copy_function = None
         scoped_ast.functions = [
             function
@@ -3923,11 +3937,7 @@ class GLSLCodeGen(
         functions = list(getattr(ast, "functions", []) or [])
         for _stage_type, stage in getattr(ast, "stages", {}).items():
             functions.extend(getattr(stage, "local_functions", []) or [])
-        functions_by_name = {}
-        for function in functions:
-            name = getattr(function, "name", None)
-            if name:
-                functions_by_name.setdefault(name, []).append(function)
+        functions_by_name = functions_by_called_name(functions)
 
         reachable_names = set()
         pending = list(entry_functions)
@@ -3949,6 +3959,9 @@ class GLSLCodeGen(
                 if not candidates:
                     continue
                 reachable_names.add(name)
+                reachable_names.update(
+                    candidate.name for candidate in candidates if candidate.name
+                )
                 pending.extend(candidates)
         return reachable_names
 
@@ -9112,6 +9125,9 @@ class GLSLCodeGen(
         self.current_type_aliases = dict(self.global_type_aliases)
         self.glsl_builtin_option_available = self.glsl_ast_declares_type(ast, "Option")
         self.validate_stage_main_helper_conflict(ast, target_stage)
+        refuse_repeated_stage_entries(
+            ast, target_stage, self.combined_stage_entry_types()
+        )
 
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
@@ -19168,36 +19184,9 @@ class GLSLCodeGen(
             self.should_emit_stage_guards(ast, target_stage)
             and "main" not in used_names
         ):
-            # Each stage's guarded section declares one main: the stage's first entry. Later entries of the
-            # same stage stay ordinary functions, as for a single-stage program.
-            first_of_stage, later = {}, []
-            for entry_id, stage_name, func in entries:
-                if stage_name in first_of_stage.values():
-                    later.append((entry_id, stage_name, func))
-                else:
-                    first_of_stage[entry_id] = stage_name
-            names = {entry_id: "main" for entry_id in first_of_stage}
-            if later:
-                names.update(
-                    target_names(
-                        assign_stage_entry_names(
-                            later,
-                            used_names | {"main"},
-                            lambda stage_name, _func: f"{stage_name}_main",
-                        )
-                    )
-                )
-            return names
-
-        stage_names = {stage_name for _entry_id, stage_name, _func in entries}
-        if len(entries) > 1 and len(stage_names) == 1 and "main" not in used_names:
-            first_entry_id, _first_stage_name, _first_func = entries[0]
-            assigned_names = assign_stage_entry_names(
-                entries[1:],
-                used_names | {"main"},
-                lambda stage_name, _func: f"{stage_name}_main",
-            )
-            return target_names({first_entry_id: "main", **assigned_names})
+            # Each stage's guarded section declares its entry as main. A stage has one entry here:
+            # generate_program refuses a second one (refuse_repeated_stage_entries).
+            return {entry_id: "main" for entry_id, _stage_name, _func in entries}
 
         return target_names(
             assign_stage_entry_names(
