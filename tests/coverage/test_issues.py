@@ -77,6 +77,59 @@ def test_a_run_links_the_bugs_it_files_and_the_next_run_changes_nothing():
     assert len(logged) == 3
 
 
+class LaggingRepository(Repository):
+    """A repository whose issue list leaves out the issues created since the last :meth:`settle`, as GitHub's can."""
+
+    def __init__(self, existing=()):
+        super().__init__(existing)
+        self.fresh = set()
+
+    def managed(self):
+        return [i for i in self.issues if i.number not in self.fresh]
+
+    def apply(self, action):
+        number = super().apply(action)
+        if action.kind == "create":
+            self.fresh.add(number)
+        return number
+
+    def settle(self):
+        self.fresh.clear()
+
+
+def test_a_run_links_its_new_bugs_when_the_issue_list_lags():
+    report = coverage_report(hlsl_row())
+    repository = LaggingRepository()
+    actions = issues.reconcile(report, repository, log=lambda line: None)
+    assert kinds(actions) == [
+        ("create", "tracking/hlsl/output"),
+        ("create", bug_for("hlsl", "b")),
+        ("edit", "tracking/hlsl/output"),
+    ]
+    assert len(repository.issues) == 2
+    bug = next(i for i in repository.issues if i.key == bug_for("hlsl", "b"))
+    tracking = next(i for i in repository.issues if i.key == "tracking/hlsl/output")
+    assert f"- [ ] `b` wrong (#{bug.number}): B failed" in tracking.body
+    repository.settle()
+    assert issues.reconcile(report, repository, log=lambda line: None) == []
+
+
+def test_applied_issues_match_what_github_keeps():
+    old = issues.Issue(7, "tracking/hlsl/output", "open", "t", "b", ("coverage",))
+    edit = issues.Action("edit", "tracking/hlsl/output", "t2", "b2", ("bug",), 7)
+    close = issues.Action("close", "k", "t3", "b3", (), 9, "gone", "completed")
+    create = issues.Action("create", "wrong/x", "new", "body", ("coverage", "bug"))
+    gone = issues.Issue(9, "k", "open", "t", "b")
+    after = issues.applied([old, gone], [(edit, 7), (close, 9), (create, 12)])
+    assert after == [
+        issues.Issue(
+            7, "tracking/hlsl/output", "open", "t2", "b2", ("coverage", "bug")
+        ),
+        issues.Issue(9, "k", "closed", "t3", "b3"),
+        issues.Issue(12, "wrong/x", "open", "new", "body", ("coverage", "bug")),
+    ]
+
+
 def test_the_follow_up_pass_files_no_further_bugs():
     row = backend_row(
         "wgsl",
