@@ -9,6 +9,7 @@ from ...translator.semantics.warp import (
     SHUFFLES,
 )
 from ..assignment_operands import grouped_operand
+from ..device_globals import device_memory_declaration, is_device_memory
 from ..import_refusals import CudaImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..no_contraction import (
@@ -4499,6 +4500,22 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        if (
+            self.namespace_scope_variable
+            and is_device_memory(node)
+            and not self.is_namespace_scope_constant(node)
+        ):
+            declaration = device_memory_declaration(
+                self,
+                node,
+                output_name,
+                var_type,
+                self.allocate_global_resource_binding(),
+                "CUDA",
+            )
+            if declaration is not None:
+                self.emit(declaration)
+            return
         dim3_value = self.format_cuda_dim3_initializer(node)
         if dim3_value is not None:
             self.register_warp_mask_value(node.name, output_name, None)

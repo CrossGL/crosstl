@@ -49,11 +49,12 @@ BORROWED = {
 # ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
 UNIDENTIFIED = {("rust", "vec3"): "glam computes it with Rust arithmetic"}
 # Instructions that only move or address values, or structure control flow. They never identify a call; the
-# unreachable block after a call that never returns, such as Rust's ``kill() -> !``, ends in OpUnreachable.
+# unreachable block after a call that never returns, such as Rust's ``kill() -> !``, ends in OpUnreachable, and the
+# match by which spirv_std turns a ray query's intersection type into an enumeration lowers to OpSwitch.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "
-    "OpLine OpNoLine OpLabel OpBranch OpBranchConditional OpSelectionMerge OpLoopMerge OpPhi OpUndef OpReturn "
-    "OpReturnValue OpUnreachable OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
+    "OpLine OpNoLine OpLabel OpBranch OpBranchConditional OpSwitch OpSelectionMerge OpLoopMerge OpPhi OpUndef "
+    "OpReturn OpReturnValue OpUnreachable OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
 )
 # Instructions that also reshape or convert the call's result for the output buffer. They identify a call only when
 # it lowers to nothing else, as a bit cast or a select does.

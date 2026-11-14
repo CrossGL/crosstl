@@ -166,7 +166,7 @@ class _Builder:
     def _resource(self, kind: Type) -> bool:
         if (self.payload or self.tracing) and kind.opaque == "udt":
             return True
-        if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind):
+        if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind, self.dialect):
             return True
         return (
             bool(self.receiver and self.receiver.takes(kind))
@@ -229,8 +229,8 @@ class _Builder:
             ):
                 self.traced = True
                 arguments.append(dialect.payload)
-            elif local_object(param.type):
-                self.lines += local_object(param.type, local)
+            elif local_object(param.type, dialect):
+                self.lines += local_object(param.type, dialect, local)
                 arguments.append(local)
             elif self._attributes(param):
                 self.lines += self._hit_attributes(local, param.direction == "in")
