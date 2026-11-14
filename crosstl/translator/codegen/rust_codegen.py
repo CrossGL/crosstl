@@ -78,6 +78,11 @@ from .rust_memory_atomics import (
     rust_memory_atomic_location_roots,
     rust_memory_atomic_result_type,
 )
+from .rust_mesh_tasks import (
+    generate_rust_dispatch_mesh,
+    rust_dispatch_mesh_payload_roots,
+    rust_task_payload_declarations,
+)
 from .rust_narrow_integers import (
     RUST_EXACT_WIDTH_INTEGER_TYPES,
     RUST_SCALAR_RANKS,
@@ -667,6 +672,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.enum_nodes_by_name = {}
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
+        self.current_rust_task_declarations = None
+        self.rust_program_variables = []
         self.required_generic_math_traits = set()
         self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
@@ -698,6 +705,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
         explicit_specialization_refusals(self, ast, "Rust")
+        self.rust_program_variables = list(getattr(ast, "global_variables", None) or [])
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -741,6 +749,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
         self.current_mutated_names = set()
+        self.current_rust_task_declarations = None
         self.required_generic_math_traits = set()
         self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
@@ -1507,20 +1516,19 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.validate_rust_mesh_op_stage(operation, stage_name)
         self.validate_rust_mesh_op_arguments(operation, arguments, stage_name)
 
+        if operation == "DispatchMesh":
+            return generate_rust_dispatch_mesh(self, arguments)
         args = [self.generate_expression(argument) for argument in arguments]
         if operation == "SetMeshOutputCounts":
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
-        if operation == "DispatchMesh":
-            if len(args) == 4:
-                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args[:3])}, &mut {args[3]}) }}"
-            return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
+
         raise RustRefusal(f"Unsupported Rust mesh intrinsic {operation}")
 
     def generate_required_rust_mesh_helpers(self):
         if not self.required_mesh_helpers:
             return ""
-        code = "// CrossGL mesh/task placeholders
+        code = "// CrossGL mesh/task placeholders\n"
         if "set_mesh_output_counts" in self.required_mesh_helpers:
             code += (
                 "pub fn _crossgl_set_mesh_output_counts("
@@ -4265,9 +4273,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         saved_output_parameters = self.current_rust_output_parameters
+        saved_task_declarations = self.current_rust_task_declarations
         self.current_rust_output_parameters = []
         self.current_generic_param_names = set(self.generic_param_names(func))
         self.current_shader_type = shader_type
+        self.current_rust_task_declarations = rust_task_payload_declarations(
+            self, func, stage_node, shader_type
+        )
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         if extra_params:
             param_list.extend(extra_params)
@@ -4496,6 +4508,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
         self.current_rust_output_parameters = saved_output_parameters
+        self.current_rust_task_declarations = saved_task_declarations
         return code
 
     def is_function_prototype(self, func):
@@ -4803,6 +4816,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 names.update(rust_memory_atomic_location_roots(self, func_name, args))
                 collect(current.function)
                 collect(args)
+                return
+
+            if isinstance(current, MeshOpNode):
+                names.update(rust_dispatch_mesh_payload_roots(self, current))
+                collect(getattr(current, "arguments", []))
                 return
 
             if isinstance(current, MemberAccessNode):

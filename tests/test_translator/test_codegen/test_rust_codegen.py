@@ -4301,6 +4301,29 @@ mod gpu {
 
     pub fn accept_hit_and_end_search() {}
 }
+
+// rust-gpu 0.11.0 crates/spirv-std/src/arch/mesh_shading.rs: the signatures generated task stages call. On the
+// host spirv-std's #[gpu_only] functions panic, as these do.
+mod spirv_std {
+    pub mod arch {
+        pub unsafe fn emit_mesh_tasks_ext(
+            _group_count_x: u32,
+            _group_count_y: u32,
+            _group_count_z: u32,
+        ) -> ! {
+            panic!("emit_mesh_tasks_ext is only available on the GPU")
+        }
+
+        pub unsafe fn emit_mesh_tasks_ext_payload<T>(
+            _group_count_x: u32,
+            _group_count_y: u32,
+            _group_count_z: u32,
+            _payload: &mut T,
+        ) -> ! {
+            panic!("emit_mesh_tasks_ext_payload is only available on the GPU")
+        }
+    }
+}
 """
 
 
@@ -25270,9 +25293,7 @@ def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_
         task {
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
             void main() @numthreads(1, 1, 1) {
-                MeshPayload payload;
-                payload.meshlet = 7u;
-                DispatchMesh(1, 1, 1, payload);
+                DispatchMesh(4, 1, 1);
             }
         }
 
@@ -25310,7 +25331,7 @@ def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_
 
     assert "// CrossGL mesh/task placeholders" in generated_code
     assert "pub fn _crossgl_set_mesh_output_counts" in generated_code
-    assert "pub fn _crossgl_dispatch_mesh" in generated_code
+    assert "_crossgl_dispatch_mesh" not in generated_code
     assert "// CrossGL shader stage: task" in generated_code
     assert "// CrossGL mesh/task stage: stage=task" in generated_code
     assert "// CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
@@ -25329,8 +25350,9 @@ def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_
     assert "pub fn object_main() -> ()" in generated_code
     assert "pub fn amplification_main() -> ()" in generated_code
     assert "pub fn mesh_main(" in generated_code
-    assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
-    assert "_crossgl_dispatch_mesh_without_payload(2, 3, 4)" in generated_code
+    assert "unsafe { spirv_std::arch::emit_mesh_tasks_ext(4, 1, 1) };" in generated_code
+    assert "unsafe { spirv_std::arch::emit_mesh_tasks_ext(2, 3, 4) };" in generated_code
+    assert "unsafe { spirv_std::arch::emit_mesh_tasks_ext(1, 1, 1) };" in generated_code
     assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
     assert "MeshOpNode" not in generated_code
 
@@ -25416,6 +25438,191 @@ def test_rust_mesh_task_stages_validate_metadata_and_intrinsics():
         generate_code(parse_code(tokenize_code(bad_count_type)))
 
 
+def test_rust_task_dispatch_mesh_launches_mesh_tasks_with_payload():
+    # #4392: DispatchMesh used to call a generated helper whose body did nothing, so no mesh workgroups ran. Not
+    # smoke-compiled: a write to a program-scope groupshared variable does not compile on the host yet.
+    code = """
+    shader Task {
+        struct Payload {
+            uint value;
+        }
+        groupshared Payload payload @ taskPayloadSharedEXT;
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.value = 1u;
+                DispatchMesh(1u, 1u, 1u, payload);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "unsafe { spirv_std::arch::emit_mesh_tasks_ext_payload(1, 1, 1, &mut *PAYLOAD) };"
+        in generated_code
+    )
+    assert "_crossgl_dispatch_mesh" not in generated_code
+    assert "placeholder" not in generated_code
+
+
+def test_rust_task_dispatch_mesh_without_payload_passes_the_task_payload_variable():
+    # As GLSL's EmitMeshTasksEXT(x, y, z) and the SPIR-V generator do, the three-argument form hands the mesh
+    # workgroups the stage's taskPayloadSharedEXT variable.
+    code = """
+    shader Task {
+        struct Payload {
+            uint value;
+        }
+        groupshared Payload payload @ taskPayloadSharedEXT;
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.value = 1u;
+                DispatchMesh(2u, 1u, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "unsafe { spirv_std::arch::emit_mesh_tasks_ext_payload(2, 1, 1, &mut *PAYLOAD) };"
+        in generated_code
+    )
+
+
+def test_rust_task_dispatch_mesh_without_payload_refuses_two_task_payload_variables():
+    code = """
+    shader Task {
+        struct Payload {
+            uint value;
+        }
+        groupshared Payload first @ taskPayloadSharedEXT;
+        groupshared Payload second @ taskPayloadSharedEXT;
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1u, 1u, 1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"more than one taskPayloadSharedEXT variable \(first, second\)",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_rust_task_dispatch_mesh_without_payload_converts_counts_to_u32(tmp_path):
+    code = """
+    shader Task {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                int groups = 2;
+                DispatchMesh(groups, 1u, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "unsafe { spirv_std::arch::emit_mesh_tasks_ext((groups) as u32, 1, 1) };"
+        in generated_code
+    )
+    assert "_crossgl_dispatch_mesh" not in generated_code
+    assert "placeholder" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "declarations, body",
+    [
+        # A function-local payload has Function storage, which rust-gpu rejects as an OpEmitMeshTasksEXT payload.
+        ("", "MeshPayload payload = MeshPayload(7u);"),
+        # A local shadows the program's groupshared payload of the same name.
+        (
+            "groupshared MeshPayload payload @ taskPayloadSharedEXT;",
+            "MeshPayload payload = MeshPayload(7u);",
+        ),
+        # A local copy of the program's payload variable is not the payload variable.
+        (
+            "groupshared MeshPayload whole @ taskPayloadSharedEXT;",
+            "MeshPayload payload = whole;",
+        ),
+    ],
+)
+def test_rust_task_dispatch_mesh_refuses_payload_outside_task_payload_storage(
+    declarations, body
+):
+    code = f"""
+    shader Task {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+        {declarations}
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                {body}
+                DispatchMesh(1u, 1u, 1u, payload);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        RustLoweringRefused,
+        match="DispatchMesh payload argument: the payload must be a program-scope groupshared variable",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_rust_task_dispatch_mesh_refuses_stage_scope_groupshared_payload():
+    # The SPIR-V, GLSL, HLSL and Metal generators refuse a stage-scope payload too.
+    code = """
+    shader Task {
+        struct MeshPayload {
+            uint meshlet;
+        };
+        task {
+            groupshared MeshPayload payload;
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1u, 1u, 1u, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(RustLoweringRefused, match="DispatchMesh payload argument"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_rust_task_dispatch_mesh_refuses_payload_that_is_not_a_location():
+    code = """
+    shader Task {
+        struct MeshPayload {
+            uint meshlet;
+        };
+        MeshPayload make_payload() {
+            MeshPayload made;
+            made.meshlet = 3u;
+            return made;
+        }
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1u, 1u, 1u, make_payload());
+            }
+        }
+    }
+    """
+
+    with pytest.raises(RustLoweringRefused, match="DispatchMesh payload argument"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_rust_qualified_mesh_stage_uses_deterministic_entry_name(tmp_path):
     ast = ShaderNode(
         name="QualifiedRustMeshStage",
@@ -25449,8 +25656,8 @@ def test_direct_mesh_ir_node_lowers_to_rust_helper_without_ast_repr():
 
     codegen.current_shader_type = "task"
     dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
-    assert dispatch_expr == "_crossgl_dispatch_mesh_without_payload(1, 1, 1)"
-    assert "dispatch_mesh" in codegen.required_mesh_helpers
+    assert dispatch_expr == "unsafe { spirv_std::arch::emit_mesh_tasks_ext(1, 1, 1) }"
+    assert codegen.required_mesh_helpers == {"set_mesh_output_counts"}
 
 
 def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp_path):

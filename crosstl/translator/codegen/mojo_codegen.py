@@ -10237,12 +10237,13 @@ class MojoCodeGen:
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            raise MojoLoweringRefused(
-                [
-                    "DispatchMesh: Mojo's GPU modules have no mesh-task launch "
-                    "intrinsic; use the SPIR-V, HLSL, or Slang backends to target "
-                    "mesh/task shaders"
-                ]
+            # Mojo's gpu package launches compute kernels only: it has no task stage and no operation that
+            # launches mesh workgroups, so a task entry has no Mojo lowering.
+            return refuse_unsupported(
+                "Mojo",
+                "DispatchMesh",
+                "Mojo's gpu package has no task stage and no operation that launches mesh workgroups",
+                "",
             )
 
         raise MojoRefusal(f"Unsupported Mojo mesh intrinsic {operation}")

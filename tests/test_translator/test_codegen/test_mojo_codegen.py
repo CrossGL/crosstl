@@ -1704,27 +1704,6 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
             vec4 position @ gl_Position;
         };
 
-        task {
-            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-            void main() @numthreads(1, 1, 1) {
-                MeshPayload payload;
-                payload.meshlet = 7u;
-                DispatchMesh(1, 1, 1, payload);
-            }
-        }
-
-        object {
-            void main() @numthreads(2, 1, 1) {
-                DispatchMesh(2, 3, 4);
-            }
-        }
-
-        amplification {
-            void main() @numthreads(3, 1, 1) {
-                DispatchMesh(1, 1, 1);
-            }
-        }
-
         mesh {
             void main(
                 @mesh_payload in MeshPayload payload,
@@ -1747,14 +1726,10 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
 
     assert "# CrossGL mesh/task placeholders" in generated_code
     assert "fn _crossgl_set_mesh_output_counts" in generated_code
-    assert "fn _crossgl_dispatch_mesh" in generated_code
-    assert "# CrossGL shader stage: task" in generated_code
-    assert "# CrossGL mesh/task stage: stage=task" in generated_code
-    assert "# CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
-    assert "# CrossGL mesh/task local size: 1, 1, 1" in generated_code
-    assert "# CrossGL shader stage: object" in generated_code
-    assert "# CrossGL shader stage: amplification" in generated_code
+    assert "_crossgl_dispatch_mesh" not in generated_code
     assert "# CrossGL shader stage: mesh" in generated_code
+    assert "# CrossGL mesh/task stage: stage=mesh" in generated_code
+    assert "# CrossGL mesh/task numthreads: 32, 1, 1" in generated_code
     assert "# CrossGL mesh output topology: triangle" in generated_code
     assert "# CrossGL mesh max vertices: 64" in generated_code
     assert "# CrossGL mesh max primitives: 32" in generated_code
@@ -1762,12 +1737,7 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
         "# CrossGL mesh parameter role: mesh_payload:payload->MeshPayload, "
         "vertices:verts->MeshVertex[3], indices:tris->uvec3[1]" in generated_code
     )
-    assert "fn task_main() -> None:" in generated_code
-    assert "fn object_main() -> None:" in generated_code
-    assert "fn amplification_main() -> None:" in generated_code
     assert "fn mesh_main(" in generated_code
-    assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
-    assert "_crossgl_dispatch_mesh(2, 3, 4)" in generated_code
     assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
     assert "MeshOpNode" not in generated_code
 
@@ -1784,6 +1754,39 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
 
     assert result.returncode == 0, result.stderr + "\n\n" + generated_code
     assert output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("stage", "dispatch"),
+    [
+        ("task", "DispatchMesh(1u, 1u, 1u, payload);"),
+        ("task", "DispatchMesh(1u, 1u, 1u);"),
+        ("object", "DispatchMesh(2u, 3u, 4u);"),
+        ("amplification", "DispatchMesh(1u, 1u, 1u, payload);"),
+    ],
+)
+def test_mojo_refuses_dispatch_mesh(stage, dispatch):
+    # #4392: DispatchMesh used to call a generated Mojo helper whose body was `pass`, so no mesh workgroups ran.
+    code = f"""
+    shader Task {{
+        struct Payload {{
+            uint value;
+        }}
+        groupshared Payload payload @ taskPayloadSharedEXT;
+        {stage} {{
+            void main() @numthreads(1, 1, 1) {{
+                payload.value = 1u;
+                {dispatch}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(code)))
+
+    assert refused.value.code == "project.translate.mojo-lowering-unsupported"
+    assert "DispatchMesh: Mojo's gpu package has no task stage" in str(refused.value)
 
 
 def test_mesh_task_stages_validate_mojo_metadata_and_intrinsics():
@@ -16116,9 +16119,9 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     assert "set_mesh_output_counts" in codegen.required_mesh_helpers
 
     codegen.current_shader_type = "task"
-    dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
-    assert dispatch_expr == "_crossgl_dispatch_mesh(1, 1, 1)"
-    assert "dispatch_mesh" in codegen.required_mesh_helpers
+    with pytest.raises(MojoLoweringRefused, match="DispatchMesh"):
+        codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
+    assert "dispatch_mesh" not in codegen.required_mesh_helpers
 
 
 def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():
