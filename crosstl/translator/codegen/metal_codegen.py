@@ -218,6 +218,10 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .hlsl_buffer_layout import BUFFER_LAYOUT_ATTRIBUTE
+from .metal_buffer_scalars import (
+    is_metal_buffer_scalar_type_name,
+    metal_buffer_scalar_type,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -17667,7 +17671,7 @@ class MetalCodeGen(
         if self.is_raw_buffer_parameter_type(raw_param_type, node):
             return False
         type_name = self.type_name_string(raw_param_type)
-        return is_numeric_scalar_type_name(type_name, self.map_type)
+        return is_metal_buffer_scalar_type_name(type_name, self.map_type)
 
     def is_texture_or_image_resource_type(self, vtype):
         return (
@@ -18193,7 +18197,10 @@ class MetalCodeGen(
                 raw_param_type, name
             )
         if self.is_bound_scalar_value_parameter(raw_param_type, node, shader_type):
-            return f"constant {mapped_type}& {name}"
+            scalar_type = metal_buffer_scalar_type(
+                self.type_name_string(raw_param_type), mapped_type
+            )
+            return f"constant {scalar_type}& {name}"
         address_space_declaration = self.format_address_space_parameter_declaration(
             raw_param_type, mapped_type, name, node, shader_type
         )
