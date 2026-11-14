@@ -66,7 +66,13 @@ def _mojo(offline: bool) -> list[Feature]:
 
 
 def _opencl(offline: bool) -> list[Feature]:
-    return opencl.parse(fetch("opencl", offline=offline))
+    declared = opencl.parse(fetch("opencl", offline=offline))
+    compiler = opencl.compiler(
+        fetch("opencl-base", offline=offline),
+        fetch("opencl-builtins", offline=offline),
+        fetch("opencl-keywords", offline=offline),
+    )
+    return sorted(declared + compiler, key=lambda f: (f.group, f.name))
 
 
 # The modules of spirv_std::arch, each a source of :data:`..upstream.SOURCES` named ``rust-<module>``.

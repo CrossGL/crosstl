@@ -7,7 +7,7 @@ import re
 from .dialect import Buffer, Dialect, Handle, ProbeError
 from .model import OPENCL_ATOMICS as ATOMIC_TYPES
 from .model import OPENCL_ENUMERATIONS as ENUMERATIONS
-from .model import Type
+from .model import STRING, Type
 
 # The OpenCL C handle types a built-in makes, and the call a probe makes one with. An event_t is zero where no copy
 # made it (OpenCL C 3.0, section 6.15.11); the others come from the device-side enqueue functions (section 6.15.16).
@@ -19,6 +19,10 @@ _HANDLES = {
 }
 # A reservation of packets in a pipe, which the kernel takes as an argument (section 6.15.17).
 _PIPE = "read_only pipe int"
+# A function that commits a reservation, and so takes the reservation of its own kind on the pipe it is given.
+_COMMIT = re.compile(r"((?:work_group_|sub_group_)?)commit_(read|write)_pipe")
+# A block, which the device-side enqueue functions run or query; the probe's block does nothing.
+_BLOCK = "void (^block)(void)"
 # A pointer into one named address space, a generic pointer, and a constant array, as the header spells them.
 _SPACE_POINTER = re.compile(r"(?:const )?(__local|__global) (\w+) ?\*")
 _POINTER = re.compile(r"(?:const )?(\w+) ?\*")
@@ -53,6 +57,10 @@ class OpenCL(Dialect):
     _SAMPLER = (
         "CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST"
     )
+    # printf's format is the one string a built-in takes; it converts the float a probe passes as its variable
+    # arguments.
+    string = "__constant char*"
+    _FORMAT = '"%f\\n"'
 
     def type(self, kind: Type) -> str:
         if kind.opaque in ENUMERATIONS:
@@ -80,6 +88,8 @@ class OpenCL(Dialect):
     def literal(self, kind: Type) -> str:
         if kind.opaque in ENUMERATIONS:
             return ENUMERATIONS[kind.opaque]
+        if kind == STRING:
+            return self._FORMAT
         if kind.scalar == "float" and not kind.shape:
             return "0.0f"
         return super().literal(kind)
@@ -115,11 +125,32 @@ class OpenCL(Dialect):
         return f"__local {self.type(kind.element)} {name}{count};"
 
     def holding(self, opaque: str) -> str:
-        return opaque if opaque in _HANDLES else ""
+        return opaque if opaque in _HANDLES or opaque == "reserve_id_t" else ""
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         # An enumeration is an unsigned integer: get_fence returns the cl_mem_fence_flags of a pointer.
-        return (Type("uint"), "(uint){}") if opaque in ENUMERATIONS else None
+        if opaque in ENUMERATIONS:
+            return Type("uint"), "(uint){}"
+        # A pointer to_global, to_local or to_private returns is read as whether it is null: the probe's pointer is
+        # to a private local, so only to_private returns it.
+        if opaque.endswith("*"):
+            return Type("uint"), "(uint)({} != 0)"
+        return None
+
+    def assignment(
+        self, name: str, kind: Type, arguments: list[str]
+    ) -> tuple[list[str], str] | None:
+        # A commit takes a reservation that the reserve function of its kind made on the same pipe; :meth:`handle`
+        # leaves the reservation to be made here.
+        commit = _COMMIT.fullmatch(name)
+        if not commit:
+            return None
+        prefix, access = commit.groups()
+        pipe, reservation = arguments
+        line = (
+            f"reserve_id_t {reservation} = {prefix}reserve_{access}_pipe({pipe}, 1u);"
+        )
+        return [line], f"{name}({pipe}, {reservation})"
 
     def handle(self, kind: Type, name: str) -> Handle | None:
         """A handle the built-in that makes it returns; an image or a pipe the kernel takes; a ``__local`` pointer
@@ -130,6 +161,12 @@ class OpenCL(Dialect):
             return None
         if spelling in _HANDLES:
             return Handle(name, (f"{spelling} {name} = {_HANDLES[spelling]};",))
+        if spelling == _BLOCK:
+            return Handle("^{}")
+        if spelling == "reserve_id_t" and name not in ("", "a0"):
+            # A reservation that follows the call's pipe, the probe's first argument, is made on that pipe by the
+            # reserve function the call pairs with (:meth:`assignment`).
+            return Handle(name)
         if spelling == "reserve_id_t":
             pipe = f"{name}_pipe"
             line = f"reserve_id_t {name} = reserve_read_pipe({pipe}, 1u);"
