@@ -280,11 +280,12 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "native SPIR-V probe is the module glslang compiles the GLSL probe to, and its round trip must keep the "
         "feature's instruction. The language's reference tool then validates the result:",
         "",
-        "- **supported**: the reference tool accepts the translation and, where it runs, the translation "
-        "computes what the native probe computes;",
+        "- **supported**: the reference tool accepts the translation, which keeps the built-ins and decorations "
+        "the feature needs once compiled and, where it runs, computes what the native probe computes;",
         "- **refused**: CrossTL rejects the feature with a diagnostic;",
-        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, writes a "
-        "placeholder comment in place of the feature, or fails without a diagnostic;",
+        "- **wrong**: CrossTL produces output the reference tool rejects, that loses a built-in or decoration the "
+        "feature needs or that computes other results, writes a placeholder comment in place of the feature, or "
+        "fails without a diagnostic;",
         "- **untested**: no probe can be built for the feature yet, or the reference tool rejects the probe "
         "itself.",
         "",
