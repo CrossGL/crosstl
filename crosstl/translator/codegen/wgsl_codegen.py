@@ -4111,9 +4111,7 @@ class WGSLCodeGen(
                 args = wgsl_mixed_integer_call_arguments(self, node.arguments)
                 if not mixed_integer_call_is_unsigned(self, node.arguments):
                     # An unsigned mixed call already has its scalars written as vecN<u32>.
-                    args = self.replicate_scalar_call_arguments(
-                        node.arguments, args
-                    )
+                    args = self.replicate_scalar_call_arguments(node.arguments, args)
             return f"{normalized_name}({args[0]}, {args[1]})"
         if normalized_name in {"step", "smoothstep"} and not (
             self.is_user_function_name(function_name)
@@ -4648,9 +4646,7 @@ class WGSLCodeGen(
                 f"{len(node.arguments)}"
             )
         left, right = (
-            self.float_converted_argument(
-                argument, self.generate_expression(argument)
-            )
+            self.float_converted_argument(argument, self.generate_expression(argument))
             for argument in node.arguments
         )
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"

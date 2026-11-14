@@ -386,8 +386,7 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
     assert "var b: f32 = min(f32(k), f);" in generated
     assert "var c: f32 = max(f, f32(u));" in generated
     assert (
-        "var d: vec2<f32> = clamp(v, vec2<f32>(f32(k)), vec2<f32>(2.0));"
-        in generated
+        "var d: vec2<f32> = clamp(v, vec2<f32>(f32(k)), vec2<f32>(2.0));" in generated
     )
     assert "var e: f32 = clamp(f, f32(k), 1.0);" in generated
     assert "var g: f32 = step(f32(k), f);" in generated
