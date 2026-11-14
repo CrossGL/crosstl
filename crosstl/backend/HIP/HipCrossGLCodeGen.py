@@ -361,7 +361,7 @@ class HipToCrossGLConverter:
     }
     # ``let``, ``match`` and ``var`` are CrossGL value-identifier keywords.
     # Only these narrow names are rejected by the CrossGL parser as identifiers.
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
