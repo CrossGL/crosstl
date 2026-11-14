@@ -128,6 +128,25 @@ def test_preserves_pointer_and_constant_reference_layouts(
 
 
 @pytest.mark.parametrize(
+    "qualifiers",
+    [
+        "volatile device",
+        "volatile coherent(system) device",
+        "coherent(device) device",
+        "device coherent( system ) const",
+    ],
+)
+@pytest.mark.parametrize("indirection", ["*", "&"])
+def test_coherence_qualifiers_keep_the_device_layout(
+    tmp_path, qualifiers, indirection
+):
+    resource = _reflect(tmp_path, f"{qualifiers} uint{indirection}")
+    plain = _reflect(tmp_path, f"device uint{indirection}")
+    assert resource["scalarLayout"] == plain["scalarLayout"]
+    assert resource["scalarLayout"]["storageLayout"] == "metal-buffer"
+
+
+@pytest.mark.parametrize(
     "declaration",
     [
         "device float3&",
@@ -138,6 +157,10 @@ def test_preserves_pointer_and_constant_reference_layouts(
         "device constant int&",
         "thread int&",
         "device int**",
+        "coherent(system) constant uint&",
+        "coherent(threadgroup) device uint*",
+        "coherent(device) coherent(system) device uint*",
+        "volatile volatile device uint*",
     ],
 )
 def test_unproven_reference_layout_remains_unavailable(tmp_path, declaration):

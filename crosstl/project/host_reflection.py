@@ -838,17 +838,29 @@ def _metal_buffer_layout(
 ) -> dict[str, Any] | None:
     if resource["kind"] not in {"buffer", "constant-buffer"}:
         return None
+    # ``volatile`` and MSL 3.2's ``coherent(device|system)`` change how
+    # accesses are ordered and made visible, not the bytes they address.
     match = re.fullmatch(
-        r"(?P<qualifiers>(?:(?:const|device|constant)\s+)+)"
+        r"(?P<qualifiers>(?:(?:const|device|constant|volatile|"
+        r"coherent\s*\(\s*(?:device|system)\s*\))\s+)+)"
         r"(?P<type>[A-Za-z_]\w*)\s*(?P<reference>[*&])",
         resource["type"],
     )
     if match is None:
         return None
-    qualifiers = match.group("qualifiers").split()
+    qualifiers = [
+        re.sub(r"\s+", "", item)
+        for item in re.findall(
+            r"coherent\s*\(\s*\w+\s*\)|\w+", match.group("qualifiers")
+        )
+    ]
+    coherence = [item for item in qualifiers if item.startswith("coherent")]
     if (
         len(qualifiers) != len(set(qualifiers))
         or len(set(qualifiers) & {"device", "constant"}) != 1
+        or len(coherence) > 1
+        # Coherence qualifies device memory only.
+        or (coherence and "device" not in qualifiers)
     ):
         return None
     pointer = match.group("reference") == "*"
