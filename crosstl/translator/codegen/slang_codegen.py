@@ -408,7 +408,7 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
         self._generating = False
         self.semantic_map = {
             "gl_Position": "SV_Position",
-            "gl_PointSize": "PSIZE",
+            "gl_PointSize": "SV_PointSize",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
             "gl_VertexID": "SV_VertexID",
