@@ -2314,7 +2314,10 @@ def test_external_rocm_hip_complex_math_codegen_reparse():
     assert (
         "vec2<f32> accumulateDFT(f32 sample, vec2<f32> sum, " "i32 k, i32 n, i32 N)"
     ) in crossgl
-    assert "var w: vec2<f32> = vec2<f32>(cos(angle), sin(angle));" in crossgl
+    assert (
+        "var w: vec2<f32> = vec2<f32>(__cgl_libm_cos(angle), __cgl_libm_sin(angle));"
+        in crossgl
+    )
     assert (
         "return (sum + vec2<f32>(((x.x * w.x) - (x.y * w.y)), "
         "((x.x * w.y) + (x.y * w.x))));"

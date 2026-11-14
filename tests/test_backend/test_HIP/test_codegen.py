@@ -1371,8 +1371,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
 
         assert codegen.convert_hip_builtin_function("sqrtf") == "sqrt"
-        assert codegen.convert_hip_builtin_function("sinf") == "sin"
-        assert codegen.convert_hip_builtin_function("cosf") == "cos"
+        assert codegen.convert_hip_builtin_function("sinf") == "__cgl_libm_sin"
+        assert codegen.convert_hip_builtin_function("cosf") == "__cgl_libm_cos"
         assert codegen.convert_hip_builtin_function("fmodf") == "fmod"
         assert codegen.convert_hip_builtin_function("fmod") == "fmod"
         assert codegen.convert_hip_builtin_function("fminf") == "fmin"

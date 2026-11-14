@@ -40,6 +40,16 @@
       "outcome": "preserved",
       "sourceSHA256": "22e4367d07ca2757d8a662146cb12a0c41340d001f6b5b72423c737d6cf97a19"
     },
+    "c_cos_range|opencl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
     "c_fmin_nan|opencl|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "169fba4f996b245fd94d5109c950313e685a32bf632657d3de40d088930dd525",
       "outcome": "preserved",
@@ -1280,6 +1290,16 @@
       "outcome": "preserved",
       "sourceSHA256": "92417630cce716b64fdb9ccf9304f087012714325bd517a27ce6f91a8dd73595"
     },
+    "u_cosf_range|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
     "u_denorm|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "ed265f341fd68634c312fb7d3c8490d24649d0f4981927441951cc4d21db7d37",
       "outcome": "diverged",
@@ -1379,6 +1399,16 @@
       "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
       "outcome": "preserved",
       "sourceSHA256": "402a7bde42a92afa1719bbff4e7774c8cb9d945d089bed0ab5d6cfc753abe479"
+    },
+    "u_sinf_range|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
     },
     "u_sinf|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
@@ -2615,7 +2645,7 @@
     "diverged": 8,
     "interface-changed": 4,
     "observed": 25,
-    "preserved": 474,
+    "preserved": 480,
     "refused": 8
   },
   "keys": [

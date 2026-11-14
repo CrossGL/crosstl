@@ -3,7 +3,9 @@
 A template in ``rule_table.POLYFILLS`` names each operand exactly once, so it can be substituted in place. A polyfill
 that needs an operand twice, such as the zero test and the division of the ``udiv_zero`` family, is a helper
 function instead: the operation becomes a call, which evaluates each operand once, and the lowering pass injects the
-helper into the program. Vector operations call a per-lane lift of the scalar helper.
+helper into the program. Vector operations call a per-lane lift of the scalar helper. A helper whose body calls
+further reserved functions (``Helper.support``, such as the libm family's integer evaluation) brings them along:
+they are injected once per program, ahead of every helper.
 """
 
 from __future__ import annotations
@@ -57,17 +59,48 @@ def helper_source(intrinsic: str, lanes: int) -> str:
     )
 
 
-@functools.lru_cache(maxsize=None)
-def _parsed(intrinsic: str, lanes: int):
+def helper_program_source(intrinsic: str) -> str:
+    """A CrossGL program defining the scalar helper of ``intrinsic`` and every function it calls."""
+    support = HELPERS[intrinsic].support or ""
+    return (
+        "shader __cgl_rule_helpers {\n"
+        + (support.strip() + "\n" if support else "")
+        + helper_source(intrinsic, 1)
+        + "\n}\n"
+    )
+
+
+def _parse(text: str):
     from ..source_registry import SOURCE_REGISTRY, register_default_sources
 
     register_default_sources()
+    return SOURCE_REGISTRY.get("cgl").parse(text).functions
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed(intrinsic: str, lanes: int):
     text = (
         "shader __cgl_rule_helpers {\n    " + helper_source(intrinsic, lanes) + "\n}\n"
     )
-    program = SOURCE_REGISTRY.get("cgl").parse(text)
-    (function,) = program.functions
+    (function,) = _parse(text)
     return function
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed_support(intrinsic: str):
+    support = HELPERS[intrinsic].support
+    if not support:
+        return ()
+    functions = tuple(_parse("shader __cgl_rule_helpers {\n" + support + "\n}\n"))
+    if (
+        tuple(function.name for function in functions)
+        != HELPERS[intrinsic].support_names
+    ):
+        # An authoring error in the rule table, not a property of the program: an internal invariant.
+        raise AssertionError(
+            f"the support functions of {intrinsic} must all have reserved names"
+        )
+    return functions
 
 
 def helper_function(intrinsic: str, lanes: int):
@@ -75,6 +108,16 @@ def helper_function(intrinsic: str, lanes: int):
     function = clone(_parsed(intrinsic, lanes))
     function.annotations[HELPER_MARK] = intrinsic
     return function
+
+
+def support_functions(intrinsic: str):
+    """Fresh copies of the functions the helper of ``intrinsic`` calls, marked as rule helpers."""
+    functions = []
+    for function in _parsed_support(intrinsic):
+        copy = clone(function)
+        copy.annotations[HELPER_MARK] = intrinsic
+        functions.append(copy)
+    return functions
 
 
 def helper_body(intrinsic: str):
@@ -122,15 +165,20 @@ class HelperSet:
             )
         for needed in sorted({(intrinsic, 1), (intrinsic, lanes)}):
             name = helper_name(*needed)
-            known = self.existing.get(name)
-            if known is None:
+            self._reserve(name, intrinsic)
+            if name not in self.existing:
                 self.required.add(needed)
-            elif not is_helper(known):
-                raise self.error(
-                    f"the program defines {name}, a name reserved for the rule helper of {intrinsic}",
-                    target=self.target,
-                )
+        for name in HELPERS[intrinsic].support_names:
+            self._reserve(name, intrinsic)
         return call(helper_name(intrinsic, lanes), operands)
+
+    def _reserve(self, name, intrinsic):
+        known = self.existing.get(name)
+        if known is not None and not is_helper(known):
+            raise self.error(
+                f"the program defines {name}, a name reserved for the rule helper of {intrinsic}",
+                target=self.target,
+            )
 
     def inject(self):
         if not self.required:
@@ -141,8 +189,14 @@ class HelperSet:
                 f"the program has no function list to receive the rule helpers for {self.target}",
                 target=self.target,
             )
-        functions[0:0] = [
+        support = {}
+        for intrinsic, _ in sorted(self.required):
+            for function in support_functions(intrinsic):
+                if function.name not in self.existing:
+                    support.setdefault(function.name, function)
+        functions[0:0] = list(support.values()) + [
             helper_function(intrinsic, lanes)
             for intrinsic, lanes in sorted(self.required)
         ]
+        self.existing.update(support)
         self.required.clear()
