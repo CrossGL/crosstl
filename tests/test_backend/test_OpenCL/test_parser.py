@@ -17,6 +17,11 @@ def parse_code(source):
     return OpenCLParser(tokens).parse()
 
 
+def test_template_prefix_without_declaration_raises_syntax_error_at_eof():
+    with pytest.raises(SyntaxError):
+        parse_code("template <typename T>")
+
+
 def test_kernel_qualifier_before_return_type_parses():
     ast = parse_code("""
         kernel void saxpy(global float *out, const global float *x, float a) {

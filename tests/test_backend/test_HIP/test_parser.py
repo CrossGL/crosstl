@@ -44,6 +44,10 @@ class TestHipParser:
         parser = HipParser(tokens)
         return parser.parse()
 
+    def test_template_prefix_without_declaration_raises_syntax_error_at_eof(self):
+        with pytest.raises(SyntaxError):
+            self.parse_code("template <typename T>")
+
     def test_missing_semicolon_after_expression_statement_errors(self):
         code = """
         void host() {
