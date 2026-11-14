@@ -57,4 +57,4 @@ def test_user_defined_select_is_unchanged():
     )
     generated = generate("output[1] = select(10.0, 20.0, b);", helper)
     assert "select(10.0, 20.0, b)" in generated
-  
+
