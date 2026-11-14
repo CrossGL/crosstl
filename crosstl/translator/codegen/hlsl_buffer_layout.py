@@ -35,6 +35,7 @@ HLSL_BUFFER_LAYOUTS = (HLSL_CBUFFER_LAYOUT, HLSL_STRUCTURED_LAYOUT)
 CBUFFER_REGISTER_SIZE = 16
 
 HLSL_SCALAR_SIZES = {
+    "float16": 2,
     "bool": 4,
     "int": 4,
     "uint": 4,
