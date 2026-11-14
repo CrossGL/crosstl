@@ -17,6 +17,7 @@ HLSL ballot (``uint4``) receives both halves.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 __all__ = [
@@ -31,7 +32,7 @@ __all__ = [
 
 
 @dataclass(frozen=True)
-class WarpDialect:
+class WarpDialect(ABC):
     """How one language spells the warp-level primitives the helpers need."""
 
     mask_type: str
@@ -41,23 +42,29 @@ class WarpDialect:
     first_lane_function: str
     popcount_function: str
 
+    @abstractmethod
     def shuffle(self, mask: str, value: str, lane: str) -> str:
-        raise NotImplementedError
+        """``value`` read from lane ``lane`` of the lanes in ``mask``."""
 
+    @abstractmethod
     def shuffle_xor(self, mask: str, value: str, lane_mask: str) -> str:
-        raise NotImplementedError
+        """``value`` read from the lane whose index is this lane's XOR ``lane_mask``."""
 
+    @abstractmethod
     def ballot(self, mask: str, predicate: str) -> str:
-        raise NotImplementedError
+        """The mask of the lanes in ``mask`` whose ``predicate`` holds."""
 
+    @abstractmethod
     def vote(self, kind: str, mask: str, predicate: str) -> str:
-        raise NotImplementedError
+        """Whether ``predicate`` holds on any or all (``kind``) of the lanes in ``mask``."""
 
+    @abstractmethod
     def ballot_uint4(self, bits: str) -> str:
-        raise NotImplementedError
+        """``bits`` spread over the four 32-bit words of a ``uint4`` ballot."""
 
+    @abstractmethod
     def partition_mask(self, mask: str) -> str:
-        raise NotImplementedError
+        """The lanes in ``mask`` that hold the same value as this lane."""
 
     def first_lane(self, mask: str) -> str:
         return f"({self.first_lane_function}({mask}) - 1)"
@@ -188,7 +195,8 @@ def wave_combine_expression(operation: str, left: str, right: str) -> str:
         return f"(({right}) < ({left}) ? ({right}) : ({left}))"
     if operation == "WaveActiveMax":
         return f"(({right}) > ({left}) ? ({right}) : ({left}))"
-    raise ValueError(f"{operation} has no combining operator")
+    # The callers only reach here with the reductions and prefixes listed above.
+    raise AssertionError(f"{operation} has no combining operator")
 
 
 def wave_first_lane_test(dialect: WarpDialect, lane_index: str) -> str:
