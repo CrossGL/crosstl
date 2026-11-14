@@ -41,11 +41,25 @@ import hashlib
 # quotient rounded to the operand type, which differs by one where that
 # rounding reaches the next integer. Stock Metal fails 14 of 400 run seeds
 # (6, 24 and 34 among them) and the CPU none of 100; run seed 0 passes on both.
+#
+# test_scans compares float16 and bfloat16 cumsums of 32 uniform values with
+# products of a lower-triangular matrix summed in the same type, under rtol
+# 0.02 and atol 1e-3 (line 2707). The two add in different orders, and with
+# bfloat16's 8 significant bits their roundings can drift past that bound.
+# It also compares the float32 cumsum of 32768 normal values with NumPy's,
+# which adds them one by one in float32 and drifts up to 1.3e-3 from the
+# exact sums (Metal stays within 7e-5), under rtol and atol 1e-3 (line
+# 2638); near a zero crossing the bound is the atol alone. Stock Metal fails
+# 16 of 400 run seeds (13 at line 2707, 6 and 18 among them; 3 at line 2638,
+# 70 among them), and the CPU 2 of 100 (6 and 98, both at line 2707). Run
+# seed 0 passes on both, with its largest error at 0.51 of the bound on
+# Metal and 0.42 on the CPU.
 FIXED_RUN_SEEDS = {
     "test_ops.TestOps.test_softmax": 0,
     "test_blas.TestBlas.test_segmented_mm": 1,
     "test_blas.TestBlas.test_block_masked_matmul": 2,
     "test_ops.TestOps.test_divmod": 0,
+    "test_ops.TestOps.test_scans": 0,
 }
 
 
