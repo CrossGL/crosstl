@@ -10920,7 +10920,14 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             "exp2f": "exp2",
             "fabsf": "abs",
             "rsqrtf": "inversesqrt",
-            "roundf": "round",
+            # C11 7.12.9.6 round rounds halfway cases away from zero, which the round_away rule carries;
+            # rint and nearbyint round to nearest even in the default rounding mode (7.12.9.3-4).
+            "roundf": "__cgl_round_away",
+            "round": "__cgl_round_away",
+            "rintf": "roundEven",
+            "rint": "roundEven",
+            "nearbyintf": "roundEven",
+            "nearbyint": "roundEven",
             "truncf": "trunc",
             "atan2f": "atan2",
             "fmaf": "fma",

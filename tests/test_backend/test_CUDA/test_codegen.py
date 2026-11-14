@@ -1731,7 +1731,7 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "out[0] = inversesqrt(x);" in result
-        assert "out[1] = round(x);" in result
+        assert "out[1] = __cgl_round_away(x);" in result
         assert "out[2] = trunc(x);" in result
         assert "out[3] = exp2(x);" in result
         assert "out[4] = log2(x);" in result

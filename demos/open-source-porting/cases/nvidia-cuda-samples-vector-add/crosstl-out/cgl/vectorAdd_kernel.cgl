@@ -1,4 +1,4 @@
-#pragma cgl_rules(fp_ieee)
+#pragma cgl_rules(fp_ieee, round_away)
 // CUDA to CrossGL conversion
 // Kernel: vectorAdd
 @compute
