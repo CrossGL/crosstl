@@ -134,3 +134,80 @@ def test_outputs_compile_with_the_metal_compiler(tmp_path, name, source):
         cwd=tmp_path,
     )
     assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+READONLY_SB = textwrap.dedent(
+    """\
+    shader Test {
+        compute {
+            @stage_entry
+            void main(StructuredBuffer<float> in_ @buffer(0),
+                      RWStructuredBuffer<float> out_ @buffer(1),
+                      uint id @gl_GlobalInvocationID) {
+                float* s = in_;
+                out_[id] = s[id];
+            }
+        }
+    }
+    """
+)
+
+CHAINED_SB = textwrap.dedent(
+    """\
+    shader Test {
+        compute {
+            @stage_entry
+            void main(StructuredBuffer<float> in_ @buffer(0),
+                      RWStructuredBuffer<float> out_ @buffer(1),
+                      uint id @gl_GlobalInvocationID) {
+                float* s = in_;
+                float* t = s;
+                out_[id] = t[id];
+            }
+        }
+    }
+    """
+)
+
+READWRITE_SB = textwrap.dedent(
+    """\
+    shader Test {
+        compute {
+            @stage_entry
+            void main(RWStructuredBuffer<float> in_ @buffer(0),
+                      RWStructuredBuffer<float> out_ @buffer(1),
+                      uint id @gl_GlobalInvocationID) {
+                float* s = in_;
+                out_[id] = s[id];
+            }
+        }
+    }
+    """
+)
+
+
+def _cgl(tmp_path, source):
+    path = tmp_path / "shader.cgl"
+    path.write_text(source, encoding="utf-8")
+    return crosstl.translate(str(path), backend="metal", format_output=False)
+
+
+def test_readonly_structured_buffer_ptr_local_is_const(tmp_path):
+    """ptr<T> local from StructuredBuffer<T> must carry const (issue #3722)."""
+    code = _cgl(tmp_path, READONLY_SB)
+    assert "const device float* s = in_;" in code, code
+    assert "device float* s = in_;" not in code.replace("const ", ""), code
+
+
+def test_chained_ptr_local_keeps_const(tmp_path):
+    """A ptr<T> local derived from a const ptr<T> also carries const."""
+    code = _cgl(tmp_path, CHAINED_SB)
+    assert "const device float* s = in_;" in code, code
+    assert "const device float* t = s;" in code, code
+
+
+def test_readwrite_structured_buffer_ptr_local_has_no_const(tmp_path):
+    """ptr<T> local from RWStructuredBuffer<T> must not carry const."""
+    code = _cgl(tmp_path, READWRITE_SB)
+    assert "const device float* s" not in code, code
+    assert "device float* s = in_;" in code, code
