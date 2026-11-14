@@ -3679,7 +3679,16 @@ class CudaCodeGen(
         if pointer_math_call is not None:
             return pointer_math_call
 
-        if func_name in {"dot", "cross", "distance", "length", "normalize"}:
+        if func_name in {
+            "dot",
+            "cross",
+            "distance",
+            "length",
+            "normalize",
+            "reflect",
+            "refract",
+            "faceforward",
+        }:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
@@ -7968,6 +7977,9 @@ class CudaCodeGen(
                 and not self.is_user_defined_function(func_name)
             ):
                 return self.expression_result_type(raw_args[0])
+            reflection_result_type = self.reflection_result_type(func_name, raw_args)
+            if reflection_result_type is not None:
+                return reflection_result_type
             bitcast_result_type = self.cuda_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
