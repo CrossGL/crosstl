@@ -16,6 +16,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
@@ -46,6 +47,17 @@ SELECTS = """shader Selects {
             vec2 h = mix(vec2(values[i]), vec2(0.0), c);
             float w = mix(values[i], 2.0, 0.25);
             values[i] = f + g.z + h.y + w;
+        }
+    }
+}"""
+
+MATRIX_SELECT = """shader MatrixSelect {
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uvec3 id @gl_GlobalInvocationID) {
+            mat3 m0 = mat3(1.0);
+            mat3 m1 = mat3(2.0);
+            mat3 chosen = select(m1, m0, id.x == 0u);
         }
     }
 }"""
@@ -206,6 +218,24 @@ def test_wgsl_boolean_mix_is_select(tmp_path):
     # WGSL's select accepts a scalar condition with vector values, so it is not splatted.
     assert "select(vec2<f32>(values[i]), vec2<f32>(0.0), c)" in wgsl
     assert "mix(values[i], 2.0, 0.25)" in wgsl
+    _naga_validates(wgsl, tmp_path)
+
+
+def test_matrix_select_lowers_to_a_conditional_on_source_backends(tmp_path):
+    glsl = GLSLCodeGen().generate(parse(MATRIX_SELECT))
+    metal = MetalCodeGen().generate(parse(MATRIX_SELECT))
+    slang = SlangCodeGen().generate(parse(MATRIX_SELECT))
+    wgsl = WGSLCodeGen().generate(parse(MATRIX_SELECT))
+
+    assert "((gl_GlobalInvocationID.x == 0u) ? m0 : m1)" in glsl
+    assert "(id.x == 0u ? m0 : m1)" in metal
+    assert "(id.x == 0u ? m0 : m1)" in slang
+    assert "var chosen: mat3x3<f32>;" in wgsl
+    assert "if ((id.x == 0u))" in wgsl
+    assert "chosen = m0;" in wgsl
+    assert "chosen = m1;" in wgsl
+    assert "select(m1, m0" not in glsl + metal + slang + wgsl
+    _metal_compiles(metal, tmp_path)
     _naga_validates(wgsl, tmp_path)
 
 

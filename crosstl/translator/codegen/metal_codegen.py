@@ -12891,6 +12891,22 @@ class MetalCodeGen(
                 callee = self.generate_expression(func_expr)
 
             if (
+                func_name == "select"
+                and func_name not in self.user_function_names
+                and len(expr.args) == 3
+                and all(
+                    self.is_matrix_value_type(self.expression_result_type(argument))
+                    for argument in expr.args[:2]
+                )
+            ):
+                false_value, true_value, condition = expr.args
+                return (
+                    f"({self.generate_expression(condition)} ? "
+                    f"{self.generate_expression(true_value)} : "
+                    f"{self.generate_expression(false_value)})"
+                )
+
+            if (
                 func_name in PACK_FUNCTIONS
                 and func_name not in self.user_function_names
             ):

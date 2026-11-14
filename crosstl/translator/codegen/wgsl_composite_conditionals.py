@@ -26,6 +26,7 @@ from ..ast import (
     AssignmentNode,
     BlockNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
     IfNode,
     SwizzleNode,
@@ -65,6 +66,7 @@ class WGSLCompositeConditionalMixin:
             stmt = stmt.expression
         if isinstance(stmt, VariableNode):
             value = stmt.initial_value
+            value = self.matrix_select_as_ternary(value)
             if not isinstance(value, TernaryOpNode):
                 return None
             var_type = self.local_variable_declaration_type(stmt)
@@ -87,6 +89,7 @@ class WGSLCompositeConditionalMixin:
             return [declaration, AssignmentNode(IdentifierNode(stmt.name), value)]
         if isinstance(stmt, AssignmentNode):
             value = stmt.value
+            value = self.matrix_select_as_ternary(value)
             if stmt.operator != "=" or not isinstance(value, TernaryOpNode):
                 return None
             if self.is_select_operand_type(self.expression_type(stmt.target)):
@@ -99,6 +102,24 @@ class WGSLCompositeConditionalMixin:
                 )
             ]
         return None
+
+    def matrix_select_as_ternary(self, expression):
+        """Return the conditional represented by a built-in matrix ``select`` call."""
+        if not isinstance(expression, FunctionCallNode):
+            return expression
+        function_name = self.expression_name(expression.function)
+        arguments = expression.arguments
+        if function_name != "select" or len(arguments) != 3:
+            return expression
+        if self.resolve_function_overload(function_name, arguments) is not None:
+            return expression
+        if not all(
+            self.matrix_shape(self.expression_type(argument)) is not None
+            for argument in arguments[:2]
+        ):
+            return expression
+        false_value, true_value, condition = arguments
+        return TernaryOpNode(condition, true_value, false_value)
 
     def require_select_operands(self, expr):
         """Refuse the conditional ``expr`` when ``select`` cannot take its branches."""

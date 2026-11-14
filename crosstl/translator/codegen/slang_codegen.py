@@ -10124,6 +10124,21 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            if (
+                callee == "select"
+                and callee not in self.user_function_names
+                and len(node.args) == 3
+                and all(
+                    self.is_matrix_value_type(self.expression_result_type(argument))
+                    for argument in node.args[:2]
+                )
+            ):
+                false_value, true_value, condition = node.args
+                return (
+                    f"({self.generate_expression(condition)} ? "
+                    f"{self.generate_expression(true_value)} : "
+                    f"{self.generate_expression(false_value)})"
+                )
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,
                 func_expr,
