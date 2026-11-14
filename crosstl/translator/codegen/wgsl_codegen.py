@@ -5085,16 +5085,23 @@ class WGSLCodeGen(
         resolution (GLSL 4.60 sections 4.1.10 and 6.1), while WGSL has no implicit
         conversions and a built-in takes one type for every argument. The integer
         argument is written as ``f32(...)``, or as ``vecN<f32>(f32(...))`` beside a
-        float vector; a scalar beside a float vector is replicated as before.
+        float vector; a scalar beside a float vector is replicated as before, and
+        an ``ivecN`` or ``uvecN`` argument is converted to ``vecN<f32>``.
         """
         if not self.is_float_builtin_call(function_name, arguments):
             return None
         argument_types = [self.expression_type(arg) for arg in arguments]
         rendered = [self.generate_expression(arg) for arg in arguments]
+        shapes = [self.vector_shape(argument_type) for argument_type in argument_types]
+        # An f32 vector fixes the component type and width of the whole call. A
+        # float-only built-in called with integer vectors only, such as length(iv),
+        # has no f32 vector, and then the first vector still fixes the width.
         vector_shape = next(
-            (shape for shape in map(self.vector_shape, argument_types) if shape),
+            (shape for shape in shapes if shape is not None and shape[0] == "f32"),
             None,
         )
+        if vector_shape is None:
+            vector_shape = next((shape for shape in shapes if shape is not None), None)
         for index, arg in enumerate(arguments):
             argument_type = argument_types[index]
             scalar = self.scalar_type_name(argument_type)
@@ -5106,7 +5113,11 @@ class WGSLCodeGen(
                     rendered[index] = f"f32({rendered[index]})"
                 continue
             component, size = vector_shape
-            if component != "f32" or self.vector_shape(argument_type) is not None:
+            shape = shapes[index]
+            if shape is not None:
+                # GLSL converts an ivecN or uvecN argument to vecN (section 4.1.10).
+                if shape[0] != "f32" and shape[1] == size:
+                    rendered[index] = f"vec{size}<f32>({rendered[index]})"
                 continue
             literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
             if integer:
@@ -5121,6 +5132,12 @@ class WGSLCodeGen(
             return None
         if function_name in self.COMPONENT_RESULT_BUILTINS:
             argument_type = self.expression_type(arguments[0])
+            if function_name in self.FLOAT_ONLY_BUILTINS and (
+                self.vector_shape(argument_type) is not None
+            ):
+                # length, distance and dot have floating-point overloads only (GLSL
+                # 4.60 section 8.5), and an ivecN argument is converted to vecN.
+                return "f32"
             component = self.vector_component_type(argument_type)
             if component is not None:
                 return component
@@ -5129,14 +5146,39 @@ class WGSLCodeGen(
             return self.scalar_type_name(argument_type)
         if function_name in self.COMPONENTWISE_MATH_BUILTINS:
             argument_types = [self.expression_type(arg) for arg in arguments]
+            float_call = function_name in self.FLOAT_ONLY_BUILTINS or any(
+                self.is_float_argument(arg) for arg in arguments
+            )
+            if float_call:
+                # The call is emitted with f32 arguments: its result has the float
+                # vector's type, the converted integer vector's width, or f32.
+                float_vector = next(
+                    (
+                        argument_type
+                        for argument_type in argument_types
+                        if self.vector_component_type(argument_type) == "f32"
+                    ),
+                    None,
+                )
+                if float_vector is not None:
+                    return float_vector
+                integer_vector = next(
+                    (
+                        shape
+                        for shape in map(self.vector_shape, argument_types)
+                        if shape is not None
+                    ),
+                    None,
+                )
+                if integer_vector is not None:
+                    return f"vec{integer_vector[1]}<f32>"
+                return "f32"
             vector_type = next(
                 (t for t in argument_types if self.vector_shape(t) is not None), None
             )
             if vector_type is not None:
                 return vector_type
             scalars = [self.scalar_type_name(t) for t in argument_types]
-            if function_name in self.FLOAT_ONLY_BUILTINS or "f32" in scalars:
-                return "f32"
             if scalars[0] is not None:
                 return argument_types[0]
         return None

@@ -349,6 +349,9 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
         buffer float* fo;
         buffer int* io;
         buffer uint* uo;
+        buffer ivec2* iio;
+        buffer ivec3* iio3;
+        buffer vec3* go;
         compute {
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
             void main() {
@@ -356,6 +359,10 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
                 vec2 v = vec2(fo[1], fo[2]);
                 int k = io[0];
                 uint u = uo[0];
+                ivec2 iv = iio[0];
+                uvec2 uv = uvec2(uo[1], uo[2]);
+                ivec3 iv3 = iio3[0];
+                vec3 v3 = go[0];
                 float a = max(f, k);
                 float b = min(k, f);
                 float c = max(f, u);
@@ -374,7 +381,16 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
                 float r = max(k, f);
                 float s = max(f, 1);
                 int t = max(k, 1);
-                fo[3] = a + b + c + d.x + e + g + h + i + j.x + l + m + n + o + p + q.x + r + s + t;
+                vec2 u1 = max(v, iv);
+                vec2 u2 = max(v, uv);
+                vec3 u3 = clamp(iv3, 0.0, 1.0);
+                vec2 u4 = clamp(v, iv, vec2(5.0));
+                float u5 = distance(v, iv);
+                vec3 u6 = mix(iv3, v3, 0.25);
+                float u7 = dot(v, iv);
+                float u8 = length(iv);
+                vec2 u9 = normalize(iv);
+                fo[3] = a + b + c + d.x + e + g + h + i + j.x + l + m + n + o + p + q.x + r + s + float(t) + u1.x + u2.y + u3.x + u4.x + u5 + u6.y + u7 + u8 + u9.x;
             }
         }
     }
@@ -404,6 +420,20 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
     # An abstract integer literal needs no conversion, and an integer call keeps its type.
     assert "var s: f32 = max(f, 1);" in generated
     assert "var t: i32 = max(k, 1);" in generated
+    # An ivecN or uvecN argument beside a float argument converts to vecN<f32>,
+    # and a float vector fixes the result type of a mixed call (#4503).
+    assert "var u1: vec2<f32> = max(v, vec2<f32>(iv));" in generated
+    assert "var u2: vec2<f32> = max(v, vec2<f32>(uv));" in generated
+    assert (
+        "var u3: vec3<f32> = clamp(vec3<f32>(iv3), vec3<f32>(0.0), vec3<f32>(1.0));"
+        in generated
+    )
+    assert "var u4: vec2<f32> = clamp(v, vec2<f32>(iv), vec2<f32>(5.0));" in generated
+    assert "var u5: f32 = distance(v, vec2<f32>(iv));" in generated
+    assert "var u6: vec3<f32> = mix(vec3<f32>(iv3), v3, vec3<f32>(0.25));" in generated
+    assert "var u7: f32 = dot(v, vec2<f32>(iv));" in generated
+    assert "var u8: f32 = length(vec2<f32>(iv));" in generated
+    assert "var u9: vec2<f32> = normalize(vec2<f32>(iv));" in generated
     validate_wgsl_with_naga(tmp_path, generated)
 
 
