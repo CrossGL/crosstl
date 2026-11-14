@@ -5,6 +5,7 @@ import pytest
 import crosstl.translator as cgl_translator
 from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
+from crosstl.translator.refusals import CrossGLRefusal
 
 EXTERNAL_REPOS = {
     "shader-slang/slang": {
@@ -1801,12 +1802,18 @@ EXTERNAL_FIXTURES = [
         """
         ),
         "crossgl": True,
+        "crossgl_refused": (
+            "Missing cross-stage interface output from vertex to fragment for "
+            "semantic texcoord0"
+        ),
         "contains": [
             "struct Vertex {",
             "vec3 position @ in_Position;",
             "vec4 svPosition @ gl_Position;",
             "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",
+            "VsOutput vertexMain(Vertex input) @ stage_entry",
+            "vec4 fragmentMain(Vertex v,",
         ],
     },
     {
@@ -2459,7 +2466,12 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
         assert rejected not in generated
 
     if fixture.get("crossgl", False):
-        cgl_translator.parse(generated)
+        crossgl_refused = fixture.get("crossgl_refused")
+        if crossgl_refused is None:
+            cgl_translator.parse(generated)
+        else:
+            with pytest.raises(CrossGLRefusal, match=re.escape(crossgl_refused)):
+                cgl_translator.parse(generated)
 
 
 def test_structured_buffer_of_pointers_is_refused():
