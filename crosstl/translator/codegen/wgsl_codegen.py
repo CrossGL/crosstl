@@ -4242,7 +4242,10 @@ class WGSLCodeGen(
                 return dispatch_call
         if (
             resolved_function is None
-            and function_name in self.FLOAT_ARGUMENT_BUILTINS
+            and (
+                function_name in self.FLOAT_ARGUMENT_BUILTINS
+                or function_name in self.FLOAT_ONLY_BUILTINS
+            )
             and isinstance(node.function, IdentifierNode)
             and not self.is_user_function_name(function_name)
         ):
@@ -4761,6 +4764,49 @@ class WGSLCodeGen(
             "fma",
         }
     )
+    # GLSL math built-ins declared only for floating-point arguments, whose int or
+    # uint argument GLSL converts to float even when no argument is floating point
+    # (GLSL 4.60 sections 8.1-8.5). min, max, clamp, mix, abs and sign also have
+    # integer overloads and are not listed.
+    FLOAT_ONLY_BUILTINS = frozenset(
+        {
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "floor",
+            "ceil",
+            "fract",
+            "round",
+            "roundEven",
+            "trunc",
+            "mod",
+            "step",
+            "smoothstep",
+            "fma",
+            "length",
+            "distance",
+            "dot",
+            "normalize",
+        }
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -5106,11 +5152,14 @@ class WGSLCodeGen(
     def float_call_component(self, function_name, arguments):
         """The float type an int or uint argument of a float built-in call is converted to.
 
-        Returns ``f32`` or ``f16`` when ``function_name`` is one of FLOAT_ARGUMENT_BUILTINS
-        and an argument other than an abstract integer literal is an integer while
-        another is floating point, else None.
+        Returns ``f32`` or ``f16`` when an argument other than an abstract integer
+        literal is an integer and either ``function_name`` is one of
+        FLOAT_ARGUMENT_BUILTINS and another argument is floating point, or
+        ``function_name`` is one of FLOAT_ONLY_BUILTINS (``f32`` when no argument is
+        floating point). Else None.
         """
-        if function_name not in self.FLOAT_ARGUMENT_BUILTINS:
+        float_only = function_name in self.FLOAT_ONLY_BUILTINS
+        if function_name not in self.FLOAT_ARGUMENT_BUILTINS and not float_only:
             return None
         components = [
             self.call_argument_component(arg, arg_type)
@@ -5118,9 +5167,11 @@ class WGSLCodeGen(
                 arguments, (self.expression_type(arg) for arg in arguments)
             )
         ]
-        float_component = next((c for c in components if c in {"f32", "f16"}), None)
-        if float_component is None or not ({"i32", "u32"} & set(components)):
+        if not {"i32", "u32"} & set(components):
             return None
+        float_component = next((c for c in components if c in {"f32", "f16"}), None)
+        if float_component is None and float_only:
+            return "f32"
         return float_component
 
     def call_argument_component(self, arg, arg_type):

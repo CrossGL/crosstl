@@ -453,6 +453,73 @@ def test_wgsl_codegen_types_float_builtin_call_with_integer_first_argument(
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_integer_arguments_of_float_only_builtins(tmp_path):
+    # sqrt, sin, length, dot and the other float-only built-ins have no integer
+    # overload, so GLSL converts an int or uint argument even when no other
+    # argument is floating point (#4503).
+    shader = """
+    shader Probe {
+        buffer float* fo;
+        buffer int* io;
+        buffer uint* uo;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec2 v = vec2(fo[0], fo[1]);
+                int k = io[0];
+                int j = io[1];
+                uint u = uo[0];
+                ivec2 iv = ivec2(k, j);
+                float a = sqrt(k);
+                float b = sin(u);
+                float c = floor(k) + exp2(k) + fract(u) + atan(k);
+                float d = inversesqrt(k) + radians(u) + log(k);
+                float e = length(iv);
+                vec2 g = normalize(iv);
+                float h = dot(v, iv);
+                float m = dot(iv, iv);
+                vec2 n = sqrt(iv);
+                float o = pow(k, j) + distance(k, j) + atan(k, j);
+                float p = mod(k, j);
+                int q = abs(k) + max(k, j) + clamp(k, 0, 7);
+                float r = sqrt(4);
+                fo[2] = a + b + c + d + e + g.x + h + m + n.x + o + p + float(q) + r;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: f32 = sqrt(f32(k));" in generated
+    assert "var b: f32 = sin(f32(u));" in generated
+    assert (
+        "var c: f32 = (((floor(f32(k)) + exp2(f32(k))) + fract(f32(u))) "
+        "+ atan(f32(k)));" in generated
+    )
+    assert (
+        "var d: f32 = ((inverseSqrt(f32(k)) + radians(f32(u))) + log(f32(k)));"
+        in generated
+    )
+    assert "var e: f32 = length(vec2<f32>(iv));" in generated
+    assert "var g: vec2<f32> = normalize(vec2<f32>(iv));" in generated
+    assert "var h: f32 = dot(v, vec2<f32>(iv));" in generated
+    assert "var m: f32 = dot(vec2<f32>(iv), vec2<f32>(iv));" in generated
+    assert "var n: vec2<f32> = sqrt(vec2<f32>(iv));" in generated
+    assert (
+        "var o: f32 = ((pow(f32(k), f32(j)) + distance(f32(k), f32(j))) "
+        "+ atan2(f32(k), f32(j)));" in generated
+    )
+    assert "var p: f32 = ((f32(k)) - ((f32(j)) * floor((f32(k)) / (f32(j)))));" in (
+        generated
+    )
+    # abs, min, max and clamp have integer overloads.
+    assert "var q: i32 = ((abs(k) + max(k, j)) + clamp(k, 0, 7));" in generated
+    # Integer literals are abstract in WGSL and stay as written.
+    assert "sqrt(4)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
