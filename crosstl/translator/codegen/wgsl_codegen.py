@@ -3838,7 +3838,9 @@ class WGSLCodeGen(
         target = self.ternary_conversion_target(false_name, true_name)
         if target is not None:
             return target
-        return true_name
+        # No conversion makes the branches match, so leave the declaration
+        # unresolved and let the emitter refuse it.
+        return None
 
     def is_integer_literal_expression(self, expr):
         if isinstance(expr, UnaryOpNode) and expr.operator in {"+", "-"}:
@@ -8361,6 +8363,19 @@ class WGSLCodeGen(
                 or self.scalar_type_name(operand_type) is not None
             ):
                 return operand_type
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "!"
+            and not expr.is_postfix
+        ):
+            # `!` keeps the operand's shape: a bvec stays a bvec, and only a
+            # scalar bool becomes `bool`.
+            operand_type = self.expression_type(expr.operand)
+            shape = self.vector_shape(operand_type)
+            if shape is not None and shape[0] == "bool":
+                return f"vec{shape[1]}<bool>"
+            if self.scalar_type_name(operand_type) == "bool":
+                return "bool"
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
             function_name = self.expression_name(expr.function)
