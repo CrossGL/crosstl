@@ -89,6 +89,36 @@ _ELEMENTWISE_INTRINSICS = frozenset(
 _SCALAR_RESULT_INTRINSICS = frozenset({"determinant", "distance", "dot", "length"})
 # Vector or matrix results whatever the operands; these are never splatted.
 _AGGREGATE_RESULT_INTRINSICS = frozenset({"transpose"})
+_RAYTRACING_MATRIX_INTRINSICS = {
+    "ObjectToWorld": "float3x4",
+    "ObjectToWorld3x4": "float3x4",
+    "ObjectToWorld4x3": "float4x3",
+    "WorldToObject": "float3x4",
+    "WorldToObject3x4": "float3x4",
+    "WorldToObject4x3": "float4x3",
+}
+_HIT_OBJECT_MATRIX_METHODS = {
+    "GetObjectToWorld3x4": "float3x4",
+    "GetObjectToWorld4x3": "float4x3",
+    "GetWorldToObject3x4": "float3x4",
+    "GetWorldToObject4x3": "float4x3",
+}
+_RAY_QUERY_MATRIX_METHODS = {
+    "CandidateObjectToWorld3x4": "float3x4",
+    "CandidateObjectToWorld4x3": "float4x3",
+    "CandidateWorldToObject3x4": "float3x4",
+    "CandidateWorldToObject4x3": "float4x3",
+    "CommittedObjectToWorld3x4": "float3x4",
+    "CommittedObjectToWorld4x3": "float4x3",
+    "CommittedWorldToObject3x4": "float3x4",
+    "CommittedWorldToObject4x3": "float4x3",
+}
+_HIT_OBJECT_STATIC_ARITIES = {
+    "FromRayQuery": frozenset({1, 3}),
+    "MakeMiss": frozenset({3}),
+    "MakeNop": frozenset({0}),
+    "TraceRay": frozenset({8}),
+}
 # Scalar for scalar operands, the operands' shape otherwise.
 _OPERAND_SHAPED_INTRINSICS = frozenset({"and", "mul", "or", "select"})
 _FLOAT_TYPES = frozenset(
@@ -283,6 +313,67 @@ class HLSLMatrixImportMixin:
                 shape = self.matrix_expression_shape(arg)
                 if shape is not None:
                     return shape
+        return self.hlsl_matrix_shape(self.raytracing_matrix_call_raw_type(expr))
+
+    def is_builtin_hit_object_type(self, raw_type):
+        if not raw_type:
+            return False
+        base = self.raw_type_base(self.resolve_integer_alias(raw_type))
+        if base == "dx::HitObject":
+            return "dx::HitObject" not in self.struct_type_names
+        return base == "HitObject" and "HitObject" not in self.struct_type_names
+
+    def is_builtin_ray_query_type(self, raw_type):
+        if not raw_type:
+            return False
+        base = self.raw_type_base(self.resolve_integer_alias(raw_type))
+        return base == "RayQuery" and "RayQuery" not in self.struct_type_names
+
+    def hit_object_static_call_raw_type(self, expr):
+        if not (isinstance(expr, FunctionCallNode) and isinstance(expr.name, str)):
+            return None
+        if expr.name in self.source_function_names:
+            return None
+        scoped = expr.name.removeprefix("::")
+        if "::" not in scoped:
+            return None
+        owner, member = scoped.rsplit("::", 1)
+        arities = _HIT_OBJECT_STATIC_ARITIES.get(member)
+        if arities is None or len(expr.args or []) not in arities:
+            return None
+        if owner in getattr(self, "struct_methods", {}):
+            return None
+        return "dx::HitObject" if self.is_builtin_hit_object_type(owner) else None
+
+    def raytracing_matrix_call_raw_type(self, expr):
+        if not isinstance(expr, FunctionCallNode) or expr.args:
+            return None
+        if isinstance(expr.name, str):
+            if expr.name in self.source_function_names:
+                return None
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            if name in self.source_function_names:
+                return None
+            return _RAYTRACING_MATRIX_INTRINSICS.get(name)
+        if isinstance(expr.name, MemberAccessNode):
+            member = expr.name.member
+            if not isinstance(member, str):
+                return None
+            if (
+                member not in _HIT_OBJECT_MATRIX_METHODS
+                and member not in _RAY_QUERY_MATRIX_METHODS
+            ):
+                return None
+            if self.matrix_operand_is_array(expr.name.object):
+                return None
+            try:
+                receiver_type = self.struct_method_receiver_type(expr.name.object)
+            except ValueError:
+                return None
+            if self.is_builtin_hit_object_type(receiver_type):
+                return _HIT_OBJECT_MATRIX_METHODS.get(member)
+            if self.is_builtin_ray_query_type(receiver_type):
+                return _RAY_QUERY_MATRIX_METHODS.get(member)
         return None
 
     def matrix_operand_is_array(self, expr):
@@ -934,11 +1025,14 @@ class HLSLMatrixImportMixin:
                 for part in (expr.condition, expr.true_expr, expr.false_expr)
             )
         if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            if self.raytracing_matrix_call_raw_type(expr) is not None:
+                return True
             name = self.normalize_hlsl_intrinsic_name(expr.name)
             return (
                 name
                 in _ELEMENTWISE_INTRINSICS
                 | _SCALAR_RESULT_INTRINSICS
+                | _AGGREGATE_RESULT_INTRINSICS
                 | _REINTERPRET_INTRINSICS
                 | _OPERAND_SHAPED_INTRINSICS
                 and name not in self.source_function_names
@@ -947,6 +1041,8 @@ class HLSLMatrixImportMixin:
         if isinstance(expr, FunctionCallNode) and isinstance(
             expr.name, MemberAccessNode
         ):
+            if self.raytracing_matrix_call_raw_type(expr) is not None:
+                return self.matrix_operand_is_pure(expr.name.object)
             method = self.source_struct_method(expr.name)
             return (
                 method is not None
