@@ -382,3 +382,87 @@ def test_spirv_negative_lod_offset_uses_const_offset(tmp_path):
 def test_spirv_refuses_non_constant_offsets_outside_gathers(tmp_path, call):
     with pytest.raises(Exception, match=SPIRV_REFUSAL):
         _translate(tmp_path, _fragment(f"sum += {call};"), "vulkan")
+
+
+# HLSL input forms with negative offsets -------------------------------------------------------------------------
+HLSL_1D_NEGATIVE_OFFSET = """\
+Texture1D<float4> tex : register(t0);
+SamplerState s : register(s0);
+float4 main(float u : TEXCOORD0) : SV_Target {
+    return tex.Sample(s, u, -1);
+}
+"""
+
+HLSL_1D_NEGATIVE_SHADOW_OFFSET = """\
+Texture1D<float> tex : register(t0);
+SamplerComparisonState cs : register(s0);
+float main(float u : TEXCOORD0) : SV_Target {
+    return tex.SampleCmp(cs, u, 0.5, -1);
+}
+"""
+
+HLSL_1DARRAY_NEGATIVE_SHADOW_OFFSET = """\
+Texture1DArray<float> tex : register(t0);
+SamplerComparisonState cs : register(s0);
+float main(float2 uv : TEXCOORD0) : SV_Target {
+    return tex.SampleCmpLevelZero(cs, uv, 0.5, -1);
+}
+"""
+
+
+def test_spirv_hlsl_texture1d_sample_negative_offset(tmp_path):
+    """Texture1D.Sample with offset -1 must lower to ConstOffset and pass spirv-val."""
+    code = _translate(tmp_path, HLSL_1D_NEGATIVE_OFFSET, "vulkan", suffix="hlsl")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code), (
+        "Expected ConstOffset in SPIR-V output"
+    )
+    assert not re.search(r"(?<!Const)Offset %", code), (
+        "Found non-constant Offset operand"
+    )
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_hlsl_texture1d_samplecmp_negative_offset(tmp_path):
+    """Texture1D.SampleCmp with offset -1 must lower to ConstOffset and pass spirv-val."""
+    code = _translate(tmp_path, HLSL_1D_NEGATIVE_SHADOW_OFFSET, "vulkan", suffix="hlsl")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code), (
+        "Expected ConstOffset in SPIR-V output"
+    )
+    assert not re.search(r"(?<!Const)Offset %", code), (
+        "Found non-constant Offset operand"
+    )
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_hlsl_texture1darray_samplecmplevelzero_negative_offset(tmp_path):
+    """Texture1DArray.SampleCmpLevelZero with offset -1 must lower to ConstOffset and pass spirv-val."""
+    code = _translate(tmp_path, HLSL_1DARRAY_NEGATIVE_SHADOW_OFFSET, "vulkan", suffix="hlsl")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code), (
+        "Expected ConstOffset in SPIR-V output"
+    )
+    assert not re.search(r"(?<!Const)Offset %", code), (
+        "Found non-constant Offset operand"
+    )
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_negated_vector_constructor_uses_const_offset(tmp_path):
+    """-(ivec2(3, -4)) must lower to ConstOffset, not be refused."""
+    body = "sum += textureOffset(colorMap, uv, -(ivec2(3, -4)));"
+    code = _translate(tmp_path, _fragment(body), "vulkan")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code), (
+        "Expected ConstOffset for negated vector constructor"
+    )
+    assert not re.search(r"(?<!Const)Offset %", code), (
+        "Found non-constant Offset operand"
+    )
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_negated_non_constant_offset_is_refused(tmp_path):
+    """A negated non-constant offset (-k where k is uniform) must still raise SpirvLoweringRefused."""
+    from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+
+    body = "sum += textureOffset(colorMap, uv, ivec2(-k, 0));"
+    with pytest.raises((Exception, SpirvLoweringRefused), match=SPIRV_REFUSAL):
+        _translate(tmp_path, _fragment(body), "vulkan")
