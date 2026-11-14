@@ -6778,6 +6778,10 @@ def test_wgsl_codegen_converts_int_conditional_branches_to_the_other_type():
                 float f = k > 2 ? k : 0.5;
                 uvec2 w = k > 3 ? uvec2(1u, 2u) : ivec2(k, -1);
                 uint same = k > 4 ? 6u : 7u;
+                uint u = 8u;
+                float g = 0.5;
+                float h = k > 5 ? u : g;
+                vec2 v = k > 6 ? uvec2(u, 1u) : vec2(g);
                 return;
             }
         }
@@ -6795,5 +6799,8 @@ def test_wgsl_codegen_converts_int_conditional_branches_to_the_other_type():
     assert (
         "select(vec2<u32>(vec2<i32>(k, -1)), vec2<u32>(1u, 2u), (k > 3))" in generated
     )
+    # The same rule converts a uint branch to float, scalar and per component.
+    assert "select(g, f32(u), (k > 5))" in generated
+    assert "select(vec2<f32>(g), vec2<f32>(vec2<u32>(u, 1u)), (k > 6))" in generated
     # Branches that already share a type are left alone.
     assert "select(7u, 6u, (k > 4))" in generated

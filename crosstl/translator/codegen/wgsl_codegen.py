@@ -3796,28 +3796,32 @@ class WGSLCodeGen(
         except ValueError:
             return None
 
-    def ternary_int_conversion_target(self, branch_type, other_type):
-        """Return the type an `int` ternary branch converts to, or None.
+    ternary_scalar_ranks = {"i32": 0, "u32": 1, "f32": 2}
 
-        GLSL 4.60 §5.8 converts an `int` operand of the conditional operator to
-        the other operand's `uint` or `float` type, and §4.1.10 does the same
-        per component for vectors. WGSL has no implicit conversion and `select`
-        requires both operands to share a type, so the conversion has to be
-        written out.
+    def ternary_conversion_target(self, branch_type, other_type):
+        """Return the type a ternary branch converts to, or None.
+
+        GLSL 4.60 §5.8 lets the conditional operator apply the implicit
+        conversions of §4.1.10 to the operands: `int` to `uint` or `float`,
+        and `uint` to `float`, per component for vectors. WGSL has no implicit
+        conversion and `select` requires both operands to share a type, so the
+        conversion has to be written out.
         """
         branch_name = self.normalized_type_name(branch_type)
         other_name = self.normalized_type_name(other_type)
         branch_shape = self.vector_shape(branch_name)
         other_shape = self.vector_shape(other_name)
         if branch_shape is None:
-            if branch_name != "i32" or other_name not in {"u32", "f32"}:
+            branch_rank = self.ternary_scalar_ranks.get(branch_name)
+            other_rank = self.ternary_scalar_ranks.get(other_name)
+            if branch_rank is None or other_rank is None or branch_rank >= other_rank:
                 return None
             return other_name
-        if branch_shape[0] != "i32" or other_shape is None:
+        if other_shape is None or other_shape[1] != branch_shape[1]:
             return None
-        if other_shape[1] != branch_shape[1]:
-            return None
-        if other_shape[0] not in {"u32", "f32"}:
+        branch_rank = self.ternary_scalar_ranks.get(branch_shape[0])
+        other_rank = self.ternary_scalar_ranks.get(other_shape[0])
+        if branch_rank is None or other_rank is None or branch_rank >= other_rank:
             return None
         return f"vec{other_shape[1]}<{other_shape[0]}>"
 
@@ -3828,10 +3832,10 @@ class WGSLCodeGen(
             return true_name
         if true_name is None or false_name is None:
             return true_name or false_name
-        target = self.ternary_int_conversion_target(true_name, false_name)
+        target = self.ternary_conversion_target(true_name, false_name)
         if target is not None:
             return target
-        target = self.ternary_int_conversion_target(false_name, true_name)
+        target = self.ternary_conversion_target(false_name, true_name)
         if target is not None:
             return target
         return true_name
@@ -3847,8 +3851,9 @@ class WGSLCodeGen(
         # An integer literal is an abstract value in WGSL, and `u32(-3)` is a
         # shader-creation error because the value is not representable. Typing
         # the literal first makes the conversion a runtime one, which wraps the
-        # way GLSL's int -> uint conversion does.
-        if self.is_integer_literal_expression(expr):
+        # way GLSL's int -> uint conversion does. Conversions to `float` accept
+        # the literal unchanged.
+        if target == "u32" and self.is_integer_literal_expression(expr):
             return f"{target}({rendered}i)"
         return f"{target}({rendered})"
 
@@ -3858,13 +3863,13 @@ class WGSLCodeGen(
         true_rendered = self.generate_expression(expr.true_expr)
         false_rendered = self.generate_expression(expr.false_expr)
         if true_type is not None and false_type is not None:
-            target = self.ternary_int_conversion_target(true_type, false_type)
+            target = self.ternary_conversion_target(true_type, false_type)
             if target is not None:
                 true_rendered = self.convert_ternary_int_branch(
                     true_rendered, expr.true_expr, target
                 )
             else:
-                target = self.ternary_int_conversion_target(false_type, true_type)
+                target = self.ternary_conversion_target(false_type, true_type)
                 if target is not None:
                     false_rendered = self.convert_ternary_int_branch(
                         false_rendered, expr.false_expr, target
@@ -8344,18 +8349,18 @@ class WGSLCodeGen(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
-        if isinstance(expr, UnaryOpNode):
-            if expr.operator == "!":
-                return "bool"
-            if expr.operator in {"-", "+", "~"} and not expr.is_postfix:
-                operand_type = self.expression_type(expr.operand)
-                if (
-                    self.matrix_shape(operand_type) is not None
-                    or self.vector_shape(operand_type) is not None
-                    or self.scalar_type_name(operand_type) is not None
-                ):
-                    return operand_type
-            return self.expression_type(expr.operand)
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator in {"-", "+", "~"}
+            and not expr.is_postfix
+        ):
+            operand_type = self.expression_type(expr.operand)
+            if (
+                self.matrix_shape(operand_type) is not None
+                or self.vector_shape(operand_type) is not None
+                or self.scalar_type_name(operand_type) is not None
+            ):
+                return operand_type
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
             function_name = self.expression_name(expr.function)
