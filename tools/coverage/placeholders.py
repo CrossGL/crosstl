@@ -18,7 +18,7 @@ PLACEHOLDER = "CrossTL wrote a placeholder for what it could not translate"
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/|^[ \t]*;[^\n]*|#[^\n]*", re.S | re.M)
 _LOSS = re.compile(
     r"^(?://|/\*|;|#)\s*WARNING\b"
-    r"|\b(?:not (?:directly )?supported|unsupported|placeholder|using default value)\b",
+    r"|\b(?:not (?:directly )?supported|unsupported|placeholders?|using default value)\b",
     re.I,
 )
 
