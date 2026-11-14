@@ -410,3 +410,41 @@ def test_rust_features_lower_to_spir_v_through_rust_gpu():
     # glam's methods are Rust arithmetic, so they borrow GLSL's ids through their CrossGL spelling instead.
     dot = Feature("rust", "function", "Vec3::dot", SAMPLES[1].signature, group="vec3")
     assert semantic.lower(dot) == ("", "glam computes it with Rust arithmetic")
+
+
+def test_rust_methods_that_change_their_receiver_store_it_after_the_call():
+    found, spelling, _ = rust.signature(
+        "set", ("", "&mut self, index: usize, value: bool", ""), Type("bool", (3,))
+    )
+    assert spelling == ".set"
+    assert found.params[0] == Param(Type("bool", (3,)), "mutable")
+    by_value, _, _ = rust.signature("dot", ("", "self, rhs: Self", "f32"), VEC3_TYPE)
+    assert by_value.params[0] == Param(VEC3_TYPE)
+    source = probes.build(
+        feature("BVec3::set", VOID, *found.params, spelling=spelling), "rust"
+    ).source
+    assert "let mut a0: BVec3 = BVec3::new(" in source
+    assert "a0.set(a1, a2);\n    let r: BVec3 = a0;" in source
+    assert "outp[i] = if r.x { 1 } else { 0 };" in source
+
+
+@needs_rust_gpu
+def test_rust_probes_that_change_a_receiver_or_index_a_vector_compile():
+    # rust-gpu indexes a vector through a pointer it selects with OpPhi, which needs VariablePointers.
+    changed = feature(
+        "Mat4::set_row",
+        VOID,
+        Param(Type("float", (4, 4)), "mutable"),
+        Type("usize"),
+        Type("float", (4,)),
+        spelling=".set_row",
+    )
+    assert "VariablePointers" in rustgpu.CAPABILITIES
+    for baseline in (False, True):
+        probe = probes.build(changed, "rust", baseline=baseline)
+        verdict = validators.validate("rust", probe.source, entry=probe.entry)
+        assert verdict.accepted, verdict.log
+    indexed = Feature("rust", "type", "vector-dynamic-index", None)
+    probe = probes.build(indexed, "rust")
+    verdict = validators.validate("rust", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log

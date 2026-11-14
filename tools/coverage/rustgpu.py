@@ -85,6 +85,9 @@ CAPABILITIES = (
     "RayQueryKHR",
     "RayQueryPositionFetchKHR",
     "RuntimeDescriptorArray",
+    # rust-gpu selects between pointers with OpPhi to index a vector or a local array dynamically, as glam's
+    # to_euler and an index into a vector do; spirv-val accepts that only with this capability.
+    "VariablePointers",
 )
 EXTENSIONS = (
     "SPV_EXT_demote_to_helper_invocation",
@@ -97,6 +100,8 @@ EXTENSIONS = (
     "SPV_KHR_shader_clock",
     "SPV_KHR_fragment_shader_barycentric",
     "SPV_EXT_shader_stencil_export",
+    # debug_printf! writes NonSemantic.DebugPrintf instructions.
+    "SPV_KHR_non_semantic_info",
 )
 MESH_CAPABILITIES = ("MeshShadingEXT",)
 MESH_EXTENSIONS = ("SPV_EXT_mesh_shader",)
