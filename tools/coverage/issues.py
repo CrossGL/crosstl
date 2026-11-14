@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from . import chart, execution, ir, placeholders, publish
+from . import chart, decorations, execution, ir, placeholders, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
 from .model import ROUND_TRIPS, kept_folder
 
@@ -346,6 +346,19 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             f"CrossTL translates the generated {probe} and {tool} accepts the result, but CrossTL wrote a "
             "placeholder for the feature instead of raising a typed diagnostic."
         )
+    elif decorations.LOSES in (first.get("detail") or "").partition("\n")[0]:
+        # The translation validates but drops an anchor of the feature (:mod:`.decorations`).
+        keeps = (
+            "does not keep everything the feature needs once compiled, such as a built-in, a decoration, a "
+            "capability or an execution mode"
+        )
+        if direction == "input":
+            what = (
+                f"CrossTL imports the generated {chart.name(language)} probe, which {tool} accepts, and the "
+                f"{trip} produces code that {TOOLS[emitted] if emitted else tool} accepts, but that code {keeps}."
+            )
+        else:
+            what = f"CrossTL translates the generated CrossGL probe into code that {tool} accepts, but that code {keeps}."
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "

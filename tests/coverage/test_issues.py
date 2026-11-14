@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from tools.coverage import issues
+from tools.coverage import decorations, issues
 
 from .issue_cases import (
     Repository,
@@ -468,3 +468,21 @@ def test_long_gap_lists_are_cut_to_the_body_limit(monkeypatch):
     body = issues.plan(coverage_report(row), [])[0].body
     assert len(body) <= 1_600
     assert body.rstrip().endswith("more gaps are listed in COVERAGE.md.")
+
+
+def test_a_bug_for_a_lost_anchor_says_the_validator_accepts_the_translation():
+    lost = f"{decorations.LOSES} BuiltIn.PointSize"
+    keeps = "but that code does not keep everything the feature needs once compiled"
+    output = backend_row("glsl", "output", [feature_entry("p", "wrong", detail=lost)])
+    body = issues.bug_body(output, lost, output["features"], "CrossGL/crosstl")
+    assert f"CrossGL probe into code that glslang accepts, {keeps}" in body
+    assert "rejects" not in body
+    trip = "after the round trip: " + lost
+    for language, accepted in (
+        ("slang", "the round trip through CrossGL produces code that slangc accepts"),
+        ("opencl", "the translation to HLSL produces code that DXC accepts"),
+    ):
+        row = backend_row(language, "input", [feature_entry("p", "wrong", detail=trip)])
+        body = issues.bug_body(row, trip, row["features"], "CrossGL/crosstl")
+        assert f"{accepted}, {keeps}" in body
+        assert "rejects" not in body
