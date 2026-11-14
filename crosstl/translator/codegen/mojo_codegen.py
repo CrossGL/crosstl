@@ -10174,10 +10174,12 @@ class MojoCodeGen:
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            raise ValueError(
-                "Unsupported DispatchMesh for Mojo codegen; Mojo's GPU modules "
-                "have no mesh-task launch intrinsic. Use the SPIR-V, HLSL, or "
-                "Slang backends to target mesh/task shaders."
+            raise MojoLoweringRefused(
+                [
+                    "DispatchMesh: Mojo's GPU modules have no mesh-task launch "
+                    "intrinsic; use the SPIR-V, HLSL, or Slang backends to target "
+                    "mesh/task shaders"
+                ]
             )
 
         raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
