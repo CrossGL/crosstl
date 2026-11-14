@@ -3831,7 +3831,11 @@ class WGSLCodeGen(
         if true_name == false_name:
             return true_name
         if true_name is None or false_name is None:
-            return true_name or false_name
+            # An unknown branch keeps the declaration unresolved, as the
+            # `_common_value_type` rule did before the conditional got a
+            # conversion rule. Typing it from the known branch would drop the
+            # check on the other one and could emit invalid WGSL.
+            return None
         target = self.ternary_conversion_target(true_name, false_name)
         if target is not None:
             return target

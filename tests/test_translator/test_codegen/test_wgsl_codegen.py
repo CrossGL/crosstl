@@ -6816,6 +6816,28 @@ def test_wgsl_codegen_converts_int_conditional_branches_to_the_other_type(tmp_pa
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_refuses_a_conditional_with_an_untyped_branch():
+    shader = """
+    shader WGSLUnresolvedConditionalBranch {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 1;
+                mat2 m = mat2(1.0);
+                var x = k > 0 ? 1 : determinant(m);
+                return;
+            }
+        }
+    }
+    """
+
+    # determinant(m) is not typed, so the branch types are unknown. Typing the
+    # declaration from the known branch alone would emit `var x: i32` around a
+    # select whose other operand is f32, which naga rejects.
+    with pytest.raises(ValueError, match="cannot infer a concrete type"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_types_logical_not_of_a_boolean_vector(tmp_path):
     shader = """
     shader WGSLNotVector {
