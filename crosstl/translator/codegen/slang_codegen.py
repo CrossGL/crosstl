@@ -10147,6 +10147,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if callee == "select" and callee not in self.user_function_names:
+                bool_select = self.generate_bool_mix_call(node.args)
+                if bool_select is not None:
+                    return bool_select
             if (
                 callee == "mod"
                 and len(node.args) == 2
