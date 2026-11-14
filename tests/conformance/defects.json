@@ -94,7 +94,7 @@
       "class": "silent",
       "component": "SPIR-V emitter (HLSL source)",
       "summary": "precise was not lowered to NoContraction",
-      "status": "open",
+      "status": "fixed",
       "cases": [
         "h_precise",
         "g_precise",
@@ -103,7 +103,11 @@
       "targets": [
         "spirv"
       ],
-      "note": "Main decorates only the operations of the precise declaration itself; h_precise diverges on MoltenVK and KosmicKrisp. Data-flow propagation of NoContraction is in review (core/precise-dataflow)."
+      "tests": [
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_hlsl_precise_local_qualifier_reaches_spirv",
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_values_computed_into_other_locals_first_are_precise"
+      ],
+      "note": "NoContraction follows the data flow into every operation that contributes to a precise value (#4529), so h_precise, g_precise and s_nocontraction are preserved on lavapipe, MoltenVK and KosmicKrisp. The D3D12 WARP cells of these cases still diverge, the native HLSL reference included: WARP fuses DXC's unfused fmul and fsub, which is a property of the WARP JIT, not of the SPIR-V route."
     },
     {
       "id": "S5",
@@ -543,8 +547,15 @@
       "class": "silent",
       "component": "Metal importer",
       "summary": "the source-owned precise::pow wrapper calls the target pow for finite cases, 23.9 ulp under Apple's default options",
-      "status": "unverified",
-      "note": "The importer still emits a __crossgl_metal_power_float wrapper whose finite path calls pow. No conformance case measures pow accuracy against MSL's 16 ulp bound yet."
+      "status": "fixed",
+      "cases": [
+        "m_precise_pow"
+      ],
+      "tests": [
+        "tests/test_translator/test_metal_power.py::test_precise_power_runs_the_portable_power_over_the_normal_range",
+        "tests/test_translator/test_metal_power.py::test_power_executes_metal_subnormal_control"
+      ],
+      "note": "precise::pow now calls __crossgl_metal_precise_power_float, whose finite path is the fdlibm binary32 power over every normal result and overflow; only subnormal results and subnormal operands keep the target's pow, because flushing them is the target's choice. Before the fix m_precise_pow diverged on 9 of the 10 executed Metal, OpenGL and Vulkan cells: by up to 483 ulp between 2^-120 and 2^120, and by overflowing or vanishing at the ends of the range. After it every cell is within 1 ulp. An unqualified metal::pow keeps the target's pow unless the portable-finite profile is selected."
     },
     {
       "id": "S27",

@@ -18,11 +18,8 @@ float $evaluate(float base, float exponent) {
     float t1 @precise = 0.0;
     float t2 @precise = 0.0;
     if (ix == 0x3f800000u || iy == 0u) { return 1.0; }
-    if (iy > 0x4d000000u) {
-        if (ix < 0x3f7ffff6u || ix > 0x3f800007u) {
-            return pow(base, exponent);
-        }
-        float t @precise = base - 1.0;
+    if ($near_one) {
+$far_from_one        float t @precise = base - 1.0;
         float w @precise = (t * t) * (0.5 - t * (3.33333343e-1 - t * 0.25));
         float u @precise = 1.4426879883 * t;
         float v @precise = t * 7.0526075433e-6 - w * 1.4426950216;
@@ -75,10 +72,7 @@ float $evaluate(float base, float exponent) {
     float product_low @precise = (exponent - y_high) * t1 + exponent * t2;
     float product_high @precise = y_high * t1;
     float z @precise = product_low + product_high;
-    // Range-boundary behavior remains native until a source result policy is resolved.
-    // A full binade on each side separates this approximation from those decisions.
-    if (!(z > -125.0 && z < 127.0)) { return pow(base, exponent); }
-    uint word = asuint(z);
+$range    uint word = asuint(z);
     uint magnitude = word & 0x7fffffffu;
     int n = 0;
     if (magnitude > 0x3f000000u) {
@@ -101,19 +95,77 @@ float $evaluate(float base, float exponent) {
     float r @precise = (z * t1) / (t1 - 2.0) - (w + z * w);
     z = 1.0 - (r - z);
     uint result_word = asuint(z);
-    int scale = int(result_word >> 23u) - 127 + n;
-    return asfloat((uint(scale + 127) << 23u) | (result_word & 0x7fffffu));
-}
+$scale}
 """
 
 
-def binary32_power_support(name):
+# Range boundaries of the ``portable-finite`` profile: a full binade on each side of the binary32 range keeps the
+# target's own ``pow``.
+_NATIVE_BOUNDARIES = {
+    "$near_one": "iy > 0x4d000000u",
+    "$far_from_one": (
+        """        if (ix < 0x3f7ffff6u || ix > 0x3f800007u) {
+            return pow(base, exponent);
+        }
+"""
+    ),
+    "$range": (
+        """    // Range-boundary behavior remains native until a source result policy is resolved.
+    // A full binade on each side separates this approximation from those decisions.
+    if (!(z > -125.0 && z < 127.0)) { return pow(base, exponent); }
+"""
+    ),
+    "$scale": (
+        """    int scale = int(result_word >> 23u) - 127 + n;
+    return asfloat((uint(scale + 127) << 23u) | (result_word & 0x7fffffu));
+"""
+    ),
+}
+
+# Range boundaries of ``precise::pow``: every normal result is computed and overflow is infinite, as in e_powf.c.
+# Exponents above 2^27 take the near-one series only near one; elsewhere the general logarithm keeps the result,
+# which e_powf.c's shortcut would overflow although x^y can still be finite for x just below one.
+# Subnormal results keep the target's own ``pow``, because whether they flush to zero is the target's choice
+# (Apple GPUs flush them, Mesa keeps them) and no source result policy selects one yet.
+_COMPUTED_BOUNDARIES = {
+    "$near_one": "iy > 0x4d000000u && ix >= 0x3f7ffff6u && ix <= 0x3f800007u",
+    "$far_from_one": "",
+    "$range": (
+        """    // Overflow at 2^128, with e_powf.c's rounding margin when z rounds to 128 exactly.
+    if (z > 128.0 || (z == 128.0 && product_low + 4.2995665694e-8 > z - product_high)) {
+        return asfloat(0x7f800000u);
+    }
+    if (!(z > -127.0)) { return pow(base, exponent); }
+"""
+    ),
+    "$scale": (
+        """    int biased = int(result_word >> 23u) + n;
+    if (biased >= 255) { return asfloat(0x7f800000u); }
+    if (biased <= 0) { return pow(base, exponent); }
+    return asfloat((uint(biased) << 23u) | (result_word & 0x7fffffu));
+"""
+    ),
+}
+
+
+def binary32_power_support(name, boundaries="native", notice=True):
     """Render a positive-normal-base, finite-exponent approximation.
 
     The caller handles operand profiles and the power domain. Split logarithm
     and exponent products avoid losing near-one accuracy at large exponents.
-    Results near underflow and overflow retain target-native behavior; this
-    helper does not define a cross-target result flushing policy.
+    With ``boundaries="native"`` results near underflow and overflow retain
+    target-native behavior. ``boundaries="computed"`` computes every normal
+    result and overflow, leaving only subnormal results to the target; neither
+    defines a cross-target result flushing policy. ``notice=False`` leaves out
+    the fdlibm notice comment when an earlier helper already carries it.
     """
-    notice = "".join(f"// {line}\n" for line in SOURCE_LICENSES["fdlibm"].splitlines())
-    return notice + _POWER_SUPPORT.replace("$evaluate", name)
+    if boundaries not in ("native", "computed"):
+        raise ValueError("boundaries must be 'native' or 'computed'")
+    text = _POWER_SUPPORT.replace("$evaluate", name)
+    chosen = _NATIVE_BOUNDARIES if boundaries == "native" else _COMPUTED_BOUNDARIES
+    for placeholder, replacement in chosen.items():
+        text = text.replace(placeholder, replacement)
+    if not notice:
+        return text
+    lines = SOURCE_LICENSES["fdlibm"].splitlines()
+    return "".join(f"// {line}\n" for line in lines) + text

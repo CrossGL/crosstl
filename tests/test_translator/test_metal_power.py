@@ -19,6 +19,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.translator.precise_power import binary32_power_support
 from crosstl.translator.source_licenses import SOURCE_LICENSES
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_trig import _bits, _float, _round_decimal
@@ -141,14 +142,18 @@ def test_power_domain_helpers_compile(tmp_path, target, source, accuracy_profile
     generated = _translate(
         tmp_path, source=source, target=target, accuracy_profile=accuracy_profile
     )
-    for suffix in ("", "2", "3", "4"):
+    # metal::pow takes one, two and (in the domain source) three lanes; precise::pow one, three and four.
+    for suffix in ("", "2", "3") if source is SOURCE else ("", "2"):
         assert f"metal_power_float{suffix}(" in generated
+    for suffix in ("", "3", "4"):
+        assert f"metal_precise_power_float{suffix}(" in generated
+    # precise::pow always runs the portable power; metal::pow only under the portable-finite profile.
+    assert "metal_precise_power_positive_float(" in generated
     assert ("metal_power_positive_float(" in generated) == (
         accuracy_profile is not None
     )
-    if accuracy_profile is not None:
-        for line in SOURCE_LICENSES["fdlibm"].splitlines():
-            assert line in generated
+    for line in SOURCE_LICENSES["fdlibm"].splitlines():
+        assert line in generated
     _compile(
         generated,
         target,
@@ -184,7 +189,13 @@ def test_power_keeps_fast_mode_integer_helpers_and_source_overloads(tmp_path):
     """
     generated = _translate(tmp_path, source)
     assert (
-        generated.count("return __crossgl_metal_power_float(float(a), float(b));") == 2
+        generated.count("return __crossgl_metal_power_float(float(a), float(b));") == 1
+    )
+    assert (
+        generated.count(
+            "return __crossgl_metal_precise_power_float(float(a), float(b));"
+        )
+        == 1
     )
     assert "return fast::pow(a, b);" in generated
     assert "return pow__metal_overload_1(a, b);" in generated
@@ -256,9 +267,14 @@ bfloat16_t apply(bfloat16_t x, bfloat16_t y) {{
     )
     generated = converter.generate(MetalParser(MetalLexer(source).tokenize()).parse())
     lowered = materialized and namespace != "fast"
-    assert ("__crossgl_metal_power_float" in generated) == lowered
+    helper = (
+        "__crossgl_metal_precise_power_float"
+        if namespace == "precise"
+        else "__crossgl_metal_power_float"
+    )
+    assert (helper in generated) == lowered
     if lowered:
-        assert "bfloat16(__crossgl_metal_power_float(float(x), float(y)))" in generated
+        assert f"bfloat16({helper}(float(x), float(y)))" in generated
     elif materialized:
         assert "bfloat16(pow(float(x), float(y)))" in generated
 
@@ -425,6 +441,57 @@ def _check(actual, pairs):
     return maximum
 
 
+# Row offsets of the precise::pow fields of SOURCE and IDENTITY_SOURCE, with which operands each negates.
+PRECISE_FIELDS = {
+    3: (0, 0),
+    6: (0, 0),
+    7: (0, 1),
+    8: (1, 0),
+    9: (0, 0),
+    10: (1, 0),
+    11: (0, 1),
+    12: (1, 1),
+}
+IDENTITY_PRECISE_FIELDS = {
+    3: (0, 0),
+    6: (0, 0),
+    7: (1, 0),
+    8: (0, 0),
+    9: (0, 0),
+    10: (1, 0),
+    11: (0, 0),
+    12: (1, 0),
+}
+
+
+def _assert_matches_metal_control(generated, original, pairs, width, precise_fields):
+    """Bit-identical to the Metal control, except where a precise::pow field differs within its 16 ulp bound.
+
+    precise::pow runs the portable binary32 power on every target, so its normal results may differ from Apple's
+    in the last few bits; Apple also returns 0 for 2^-126. Subnormal results keep the target's own pow.
+    """
+    assert len(generated) == len(original) == width * len(pairs) + 8
+    for position, (got, expected) in enumerate(zip(generated, original)):
+        if expected & 0x7FFFFFFF > 0x7F800000:
+            assert got & 0x7FFFFFFF > 0x7F800000
+            continue
+        if got == expected:
+            continue
+        row, offset = divmod(position - 4, width)
+        assert 0 <= row < len(pairs) and offset in precise_fields, (
+            position,
+            hex(got),
+            hex(expected),
+        )
+        a, b = pairs[row]
+        negate_base, negate_exponent = precise_fields[offset]
+        reference = _oracle(a ^ (negate_base << 31), b ^ (negate_exponent << 31))
+        magnitude = reference & 0x7FFFFFFF
+        assert 0x800000 <= magnitude < 0x7F800000, (hex(a), hex(b), hex(reference))
+        assert got >> 31 == reference >> 31
+        assert abs(got - reference) <= 16, (hex(a), hex(b), hex(got), hex(reference))
+
+
 def test_power_reference_and_comparison_preserve_domain_contracts():
     pairs = _pairs()
     assert (0xBF800000, 0x4B7FFFFF) in pairs
@@ -453,6 +520,48 @@ def test_power_finite_reference_rejects_near_one_accuracy_loss():
     changed[6] = 0x3E3504F5
     with pytest.raises(AssertionError):
         _check(changed, pairs)
+
+
+PRECISE_AND_DEFAULT = """
+    float precise_call(float a, float b) { return metal::precise::pow(a, b); }
+    float default_call(float a, float b) { return metal::pow(a, b); }
+"""
+
+
+@pytest.mark.parametrize("accuracy_profile", (None, "portable-finite"))
+def test_precise_power_runs_the_portable_power_over_the_normal_range(
+    tmp_path, accuracy_profile
+):
+    generated = _translate(
+        tmp_path, PRECISE_AND_DEFAULT, accuracy_profile=accuracy_profile
+    )
+    precise = generated[
+        generated.index("float __crossgl_metal_precise_power_positive_float(") :
+    ]
+    precise = precise[: precise.index("\n}\n")]
+    # Normal results up to overflow are computed; only subnormal results keep the target's pow.
+    assert "z > 128.0 || (z == 128.0 && product_low + 4.2995665694e-8" in precise
+    assert "if (!(z > -127.0)) { return pow(base, exponent); }" in precise
+    assert "if (biased <= 0) { return pow(base, exponent); }" in precise
+    assert "z < 127.0" not in precise
+    assert (
+        "__crossgl_metal_precise_power_positive_float(asfloat(magnitude), exponent)"
+        in generated
+    )
+    # metal::pow keeps the target's pow unless the portable-finite profile is selected.
+    assert (
+        "__crossgl_metal_power_positive_float(asfloat(magnitude), exponent)"
+        in generated
+    ) == (accuracy_profile is not None)
+    assert generated.count(SOURCE_LICENSES["fdlibm"].splitlines()[0]) == 1
+
+
+def test_power_support_rejects_unknown_boundaries():
+    with pytest.raises(ValueError, match="boundaries"):
+        binary32_power_support("evaluate", boundaries="flush")
+    assert binary32_power_support("evaluate", notice=False).startswith(
+        "@source_license(fdlibm)"
+    )
 
 
 def test_power_range_boundaries_keep_the_native_path(tmp_path):
@@ -521,11 +630,13 @@ def test_power_accuracy_profile_executes_unchanged_metal_range_boundaries(
                 4 + IDENTITY_FIELDS * index : 4 + IDENTITY_FIELDS * (index + 1)
             ]
             assert row[:2] == list(pair) and row[-2:] == [2, pair[1]]
-    for got, expected in zip(outputs["profiled"], outputs["original"]):
-        if expected & 0x7FFFFFFF > 0x7F800000:
-            assert got & 0x7FFFFFFF > 0x7F800000
-        else:
-            assert got == expected
+    _assert_matches_metal_control(
+        outputs["profiled"],
+        outputs["original"],
+        pairs,
+        IDENTITY_FIELDS,
+        IDENTITY_PRECISE_FIELDS,
+    )
     (tmp_path / "evidence.json").write_text(
         json.dumps(
             {
@@ -775,11 +886,9 @@ def test_power_executes_metal_subnormal_control(tmp_path, monkeypatch):
             assert row[:2] == list(pair)
             assert row[-2:] == [3, pair[0]]
         results[name] = actual
-    for got, expected in zip(results["generated"], results["original"]):
-        if expected & 0x7FFFFFFF > 0x7F800000:
-            assert got & 0x7FFFFFFF > 0x7F800000
-        else:
-            assert got == expected
+    _assert_matches_metal_control(
+        results["generated"], results["original"], pairs, FIELDS, PRECISE_FIELDS
+    )
     (tmp_path / "evidence.json").write_text(
         json.dumps(
             {
