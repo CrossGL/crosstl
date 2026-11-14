@@ -1576,6 +1576,7 @@ jobs:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES: "1"
           CROSTL_REQUIRE_SUBGROUP_LOOP_ELEMENT_ADDRESSES: "1"
           CROSTL_REQUIRE_METAL_LATE_MEMBER_SPECIALIZATIONS: "1"
+          CROSTL_REQUIRE_METAL_POST_MEMBER_HELPERS: "1"
           CROSTL_REQUIRE_RESOURCE_HELPER_CONSTRUCTOR_INTERVALS: "1"
           CROSTL_REQUIRE_INTEGRAL_CONSTANT_STRIDES: "1"
           CROSTL_REQUIRE_BITWISE_RETURN_BOUNDS: "1"
@@ -1663,6 +1664,7 @@ jobs:
               tests/test_translator/test_software_subgroup_relative_shuffles.py \
               tests/test_translator/test_subgroup_loop_element_addresses.py \
               tests/test_translator/test_metal_late_member_specializations.py \
+              tests/test_translator/test_metal_post_member_helpers.py \
               tests/test_translator/test_resource_helper_constructor_intervals.py \
               tests/test_translator/test_integral_constant_strides.py \
               tests/test_translator/test_bitwise_return_bounds.py \
