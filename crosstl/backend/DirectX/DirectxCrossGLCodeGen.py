@@ -2554,6 +2554,12 @@ class HLSLToCrossGLConverter(
                 deduced = template_call_result_raw_type(self, expr)
                 if deduced is not None:
                     return deduced
+                hit_object_type = self.hit_object_static_call_raw_type(expr)
+                if hit_object_type is not None:
+                    return hit_object_type
+                raytracing_matrix = self.raytracing_matrix_call_raw_type(expr)
+                if raytracing_matrix is not None:
+                    return raytracing_matrix
                 type_name = self.resolve_integer_alias(expr.name)
                 if source_integer_shape(type_name) is not None:
                     return type_name
@@ -2594,6 +2600,9 @@ class HLSLToCrossGLConverter(
         method = self.struct_methods.get(resource_base, {}).get(member)
         if method is not None and method.definition is not None:
             return method.definition.return_type
+        raytracing_matrix = self.raytracing_matrix_call_raw_type(expr)
+        if raytracing_matrix is not None:
+            return raytracing_matrix
         if member in {"Load", "Load2", "Load3", "Load4"}:
             if resource_base in {
                 "ByteAddressBuffer",
@@ -5504,7 +5513,13 @@ class HLSLToCrossGLConverter(
                             call += self.texel_narrowing_suffix(resource_type)
                     self.resource_method_diagnostic(method_member, descriptor)
                     return call
-                return f"{obj}.{member}({args})"
+                call = f"{obj}.{member}({args})"
+                if (
+                    self.hlsl_matrix_rows_are_columns()
+                    and self.raytracing_matrix_call_raw_type(expr) is not None
+                ):
+                    return f"transpose({call})"
+                return call
 
             func_name = (
                 expr.name
@@ -5618,7 +5633,13 @@ class HLSLToCrossGLConverter(
             if isinstance(func_name, str) and "<" in func_name:
                 func_name = templated_call_name(self, func_name)
             func_name = self.render_function_identifier(func_name)
-            return f"{func_name}({args})"
+            call = f"{func_name}({args})"
+            if (
+                self.hlsl_matrix_rows_are_columns()
+                and self.raytracing_matrix_call_raw_type(expr) is not None
+            ):
+                return f"transpose({call})"
+            return call
         elif isinstance(expr, MemberAccessNode):
             alias = self.stage_struct_parameter_member_alias(expr)
             if alias is not None:

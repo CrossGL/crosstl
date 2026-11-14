@@ -6764,3 +6764,100 @@ def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
     assert compute_main.count("i += 1;") == 9
 
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_int_conditional_branches_to_the_other_type(tmp_path):
+    shader = """
+    shader WGSLSelectIntegerBranch {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 1;
+                uint d = k > 0 ? -3 : 4u;
+                uint e = k > 1 ? k : 5u;
+                float f = k > 2 ? k : 0.5;
+                uvec2 w = k > 3 ? uvec2(1u, 2u) : ivec2(k, -1);
+                uint same = k > 4 ? 6u : 7u;
+                uint u = 8u;
+                float g = 0.5;
+                float h = k > 5 ? u : g;
+                vec2 v = k > 6 ? uvec2(u, 1u) : vec2(g);
+                var t = k > 7 ? ivec2(k, -1) : vec2(0.5);
+                var d2 = k > 8 ? k : u;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    # GLSL 4.60 §5.8 converts the int branch to the other branch's type, and
+    # select() requires both operands to match, so the conversion is written
+    # out. An integer literal is typed first: `u32(-3)` is not representable.
+    assert "select(4u, u32(-3i), (k > 0))" in generated
+    assert "select(5u, u32(k), (k > 1))" in generated
+    assert "select(0.5, f32(k), (k > 2))" in generated
+    assert (
+        "select(vec2<u32>(vec2<i32>(k, -1)), vec2<u32>(1u, 2u), (k > 3))" in generated
+    )
+    # The same rule converts a uint branch to float, scalar and per component.
+    assert "select(g, f32(u), (k > 5))" in generated
+    assert "select(vec2<f32>(g), vec2<f32>(vec2<u32>(u, 1u)), (k > 6))" in generated
+    # Branches that already share a type are left alone.
+    assert "select(7u, 6u, (k > 4))" in generated
+    # An untyped declaration takes the converted type.
+    assert (
+        "var t: vec2<f32> = select(vec2<f32>(0.5), "
+        "vec2<f32>(vec2<i32>(k, -1)), (k > 7));" in generated
+    )
+    assert "var d2: u32 = select(u, u32(k), (k > 8));" in generated
+
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_a_conditional_with_an_untyped_branch():
+    shader = """
+    shader WGSLUnresolvedConditionalBranch {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 1;
+                mat2 m = mat2(1.0);
+                var x = k > 0 ? 1 : determinant(m);
+                return;
+            }
+        }
+    }
+    """
+
+    # determinant(m) is not typed, so the branch types are unknown. Typing the
+    # declaration from the known branch alone would emit `var x: i32` around a
+    # select whose other operand is f32, which naga rejects.
+    with pytest.raises(ValueError, match="cannot infer a concrete type"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_types_logical_not_of_a_boolean_vector(tmp_path):
+    shader = """
+    shader WGSLNotVector {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                vec3 v = vec3(0.25);
+                bvec3 eq = equal(v, vec3(0.25));
+                var ne = !eq;
+                vec4 c = vec4(float(ne.x), 0.0, 0.0, 1.0);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    # `!` keeps the shape of a boolean vector; only a scalar becomes `bool`.
+    assert "var ne: vec3<bool> = !eq;" in generated
+    assert "var c: vec4<f32>" in generated
+
+    validate_wgsl_with_naga(tmp_path, generated)

@@ -2689,11 +2689,11 @@ def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
     assert body[4].value.name == "__double2ll_rn"
     assert body[5].value.name == "__float2ull_rd"
     assert_crossgl_reparse(crossgl)
-    assert "var nearest: i32 = i32(round(x));" in crossgl
+    assert "var nearest: i32 = i32(roundEven(x));" in crossgl
     assert "var down: i32 = i32(floor(x));" in crossgl
     assert "var trunc: u32 = u32(x);" in crossgl
     assert "var up: u32 = u32(ceil(y));" in crossgl
-    assert "var wide: i64 = i64(round(y));" in crossgl
+    assert "var wide: i64 = i64(roundEven(y));" in crossgl
     assert "var uwide: u64 = u64(floor(x));" in crossgl
     for raw_name in {
         "__float2int_rn",
@@ -3480,9 +3480,9 @@ def test_cuda_samples_dxtc_rintf_color_quantization_codegen_reparse():
 
     assert body[0].right.name == "rintf"
     assert_crossgl_reparse(crossgl)
-    assert "v.x = round((clamp(v.x, 0.0f, 1.0f) * 31.0f));" in crossgl
-    assert "v.y = round((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
-    assert "v.z = round((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "v.x = roundEven((clamp(v.x, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "v.y = roundEven((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
+    assert "v.z = roundEven((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
     assert "rintf" not in crossgl
 
 

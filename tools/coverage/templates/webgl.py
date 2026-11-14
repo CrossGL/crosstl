@@ -43,10 +43,12 @@ from .interlocks import WEBGL as _INTERLOCKS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .memory import ELSEWHERE as _MEMORY
 from .meshes import WEBGL as _MESHES
 from .orientation import WEBGL as _ORIENTATION
 from .packing import WEBGL as _PACKING
 from .pipeline import WEBGL as _PIPELINE
+from .pointers import ELSEWHERE as _POINTERS
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
@@ -150,6 +152,8 @@ WEBGL = {
     **_BINDINGS,
     **_INTERLOCKS,
     **_COMPONENTS,
+    **_POINTERS,
+    **_MEMORY,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

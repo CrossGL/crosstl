@@ -196,6 +196,7 @@ from .slang_exact_lookups import (
     slang_shader_stage,
 )
 from .slang_numeric_types import slang_unrepresentable_type_reason
+from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
     generate_slang_projected_compare,
@@ -235,7 +236,7 @@ from .stage_utils import (
 from .storage_parameter_texels import StorageParameterTexels
 
 
-class SlangCodeGen(LoweringRefusalMixin):
+class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
     """Emit Slang shader source from the shared CrossGL AST."""
 
     LOWERING_REFUSAL_TYPE = SlangLoweringRefused
@@ -6527,14 +6528,20 @@ class SlangCodeGen(LoweringRefusalMixin):
             # which slangc rejects once the definition follows.
             result += f"{signature};"
         else:
-            result += self.emit_slang_function_body(
-                signature,
-                body_statements,
-                builtin_return_rewrite,
-                hull_output_rewrite,
-                fragment_output_rewrite,
-                local_alias_declarations,
+            previous_precise_state = self.enter_slang_precise_function(
+                node, body_statements
             )
+            try:
+                result += self.emit_slang_function_body(
+                    signature,
+                    body_statements,
+                    builtin_return_rewrite,
+                    hull_output_rewrite,
+                    fragment_output_rewrite,
+                    local_alias_declarations,
+                )
+            finally:
+                self.leave_slang_precise_function(previous_precise_state)
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
         self.image_resource_accesses = saved_image_resource_accesses
@@ -6586,6 +6593,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         for declaration in local_alias_declarations:
             result += f"{self.indent()}{declaration}\n"
 
+        # The precise captures are declared at entry, once every statement has named the ones it uses.
+        captures_offset = len(result)
         for statement_index, stmt in enumerate(body_statements):
             result += (
                 self.emit_function_body_statement(
@@ -6608,6 +6617,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"{self.indent()}return " f"{fragment_output_rewrite['local_name']};\n"
             )
 
+        result = (
+            result[:captures_offset]
+            + self.slang_precise_capture_declarations(self.indent())
+            + result[captures_offset:]
+        )
         self.indent_level -= 1
         return result + "}"
 
@@ -8585,6 +8599,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             value = self.generate_expression_with_expected(
                 rewrite["value"], rewrite["return_type_name"]
             )
+            value = self.slang_precise_returned_value(
+                rewrite["value"], value, rewrite["return_type_name"]
+            )
             return f"{self.indent()}return {value};"
         return self.emit_statement(statement)
 
@@ -8681,6 +8698,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             prelude, _results, value = self.generate_expression_with_prelude(
                 node.value, self.current_function_return_type
             )
+            value = self.slang_precise_returned_value(
+                node.value, value, self.current_function_return_type
+            )
             return self.statement_with_prelude(prelude, f"return {value};")
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment_statement(node)
@@ -8757,13 +8777,16 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.register_variable_type(node.name, var_type, node)
         mapped_type = self.map_resource_type_with_format(var_type, node)
         declaration = self.format_declaration(var_type, node.name, node)
-        declaration = (
+        prefix = (
             # A function-scope groupshared variable is static (slang_workgroup_locals.py).
             slang_workgroup_local_prefix(self, node, initial_value)
             + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
-            + declaration
         )
+        declaration = (
+            self.slang_precise_local_prefix(node, prefix) + prefix + declaration
+        )
+        self.slang_precise_local_initializer(node, initial_value)
         if initial_value is not None:
             prelude, _results, initial_expr = self.generate_expression_with_prelude(
                 initial_value,
@@ -8794,17 +8817,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             node.left, node.right, node.operator
         )
         if block_store is not None:
+            self.slang_precise_lowered_store(node)
             return block_store
         column_assignment = self.hlsl_matrix_orientation.column_assignment(
             node.left, node.right, node.operator, statement_context=True
         )
         if column_assignment is not None:
+            self.slang_precise_lowered_store(node)
             return column_assignment
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
+        )
+        right = self.slang_precise_stored_value(
+            node.left, node.right, right, node.operator
         )
         # Slang's floating % and %= are the truncated remainder, as CrossGL's.
         return f"{left} {node.operator} {right}"
@@ -8817,17 +8845,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             node.left, node.right, node.operator
         )
         if block_store is not None:
+            self.slang_precise_lowered_store(node)
             return block_store
         column_assignment = self.hlsl_matrix_orientation.column_assignment(
             node.left, node.right, node.operator, statement_context=True
         )
         if column_assignment is not None:
+            self.slang_precise_lowered_store(node)
             return self.statement_with_prelude([], f"{column_assignment};")
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
         prelude, _results, right = self.generate_expression_with_prelude(
             node.right, self.expression_result_type(node.left)
+        )
+        right = self.slang_precise_stored_value(
+            node.left, node.right, right, node.operator
         )
         # Slang's floating % and %= are the truncated remainder, as CrossGL's.
         statement = f"{left} {node.operator} {right};"
@@ -8849,6 +8882,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             node.expression,
             return_type,
         )
+        value = self.slang_precise_returned_value(node.expression, value, return_type)
         return self.statement_with_prelude(prelude, f"return {value};")
 
     def generate_for_header_statement(self, node, atomic_value_context=None):
@@ -10280,8 +10314,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                 node.condition, node.true_expr, node.false_expr
             )
             if bool_vector_select is not None:
+                self.slang_precise_lowered_condition(node.condition)
                 return bool_vector_select
-            condition = self.generate_expression(node.condition)
+            condition = self.slang_precise_condition(
+                node.condition, self.generate_expression(node.condition)
+            )
             if self.current_expression_expected_type is not None:
                 true_expr = self.generate_expression_with_expected(
                     node.true_expr, self.current_expression_expected_type
@@ -11085,9 +11122,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         return self.generate_expression(index)
 
     def generate_if(self, node):
+        condition_node = getattr(node, "condition", getattr(node, "if_condition", None))
         prelude, _results, condition = self.generate_expression_with_prelude(
-            getattr(node, "condition", getattr(node, "if_condition", None))
+            condition_node
         )
+        condition = self.slang_precise_condition(condition_node, condition)
         result = f"if ({condition})\n{{\n"
 
         self.indent_level += 1
@@ -11117,8 +11156,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             else ""
         )
         condition = (
-            self.generate_loop_condition_expression(
-                node.condition, "for-loop condition context"
+            self.slang_precise_condition(
+                node.condition,
+                self.generate_loop_condition_expression(
+                    node.condition, "for-loop condition context"
+                ),
             )
             if node.condition
             else ""
@@ -11166,8 +11208,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         return result
 
     def generate_while(self, node):
-        condition = self.generate_loop_condition_expression(
-            node.condition, "while-loop condition context"
+        condition = self.slang_precise_condition(
+            node.condition,
+            self.generate_loop_condition_expression(
+                node.condition, "while-loop condition context"
+            ),
         )
         result = f"while ({condition})\n{{\n"
 
@@ -11180,8 +11225,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         return result
 
     def generate_do_while(self, node):
-        condition = self.generate_loop_condition_expression(
-            node.condition, "do-while-loop condition context"
+        condition = self.slang_precise_condition(
+            node.condition,
+            self.generate_loop_condition_expression(
+                node.condition, "do-while-loop condition context"
+            ),
         )
         result = "do\n{\n"
 
@@ -11197,6 +11245,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         prelude, _results, expression = self.generate_expression_with_prelude(
             node.expression
         )
+        expression = self.slang_precise_condition(node.expression, expression)
         result = f"switch ({expression})\n{{\n"
 
         self.indent_level += 1

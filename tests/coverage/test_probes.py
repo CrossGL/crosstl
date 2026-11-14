@@ -1,6 +1,6 @@
 import pytest
 
-from tools.coverage import probes, validators
+from tools.coverage import probes, spellings, validators
 from tools.coverage.model import (
     Feature,
     Param,
@@ -111,6 +111,27 @@ def test_a_builtin_value_is_read_rather_than_called():
         crossgl="gl_LaneValues[{}]",
     )
     assert "vec3 r = gl_LaneValues[a0];" in probes.build(indexed, "crossgl").source
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_select_passes_the_condition_last_in_crossgl(language):
+    # HLSL's and Slang's select(c, t, f) is CrossGL's select(f, t, c), on the same inputs as the native probe, so
+    # the two can be run against each other.
+    ivec2 = Type("int", (2,))
+    select = Feature(
+        language,
+        "function",
+        "select",
+        Signature(ivec2, (Param(Type("bool", (2,))), Param(ivec2), Param(ivec2))),
+        crossgl=spellings.spelling(language, "select", set()),
+    )
+    native = probes.build(select, language).source
+    crossgl = probes.build(select, "crossgl").source
+    assert "int2 r = select(a0, a1, a2);" in native
+    assert "ivec2 r = select(a2, a1, a0);" in crossgl
+    assert "bvec2 a0 = bvec2(" in crossgl
+    assert native.count("fin[") == crossgl.count("fin[")
+    assert native.count("iin[") == crossgl.count("iin[")
 
 
 def test_an_interpolant_is_read_straight_from_a_shader_input():

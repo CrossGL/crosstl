@@ -75,6 +75,7 @@ from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
@@ -946,6 +947,7 @@ class WGSLCodeGen(
 
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
+        refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
         target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
@@ -3790,6 +3792,101 @@ class WGSLCodeGen(
             return narrowed
         return f"{self.type_name_string(target_type)}({narrowed})"
 
+    def normalized_type_name(self, vtype):
+        try:
+            return self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+
+    ternary_scalar_ranks = {"i32": 0, "u32": 1, "f32": 2}
+
+    def ternary_conversion_target(self, branch_type, other_type):
+        """Return the type a ternary branch converts to, or None.
+
+        GLSL 4.60 §5.8 lets the conditional operator apply the implicit
+        conversions of §4.1.10 to the operands: `int` to `uint` or `float`,
+        and `uint` to `float`, per component for vectors. WGSL has no implicit
+        conversion and `select` requires both operands to share a type, so the
+        conversion has to be written out.
+        """
+        branch_name = self.normalized_type_name(branch_type)
+        other_name = self.normalized_type_name(other_type)
+        branch_shape = self.vector_shape(branch_name)
+        other_shape = self.vector_shape(other_name)
+        if branch_shape is None:
+            branch_rank = self.ternary_scalar_ranks.get(branch_name)
+            other_rank = self.ternary_scalar_ranks.get(other_name)
+            if branch_rank is None or other_rank is None or branch_rank >= other_rank:
+                return None
+            return other_name
+        if other_shape is None or other_shape[1] != branch_shape[1]:
+            return None
+        branch_rank = self.ternary_scalar_ranks.get(branch_shape[0])
+        other_rank = self.ternary_scalar_ranks.get(other_shape[0])
+        if branch_rank is None or other_rank is None or branch_rank >= other_rank:
+            return None
+        return f"vec{other_shape[1]}<{other_shape[0]}>"
+
+    def ternary_result_type(self, true_type, false_type):
+        true_name = self.normalized_type_name(true_type)
+        false_name = self.normalized_type_name(false_type)
+        if true_name == false_name:
+            return true_name
+        if true_name is None or false_name is None:
+            # An unknown branch keeps the declaration unresolved, as the
+            # `_common_value_type` rule did before the conditional got a
+            # conversion rule. Typing it from the known branch would drop the
+            # check on the other one and could emit invalid WGSL.
+            return None
+        target = self.ternary_conversion_target(true_name, false_name)
+        if target is not None:
+            return target
+        target = self.ternary_conversion_target(false_name, true_name)
+        if target is not None:
+            return target
+        # No conversion makes the branches match, so leave the declaration
+        # unresolved and let the emitter refuse it.
+        return None
+
+    def is_integer_literal_expression(self, expr):
+        if isinstance(expr, UnaryOpNode) and expr.operator in {"+", "-"}:
+            expr = expr.operand
+        if not isinstance(expr, LiteralNode):
+            return False
+        return self.normalized_type_name(getattr(expr, "literal_type", None)) == "i32"
+
+    def convert_ternary_int_branch(self, rendered, expr, target):
+        # An integer literal is an abstract value in WGSL, and `u32(-3)` is a
+        # shader-creation error because the value is not representable. Typing
+        # the literal first makes the conversion a runtime one, which wraps the
+        # way GLSL's int -> uint conversion does. Conversions to `float` accept
+        # the literal unchanged.
+        if target == "u32" and self.is_integer_literal_expression(expr):
+            return f"{target}({rendered}i)"
+        return f"{target}({rendered})"
+
+    def generate_ternary_expression(self, expr):
+        true_type = self.expression_type(expr.true_expr)
+        false_type = self.expression_type(expr.false_expr)
+        true_rendered = self.generate_expression(expr.true_expr)
+        false_rendered = self.generate_expression(expr.false_expr)
+        if true_type is not None and false_type is not None:
+            target = self.ternary_conversion_target(true_type, false_type)
+            if target is not None:
+                true_rendered = self.convert_ternary_int_branch(
+                    true_rendered, expr.true_expr, target
+                )
+            else:
+                target = self.ternary_conversion_target(false_type, true_type)
+                if target is not None:
+                    false_rendered = self.convert_ternary_int_branch(
+                        false_rendered, expr.false_expr, target
+                    )
+        return (
+            f"select({false_rendered}, {true_rendered}, "
+            f"{self.generate_expression(expr.condition)})"
+        )
+
     def generate_expression(self, expr):
         if expr is None:
             return ""
@@ -3890,11 +3987,7 @@ class WGSLCodeGen(
         if isinstance(expr, TernaryOpNode):
             self.require_select_operands(expr)
             self.require_unconditional_branches(expr)
-            return (
-                f"select({self.generate_expression(expr.false_expr)}, "
-                f"{self.generate_expression(expr.true_expr)}, "
-                f"{self.generate_expression(expr.condition)})"
-            )
+            return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
@@ -4807,6 +4900,11 @@ class WGSLCodeGen(
             "normalize",
         }
     )
+    # Built-ins whose scalar GLSL overloads are floating-point only. Integer
+    # arguments are implicitly converted to f32 for these calls.
+    FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS = frozenset(
+        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp", "mix"}
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -5255,7 +5353,34 @@ class WGSLCodeGen(
             )
             if vector_type is not None:
                 return vector_type
-            if self.scalar_type_name(argument_types[0]) is not None:
+            scalar_arguments = argument_types
+            boolean_selector = False
+            if function_name == "mix" and len(arguments) == 3:
+                # A boolean selector may be a comparison or logical expression;
+                # its expression_type is intentionally not a scalar type. Infer
+                # the result from x and y, then let generate_boolean_mix_call
+                # validate the selector shape.
+                boolean_selector = (
+                    self.boolean_expression_width(arguments[2]) is not None
+                )
+                if boolean_selector:
+                    scalar_arguments = argument_types[:2]
+            scalar_names = [self.scalar_type_name(t) for t in scalar_arguments]
+            if any(s is None for s in scalar_names):
+                return None
+            if function_name in self.FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS:
+                return "f32"
+            if (
+                function_name == "mix"
+                and not boolean_selector
+                and "bool" not in scalar_names
+            ):
+                return "f32"
+            for target in ("f32", "u32", "i32"):
+                for t, s in zip(argument_types, scalar_names):
+                    if s == target:
+                        return t
+            if scalar_names and scalar_names[0] is not None:
                 return argument_types[0]
         return None
 
@@ -8258,8 +8383,9 @@ class WGSLCodeGen(
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
         if isinstance(expr, TernaryOpNode):
-            # WGSL lowers a ternary to select, whose branches share one type.
-            return self._common_value_type(
+            # WGSL lowers a ternary to select, whose branches share one type;
+            # an int branch is converted to the other branch's type.
+            return self.ternary_result_type(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
@@ -8275,6 +8401,19 @@ class WGSLCodeGen(
                 or self.scalar_type_name(operand_type) is not None
             ):
                 return operand_type
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "!"
+            and not expr.is_postfix
+        ):
+            # `!` keeps the operand's shape: a bvec stays a bvec, and only a
+            # scalar bool becomes `bool`.
+            operand_type = self.expression_type(expr.operand)
+            shape = self.vector_shape(operand_type)
+            if shape is not None and shape[0] == "bool":
+                return f"vec{shape[1]}<bool>"
+            if self.scalar_type_name(operand_type) == "bool":
+                return "bool"
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
             function_name = self.expression_name(expr.function)

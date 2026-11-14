@@ -124,7 +124,8 @@ def test_sources_without_fp_ieee_keep_plain_metal_calls(tmp_path, name, text):
 def test_the_crossgl_of_a_cuda_program_carries_fp_ieee(tmp_path):
     crossgl = _translate(tmp_path, "k.cu", CUDA, "cgl")
 
-    assert crossgl.startswith("#pragma cgl_rules(fp_ieee)\n")
+    # The pragma lists every rule family CUDA defines.
+    assert crossgl.startswith("#pragma cgl_rules(fp_ieee, round_away)\n")
     saved = tmp_path / "saved.cgl"
     saved.write_text(crossgl)
     carried = crosstl.translate(str(saved), backend="metal", format_output=False)
