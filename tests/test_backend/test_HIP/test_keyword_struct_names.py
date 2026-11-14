@@ -21,7 +21,10 @@ from crosstl.translator.parser import Parser
 # ``kernel`` is NOT in HIP's CROSSGL_RESERVED_IDENTIFIERS, so it is excluded
 # from the struct-rename tests (struct kernel is renamed via _CROSSGL_ALL_KEYWORDS).
 # ``let``, ``var``, ``match`` are in the narrow set.
-KEYWORDS = ("let", "var", "match")
+STRUCT_ONLY_KEYWORDS = ("half", "fn", "mesh", "kernel")
+RESERVED_KEYWORDS = ("let", "var", "match")
+ALL_STRUCT_KEYWORDS = (*STRUCT_ONLY_KEYWORDS, *RESERVED_KEYWORDS)
+KEYWORDS = ALL_STRUCT_KEYWORDS
 
 STRUCT_SOURCE = """\
 struct {name} {{
