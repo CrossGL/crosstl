@@ -2086,13 +2086,31 @@ class VulkanComputeRuntime:
         return self.load_artifact(None, None, request.module_path)
 
     def _create_instance(self, vk: Any) -> Any:
+        enumerate_version = getattr(vk, "vkEnumerateInstanceVersion", None)
+        if callable(enumerate_version):
+            try:
+                loader_version = enumerate_version()
+                loader_minor = (loader_version >> 12) & 0x3FF
+            except Exception:
+                loader_minor = 0
+        else:
+            loader_minor = 0
+        if loader_minor >= 1:
+            make_version = getattr(vk, "VK_MAKE_VERSION", None)
+            if callable(make_version):
+                requested_api_version = make_version(1, 1, 0)
+            else:
+                requested_api_version = (1 << 22) | (1 << 12)
+        else:
+            requested_api_version = vk.VK_API_VERSION_1_0
+        self._instance_api_version = requested_api_version
         application_info = vk.VkApplicationInfo(
             sType=vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             pApplicationName=self.application_name,
             applicationVersion=1,
             pEngineName="CrossTL",
             engineVersion=1,
-            apiVersion=getattr(vk, "VK_API_VERSION_1_1", vk.VK_API_VERSION_1_0),
+            apiVersion=requested_api_version,
         )
         options: dict[str, Any] = {}
         instance_extensions = self._instance_extension_names(vk)
@@ -2207,6 +2225,16 @@ class _VulkanDispatchContext:
         # Keep the properties alive: cffi frees it, and its nested limits, once unreferenced.
         properties = vk.vkGetPhysicalDeviceProperties(self.physical_device)
         limits = properties.limits
+        device_api_version = getattr(properties, "apiVersion", None)
+        if isinstance(device_api_version, int) and device_api_version > 0:
+            self._effective_api_version = min(
+                getattr(self.runtime, "_instance_api_version", vk.VK_API_VERSION_1_0),
+                device_api_version,
+            )
+        else:
+            self._effective_api_version = getattr(
+                self.runtime, "_instance_api_version", vk.VK_API_VERSION_1_0
+            )
         _validate_dispatch_limits(
             self.workgroup_count,
             self.workgroup_size,
@@ -2241,6 +2269,8 @@ class _VulkanDispatchContext:
 
     def _create_shader_module(self) -> None:
         vk = self.vk
+        api_ver = getattr(self, "_effective_api_version", vk.VK_API_VERSION_1_0)
+        _validate_vulkan_spirv_module_version(self.shader_code, api_ver)
         create_info = vk.VkShaderModuleCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             codeSize=len(self.shader_code),
@@ -2250,8 +2280,6 @@ class _VulkanDispatchContext:
 
     def _create_buffers(self) -> None:
         for prepared in self.buffers:
-        api_ver = getattr(self, "_effective_api_version", vk.VK_API_VERSION_1_0)
-        _validate_vulkan_spirv_module_version(self.shader_code, api_ver)
             self.resources.append(self._create_buffer(prepared))
 
     def _create_buffer(self, prepared: _PreparedVulkanBuffer) -> _VulkanBufferResource:
@@ -2504,7 +2532,16 @@ class _VulkanDispatchContext:
 
 
 def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
-    if handle is None:
+        return
+        return
+    destroy = getattr(vk, name, None)
+    if not callable(destroy):
+        return
+    if owner is None:
+        destroy(handle, None)
+    else:
+
+
 # SPIR-V module version helpers (used by _create_shader_module to enforce
 # the SPIR-V version accepted by the active Vulkan device before submitting).
 _SPIRV_MAGIC_LE = b"\x03\x02\x23\x07"
@@ -2555,14 +2592,6 @@ def _validate_vulkan_spirv_module_version(code: bytes, api_version: int) -> None
             "vulkanApiVersion": f"{vk_maj}.{vk_min}",
         },
     )
-
-        return
-    destroy = getattr(vk, name, None)
-    if not callable(destroy):
-        return
-    if owner is None:
-        destroy(handle, None)
-    else:
         destroy(owner, handle, None)
 
 

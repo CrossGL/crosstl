@@ -20,6 +20,9 @@ from crosstl._crosstl import translate
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
+    _spirv_module_version,
+    _vulkan_spirv_ceiling,
+    _validate_vulkan_spirv_module_version,
     VulkanComputeRuntime,
     _complete_directx_register_layout,
     _compushady_backend_name,
