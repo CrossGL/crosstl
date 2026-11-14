@@ -63,9 +63,36 @@ def test_a_language_lists_only_what_it_can_spell():
     }
 
 
-def test_spirv_lists_every_construct():
-    spirv = constructs.features("spirv", GRAMMAR)
-    assert len(spirv) == len(constructs.universe(GRAMMAR))
+def test_spirv_lists_every_construct_glsl_or_hlsl_spells():
+    spirv = {f.name for f in constructs.features("spirv", GRAMMAR)}
+    spelled = {
+        c.name
+        for c in constructs.universe(GRAMMAR)
+        if constructs.spells(c.name, "glsl") or constructs.spells(c.name, "hlsl")
+    }
+    assert spirv == spelled
+    assert not {"vector-halves", "numeric-components"} & spirv
+
+
+def test_only_opencl_lists_its_vector_component_names():
+    names = {"vector-halves", "numeric-components"}
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if names & {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"opencl"}
+    halves = probes.build(construct_feature("opencl", "vector-halves"), "opencl")
+    assert "v.hi;" in halves.source and "v.even = (float2)(" in halves.source
+    assert "v.odd.hi;" in halves.source and "* 16.0f" in halves.source
+    numeric = probes.build(construct_feature("opencl", "numeric-components"), "opencl")
+    assert "v.s32;" in numeric.source and "v.s13 = " in numeric.source
+    assert "v.S2 = v.s0 + 4.0f;" in numeric.source
+    # CrossGL writes the same components as swizzles.
+    crossgl_probe = probes.build(
+        construct_feature("opencl", "vector-halves"), "crossgl"
+    ).source
+    assert "v.zw;" in crossgl_probe and "v.xz = vec2(" in crossgl_probe
 
 
 def test_constructs_share_a_semantic_id_across_languages():
@@ -470,6 +497,8 @@ def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
         if names is None and construct.name in _UNANCHORED_TYPES | _HLSL_ANCHORED:
             continue
         if names is not None and construct.name not in names:
+            continue
+        if not constructs.spells(construct.name, language):
             continue
         probe = probes.build(construct_feature(language, construct.name), language)
         assembly, log = lowering.lower(
