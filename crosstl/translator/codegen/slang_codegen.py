@@ -10204,6 +10204,15 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if callee == "select" and callee not in self.user_function_names:
+                bool_select = self.generate_bool_mix_call(node.args)
+                if bool_select is not None:
+                    return bool_select
+                if len(node.args) == 3:
+                    false_value = self.generate_expression(node.args[0])
+                    true_value = self.generate_expression(node.args[1])
+                    condition = self.generate_expression(node.args[2])
+                    return f"select({condition}, {true_value}, {false_value})"
             if (
                 callee == "mod"
                 and len(node.args) == 2
