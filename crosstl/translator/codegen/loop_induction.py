@@ -21,6 +21,17 @@ from ..ast import (
 from ..resource_identity import source_resource_identity
 from .array_utils import _UnsignedLiteralInt, evaluate_literal_int_expression
 
+# HLSL minimum-precision integers hold at least 16 bits and may hold more, so a counter proved to stay within the
+# 16-bit range stays within theirs.
+_MINIMUM_PRECISION_COUNTER_TYPES = {"min16int": "short", "min16uint": "ushort"}
+
+
+def counter_integer_shape(type_name):
+    """``(kind, bits, lanes)`` that bounds a loop counter of ``type_name``, or ``None`` for a non-integer type."""
+    if type_name in _MINIMUM_PRECISION_COUNTER_TYPES:
+        return source_integer_shape(_MINIMUM_PRECISION_COUNTER_TYPES[type_name])
+    return source_integer_shape(type_name)
+
 
 def checked_induction_value(expression, constants):
     """Evaluate integer proof operands without hiding overflowing subexpressions."""
@@ -266,9 +277,7 @@ def fixed_stride_loop_terminates(
     """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return False
-    shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
-    )
+    shape = counter_integer_shape(type_name)
     if shape is None or shape[2] != 1 or shape[1] > 32:
         return False
     unary = isinstance(update, UnaryOpNode)
@@ -355,9 +364,7 @@ def subgroup_strided_trips(type_name, bound, step, operator, subgroup_count):
     """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return None
-    shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
-    )
+    shape = counter_integer_shape(type_name)
     if shape is None or shape[2] != 1 or shape[1] > 32:
         return None
     if (
@@ -392,9 +399,7 @@ def geometric_loop_terminates(type_name, start, bound, update, constants, operat
     """Prove positive geometric induction, including the terminating update."""
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return False
-    shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
-    )
+    shape = counter_integer_shape(type_name)
     if (
         shape is None
         or shape[2] != 1
@@ -680,9 +685,7 @@ def offset_counter_loop_terminates(type_name, start, offset, stops, step, operat
     """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return False
-    shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
-    )
+    shape = counter_integer_shape(type_name)
     if shape is None or shape[2] != 1 or shape[1] > 32:
         return False
     if operator not in {"<", "<="}:
@@ -814,9 +817,7 @@ def static_loop_trip_count(
     """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return None
-    shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
-    )
+    shape = counter_integer_shape(type_name)
     if (
         shape is None
         or shape[2] != 1

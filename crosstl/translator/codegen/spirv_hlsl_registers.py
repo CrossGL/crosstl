@@ -26,6 +26,7 @@ Resource and Descriptor Type Correspondence"), and DXC emits that layout for thi
 
 from __future__ import annotations
 
+from ..refusals import VulkanRefusal
 from .glsl_hlsl_resources import HlslRegisterOverlapError
 from .spirv_argument_tables import argument_table_index, place_argument_table_slots
 
@@ -55,7 +56,7 @@ def _text(codegen, value):
 def _space(codegen, value):
     text = _text(codegen, value)
     if text is None or not text.startswith("space") or not text[5:].isdigit():
-        raise ValueError(f"Invalid HLSL register space '{text}'")
+        raise VulkanRefusal(f"Invalid HLSL register space '{text}'")
     return int(text[5:])
 
 
@@ -86,10 +87,10 @@ def _vk_binding(codegen, node, default_set):
             continue
         arguments = _arguments(attr)
         if not arguments or len(arguments) > 2:
-            raise ValueError("vk::binding takes a binding and an optional set")
+            raise VulkanRefusal("vk::binding takes a binding and an optional set")
         values = [codegen.literal_int_argument(argument) for argument in arguments]
         if any(value is None or value < 0 for value in values):
-            raise ValueError("vk::binding needs non-negative integer arguments")
+            raise VulkanRefusal("vk::binding needs non-negative integer arguments")
         binding = values[0]
         descriptor_set = values[1] if len(values) == 2 else default_set
         return descriptor_set, binding
@@ -159,7 +160,7 @@ def reserve_exact_binding(codegen, key, node, name):
         claim = occupants.get(key)
         halves = [] if claim is None else [occupant_half for occupant_half, _ in claim]
         if half is None or not halves or None in halves or half in halves:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Duplicate SPIR-V resource binding set {key[0]} binding {key[1]} ({name})"
             )
         claim.append((half, id(node)))

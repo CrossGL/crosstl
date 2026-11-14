@@ -16,6 +16,7 @@ alone does not determine the format, through an attribute:
 
 import re
 
+from ..refusals import DirectXRefusal
 from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
@@ -164,19 +165,19 @@ def declared_texel_type(node, image_type, explicit_format, attribute_value_to_st
         or shape is None
         or (modifier is not None and modifier not in TEXEL_MODIFIERS)
     ):
-        raise ValueError(
+        raise DirectXRefusal(
             f"storage image '{name}': {spelled} must name a scalar or vector "
             "texel type, optionally after unorm or snorm"
         )
     if explicit_format is not None:
-        raise ValueError(
+        raise DirectXRefusal(
             f"storage image '{name}': {spelled} applies only to an image whose "
             f"format is unknown, but its format is {explicit_format}"
         )
     kind, count = shape
     image_kind = crossgl_image_component_kind(image_type)
     if kind != image_kind or (modifier is not None and kind != "float"):
-        raise ValueError(
+        raise DirectXRefusal(
             f"storage image '{name}': {image_type} holds {image_kind} texels, "
             f"which {spelled} does not describe"
         )

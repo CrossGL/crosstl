@@ -32,6 +32,7 @@ from typing import (
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
+from crosstl.translator.refusals import MetalSourceRefusal
 
 from .alias_template_types import (
     expand_concrete_alias_template_references,
@@ -66,7 +67,7 @@ from .deduction_arguments import deduction_argument_type
 from .defaulted_template_arguments import canonical_struct_template_arguments
 from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
-from .floating_point import reject_contraction_tokens
+from .floating_point import NO_CONTRACTION_PRAGMA, contraction_requirement
 from .forwarding_reference_accessors import (
     forwarded_storage_expression,
     selected_constexpr_body,
@@ -168,7 +169,7 @@ from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .template_reference_accessors import (
-    TemplateReferenceAccessor,
+    _TemplateReferenceAccessor,
     inline_template_reference_accessor,
 )
 from .text_scanners import (
@@ -361,6 +362,23 @@ def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[i
         if previous.isalnum() or previous == "_":
             return None
     return keyword_start
+
+
+# The multi-word C++ spellings of integer types, to the Metal scalar each names (MSL 3.2 section 2.1).
+_C_INTEGER_SPELLINGS = {
+    "signed": "int",
+    "signed int": "int",
+    "unsigned": "uint",
+    "unsigned int": "uint",
+    "signed short": "short",
+    "signed short int": "short",
+    "unsigned short": "ushort",
+    "unsigned short int": "ushort",
+    "signed long": "long",
+    "signed long int": "long",
+    "unsigned long": "ulong",
+    "unsigned long int": "ulong",
+}
 
 
 class MetalStructMethodError(ValueError):
@@ -1186,27 +1204,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             max_expansion_depth=max_expansion_depth,
         )
         if not isinstance(promote_derived_pointer_members, bool):
-            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
+            raise MetalSourceRefusal(
+                "Metal promote_derived_pointer_members must be a boolean"
+            )
         self.promote_derived_pointer_members = promote_derived_pointer_members
         if not isinstance(group_non_type_template_substitutions, bool):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal group_non_type_template_substitutions must be a boolean"
             )
         self.group_non_type_template_substitutions = (
             group_non_type_template_substitutions
         )
         if isinstance(max_template_specializations, bool):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             )
         try:
             specialization_limit = operator.index(max_template_specializations)
         except TypeError as exc:
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             ) from exc
         if specialization_limit < 0:
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             )
         self.max_template_specializations = specialization_limit
@@ -1319,14 +1339,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
-        if "contract" in processed or "FP_CONTRACT" in processed:
+        if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
             from .MetalLexer import MetalLexer
 
-            reject_contraction_tokens(
+            # A setting CrossGL cannot express is refused here. A directive that requires @precise functions is
+            # restated at the end of the unit, so the parser still finds it after template rewriting.
+            if contraction_requirement(
                 MetalLexer(processed, preprocess=False).token_generator()
-            )
+            ):
+                processed = (
+                    processed.rstrip("\n") + f"\n#pragma {NO_CONTRACTION_PRAGMA}\n"
+                )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
         # Assertions over constexpr aggregates and operators, such as MLX's
@@ -7442,6 +7467,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         "bfloat": "bfloat16_t",
         "bfloat16": "bfloat16_t",
     }
+    # Every spelling of a Metal scalar type, to the name `_METAL_SCALAR_TYPE_SIZES` gives it; a spelling missing
+    # here is no Metal scalar.
+    _METAL_SCALAR_BY_SPELLING: Dict[str, str] = {
+        **dict(zip(_METAL_SCALAR_TYPE_SIZES, _METAL_SCALAR_TYPE_SIZES)),
+        **_METAL_NATIVE_SCALAR_SPELLINGS,
+    }
     _METAL_FLOATING_SCALAR_TYPES: Set[str] = {
         "half",
         "float16_t",
@@ -7530,9 +7561,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             arguments = self._split_top_level_commas(generic_match.group(1))
             if len(arguments) != 2:
                 return None
-            base = self._normalize_inferred_type(arguments[0])
-            base = self._METAL_NATIVE_SCALAR_SPELLINGS.get(base, base)
-            if base not in self._METAL_SCALAR_TYPE_SIZES:
+            base = self._METAL_SCALAR_BY_SPELLING.get(
+                self._normalize_inferred_type(arguments[0])
+            )
+            if base is None:
                 return None
             width_text = self._proven_integral_constant_value("int", arguments[1])
             if width_text is None:
@@ -7544,11 +7576,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if match is None:
             return None
-        base = match.group("base")
-        # MLX's `bfloat16_t` is a typedef of Metal's native `bfloat`; resolved
-        # template arguments use the native spelling, including vectors.
-        base = self._METAL_NATIVE_SCALAR_SPELLINGS.get(base, base)
-        if base not in self._METAL_SCALAR_TYPE_SIZES:
+        # `bfloat` and `bfloat16` spell the scalar `_METAL_SCALAR_TYPE_SIZES` calls `bfloat16_t`, including in
+        # vectors.
+        base = self._METAL_SCALAR_BY_SPELLING.get(match.group("base"))
+        if base is None:
             # A width suffix that is actually part of the name (e.g. an unknown
             # type) — treat the whole token as the base.
             if text in self._METAL_SCALAR_TYPE_SIZES:
@@ -7636,21 +7667,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             normalized,
         )
         normalized = self._normalize_template_argument_text(normalized)
-        scalar_aliases = {
-            "signed": "int",
-            "signed int": "int",
-            "unsigned": "uint",
-            "unsigned int": "uint",
-            "signed short": "short",
-            "signed short int": "short",
-            "unsigned short": "ushort",
-            "unsigned short int": "ushort",
-            "signed long": "long",
-            "signed long int": "long",
-            "unsigned long": "ulong",
-            "unsigned long int": "ulong",
-        }
-        normalized = scalar_aliases.get(normalized, normalized)
+        # A multi-word C integer spelling names a one-word Metal scalar. Every other operand already has its
+        # canonical spelling; the trait evaluator classifies it.
+        if normalized in _C_INTEGER_SPELLINGS:
+            normalized = _C_INTEGER_SPELLINGS[normalized]
         if not re.search(r"[*&\[\]]", normalized):
             qualifiers = {
                 token
@@ -8361,10 +8381,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return parts
 
     def _resolve_constraint_type(self, arg: str, bindings: Dict[str, str]) -> str:
-        # Resolve a constraint's type operand (`T`) to its concrete binding,
-        # leaving an already-concrete type as-is.
+        # Resolve a constraint's type operand (`T`) to its concrete binding. An
+        # operand that is no template parameter already names a type, which the
+        # trait evaluators classify or refuse with `_UnrecognizedConstraint`.
         text = arg.strip()
-        return bindings.get(text, text)
+        if text in bindings:
+            return bindings[text]
+        return text
 
     def _compare(self, left: int, op: str, right: int) -> bool:
         comparisons = {
@@ -11695,11 +11718,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         normalized = re.sub(r"\s+", " ", normalized).strip()
         normalized = re.sub(r"^(?:::)?metal::", "", normalized)
-        normalized = {
-            "bfloat": "bfloat16_t",
-            "bfloat16": "bfloat16_t",
-        }.get(normalized, normalized)
-        return normalized if normalized in self._METAL_SCALAR_TYPE_SIZES else None
+        return self._METAL_SCALAR_BY_SPELLING.get(normalized)
 
     def _static_constexpr_common_scalar_type(
         self,
@@ -15557,7 +15576,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     return None
                 self._reject_reference_returning_method_call(
                     code,
-                    structs_by_name.get(qualified_struct, qualified_struct),
+                    owner_struct,
                     method,
                     arg_open,
                     arg_close,
@@ -15873,7 +15892,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     receiver,
                     method,
                     arg_open,
-                    struct_name=structs_by_name.get(struct_type, struct_type),
+                    struct_name=owner_struct,
                 )
             if owner_struct is not None and explicit_template_arguments is None:
                 static_method = self._select_concrete_method_for_call(
@@ -15902,7 +15921,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         return None
                     self._reject_reference_returning_method_call(
                         code,
-                        structs_by_name.get(struct_type, struct_type),
+                        owner_struct,
                         static_method,
                         arg_open,
                         arg_close,
@@ -15980,7 +15999,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     ident,
                     method,
                     j,
-                    struct_name=structs_by_name.get(struct_type, struct_type),
+                    struct_name=owner_struct,
                 )
             # A template `operator()` functor call `var(args)`.
             if template_overloads:
@@ -16179,10 +16198,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         receiver,
                         method,
                         arg_open,
-                        struct_name=structs_by_name.get(
-                            current_struct_name,
-                            current_struct_name,
-                        ),
+                        struct_name=owner_struct,
                     )
                 if template_overloads:
                     struct = structs_by_name.get(current_struct_name)
@@ -17585,7 +17601,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 inline_reference=True,
                 receiver_is_const=receiver_is_const,
             )
-        except TemplateReferenceAccessor as accessor:
+        except _TemplateReferenceAccessor as accessor:
             try:
                 return self._build_direct_reference_accessor_rewrite(
                     code,
@@ -17751,7 +17767,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ):
             # A reference accessor names storage; the caller inlines the instantiated method
             # (template_reference_accessors.py).
-            raise TemplateReferenceAccessor(
+            raise _TemplateReferenceAccessor(
                 self._instantiated_template_member_method(
                     struct,
                     selected,
@@ -30826,7 +30842,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ):
                     result += ident
                 else:
-                    result += replacements.get(ident, ident)
+                    # An identifier that is not replaced is copied as written.
+                    result += replacements[ident] if ident in replacements else ident
                 i += consumed
                 continue
             result += text[i]

@@ -157,11 +157,14 @@ jobs:
           echo "$RUNNER_TEMP/slang/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/slang/bin/slangc" -version
 
+      # tools/coverage/upstream.py stores each source under its pinned commit and checks its SHA-256 on every read,
+      # so an older cache can seed a new key, and a changed pin downloads only the sources it changes.
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-linux-${{ hashFiles('tools/coverage/upstream.py') }}
+          restore-keys: coverage-upstream-linux-
 
       # The verdicts of the last run on main, so that only sources CrossTL now writes differently are checked again
       # (tools/coverage/runner.py). The key changes with the pinned tools and the code that runs them.
@@ -279,6 +282,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-${{ matrix.backend }}-${{ hashFiles('tools/coverage/upstream.py') }}
+          restore-keys: coverage-upstream-${{ matrix.backend }}-
 
       - name: Restore verdicts
         id: verdicts
@@ -378,6 +382,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-rust-${{ hashFiles('tools/coverage/upstream.py') }}
+          restore-keys: coverage-upstream-rust-
 
       # A native sine probe has to run and match itself, and a translation that computes the cosine has to come out
       # wrong, so the leg shows it can execute Rust probes even when no Rust translation is executable yet.

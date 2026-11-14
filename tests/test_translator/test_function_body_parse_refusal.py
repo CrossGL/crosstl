@@ -1,8 +1,8 @@
 """A CrossGL function body that does not parse refuses the translation.
 
-Before, every ``.cgl`` input (and every Mojo import) was parsed without ``strict_function_bodies``, which skips an
-unparseable body and keeps the function with an empty one, so ``float helper(float x) { float y = x * ; return y; }``
-was emitted as ``float helper(float x) {}``: valid-looking output that returns an undefined value.
+The parser used to skip an unparseable body and keep the function with an empty one unless it was asked to be
+strict, so ``float helper(float x) { float y = x * ; return y; }`` was emitted as ``float helper(float x) {}``:
+valid-looking output that returns an undefined value. Every parse is strict now, with no option to opt out.
 """
 
 import textwrap
@@ -40,9 +40,9 @@ def tokens(text):
     return Lexer(text).tokens
 
 
-def test_the_strict_parser_refuses_an_unparseable_body():
+def test_the_parser_refuses_an_unparseable_body():
     with pytest.raises(CrossGLFunctionBodyParseError) as raised:
-        Parser(tokens(PROGRAM), strict_function_bodies=True).parse()
+        Parser(tokens(PROGRAM)).parse()
     assert raised.value.function_name == "helper"
     assert raised.value.project_diagnostic_code == DIAGNOSTIC_CODE
     assert "could not parse the body of function 'helper'" in str(raised.value)

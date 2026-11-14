@@ -88,11 +88,14 @@ from .explicit_specializations import (
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
+    explicit_workgroup_size,
     host_workgroup_size_mark,
+    padded_workgroup_size_arguments,
     resolve_host_workgroup_sizes,
 )
 from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
+from .refusals import CrossGLSyntaxError
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .static_assertion_syntax import (
@@ -348,15 +351,38 @@ class CrossGLFunctionBodyParseError(SyntaxError):
         self.token_value = token_value
 
 
+# How a cooperative-matrix contract mismatch names each field it compares.
+COOPERATIVE_MATRIX_FIELD_LABELS = {
+    "element_type": "component type",
+    "rows": "row count",
+    "cols": "column count",
+    "scope": "scope",
+    "use": "use",
+    "layout": "layout",
+    "subgroup_size": "subgroup size",
+    "elements_per_lane": "elements-per-lane count",
+    "fragment_layout": "fragment layout",
+    "fragment_provenance": "fragment provenance",
+    "fragment_mapping": "fragment mapping",
+    "fragment_mapping_provenance": "fragment mapping provenance",
+}
+# Scalar spellings a vector generic argument may use for the CrossGL scalars ``float``, ``double``, ``int``, ``uint``.
+WGSL_STYLE_SCALAR_SPELLINGS = {
+    "f32": "float",
+    "f64": "double",
+    "i32": "int",
+    "u32": "uint",
+}
+
+
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
-    def __init__(self, tokens, strict_function_bodies=False):
+    def __init__(self, tokens):
         self.tokens = tokens
         # Every in-place token edit, as (position, replaced token), so that a
         # lookahead can undo its edits without copying the whole token list.
         self.token_edits = []
-        self.strict_function_bodies = strict_function_bodies
         self.anonymous_buffer_blocks = []
         # static_assert declarations outside blocks, attached to the ShaderNode by finalize_shader.
         self.static_assertions = []
@@ -417,7 +443,7 @@ class Parser:
         The end of input is never consumed: a construct that tries to read past it is unterminated.
         """
         if token_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise CrossGLSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -425,7 +451,7 @@ class Parser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Expected {token_type}, got {self.current_token[0]} '{self.current_token[1]}'"
             )
 
@@ -1078,7 +1104,7 @@ class Parser:
                         break
                     self.eat("RPAREN")
 
-                attributes.append(AttributeNode(name=name, arguments=arguments))
+                attributes.append(self.source_attribute(name, arguments))
 
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
@@ -1160,7 +1186,16 @@ class Parser:
                 break
             self.eat("RPAREN")
 
-        return [AttributeNode(name=name, arguments=arguments)]
+        return [self.source_attribute(name, arguments)]
+
+    def source_attribute(self, name, arguments):
+        """An attribute as CrossGL source spells it, with a workgroup size's omitted dimensions made 1."""
+        return AttributeNode(
+            name=name,
+            arguments=padded_workgroup_size_arguments(
+                name, arguments, lambda: LiteralNode(1, PrimitiveType("int"))
+            ),
+        )
 
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
@@ -1248,19 +1283,10 @@ class Parser:
 
     def execution_config_from_function_attributes(self, function):
         """Return execution metadata implied by stage function attributes."""
-        for attr in getattr(function, "attributes", []) or []:
-            attr_name = str(getattr(attr, "name", "")).lower()
-            if attr_name not in {"local_size", "numthreads", "workgroup_size"}:
-                continue
-
-            arguments = getattr(attr, "arguments", []) or []
-            if len(arguments) != 3:
-                continue
-
-            values = tuple(self.layout_argument_to_string(arg) for arg in arguments)
-            return {"numthreads": values}
-
-        return {}
+        size = explicit_workgroup_size(
+            getattr(function, "attributes", []) or [], self.layout_argument_to_string
+        )
+        return {} if size is None else {"numthreads": size}
 
     def layout_argument_to_string(self, argument):
         """Return the source-like value for simple layout argument expressions."""
@@ -1466,7 +1492,7 @@ class Parser:
         if self.is_generic_declaration():
             struct_node = self.parse_generic_declaration()
             if not isinstance(struct_node, StructNode):
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Attributes before a generic declaration must precede a struct"
                 )
             struct_node.attributes = attributes + list(struct_node.attributes or [])
@@ -1505,7 +1531,7 @@ class Parser:
         self.eat("STRUCT")
 
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected a structure name after 'struct', got "
                 f"{self.current_token[0]} {self.current_token[1]!r}"
             )
@@ -1589,7 +1615,7 @@ class Parser:
             "generic",
             "trait",
         ]:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"CrossGL cannot declare a {self.current_token[1]} inside a structure"
             )
 
@@ -1685,7 +1711,7 @@ class Parser:
 
             if self.current_token[0] == "LPAREN":
                 # Skipping to the next ';' would drop a member function silently.
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     f"Struct member '{name}' is declared like a function that CrossGL "
                     "cannot read as a member function"
                 )
@@ -1826,7 +1852,9 @@ class Parser:
             self.current_token[0] == "KERNEL"
             or self.current_token_is_binding_identifier()
         ):
-            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
+            raise CrossGLSyntaxError(
+                f"Expected function name, got {self.current_token[0]}"
+            )
         name = self.parse_binding_identifier()
 
         generic_params = []
@@ -1848,8 +1876,6 @@ class Parser:
 
             body = None
             if self.current_token[0] == "LBRACE":
-                body_start_pos = self.pos
-                body_start_token = self.current_token
                 parameter_types = {
                     parameter.name: parameter.param_type for parameter in parameters
                 }
@@ -1860,16 +1886,13 @@ class Parser:
                     try:
                         body = self.parse_block()
                     except SyntaxError as exc:
-                        if self.strict_function_bodies:
-                            raise CrossGLFunctionBodyParseError(
-                                name,
-                                exc,
-                                self.current_token,
-                            ) from exc
-                        self.pos = body_start_pos
-                        self.current_token = body_start_token
-                        self.skip_balanced_declaration()
-                        body = BlockNode([])
+                        # A body that does not parse is refused: an empty body in its place would be a function
+                        # that returns an undefined value.
+                        raise CrossGLFunctionBodyParseError(
+                            name,
+                            exc,
+                            self.current_token,
+                        ) from exc
                 finally:
                     self.restore_value_type_scope()
                     self.current_function_return_type = previous_return_type
@@ -1889,7 +1912,7 @@ class Parser:
                     getattr(arguments[0], "name", None) if len(arguments) == 1 else None
                 )
                 if license_name not in SOURCE_LICENSES:
-                    raise SyntaxError(
+                    raise CrossGLSyntaxError(
                         "@source_license requires one registered license identifier"
                     )
                 source_licenses.add(license_name)
@@ -1897,7 +1920,9 @@ class Parser:
                 explicit_specialization = explicit_specialization_annotation(attribute)
             elif attribute.name in {"metal_static", "metal_inline"}:
                 if attribute.arguments:
-                    raise SyntaxError(f"@{attribute.name} does not accept arguments")
+                    raise CrossGLSyntaxError(
+                        f"@{attribute.name} does not accept arguments"
+                    )
                 qualifier = attribute.name[len("metal_") :]
                 linkage_qualifiers.add(qualifier)
             else:
@@ -2085,7 +2110,9 @@ class Parser:
         token_type, token_value = self.current_token
         kind = str(token_value).lower()
         if kind not in RESOURCE_MEMORY_QUALIFIER_NAMES:
-            raise SyntaxError(f"Expected resource memory qualifier, got {token_type}")
+            raise CrossGLSyntaxError(
+                f"Expected resource memory qualifier, got {token_type}"
+            )
         self.eat(token_type)
 
         scope = None
@@ -2093,7 +2120,9 @@ class Parser:
             self.eat("LPAREN")
             scope_token_type, scope_value = self.current_token
             if not isinstance(scope_value, str) or not scope_value.isidentifier():
-                raise SyntaxError(f"Expected coherence scope, got {scope_token_type}")
+                raise CrossGLSyntaxError(
+                    f"Expected coherence scope, got {scope_token_type}"
+                )
             scope = scope_value.lower()
             self.eat(scope_token_type)
             self.eat("RPAREN")
@@ -2626,7 +2655,13 @@ class Parser:
             if token_type == "BITWISE_AND" and self.peek(offset)[0] == "MUT":
                 offset += 1
 
-        if self.peek(offset)[0] != "IDENTIFIER":
+        declarator_type, declarator_value = self.peek(offset)
+        if declarator_type != "IDENTIFIER" and not (
+            # ``device float* local = p;``: a contextual keyword names the variable, as it may without the pointer.
+            isinstance(declarator_value, str)
+            and declarator_value.isidentifier()
+            and self.peek(offset + 1)[0] in {"EQUALS", "SEMICOLON", "COMMA", "LBRACKET"}
+        ):
             return False
 
         next_token = self.peek(offset + 1)[0]
@@ -3045,7 +3080,7 @@ class Parser:
     def cooperative_matrix_type(self, generic_args):
         """Build the canonical cooperative matrix type from generic arguments."""
         if not 3 <= len(generic_args) <= 12:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "CooperativeMatrix expects 3 to 12 generic arguments: "
                 "element type, rows, columns, scope, use, layout, fragment "
                 "layout, subgroup size, elements per lane, fragment provenance, "
@@ -3054,7 +3089,9 @@ class Parser:
 
         element_type = generic_args[0]
         if not isinstance(element_type, TypeNode):
-            raise SyntaxError("CooperativeMatrix element argument must be a type")
+            raise CrossGLSyntaxError(
+                "CooperativeMatrix element argument must be a type"
+            )
 
         rows = self.cooperative_matrix_dimension(generic_args[1])
         cols = self.cooperative_matrix_dimension(generic_args[2])
@@ -3104,7 +3141,7 @@ class Parser:
                 fragment_mapping_provenance,
             )
         except ValueError as error:
-            raise SyntaxError(str(error)) from error
+            raise CrossGLSyntaxError(str(error)) from error
 
     def cooperative_matrix_dimension(self, argument):
         if isinstance(argument, LiteralNode) and type(argument.value) is int:
@@ -3180,7 +3217,7 @@ class Parser:
             self.cooperative_matrix_expression_type(expression)
         )
         if contract is None:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} operand {label} has no "
                 "cooperative-matrix contract"
             )
@@ -3231,18 +3268,8 @@ class Parser:
         if self.cooperative_matrix_values_equal(left, right):
             return deepcopy(right)
 
-        field_name = {
-            "element_type": "component type",
-            "rows": "row count",
-            "cols": "column count",
-            "subgroup_size": "subgroup size",
-            "elements_per_lane": "elements-per-lane count",
-            "fragment_layout": "fragment layout",
-            "fragment_provenance": "fragment provenance",
-            "fragment_mapping": "fragment mapping",
-            "fragment_mapping_provenance": "fragment mapping provenance",
-        }.get(field, field)
-        raise SyntaxError(
+        field_name = COOPERATIVE_MATRIX_FIELD_LABELS[field]
+        raise CrossGLSyntaxError(
             f"Cooperative matrix {operation} has incompatible {field_name}: "
             f"{left_label} is "
             f"{self.format_cooperative_matrix_contract_value(left)}, but "
@@ -3268,7 +3295,7 @@ class Parser:
                 values["fragment_mapping_provenance"],
             )
         except ValueError as error:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} inferred an invalid result "
                 f"contract: {error}"
             ) from error
@@ -3415,7 +3442,7 @@ class Parser:
             right_label,
         )
         if not self.cooperative_matrix_values_equal(left.cols, right.rows):
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {operation} has incompatible inner dimension: "
                 f"{left_label} columns are "
                 f"{self.format_cooperative_matrix_contract_value(left.cols)}, but "
@@ -3458,7 +3485,7 @@ class Parser:
             # A fill or diagonal names only its value; the declaration,
             # assignment or return it initializes supplies the matrix contract.
             if len(arguments) != 1:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     f"Cooperative matrix {operation} expects 1 argument, got "
                     f"{len(arguments)}"
                 )
@@ -3466,7 +3493,7 @@ class Parser:
 
         if operation == "element":
             if not arguments:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Cooperative matrix element requires a matrix operand"
                 )
             matrix = self.cooperative_matrix_operand_contract(
@@ -3561,41 +3588,13 @@ class Parser:
         arguments = self.parse_call_arguments()
         self.eat("RPAREN")
         if len(arguments) != 1:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "CooperativeMatrix constructor expects 1 diagonal value, got "
                 f"{len(arguments)}"
             )
         operation = CooperativeMatrixOpNode("diagonal", arguments)
         operation.set_result_contract(matrix_type)
         return operation
-
-    def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
-        """Preserve operations for target diagnostics in permissive parse mode."""
-        try:
-            return self.infer_cooperative_matrix_operation(operation_node)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            self.record_cooperative_matrix_inference_error(operation_node, error)
-            return operation_node
-
-    @staticmethod
-    def record_cooperative_matrix_inference_error(expression, error):
-        expression.annotations.setdefault(
-            "cooperative_matrix_inference_errors", []
-        ).append(str(error))
-
-    def apply_cooperative_matrix_result_constraint(
-        self, expression, expected_type, context
-    ):
-        """Apply a result constraint without discarding permissively parsed bodies."""
-        try:
-            self.constrain_cooperative_matrix_result(expression, expected_type, context)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            if isinstance(expression, CooperativeMatrixOpNode):
-                self.record_cooperative_matrix_inference_error(expression, error)
 
     @staticmethod
     def type_is_inferred_declaration(value_type):
@@ -3614,7 +3613,7 @@ class Parser:
             if not self.cooperative_matrix_values_equal(
                 expression.expression_type, expected_type
             ):
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Cooperative matrix element has incompatible contextual type: "
                     f"inferred component is "
                     f"{self.format_cooperative_matrix_contract_value(expression.expression_type)}, "
@@ -3625,7 +3624,7 @@ class Parser:
 
         expected_contract = self.cooperative_matrix_value_type(expected_type)
         if expected_contract is None:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Cooperative matrix {expression.operation} requires a "
                 f"cooperative-matrix result, but {context} is "
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
@@ -3646,7 +3645,7 @@ class Parser:
     def finish_variable_contract(self, variable):
         """Constrain an initializer and register its effective lexical type."""
         if variable.initial_value is not None:
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 variable.initial_value,
                 variable.var_type,
                 f"declaration {variable.name!r}",
@@ -3787,7 +3786,9 @@ class Parser:
         args = []
 
         while self.current_token[0] != "RBRACKET":
-            args.append(self.parse_square_generic_argument())
+            arg = self.parse_square_generic_argument()
+            self.format_type_argument(arg)
+            args.append(arg)
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -3885,6 +3886,8 @@ class Parser:
             "GREATER_EQUAL",
             "EQUAL",
             "NOT_EQUAL",
+            "RANGE",
+            "RANGE_INCLUSIVE",
         }
         opener_to_closer = {
             "LPAREN": "RPAREN",
@@ -3962,25 +3965,28 @@ class Parser:
         self.eat_type_greater_than()
         return params
 
-    def parse_generic_arguments(self, reject_logical_at_top_level=False):
+    def parse_generic_arguments(
+        self, reject_logical_at_top_level=False, validate_arguments=True
+    ):
         """Parse generic type arguments after ``<``."""
         self.eat("LESS_THAN")
         args = []
 
         while not self.current_token_is_type_greater_than():
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated generic argument list")
+                raise CrossGLSyntaxError("Unterminated generic argument list")
 
-            args.append(
-                self.parse_generic_argument(
-                    reject_logical_at_top_level=reject_logical_at_top_level
-                )
+            arg = self.parse_generic_argument(
+                reject_logical_at_top_level=reject_logical_at_top_level
             )
+            if validate_arguments:
+                self.format_type_argument(arg)
+            args.append(arg)
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif not self.current_token_is_type_greater_than():
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Expected ',' or '>' after generic argument, "
                     f"got {self.current_token[0]} '{self.current_token[1]}'"
                 )
@@ -4005,7 +4011,7 @@ class Parser:
                     self.parse_parameter_qualifiers()
                 )
                 if not self.current_token_starts_type():
-                    raise SyntaxError(
+                    raise CrossGLSyntaxError(
                         "Expected a type after generic argument qualifiers"
                     )
                 argument = self.parse_type()
@@ -4047,13 +4053,13 @@ class Parser:
         )
 
         if self.current_token[0] == "EOF":
-            raise SyntaxError("Unterminated generic argument list")
+            raise CrossGLSyntaxError("Unterminated generic argument list")
         if self.pos == start_pos or self.current_token[0] not in {
             "COMMA",
             "GREATER_THAN",
             "BITWISE_SHIFT_RIGHT",
         }:
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected ',' or '>' after generic argument, "
                 f"got {self.current_token[0]} '{self.current_token[1]}'"
             )
@@ -4217,18 +4223,11 @@ class Parser:
     def vector_element_type_from_generic(self, type_node):
         """Resolve a vector generic argument to a primitive element type."""
         type_name = self.format_type_argument(type_node)
-        aliases = {
-            "f32": "float",
-            "float": "float",
-            "f64": "double",
-            "double": "double",
-            "i32": "int",
-            "int": "int",
-            "u32": "uint",
-            "uint": "uint",
-            "bool": "bool",
-        }
-        return PrimitiveType(aliases.get(type_name, type_name))
+        # The argument names a CrossGL type: a scalar, a type alias or a generic parameter. ``f32``, ``f64``, ``i32``
+        # and ``u32`` are other spellings of four scalars.
+        if type_name in WGSL_STYLE_SCALAR_SPELLINGS:
+            type_name = WGSL_STYLE_SCALAR_SPELLINGS[type_name]
+        return PrimitiveType(type_name)
 
     def format_type_argument(self, type_node):
         """Format a parsed type node back into a compact type argument string."""
@@ -4269,10 +4268,17 @@ class Parser:
             return f"{left} {type_node.operator} {right}"
         if isinstance(type_node, FunctionCallNode):
             function = self.format_type_argument(type_node.function)
+            generic_suffix = ""
+            if getattr(type_node, "generic_args", None):
+                generic_args = ", ".join(
+                    self.format_type_argument(argument)
+                    for argument in type_node.generic_args
+                )
+                generic_suffix = f"<{generic_args}>"
             args = ", ".join(
                 self.format_type_argument(argument) for argument in type_node.arguments
             )
-            return f"{function}({args})"
+            return f"{function}{generic_suffix}({args})"
         if isinstance(type_node, TernaryOpNode):
             condition = self.format_type_argument(type_node.condition)
             true_expr = self.format_type_argument(type_node.true_expr)
@@ -4286,9 +4292,14 @@ class Parser:
                 else f"{type_node.operator}{operand}"
             )
         if isinstance(type_node, MemberAccessNode):
-            return f"{self.format_expression_path(type_node.object_expr)}.{type_node.member}"
+            return (
+                f"{self.format_type_argument(type_node.object_expr)}.{type_node.member}"
+            )
         if isinstance(type_node, PointerType):
             return f"{self.format_type_argument(type_node.pointee_type)}*"
+        if isinstance(type_node, ReferenceType):
+            suffix = "&mut" if type_node.is_mutable else "&"
+            return f"{self.format_type_argument(type_node.referenced_type)}{suffix}"
         if isinstance(type_node, FunctionType):
             params = ", ".join(
                 self.format_type_argument(param_type)
@@ -4333,6 +4344,11 @@ class Parser:
                 type_node = type_node.element_type
             return self.format_type_argument(type_node) + "".join(suffixes)
         if hasattr(type_node, "name"):
+            if type_node.name is None:
+                # An expression or node with no spelling here (a range, for one) names no type or value argument.
+                raise CrossGLSyntaxError(
+                    f"A {type(type_node).__name__} cannot be a type argument"
+                )
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
@@ -4351,6 +4367,10 @@ class Parser:
             if element_type == "bool":
                 return f"bvec{type_node.size}"
             return f"{element_type}{type_node.size}"
+        if isinstance(type_node, ASTNode):
+            raise CrossGLSyntaxError(
+                f"A {type(type_node).__name__} cannot be a type argument"
+            )
         return str(type_node)
 
     def parse_attributes(self):
@@ -4380,7 +4400,7 @@ class Parser:
                         self.eat("COMMA")
                 self.eat("RPAREN")
 
-            attributes.append(AttributeNode(name=name, arguments=arguments))
+            attributes.append(self.source_attribute(name, arguments))
 
         return attributes
 
@@ -4447,6 +4467,13 @@ class Parser:
             return self.parse_variable_declaration()
         else:
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                # ``a(), b();``: the comma operator at statement level, the same node as ``(a(), b());``.
+                operands = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    operands.append(self.parse_expression())
+                expr = CommaExpressionNode(operands)
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return ExpressionStatementNode(expr)
@@ -4463,7 +4490,7 @@ class Parser:
         """
         node = self.parse_struct()
         if not isinstance(node, StructNode):
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "CrossGL could not parse the structure declared in a block, at "
                 f"{self.current_token[0]} {self.current_token[1]!r}"
             )
@@ -4561,7 +4588,7 @@ class Parser:
         self.eat("VAR")
         name = self.parse_binding_identifier()
         if self.current_token[0] != "EQUALS":
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"'var {name};' has no type and no initializer to infer one from; "
                 f"write 'var {name}: <type>;' or 'var {name} = <value>;'"
             )
@@ -4579,7 +4606,7 @@ class Parser:
         """Parse an identifier in binding position, including keyword-like names."""
         token_type, token_value = self.current_token
         if not self.current_token_is_binding_identifier():
-            raise SyntaxError(f"Expected binding name, got {token_type}")
+            raise CrossGLSyntaxError(f"Expected binding name, got {token_type}")
 
         self.eat(token_type)
         return token_value
@@ -4987,7 +5014,7 @@ class Parser:
         value = None
         if self.current_token[0] != "SEMICOLON":
             value = self.parse_expression()
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 value,
                 self.current_function_return_type,
                 "function return type",
@@ -5049,7 +5076,7 @@ class Parser:
                 stop_at_generic_close, reject_logical_at_top_level
             )
             if op == "=":
-                self.apply_cooperative_matrix_result_constraint(
+                self.constrain_cooperative_matrix_result(
                     right,
                     self.cooperative_matrix_expression_type(left),
                     "assignment target",
@@ -5089,7 +5116,7 @@ class Parser:
 
         while self.current_token[0] == "LOGICAL_OR":
             if reject_logical_at_top_level:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Top-level '||' is not allowed in a generic argument list in expression context"
                 )
             op = self.current_token[1]
@@ -5109,7 +5136,7 @@ class Parser:
 
         while self.current_token[0] == "LOGICAL_AND":
             if reject_logical_at_top_level:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Top-level '&&' is not allowed in a generic argument list in expression context"
                 )
             op = self.current_token[1]
@@ -5346,7 +5373,7 @@ class Parser:
             ):
                 if self.current_token[0] == "CONST":
                     if is_const:
-                        raise SyntaxError(
+                        raise CrossGLSyntaxError(
                             "Duplicate const qualifier in C-style cast target"
                         )
                     is_const = True
@@ -5387,12 +5414,12 @@ class Parser:
 
         if address_spaces or is_const:
             if not isinstance(target_type, PointerType):
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Qualified C-style cast target must be a pointer type"
                 )
             unique_address_spaces = set(address_spaces)
             if len(unique_address_spaces) > 1:
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Conflicting address spaces in C-style cast target: "
                     + ", ".join(address_spaces)
                 )
@@ -5419,7 +5446,7 @@ class Parser:
                 return None
 
             token_type, token_value = self.current_token
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected expression after C-style cast, "
                 f"got {token_type} {token_value!r}"
             )
@@ -5458,6 +5485,16 @@ class Parser:
         """Return whether ``token`` is a resource address-space qualifier."""
         return str(token[1]).lower() in RESOURCE_ADDRESS_SPACE_NAMES
 
+    def current_token_is_tuple_field_number(self):
+        """Return whether the current token is ``.N``, a float token that follows an operand as a tuple field."""
+        token_type, token_value = self.current_token
+        if token_type != "FLOAT_NUMBER":
+            return False
+        digits = str(token_value)[1:]
+        return (
+            str(token_value).startswith(".") and digits.isascii() and digits.isdigit()
+        )
+
     def parse_postfix_expression(self):
         """Parse member, call, index, and postfix unary expressions."""
         left = self.parse_primary_expression()
@@ -5466,6 +5503,11 @@ class Parser:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 member = self.parse_binding_identifier()
+                left = MemberAccessNode(left, member)
+            elif self.current_token_is_tuple_field_number():
+                # ``t.1`` lexes as ``t`` and the float ``.1``; after an operand it can only be tuple field 1.
+                member = str(self.current_token[1])[1:]
+                self.eat("FLOAT_NUMBER")
                 left = MemberAccessNode(left, member)
             elif self.is_arrow_token():
                 self.eat_arrow()
@@ -5557,7 +5599,7 @@ class Parser:
                         # CrossGL also accepts the GL_KHR_shader_subgroup spelling of a wave operation.
                         left = WaveOpNode(GLSL_SUBGROUP_FUNCTIONS[left.name], arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
-                        left = self.infer_cooperative_matrix_operation_or_preserve(
+                        left = self.infer_cooperative_matrix_operation(
                             CooperativeMatrixOpNode(
                                 COOPERATIVE_MATRIX_INTRINSICS[left.name],
                                 arguments,
@@ -5600,7 +5642,7 @@ class Parser:
         arguments = []
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated function call argument list")
+                raise CrossGLSyntaxError("Unterminated function call argument list")
 
             arguments.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
@@ -5608,7 +5650,7 @@ class Parser:
                 continue
             if self.current_token[0] != "RPAREN":
                 token_type, token_value = self.current_token
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     "Expected ',' or ')' after function argument, "
                     f"got {token_type} {token_value!r}"
                 )
@@ -5767,7 +5809,7 @@ class Parser:
         token_mark = self.mark_token_edits()
         try:
             generic_args = self.parse_generic_arguments(
-                reject_logical_at_top_level=True
+                reject_logical_at_top_level=True, validate_arguments=False
             )
             if self.current_token[0] == "LBRACE":
                 # ``vec<T, 2>{x, y}``: a braced constructor of a generic type, as MSL and HLSL write one. A
@@ -5800,7 +5842,7 @@ class Parser:
         token_mark = self.mark_token_edits()
         try:
             generic_args = self.parse_generic_arguments(
-                reject_logical_at_top_level=True
+                reject_logical_at_top_level=True, validate_arguments=False
             )
             return self.current_token[0] == "LPAREN" and (
                 self.generic_member_arguments_are_unambiguous(generic_args)
@@ -5828,7 +5870,7 @@ class Parser:
             return expression.name
         if isinstance(expression, MemberAccessNode):
             return f"{self.format_expression_path(expression.object_expr)}.{expression.member}"
-        return str(expression)
+        return self.format_type_argument(expression)
 
     def parse_struct_constructor_expression(self, type_name):
         self.eat("LBRACE")
@@ -6664,6 +6706,10 @@ class Parser:
                 depth = 1
                 self.eat("LESS_THAN")
                 while depth > 0 and self.current_token[0] != "EOF":
+                    if self.current_token[0] == "LPAREN":
+                        # ``Loc<N, (N > 2)>``: a parenthesized value argument's ``<`` and ``>`` are comparisons.
+                        self.parse_balanced_parenthesized_token_text()
+                        continue
                     if self.current_token[0] == "LESS_THAN":
                         depth += 1
                         self.eat("LESS_THAN")
@@ -6723,8 +6769,10 @@ class Parser:
         """
         token_type, token_value = self.current_token
         if token_type == "EOF":
-            raise SyntaxError(f"Unexpected end of input in {construct}")
-        raise SyntaxError(f"Unexpected {token_type} {token_value!r} in {construct}")
+            raise CrossGLSyntaxError(f"Unexpected end of input in {construct}")
+        raise CrossGLSyntaxError(
+            f"Unexpected {token_type} {token_value!r} in {construct}"
+        )
 
     def parse_scope_static_assertion(self):
         """Parse a ``static_assert`` outside a block into ``self.static_assertions``; False if none starts here."""
@@ -6740,7 +6788,7 @@ class Parser:
         truncated input.
         """
         if self.current_token[0] == "EOF":
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Unterminated {construct}: expected '}}' before end of input"
             )
 
@@ -6910,7 +6958,7 @@ class Parser:
         self.eat("IDENTIFIER")
 
         if self.current_token[0] != "LESS_THAN":
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 f"Expected '<' after 'generic', got {self.current_token[1]!r}"
             )
 
@@ -6945,7 +6993,7 @@ class Parser:
                 if trait_node:
                     trait_node.generic_params = generic_params
                 return trait_node
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "Expected a struct, enum, function or trait after the generic parameters, got "
                 f"{self.current_token[1]!r}"
             )

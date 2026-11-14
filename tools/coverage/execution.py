@@ -88,10 +88,6 @@ _GROUP_VOTE = re.compile(
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
 _FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
-# The SPIR-V version spirv-dis prints in an assembly's header, and the highest minor version each Vulkan environment
-# of the harness accepts (Vulkan 1.1 takes SPIR-V 1.3, Vulkan 1.2 takes 1.5, Vulkan 1.3 takes 1.6).
-_SPIRV_VERSION = re.compile(r"^; Version: 1\.(\d+)$", re.M)
-_ENVIRONMENTS = ((3, "vulkan1.1"), (5, "vulkan1.2"), (6, "vulkan1.3"))
 # Two runs of a probe need not agree when it reads a clock, or queries a ray query: the harness binds no acceleration
 # structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
 # keep their validation result.
@@ -220,7 +216,7 @@ def without_unused_capabilities(assembly: str) -> str:
     spirv-val requires every capability an instruction, type, decoration or built-in of the module needs, so what it
     accepts is what the module uses.
     """
-    target = environment([assembly])
+    target = validators.spirv_environment([assembly])
     assemble, validate = validators.command("spirv-as"), validators.command("spirv-val")
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
 
@@ -290,22 +286,6 @@ def without_unused_counters(assembly: str) -> str:
 
 def _annotates(words: list[str]) -> bool:
     return bool(words) and words[0] in _ANNOTATIONS
-
-
-def environment(assemblies: list[str]) -> str:
-    """The oldest Vulkan environment that accepts every one of ``assemblies``, by the SPIR-V version each declares."""
-    minor = max(
-        (
-            int(found.group(1))
-            for found in map(_SPIRV_VERSION.search, assemblies)
-            if found
-        ),
-        default=0,
-    )
-    return next(
-        (name for highest, name in _ENVIRONMENTS if minor <= highest),
-        _ENVIRONMENTS[-1][1],
-    )
 
 
 def inputs(buffer: str):
@@ -458,7 +438,7 @@ def _execute(
         selection,
         root,
         reference=True,
-        environment=environment(assemblies),
+        environment=validators.spirv_environment(assemblies),
     )
     found = {}
     for record in records:

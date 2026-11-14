@@ -27084,7 +27084,7 @@ def _materialize_crossgl_specialization_constants(
             ),
         )
     try:
-        ast = cgl_spec.parse(source, source_options={"strict_function_bodies": True})
+        ast = cgl_spec.parse(source)
     except Exception as exc:
         raise ProjectSpecializationError(
             f"CrossGL specialization intermediate could not be parsed: {exc}",
@@ -27174,7 +27174,7 @@ def _materialize_crossgl_specialization_constants(
                 diagnostic.message, diagnostics=(diagnostic,)
             )
     try:
-        cgl_spec.parse(materialized, source_options={"strict_function_bodies": True})
+        cgl_spec.parse(materialized)
     except Exception as exc:
         diagnostic = ProjectDiagnostic(
             severity="error",
@@ -27219,7 +27219,6 @@ def _entry_scoped_specialization_names(
             intermediate = reverse_codegen.generate(source_ast)
             crossgl_ast = cgl_spec.parse(
                 intermediate,
-                source_options={"strict_function_bodies": True},
             )
         return _entry_scoped_specialization_names_from_crossgl_ast(
             crossgl_ast, entry_point, target
@@ -27625,9 +27624,6 @@ def _crossgl_ast_for_project_target(
 
     ast = cgl_spec.parse(
         intermediate,
-        source_options={
-            "strict_function_bodies": True,
-        },
     )
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
@@ -29969,7 +29965,7 @@ def _translate_project_impl(
                         translation_defines = (
                             defines if unit.source_backend in {"cgl", "crossgl"} else {}
                         )
-                        translation_source_options = {"strict_function_bodies": True}
+                        translation_source_options = {}
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),

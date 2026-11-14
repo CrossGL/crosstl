@@ -1,3 +1,4 @@
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -7,7 +8,9 @@ from crosstl.translator.stage_utils import (
     SHADER_STAGE_NAMES,
     STAGE_NAME_ALIASES,
     STAGE_QUALIFIER_NAMES,
+    UnknownShaderStageError,
     normalize_stage_name,
+    requested_stage_name,
     shader_stage_from_name,
 )
 
@@ -78,7 +81,7 @@ def test_generated_shader_stage_enums_roundtrip_through_shared_lookup(stage):
     separator=st.sampled_from(["_", "-", " "]),
     wrapper=st.sampled_from(["plain", "single", "double", "enum"]),
 )
-def test_generated_unknown_stage_names_are_sanitized_but_not_canonicalized(
+def test_generated_unknown_stage_names_spell_no_stage(
     suffix,
     separator,
     wrapper,
@@ -86,8 +89,11 @@ def test_generated_unknown_stage_names_are_sanitized_but_not_canonicalized(
     unknown_name = f"custom_{suffix}_stage"
     variant = _wrap_stage_name(_apply_separator(unknown_name, separator), wrapper)
 
-    assert normalize_stage_name(variant) == unknown_name
+    assert normalize_stage_name(variant) is None
     assert shader_stage_from_name(variant) is None
+    with pytest.raises(UnknownShaderStageError) as refused:
+        requested_stage_name(variant)
+    assert refused.value.code == "project.translate.unknown-shader-stage"
 
 
 def test_stage_alias_table_only_targets_canonical_shader_stage_names():

@@ -17587,6 +17587,14 @@ def test_metal_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;

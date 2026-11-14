@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl.translator as cgl_translator
@@ -307,9 +309,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "switch (++a) {",
             "switch (index) {",
-            "a += 10;",
             "outputBuffer[index] = a;",
         ],
+        # A statement before a switch's first case label never runs (C11 6.8.4.2/4).
+        "not_contains": ["a += 10;"],
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -488,13 +491,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "outer:",
-            "break outer;",
-            "break;",
-            "return result;",
-        ],
+        # CrossGL has no labeled break; the import is refused rather than written as text.
+        "refused": "'break outer' leaves an enclosing labeled statement",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1192,24 +1190,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "sampler shadowSampler;",
-            "sampler2D shadowMap2D;",
-            "sampler2DArray shadowMap2DArray;",
-            "samplerCube shadowMapCube;",
-            "textureCompare(shadowMap2D, shadowSampler, input.texCoord, input.depth)",
-            (
-                "textureCompareOffset(shadowMap2DArray, shadowSampler, "
-                "vec3(input.texCoord, 0), input.depth, offset2)"
-            ),
-            "textureCompare(shadowMapCube, shadowSampler, cubeDir, input.depth)",
-            (
-                "unsupported Slang texture overload extras for SampleCmpBias: "
-                "dropped LOD bias"
-            ),
-        ],
-        "not_contains": ["SampleCmpBias("],
+        # CrossGL's textureCompare operations take no LOD bias.
+        "refused": "SampleCmpBias: CrossGL has no operand for LOD bias",
     },
     {
         "id": "slang_texture2d_getdimensions_querysize_lod_from_spirv_generated",
@@ -1305,16 +1287,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct MyVec {",
-            "float x;",
-            "float y;",
-            "v.x = 5.0;",
-            "v.y = 9.0;",
-            'printf("%g\\n%g\\n", v[0], v[1]);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "FunctionNode("],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": "the __subscript of Slang structure 'MyVec' has no CrossGL form",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1352,18 +1326,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct TestStruct {",
-            "float arr[5];",
-            "TestStruct ts;",
-            "ts.arr[2] = 20.0;",
-            "uint idx = 2;",
-            "float v0 = ts[int(2)];",
-            "float v1 = ts[idx];",
-            'printf("%g %g\\n", v0, v1);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "where T"],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'TestStruct' has no CrossGL form"
+        ),
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1475,17 +1441,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct FixedArray {",
-            "int data[4];",
-        ],
-        "not_contains": [
-            "interface IIndexable",
-            ": IIndexable",
-            "__subscript",
-            "operator[]",
-        ],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'FixedArray' has no CrossGL form"
+        ),
     },
     {
         "id": "slang_2026_dyn_interface_parameter_codegen_reparse",
@@ -2411,7 +2370,8 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2DMS tex;",
-            "return imageLoad(tex, 0.xx, 0).x;",
+            # ``0.xx`` is the literal 0 swizzled into an int2.
+            "return imageLoad(tex, ivec2(0), 0).x;",
         ],
         "not_contains": ["Expected COMMA or RPAREN"],
     },
@@ -2440,7 +2400,7 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "vec4 main(Params p @register(b1)) @ Out_Color",
+            "vec4 main(Params p @register(b1)) @ gl_FragColor",
             "return vec4(g_params.x + p.x, 0, 0, 0);",
         ],
         "not_contains": [
@@ -2463,6 +2423,11 @@ def generate_crossgl(ast):
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda item: item["id"])
 def test_external_fixture_codegen_crossgl_reparse(fixture):
     ast = parse_slang(fixture["source"])
+    refused = fixture.get("refused")
+    if refused is not None:
+        with pytest.raises(SlangImportRefused, match=re.escape(refused)):
+            generate_crossgl(ast)
+        return
     generated = generate_crossgl(ast)
 
     enum_underlying_types = fixture.get("enum_underlying_types", {})

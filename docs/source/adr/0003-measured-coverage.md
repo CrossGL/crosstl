@@ -40,7 +40,7 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 | HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
 | Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
-| OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, at the release of the clang that validates the probes; vendor extensions are left out |
+| OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, plus the `as_type` operators and `printf` of `opencl-c-base.h`, the pipe, device-side enqueue and address-space built-ins of `Builtins.def` and the `vec_step` operator of `TokenKinds.def`, at the release of the clang that validates the probes; vendor extensions are left out |
 | Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules of the release that validates the probes; the `num_traits::Float` trait and glam's `Vec3` methods, at the versions its lock file resolves |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
@@ -72,11 +72,13 @@ naga or rust-gpu) and run on lavapipe; a probe that compiler cannot lower, whose
 its validation result. llvmpipe's OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a
 native GLSL probe, or a 4.60 translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for
 them on lavapipe. CI executes the Metal rows on the macOS job, the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's
-llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The two outputs must match bit
-for bit, so a probe must compute a result that the compiler's permitted rewrites cannot change. A product that feeds a
-sum should scale by a power of two, which is exact, so contracting it into a fused multiply-add gives the same value.
-Constants should sum exactly before an input joins the sum, because Mesa reassociates additions that the SPIR-V does not
-mark `NoContraction`.
+llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The chart and `COVERAGE.md`
+give each row the number of probes that ran, or mark it compile-only when the harness has no runtime for its language
+(CUDA, HIP, OpenCL C, Mojo, and WebGL 2, which has no compute stage), so that its score rests on the reference tool
+alone. The two outputs must match bit for bit, so a probe must compute a result that the compiler's permitted rewrites
+cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
+fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
+reassociates additions that the SPIR-V does not mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a

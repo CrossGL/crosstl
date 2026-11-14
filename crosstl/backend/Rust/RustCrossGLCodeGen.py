@@ -2,7 +2,10 @@
 
 import re
 
+from crosstl.translator.renames import renamed
+
 from ..comma_expressions import crossgl_tuple_literal
+from ..import_refusals import ImportRefusalMixin, RustImportRefused
 from .RustAst import *
 from .RustLexer import *
 from .RustParser import *
@@ -38,8 +41,10 @@ except ImportError:
 CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 
 
-class RustToCrossGLConverter:
+class RustToCrossGLConverter(ImportRefusalMixin):
     """Serialize Rust backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = RustImportRefused
 
     GLOBAL_INITIALIZER_MACROS = {
         "concat",
@@ -830,6 +835,10 @@ class RustToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Render ``ast`` as CrossGL; raise :class:`RustImportRefused` if a construct has no CrossGL form."""
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}
@@ -2714,7 +2723,8 @@ class RustToCrossGLConverter:
             if pattern is None:
                 continue
 
-            subject = name_aliases.get(param.name, param.name)
+            # ``name_aliases`` holds the parameters the converter renamed.
+            subject = renamed(name_aliases, param.name)
             code += self.generate_match_pattern_bindings(subject, pattern, indent)
         return code
 
@@ -9502,6 +9512,8 @@ class RustToCrossGLConverter:
                     and not self.should_preserve_value_macro_bang(func_name)
                 ):
                     func_name = func_name[:-1]
+                if func_name.endswith("!"):
+                    return self.refuse_rust_macro(func_name)
                 args = ", ".join(self.generate_macro_argument(arg) for arg in expr.args)
                 return f"{func_name}({args})"
 
@@ -9719,6 +9731,23 @@ class RustToCrossGLConverter:
         if not isinstance(func_name, str):
             return ""
         return self.reparseable_macro_function_name(func_name).rsplit("::", 1)[-1]
+
+    INLINE_ASSEMBLY_MACROS = frozenset({"asm", "global_asm", "naked_asm"})
+
+    def refuse_rust_macro(self, func_name):
+        """Refuse a macro call that has no CrossGL form; writing ``name!(...)`` would not be CrossGL."""
+        base_name = self.rust_macro_base_name(func_name)
+        if base_name in self.INLINE_ASSEMBLY_MACROS:
+            reason = (
+                f"inline assembly '{base_name}!' is written for one instruction set, and CrossGL has no "
+                "inline assembly"
+            )
+        else:
+            reason = (
+                f"the macro '{func_name}' has no CrossGL translation: its expansion is not known to the "
+                "importer"
+            )
+        return self.refuse_import(reason, placeholder="0")
 
     def generate_reparseable_expression(self, expr):
         self.reparseable_macro_expression_depth += 1

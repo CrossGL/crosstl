@@ -32,6 +32,7 @@ from ..ast import (
     TernaryOpNode,
     VariableNode,
 )
+from ..refusals import WGSLRefusal
 
 SELECT_SCALAR_TYPES = frozenset({"bool", "i32", "u32", "f32", "f16"})
 
@@ -73,7 +74,7 @@ class WGSLCompositeConditionalMixin:
                 isinstance(node, IdentifierNode) and node.name == stmt.name
                 for node in value.walk()
             ):
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target cannot lower the conditional that initializes {stmt.name}: "
                     f"it reads a variable named {stmt.name}, which would name the new variable "
                     "once its declaration moves above the if/else; rename one of them"
@@ -105,7 +106,7 @@ class WGSLCompositeConditionalMixin:
             branch_type = self.expression_type(branch)
             if self.is_select_operand_type(branch_type):
                 continue
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower a conditional expression of type "
                 f"{self.type_name_string(branch_type)} here: WGSL select takes "
                 "scalars and vectors only, and a struct, array or matrix "

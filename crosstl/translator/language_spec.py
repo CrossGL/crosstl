@@ -149,6 +149,8 @@ AST_CATEGORY_ROOTS = (
 class LanguageSpecExtractionError(RuntimeError):
     """Raised when bounded source introspection cannot extract a known shape."""
 
+    project_diagnostic_code = "project.translate.language-spec-extraction-failed"
+
 
 def repository_root() -> Path:
     """Return the repository root containing this translator package."""

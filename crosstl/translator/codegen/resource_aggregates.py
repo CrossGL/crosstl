@@ -81,6 +81,9 @@ class ResourceAggregateError(ValueError):
         self.source_location = getattr(node, "source_location", None)
 
 
+_SIXTY_FOUR_BIT_INTEGER_SPELLINGS = {"int64": "int64_t", "uint64": "uint64_t"}
+
+
 @dataclass(frozen=True)
 class _Pointer:
     element: str
@@ -252,9 +255,12 @@ def _pointer_type(value, owner=None, *, allow_thread=False):
             ):
                 raise ResourceAggregateError("unsupported-vector-pointee", owner)
             return arithmetic_type_name(component.kind, component.bits, value.size)
-        return {"int64": "int64_t", "uint64": "uint64_t"}.get(
-            _name(value), _name(value)
-        )
+        # A pointee keeps its CrossGL type name. The 64-bit integers take one spelling, so that pointers to the
+        # same element type compare equal.
+        name = _name(value)
+        if name in _SIXTY_FOUR_BIT_INTEGER_SPELLINGS:
+            return _SIXTY_FOUR_BIT_INTEGER_SPELLINGS[name]
+        return name
 
     if (
         isinstance(value, NamedType)

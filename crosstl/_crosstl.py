@@ -320,10 +320,6 @@ def _translate_with_codegen(
             defines = materialized_source.defines
             source_options = materialized_source.source_options
 
-    if source_spec.name == "cgl":
-        # A CrossGL body the parser cannot read is refused; skipping it would emit a
-        # function that returns an undefined value.
-        source_options = {**(source_options or {}), "strict_function_bodies": True}
     ast = source_spec.parse(
         shader_code,
         file_path=file_path,
@@ -370,14 +366,15 @@ def _translate_with_codegen(
             if pragma is not None:
                 # The CrossGL program keeps the rule families of the language it came from (rule_pragmas.py).
                 generated_code = f"{pragma}\n{generated_code}"
+            cgl_spec = SOURCE_REGISTRY.get("cgl")
+            if not cgl_spec:
+                raise ValueError("CrossGL parser not available for validation")
+            # An importer's output that CrossGL cannot parse is refused here, as it is on the way to any other
+            # target, instead of being returned as CrossGL.
+            cgl_ast = cgl_spec.parse(
+                generated_code,
+            )
             if source_spec.name == "opencl":
-                cgl_spec = SOURCE_REGISTRY.get("cgl")
-                if not cgl_spec:
-                    raise ValueError("CrossGL parser not available for validation")
-                cgl_ast = cgl_spec.parse(
-                    generated_code,
-                    source_options={"strict_function_bodies": True},
-                )
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
             reverse_codegen = source_spec.create_reverse_codegen(source_options)
@@ -391,13 +388,7 @@ def _translate_with_codegen(
             cgl_spec = SOURCE_REGISTRY.get("cgl")
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
-            cgl_source_options = {
-                "strict_function_bodies": True,
-            }
-            cgl_ast = cgl_spec.parse(
-                intermediate_code,
-                source_options=cgl_source_options,
-            )
+            cgl_ast = cgl_spec.parse(intermediate_code)
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)

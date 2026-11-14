@@ -2,6 +2,8 @@ import re
 import shutil
 import subprocess
 
+import pytest
+
 from crosstl.backend.CUDA.CudaAst import (
     AssignmentNode,
     AtomicOperationNode,
@@ -23,10 +25,15 @@ from crosstl.backend.CUDA.CudaAst import (
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.backend.CUDA.directed_rounding import DirectedRoundingUnsupportedError
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
-from tests.lowering_refusal_helpers import cuda_partial_output
+from tests.lowering_refusal_helpers import (
+    cuda_import_partial_output,
+    cuda_partial_output,
+)
 
 EXTERNAL_SAMPLES = [
     {
@@ -595,8 +602,10 @@ def test_tiny_cuda_nn_fmt_named_argument_string_literal_suffix_parse():
     assert isinstance(dfmt_call.args[2], AssignmentNode)
     assert dfmt_call.args[2].left == '"DEVICE_FUNCTION"_a'
     assert dfmt_call.args[2].right == "device_function"
-    assert '"DEVICE_FUNCTION"_a = device_function' in crossgl
-    assert_crossgl_reparse(crossgl)
+    # CrossGL has no raw strings or user-defined literals; the host call is refused rather than read as an empty
+    # body.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        assert_crossgl_reparse(crossgl)
 
 
 def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():
@@ -1315,28 +1324,20 @@ def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse()
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(body[1].value, FunctionCallNode)
     assert body[1].value.name == "__syncthreads_count"
     assert body[2].value.name == "__syncthreads_and"
     assert body[3].value.name == "__syncthreads_or"
-    assert (
-        "var count: i32 = (/* cuda thread block sync vote "
-        "__syncthreads_count(pred) not directly supported in CrossGL */ 0);"
-    ) in crossgl
-    assert (
-        "var all_set: i32 = (/* cuda thread block sync vote "
-        "__syncthreads_and(pred) not directly supported in CrossGL */ 0);"
-    ) in crossgl
-    assert (
-        "var any_set: i32 = (/* cuda thread block sync vote "
-        "__syncthreads_or(pred) not directly supported in CrossGL */ 0);"
-    ) in crossgl
+    # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
+    for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
+        assert f"CUDA thread block sync vote {name}(pred)" in message
     assert "__syncthreads_count(pred);" not in crossgl
     assert "__syncthreads_and(pred);" not in crossgl
     assert "__syncthreads_or(pred);" not in crossgl
-    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
@@ -1688,12 +1689,14 @@ def test_cuda_samples_dxtc_thread_group_parameter_codegen_reparse():
     }
     """
 
-    crossgl = cuda_to_crossgl(source)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, parse_cuda(source)
+    )
 
     assert "cooperative_groups_thread_group tile" in crossgl
     assert "cg::thread_group" not in crossgl
-    assert "cooperative_groups thread_group.sync not directly supported" in crossgl
-    assert_crossgl_reparse(crossgl)
+    # The group behind a thread_group parameter is not known, so its barrier is refused rather than dropped.
+    assert "CUDA cooperative_groups thread_group.sync() has no CrossGL form" in message
 
 
 def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse():
@@ -1758,7 +1761,9 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
@@ -1766,11 +1771,11 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
     assert body[1].operation == "atomicMax_block"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    assert "cuda system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
-    assert "cuda block-scope atomic atomicMax_block lowered to atomicMax" in crossgl
-    assert (
-        "cuda system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
-    ) in crossgl
+    # A device-scoped atomic is atomic for the block too, but not for the host and peer devices.
+    assert "CUDA atomicAdd_system: CrossGL atomics are device-scoped" in message
+    assert "CUDA atomicCAS_system: CrossGL atomics are device-scoped" in message
+    assert "atomicMax_block" not in message
+    assert "/*" not in crossgl
     assert "atomicAdd(g_odata[0], 10)" in crossgl
     assert "atomicMax(g_odata[gl_LocalInvocationID.x], old)" in crossgl
     assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
@@ -2459,26 +2464,18 @@ def test_cuda_samples_device_time_functions_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert body[1].value.left.name == "::clock64"
     assert body[2].condition.left.name == "clock64"
     assert body[3].if_body[0].right.name == "clock"
-    assert (
-        "var endTime: i64 = ((/* cuda time function clock64() "
-        "not directly supported in CrossGL */ 0) + ticks);"
-    ) in crossgl
-    assert (
-        "while (((/* cuda time function clock64() not directly supported in CrossGL "
-        "*/ 0) < endTime)) {"
-    ) in crossgl
-    assert (
-        "timer[gl_WorkGroupID.x] = (/* cuda time function clock() "
-        "not directly supported in CrossGL */ 0);"
-    ) in crossgl
+    # A clock read as 0 turns the timed wait into an endless loop; it is refused.
+    assert "CUDA time function clock64(): CrossGL has no clock counter" in message
+    assert "CUDA time function clock(): CrossGL has no clock counter" in message
     assert "clock64() + ticks" not in crossgl
     assert "= clock();" not in crossgl
-    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
@@ -2613,12 +2610,14 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     # Single Precision Intrinsics.
     # URL:
     # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
+    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) have no CrossGL
+    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float rounded_intrinsics(float x, float y, float z) {
-        float ops = __fadd_rn(x, y) + __fsub_rz(x, y) + __fmul_ru(x, y);
-        float ratios = __fdiv_rd(x, y) + __frcp_rn(y);
+        float ops = __fadd_rn(x, y) + __fsub_rn(x, y) + __fmul_rn(x, y);
+        float ratios = __fdiv_rn(x, y) + __frcp_rn(y);
         float roots = __fsqrt_rn(x) + __frsqrt_rn(y);
-        float fused = __fmaf_rn(x, y, z) + __fmaf_ieee_rz(x, y, z);
+        float fused = __fmaf_rn(x, y, z) + __fmaf_ieee_rn(x, y, z);
         float base10 = __exp10f(x);
         float standard_fma = fmaf(x, y, z);
         return ops + ratios + roots + fused + base10 + standard_fma;
@@ -2636,18 +2635,29 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     assert "var standard_fma: f32 = fma(x, y, z);" in crossgl
     for raw_name in {
         "__fadd_rn",
-        "__fsub_rz",
-        "__fmul_ru",
-        "__fdiv_rd",
+        "__fsub_rn",
+        "__fmul_rn",
+        "__fdiv_rn",
         "__frcp_rn",
         "__fsqrt_rn",
         "__frsqrt_rn",
         "__fmaf_rn",
-        "__fmaf_ieee_rz",
+        "__fmaf_ieee_rn",
         "__exp10f",
         "fmaf",
     }:
         assert raw_name not in crossgl
+
+    for directed in (
+        "__fsub_rz(x, y)",
+        "__fmul_ru(x, y)",
+        "__fdiv_rd(x, y)",
+        "__fmaf_ieee_rz(x, y, z)",
+    ):
+        with pytest.raises(DirectedRoundingUnsupportedError):
+            cuda_to_crossgl(
+                f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
+            )
 
 
 def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
@@ -2679,11 +2689,11 @@ def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
     assert body[4].value.name == "__double2ll_rn"
     assert body[5].value.name == "__float2ull_rd"
     assert_crossgl_reparse(crossgl)
-    assert "var nearest: i32 = i32(round(x));" in crossgl
+    assert "var nearest: i32 = i32(roundEven(x));" in crossgl
     assert "var down: i32 = i32(floor(x));" in crossgl
     assert "var trunc: u32 = u32(x);" in crossgl
     assert "var up: u32 = u32(ceil(y));" in crossgl
-    assert "var wide: i64 = i64(round(y));" in crossgl
+    assert "var wide: i64 = i64(roundEven(y));" in crossgl
     assert "var uwide: u64 = u64(floor(x));" in crossgl
     for raw_name in {
         "__float2int_rn",
@@ -2977,20 +2987,24 @@ def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
 
     ast = parse_cuda(source)
     body = ast.functions[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert body[0].value.name == "__funnelshift_l"
     assert body[1].value.name == "__funnelshift_lc"
     assert body[2].value.name == "__funnelshift_r"
     assert body[3].value.name == "::__funnelshift_rc"
-    assert_crossgl_reparse(crossgl)
-    for name in {
+    for name in (
         "__funnelshift_l",
         "__funnelshift_lc",
         "__funnelshift_r",
         "__funnelshift_rc",
-    }:
-        assert f"cuda integer intrinsic {name}(lo, hi, shift)" in crossgl
+    ):
+        assert (
+            f"CUDA integer intrinsic {name}(lo, hi, shift) has no CrossGL form"
+            in message
+        )
         assert f"= {name}(lo, hi, shift);" not in crossgl
 
 
@@ -3334,11 +3348,10 @@ def test_cuda_programming_guide_nanosleep_mutex_codegen_reparse():
     crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert loop.body[0].name == "__nanosleep"
-    assert (
-        "/* cuda nanosleep __nanosleep(ns) not directly supported in CrossGL */ 0"
-        in crossgl
-    )
-    assert "__nanosleep(ns);" not in crossgl
+    # The sleep lasts between 0 and 2 * ns, so sleeping 0 is one of its executions; ns is still evaluated.
+    assert "(ns);" in crossgl
+    assert "__nanosleep" not in crossgl
+    assert "/*" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -3426,13 +3439,18 @@ def test_cuda_samples_stereo_disparity_usad4_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert ast.functions[0].name == "__usad4"
     assert body[0].value.name == "__usad4"
     assert body[1].value.name == "__usad4"
-    assert_crossgl_reparse(crossgl)
-    assert 'CUDA inline PTX: "vabsdiff4.u32.u32.u32.add %0, %1, %2, %3;"' in crossgl
+    # The calls are the __usad4 intrinsic, expanded bytewise; the definition's inline PTX is refused.
+    assert (
+        'CUDA inline PTX asm("vabsdiff4.u32.u32.u32.add %0, %1, %2, %3;"): CrossGL has no '
+        "inline assembly" in message
+    )
     assert "((imLeft & 0xffu) > (imRight & 0xffu))" in crossgl
     assert "(((imLeft >> 24) & 0xffu) > ((imRight >> 24) & 0xffu))" in crossgl
     assert "+ seed);" in crossgl
@@ -3462,9 +3480,9 @@ def test_cuda_samples_dxtc_rintf_color_quantization_codegen_reparse():
 
     assert body[0].right.name == "rintf"
     assert_crossgl_reparse(crossgl)
-    assert "v.x = round((clamp(v.x, 0.0f, 1.0f) * 31.0f));" in crossgl
-    assert "v.y = round((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
-    assert "v.z = round((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "v.x = roundEven((clamp(v.x, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "v.y = roundEven((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
+    assert "v.z = roundEven((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
     assert "rintf" not in crossgl
 
 
@@ -3617,8 +3635,9 @@ def test_current_cccl_thrust_variable_template_ternary_codegen_reparse():
 
     assert ast.global_variables[0].name == "is_proxy_reference_v"
     assert ast.functions[0].body[0].value.condition == "is_proxy_reference_v<int>"
-    assert "return (is_proxy_reference_v<int> ? 1 : 0);" in crossgl
-    assert_crossgl_reparse(crossgl)
+    # CrossGL has no variable templates; the specialization is refused rather than read as an empty body.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        assert_crossgl_reparse(crossgl)
 
 
 def test_current_cccl_forceinline_function_annotation_codegen_reparse():

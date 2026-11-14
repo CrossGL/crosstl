@@ -17,6 +17,7 @@ A float array member that does not start at element 0 is refused.
 
 from __future__ import annotations
 
+from ..refusals import TranslatorKeyError
 from .stage_distance_layout import DistanceLayout, distance_layout, distance_semantic
 
 __all__ = [
@@ -131,7 +132,7 @@ def _named_member(struct, name):
     for member in getattr(struct, "members", None) or []:
         if member.name == name:
             return member
-    raise KeyError(name)
+    raise TranslatorKeyError(name)
 
 
 def distance_input_alias(codegen, member):

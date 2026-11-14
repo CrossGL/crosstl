@@ -56,31 +56,41 @@ SKIPPED_FIELDS = frozenset(
     }
 )
 
+# The field kinds that hold replaceable children: tuples, sets and plain values hold none.
+_SLOT_KINDS = frozenset({A.FIELD_NODE, A.FIELD_LIST, A.FIELD_STAGES, A.FIELD_DICT})
+
 
 def child_slots(node):
     """Yield ``(field, key)`` once per distinct structural child; ``key`` is ``None`` for a direct attribute."""
     seen = set()
+    kinds = A.FIELD_KINDS
+    node_type = A.ASTNode
     for field, value in list(vars(node).items()):
-        if field in SKIPPED_FIELDS or id(value) in seen:
+        if field in SKIPPED_FIELDS:
             continue
-        if isinstance(value, A.ASTNode):
-            seen.add(id(value))
+        kind = kinds.get(type(value))
+        if kind is None:
+            kind = A.field_kind(value)
+        if kind not in _SLOT_KINDS:
+            continue
+        value_id = id(value)
+        if value_id in seen:
+            continue
+        seen.add(value_id)
+        if kind == A.FIELD_NODE:
             yield field, None
-        elif isinstance(value, list):
-            seen.add(id(value))
+        elif kind == A.FIELD_LIST:
             for index, item in enumerate(value):
-                if isinstance(item, A.ASTNode):
+                if isinstance(item, node_type):
                     yield field, index
-        elif isinstance(value, A.StageMap):
-            seen.add(id(value))
+        elif kind == A.FIELD_STAGES:
             for stage in list(value.keys()):
                 for index, item in enumerate(value.all_for_stage(stage)):
-                    if isinstance(item, A.ASTNode):
+                    if isinstance(item, node_type):
                         yield field, StageSlot(stage, index)
-        elif isinstance(value, dict):
-            seen.add(id(value))
+        else:
             for key, item in list(value.items()):
-                if isinstance(item, A.ASTNode):
+                if isinstance(item, node_type):
                     yield field, key
 
 

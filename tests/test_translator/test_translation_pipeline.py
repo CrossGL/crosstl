@@ -533,7 +533,6 @@ def test_translate_forwards_supported_options_to_reverse_codegen(
         backend=target,
         format_output=False,
         source_options={
-            "strict_function_bodies": True,
             "preprocess": False,
             "reverse_mode": "selected_mode",
         },

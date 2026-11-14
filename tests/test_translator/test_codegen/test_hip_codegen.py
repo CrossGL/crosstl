@@ -3744,7 +3744,6 @@ class TestHipCodeGen:
                     float f_lit = distance(f1, 1.0);
                     float fi = distance(f1, 1);
                     float hi = distance(h1, i1);
-                    float fb = distance(f1, b1);
                 }
             }
         }
@@ -3775,7 +3774,6 @@ class TestHipCodeGen:
         assert "float f_lit = fabsf(f1 - 1.0f);" in hip_code
         assert "float fi = fabsf(f1 - 1);" in hip_code
         assert "float hi = fabsf(__half2float(h1) - i1);" in hip_code
-        assert "float fb = distance(f1, b1);" in hip_code
         assert "h1 - f1" not in hip_code
         assert "h1 - i1" not in hip_code
         assert "fabsf(f1 - b1)" not in hip_code
@@ -3788,6 +3786,24 @@ class TestHipCodeGen:
         assert "distance(f1, 1.0)" not in hip_code
         assert "distance(f1, 1)" not in hip_code
         assert "distance(h1, i1)" not in hip_code
+
+    def test_distance_of_a_bool_operand_is_refused(self):
+        # HIP has no distance(); a call the generator cannot lower is refused rather than written as it stands.
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f1 = 1.0;
+                    bool b1 = true;
+                    float fb = distance(f1, b1);
+                }
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(HipLoweringRefused, match="call to 'distance'"):
+            HipCodeGen().generate(ast)
 
     def test_scalar_normalize_evaluates_operand_once_and_distance_is_typed(self):
         source_code = """
@@ -13385,9 +13401,12 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "unsigned int lane = (threadIdx.x & (warpSize - 1));" in hip_code
+        # Wavefronts are formed from linear thread IDs, so the lane reads all three block dimensions.
+        linear = "(threadIdx.z * blockDim.y * blockDim.x + threadIdx.y * blockDim.x + threadIdx.x)"
+        assert f"unsigned int lane = ({linear} % ((unsigned int)warpSize));" in hip_code
         assert "unsigned int count = warpSize;" in hip_code
-        assert "bool first = ((threadIdx.x & (warpSize - 1)) == 0);" in hip_code
+        assert f"bool first = (({linear} % ((unsigned int)warpSize)) == 0);" in hip_code
+        assert "threadIdx.x & (warpSize - 1)" not in hip_code
         assert (
             "__device__ inline unsigned int "
             "cgl_hip_wave_active_sum_uint_uint(unsigned int value)" in hip_code

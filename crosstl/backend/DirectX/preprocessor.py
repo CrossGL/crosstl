@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 from crosstl.translator.preprocessor.macros import UnterminatedInvocation
+from crosstl.translator.refusals import DirectXSyntaxError
 
 from .macro_expansion import (
     HLSL_MACROS,
@@ -209,7 +210,7 @@ class HLSLPreprocessor:
                     )
                 elif directive == "elif":
                     if not conditional_stack:
-                        raise SyntaxError("#elif without #if")
+                        raise DirectXSyntaxError("#elif without #if")
                     frame = conditional_stack[-1]
                     if frame["parent_active"] and not frame["branch_taken"]:
                         condition = self._evaluate_expression(
@@ -223,7 +224,7 @@ class HLSLPreprocessor:
                     directive in ("elifdef", "elifndef") and self.macro_dialect.elifdef
                 ):
                     if not conditional_stack:
-                        raise SyntaxError(f"#{directive} without #if")
+                        raise DirectXSyntaxError(f"#{directive} without #if")
                     frame = conditional_stack[-1]
                     if frame["parent_active"] and not frame["branch_taken"]:
                         condition = self._evaluate_condition(
@@ -235,7 +236,7 @@ class HLSLPreprocessor:
                         frame["active"] = False
                 elif directive == "else":
                     if not conditional_stack:
-                        raise SyntaxError("#else without #if")
+                        raise DirectXSyntaxError("#else without #if")
                     frame = conditional_stack[-1]
                     frame["active"] = (
                         frame["parent_active"] and not frame["branch_taken"]
@@ -243,7 +244,7 @@ class HLSLPreprocessor:
                     frame["branch_taken"] = True
                 elif directive == "endif":
                     if not conditional_stack:
-                        raise SyntaxError("#endif without #if")
+                        raise DirectXSyntaxError("#endif without #if")
                     conditional_stack.pop()
                 elif not active:
                     pass
@@ -283,7 +284,7 @@ class HLSLPreprocessor:
                         output.append(line)
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
-                        raise SyntaxError(f"#{directive}: {rest.strip()}")
+                        raise DirectXSyntaxError(f"#{directive}: {rest.strip()}")
                 elif (
                     not directive
                     and not self._strip_macro_comments(stripped[1:]).strip()
@@ -308,7 +309,7 @@ class HLSLPreprocessor:
             idx += consumed_lines
 
         if conditional_stack:
-            raise SyntaxError("Unterminated #if block")
+            raise DirectXSyntaxError("Unterminated #if block")
 
         return output
 

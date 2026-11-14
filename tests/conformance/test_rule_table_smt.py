@@ -1,5 +1,6 @@
 """The SMT check of the rule table: every entry is sound, and the checker rejects unsound entries."""
 
+import numpy as np
 import pytest
 
 z3 = pytest.importorskip("z3")
@@ -205,3 +206,66 @@ def test_native_conversion_is_unsound_on_every_target():
             "__cgl_sat_ftoi", target, TargetEntry("native", "mutation")
         )
         assert record["result"] == "unsound", target
+
+
+def test_every_round_away_entry_is_checked_and_sound():
+    records, _ = rule_table_smt.check_table()
+    checked = {
+        r["target"]: r["result"]
+        for r in records
+        if r.get("intrinsic") == "__cgl_round_away"
+    }
+    assert set(checked.values()) == {"sound"}
+    assert {"metal", "directx", "opengl", "vulkan", "cuda"} <= set(checked)
+
+
+@pytest.mark.parametrize("target", ["directx", "wgsl"])
+def test_native_round_is_unsound_where_halfway_cases_go_to_even(target):
+    record = rule_table_smt.check_entry(
+        "__cgl_round_away", target, TargetEntry("native", "mutation")
+    )
+    assert record["result"] == "unsound"
+    x = float(
+        np.array([int(record["counterexample"]["x0"], 16)], np.uint32).view(np.float32)[
+            0
+        ]
+    )
+    assert abs(x - np.trunc(x)) == 0.5
+
+
+def test_native_round_is_unmodelled_where_the_halfway_direction_is_open():
+    record = rule_table_smt.check_entry(
+        "__cgl_round_away", "opengl", TargetEntry("native", "mutation")
+    )
+    assert record["result"] == "unmodelled"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # floor(x + 0.5) rounds 0.49999997 up and -2.5 toward +infinity.
+        "x0 >= 0.0 ? floor(x0 + 0.5) : -floor(0.5 - x0)",
+        # Adding +0.0 turns the -0.0 of trunc(-0.25) into +0.0.
+        "abs(x0 - trunc(x0)) >= 0.5 ? trunc(x0) + sign(x0) : trunc(x0) + 0.0",
+        # sign(0.0) differs between targets, and the halfway test misses x0 = 0.5 - ulp.
+        "trunc(x0 + sign(x0) * 0.5)",
+    ],
+)
+def test_checker_rejects_defective_round_away_helpers(monkeypatch, body):
+    helper = rule_table.HELPERS["__cgl_round_away"]
+    monkeypatch.setitem(
+        rule_table.HELPERS,
+        "__cgl_round_away",
+        rule_table.Helper(
+            helper.name, helper.scalar, body, helper.parameters, helper.result
+        ),
+    )
+    helpers._parsed.cache_clear()
+    try:
+        record = rule_table_smt.check_entry(
+            "__cgl_round_away", "metal", TargetEntry("polyfill", "mutation")
+        )
+    finally:
+        monkeypatch.undo()
+        helpers._parsed.cache_clear()
+    assert record["result"] == "unsound"

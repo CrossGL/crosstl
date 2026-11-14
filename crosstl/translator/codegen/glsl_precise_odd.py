@@ -26,6 +26,8 @@ the series paths stay within 0.85 (sinh), 2.7 (tanh), 0.72 (atanh) and 2.5
 operand's sign bit, and NaN passes through.
 """
 
+from ..refusals import OpenGLRefusal
+
 SINH_COEFFICIENTS = (
     "0.16666666666666666667",
     "0.0083333333333333333333",
@@ -74,7 +76,7 @@ def _small_magnitude_lines(operation, value_type):
             + _odd_series("reduced", "reducedSquared", ATANH_COEFFICIENTS)
             + ";",
         ]
-    raise ValueError(f"Unsupported precise odd function: {operation}")
+    raise OpenGLRefusal(f"Unsupported precise odd function: {operation}")
 
 
 def glsl_precise_odd_helper(name, operation, value_type, width):
@@ -83,9 +85,9 @@ def glsl_precise_odd_helper(name, operation, value_type, width):
     ``value_type`` is ``float`` or ``vecN`` for ``width`` N.
     """
     if operation not in PRECISE_ODD_OPERATIONS:
-        raise ValueError(f"Unsupported precise odd function: {operation}")
+        raise OpenGLRefusal(f"Unsupported precise odd function: {operation}")
     if width not in (1, 2, 3, 4):
-        raise ValueError(f"Unsupported precise odd function width: {width}")
+        raise OpenGLRefusal(f"Unsupported precise odd function width: {width}")
     threshold = SERIES_THRESHOLDS[operation]
     if width == 1:
         unsigned = "uint"

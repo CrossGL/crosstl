@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from crosstl.translator.refusals import DirectXSyntaxError
+
 from .namespaces import source_name
 
 __all__ = [
@@ -73,11 +75,13 @@ def _collect_argument_tokens(parser):
             depth -= 1
         elif token_type == "SHIFT_RIGHT":
             if depth < 2:
-                raise SyntaxError("Unbalanced '>>' in a template parameter default")
+                raise DirectXSyntaxError(
+                    "Unbalanced '>>' in a template parameter default"
+                )
             depth -= 2
         tokens.append(parser.current_token)
         parser.eat(token_type)
-    raise SyntaxError("Unterminated template parameter list")
+    raise DirectXSyntaxError("Unterminated template parameter list")
 
 
 def parse_template_parameter_list(parser):

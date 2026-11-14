@@ -53,6 +53,7 @@ from ..ast import (
 )
 from ..explicit_specializations import explicit_specialization_refusals
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import RustRefusal
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
@@ -60,8 +61,36 @@ from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
+from .precise_evaluation import refuse_precise_evaluation
+from .rust_exact_lookups import (
+    RUST_PRIMITIVE_SOURCE_TYPES,
+    RUST_RAY_STAGE_METADATA_NAMES,
+    RUST_RAY_TRACING_INTRINSICS,
+    call_names_resolving_to,
+    rust_foreign_call_reason,
+    rust_generic_template_reason,
+    rust_operator,
+    rust_resource_kind_of_spelling,
+    rust_unmapped_semantic_reason,
+)
+from .rust_memory_atomics import (
+    generate_rust_memory_atomic_call,
+    rust_memory_atomic_location_roots,
+    rust_memory_atomic_result_type,
+)
+from .rust_narrow_integers import (
+    RUST_EXACT_WIDTH_INTEGER_TYPES,
+    RUST_SCALAR_RANKS,
+    promoted_operand_type,
+)
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
+from .rust_resource_bindings import (
+    PROMOTABLE_RESOURCE_KINDS,
+    referenced_identifier_names,
+    refuse_unbound_rust_resource,
+    resource_parameters,
+)
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
@@ -100,6 +129,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "half": "f16",
             "f16": "f16",
             "bool": "bool",
+            **RUST_EXACT_WIDTH_INTEGER_TYPES,
             "string": "&'static str",
             "str": "&'static str",
             "char": "char",
@@ -605,6 +635,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
+        self.rust_referenced_names = frozenset()
+        self.rust_resource_capture_params = {}
+        self.rust_entry_resource_infos = {}
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -657,6 +690,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         """
         # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
+        refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
         return self.refusals.run(self.generate_program, ast)
 
@@ -721,6 +755,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.lambda_capture_place_alias_stack = []
         self.force_move_lambda_depth = 0
         self.nested_lambda_capture_preclone_depth = 0
+        self.rust_referenced_names = referenced_identifier_names(ast)
         self.reserve_explicit_rust_resource_bindings(ast)
         self.rust_entry_resource_params_by_function_id = (
             self.collect_rust_entry_resource_params(ast)
@@ -729,6 +764,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             id(info["node"])
             for params in self.rust_entry_resource_params_by_function_id.values()
             for info in params
+        } | {
+            id(self.rust_entry_resource_infos[param.name]["node"])
+            for params in self.rust_resource_capture_params.values()
+            for param in params
+        }
+        self.rust_function_capture_params = {
+            name: list(params)
+            for name, params in self.rust_resource_capture_params.items()
         }
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
@@ -753,14 +796,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if isinstance(node, ArrayNode):
-                code += self.generate_global_array_declaration(node)
-                emitted_static_names.add(node.name)
-            elif self.is_promoted_rust_entry_resource(node):
+            if self.is_promoted_rust_entry_resource(node):
                 var_type = self.rust_variable_source_type(node)
                 self.register_glsl_buffer_block_metadata(node)
                 self.register_variable_type(node.name, var_type, scope="static")
                 code += self.rust_resource_metadata_comment(node, var_type)
+                emitted_static_names.add(node.name)
+            elif isinstance(node, ArrayNode):
+                code += self.generate_global_array_declaration(node)
                 emitted_static_names.add(node.name)
             else:
                 code += self.generate_variable_static_declaration(node)
@@ -820,7 +863,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     ),
                 )
             else:
-                code += self.generate_function(func)
+                code += self.generate_function(
+                    func,
+                    extra_params=self.rust_function_capture_params.get(
+                        getattr(func, "name", None)
+                    ),
+                )
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
@@ -838,9 +886,15 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         self.get_variable_type(variable),
                         scope="static",
                     )
-                    if variable.name not in emitted_static_names:
+                    if variable.name in emitted_static_names:
+                        continue
+                    if self.is_promoted_rust_entry_resource(variable):
+                        var_type = self.rust_variable_source_type(variable)
+                        self.register_glsl_buffer_block_metadata(variable)
+                        code += self.rust_resource_metadata_comment(variable, var_type)
+                    else:
                         code += self.generate_variable_static_declaration(variable)
-                        emitted_static_names.add(variable.name)
+                    emitted_static_names.add(variable.name)
 
                 local_captures = {}
                 if hasattr(stage, "entry_point"):
@@ -851,7 +905,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         stage_entry_name_counts,
                     )
                     local_captures = self.collect_stage_local_function_captures(stage)
-                    self.rust_function_capture_params.update(local_captures)
+                    for captured_name, captured in local_captures.items():
+                        self.rust_function_capture_params[captured_name] = list(
+                            captured
+                        ) + self.rust_resource_capture_params.get(captured_name, [])
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
                         stage.entry_point,
@@ -869,6 +926,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         )
                 for captured_name in local_captures:
                     self.rust_function_capture_params.pop(captured_name, None)
+                    if captured_name in self.rust_resource_capture_params:
+                        self.rust_function_capture_params[captured_name] = list(
+                            self.rust_resource_capture_params[captured_name]
+                        )
 
                 self.variable_types = saved_variable_types
 
@@ -1036,14 +1097,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         }
 
     def rust_ray_stage_metadata_name(self, shader_type):
-        return {
-            "ray_any_hit": "any_hit",
-            "ray_callable": "callable",
-            "ray_closest_hit": "closest_hit",
-            "ray_generation": "ray_generation",
-            "ray_intersection": "intersection",
-            "ray_miss": "miss",
-        }.get(shader_type, shader_type)
+        name = RUST_RAY_STAGE_METADATA_NAMES.get(shader_type)
+        if name is None:
+            return self.refuse_lowering(
+                f"ray-tracing stage {shader_type}: not a CrossGL ray-tracing stage",
+                str(shader_type),
+            )
+        return name
 
     def rust_mesh_stage_names(self):
         return {"amplification", "mesh", "object", "task"}
@@ -1061,7 +1121,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return None
         display_name = attribute_names[0]
         if len(arguments) != 1:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {display_name} requires exactly one argument"
             )
         return self.attribute_argument_text(arguments[0])
@@ -1072,13 +1132,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return None
         display_name = attribute_names[0]
         if len(arguments) != 1:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {display_name} requires exactly one argument"
             )
         value_text = self.attribute_argument_text(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {display_name} ({value}) must be positive"
             )
         return value_text
@@ -1088,14 +1148,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not arguments:
             return None
         if len(arguments) > 3:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage numthreads requires at most three arguments"
             )
         values = [self.attribute_argument_text(arg) for arg in arguments]
         for index, argument in enumerate(arguments):
             value = self.literal_int_value(argument)
             if value is not None and value <= 0:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name} stage numthreads value {index + 1} "
                     "must be positive"
                 )
@@ -1116,12 +1176,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     getattr(entry, "arguments", getattr(entry, "args", [])) or []
                 )
                 if len(arguments) != 1:
-                    raise ValueError(
+                    raise RustRefusal(
                         f"Rust {stage_name} stage {name} requires exactly one argument"
                     )
                 value = self.literal_int_value(arguments[0])
                 if value is not None and value <= 0:
-                    raise ValueError(f"Rust {stage_name} stage {name} must be positive")
+                    raise RustRefusal(
+                        f"Rust {stage_name} stage {name} must be positive"
+                    )
                 sizes[name] = self.attribute_argument_text(arguments[0])
         if all(value is None for value in sizes.values()):
             return None
@@ -1150,13 +1212,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         value = self.rust_mesh_stage_attribute_value(func, stage_name, "outputtopology")
         if value is None:
             if required:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name} stage requires outputtopology attribute"
                 )
             return None
         topology = self.canonical_rust_mesh_output_topology(value)
         if topology is None:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage outputtopology '{value}' must be point, "
                 "line, triangle, triangle_cw, or triangle_ccw"
             )
@@ -1205,23 +1267,23 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             seen_roles.setdefault(role, []).append(parameter.name)
 
             if role == "mesh_payload" and stage_name != "mesh":
-                raise ValueError(
+                raise RustRefusal(
                     "Rust mesh payload parameters are only valid on mesh stages"
                 )
             if role in {"vertices", "indices", "primitives"}:
                 if stage_name != "mesh":
-                    raise ValueError(
+                    raise RustRefusal(
                         f"Rust mesh output parameter role {role} is only valid "
                         "on mesh stages"
                     )
                 if not self.rust_parameter_is_array(parameter):
-                    raise ValueError(
+                    raise RustRefusal(
                         f"Rust mesh {role} parameter '{parameter.name}' must be "
                         "an array"
                     )
 
         if len(seen_roles.get("mesh_payload", [])) > 1:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust mesh stage accepts at most one mesh_payload parameter"
             )
 
@@ -1250,7 +1312,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 and max_vertices is not None
                 and array_count > max_vertices
             ):
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust mesh vertices parameter '{parameter.name}' count "
                     f"({array_count}) exceeds maxvertices ({max_vertices})"
                 )
@@ -1259,7 +1321,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 and max_primitives is not None
                 and array_count > max_primitives
             ):
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust mesh {role} parameter '{parameter.name}' count "
                     f"({array_count}) exceeds maxprimitives ({max_primitives})"
                 )
@@ -1306,7 +1368,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def validate_rust_mesh_op_stage(self, operation, stage_name):
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name or 'function'} stage cannot call "
                     "SetMeshOutputCounts; SetMeshOutputCounts is only valid in "
                     "mesh stages"
@@ -1314,13 +1376,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return
         if operation == "DispatchMesh":
             if stage_name not in {"task", "amplification", "object"}:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name or 'function'} stage cannot call "
                     "DispatchMesh; DispatchMesh is only valid in task, "
                     "amplification, or object stages"
                 )
             return
-        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+        raise RustRefusal(f"Unsupported Rust mesh intrinsic {operation}")
 
     def rust_mesh_count_argument_is_integer_scalar(self, argument):
         if isinstance(argument, bool) or isinstance(argument, float):
@@ -1344,13 +1406,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def validate_rust_mesh_op_arguments(self, operation, arguments, stage_name):
         if operation == "SetMeshOutputCounts":
             if len(arguments) != 2:
-                raise ValueError(
+                raise RustRefusal(
                     "Rust mesh SetMeshOutputCounts requires exactly two arguments"
                 )
             labels = ("vertex count", "primitive count")
         elif operation == "DispatchMesh":
             if len(arguments) not in {3, 4}:
-                raise ValueError(
+                raise RustRefusal(
                     "Rust mesh DispatchMesh requires three group counts and an "
                     "optional payload argument"
                 )
@@ -1360,13 +1422,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         for label, argument in zip(labels, arguments):
             if not self.rust_mesh_count_argument_is_integer_scalar(argument):
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name} {operation} {label} argument must be an "
                     "integer scalar"
                 )
             value = self.literal_int_value(argument)
             if value is not None and value < 0:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name} {operation} {label} argument must be "
                     "non-negative"
                 )
@@ -1453,7 +1515,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if len(args) == 4:
                 return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args[:3])}, &mut {args[3]}) }}"
             return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
-        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+        raise RustRefusal(f"Unsupported Rust mesh intrinsic {operation}")
 
     def generate_required_rust_mesh_helpers(self):
         if not self.required_mesh_helpers:
@@ -1483,15 +1545,15 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def rust_geometry_maxvertexcount(self, func):
         arguments = self.rust_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("Rust geometry stage requires maxvertexcount attribute")
+            raise RustRefusal("Rust geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_argument_text(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -1583,7 +1645,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
             expected_count = expected_counts[primitive]
             if not self.rust_parameter_is_array(parameter):
-                raise ValueError(
+                raise RustRefusal(
                     "Rust geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -1593,7 +1655,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise RustRefusal(
                     "Rust geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -1606,7 +1668,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.rust_geometry_stream_info(self.parameter_raw_type(param))
             for param in parameters
         ):
-            raise ValueError(
+            raise RustRefusal(
                 "Rust geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -1614,7 +1676,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not any(
             self.rust_geometry_input_primitive_qualifier(param) for param in parameters
         ):
-            raise ValueError(
+            raise RustRefusal(
                 "Rust geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -1712,7 +1774,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -1724,11 +1786,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not arguments:
             arguments = self.rust_stage_attribute_arguments(func, "vertices")
         if not arguments:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage requires outputcontrolpoints attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
@@ -1736,17 +1798,17 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         value_text = self.attribute_argument_text(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is None:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage outputcontrolpoints "
                 f"'{value_text}' must be an integer literal"
             )
         if value <= 0:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
         if value > 32:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage outputcontrolpoints "
                 f"({value}) must be at most 32"
             )
@@ -1770,12 +1832,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         value = self.rust_tessellation_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"Rust {stage_name} stage requires domain attribute")
+                raise RustRefusal(f"Rust {stage_name} stage requires domain attribute")
             return None
 
         domain = self.canonical_rust_tessellation_domain(value)
         if domain is None:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage domain '{value}' must be one of: "
                 "isoline, quad, tri"
             )
@@ -1787,7 +1849,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         )
         if value is None:
             if required:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust {stage_name} stage requires partitioning attribute"
                 )
             return None
@@ -1804,7 +1866,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "pow2": "pow2",
         }.get(normalized)
         if partitioning is None:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage partitioning '{value}' must be one of: "
                 "fractional_even, fractional_odd, integer, pow2"
             )
@@ -1858,29 +1920,29 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         type_name = self.type_name_string(self.parameter_raw_type(parameter))
 
         if not info["valid"]:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {patch_type}{name_clause} must use "
                 f"{patch_type}<T, N>; found '{type_name or patch_type}'"
             )
         if info["element_type"] is None:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {patch_type}{name_clause} must include "
                 "an element type"
             )
 
         control_points = info["count_value"]
         if control_points is None:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {patch_type}{name_clause} control "
                 f"point count '{info['count_text']}' must be an integer literal"
             )
         if control_points <= 0:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {patch_type}{name_clause} control "
                 f"point count ({control_points}) must be positive"
             )
         if control_points > 32:
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust {stage_name} stage {patch_type}{name_clause} control "
                 "point count "
                 f"({control_points}) must be at most 32"
@@ -1908,7 +1970,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.rust_tessellation_patch_parameters(parameters, "InputPatch")
         )
         if not input_patch_parameters:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_control stage parameters must include an "
                 "InputPatch<T, N> parameter"
             )
@@ -1927,7 +1989,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.rust_tessellation_patch_parameters(parameters, "OutputPatch")
         )
         if not output_patch_parameters:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust tessellation_evaluation stage parameters must include an "
                 "OutputPatch<T, N> parameter"
             )
@@ -2025,7 +2087,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(
+            raise RustRefusal(
                 f"Rust output does not support stage type(s): {stage_list}"
             )
 
@@ -2202,12 +2264,23 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return None
 
     def rust_global_entry_resource_infos(self, ast):
-        """Collect global resources that can be promoted to entry parameters."""
+        """Collect global and stage-local resources that can be promoted to entry parameters.
+
+        Stage-local variables share one module-level namespace with the globals (a name is declared once), so a
+        stage-local resource whose name a global or an earlier stage already declares is the same resource.
+        """
         resources = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        declared = set()
+        candidates = list(getattr(ast, "global_variables", []) or [])
+        stages = getattr(ast, "stages", None)
+        if isinstance(stages, dict):
+            for stage in stages.values():
+                candidates.extend(getattr(stage, "local_variables", []) or [])
+        for node in candidates:
             name = getattr(node, "name", None)
-            if not name:
+            if not name or name in declared:
                 continue
+            declared.add(name)
             type_name = self.rust_variable_source_type(node)
             if not self.can_promote_rust_entry_resource(node, type_name):
                 continue
@@ -2215,24 +2288,30 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return resources
 
     def can_promote_rust_entry_resource(self, node, type_name):
-        """Return whether a resource can replace a Rust placeholder static."""
-        if isinstance(node, ArrayNode):
-            return False
-        if self.explicit_rust_resource_binding_index(node) is None:
-            return False
+        """Return whether a resource can be an entry parameter, with its explicit or assigned binding.
+
+        A fixed-size resource array is one parameter of array type bound to ``count`` consecutive bindings.
+        """
         if getattr(node, "initial_value", getattr(node, "value", None)) is not None:
             return False
 
         resource_kind = self.rust_resource_kind(type_name, node=node)
-        if resource_kind not in {"texture", "sampler"}:
+        if resource_kind not in PROMOTABLE_RESOURCE_KINDS:
             return False
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
-        return count == 1
+        if self.is_array_type_name(self.type_name_string(type_name)):
+            _base, sizes = self.c_array_type_parts(self.type_name_string(type_name))
+        return isinstance(count, int) and count >= 1
 
     def collect_rust_entry_resource_params(self, ast):
-        """Map stage entry functions to promoted Rust resource parameters."""
+        """Map stage entry functions to their Rust resource parameters, and helpers to the resources they take.
+
+        The helper parameters go to :attr:`rust_resource_capture_params`, keyed by helper name.
+        """
+        self.rust_resource_capture_params = {}
         resources = self.rust_global_entry_resource_infos(ast)
+        self.rust_entry_resource_infos = resources
         if not resources:
             return {}
 
@@ -2245,12 +2324,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 stage_entry_ids.add(id(entry_point))
 
         entry_functions = {}
-        entry_refs = {}
-        non_entry_refs = set()
+        helpers = []
         seen_functions = set()
 
         def visit(current):
-            nonlocal non_entry_refs
             if current is None:
                 return
             if isinstance(current, list):
@@ -2262,17 +2339,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 if function_id in seen_functions:
                     return
                 seen_functions.add(function_id)
-                is_entry = (
+                if (
                     function_id in stage_entry_ids
                     or self.rust_function_stage_name(current) is not None
-                )
-                if is_entry:
+                ):
                     entry_functions[function_id] = current
-                    entry_refs[function_id] = self.collect_free_identifier_names(
-                        current
-                    )
-                else:
-                    non_entry_refs.update(self.collect_free_identifier_names(current))
+                elif not self.is_function_prototype(current):
+                    helpers.append(current)
                 return
 
             for function in getattr(current, "functions", []) or []:
@@ -2286,28 +2359,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     visit(stage)
 
         visit(ast)
-
-        params_by_function = {}
-        unsafe_names = set(resources) & non_entry_refs
-        for function_id, used_names in entry_refs.items():
-            function = entry_functions[function_id]
-            parameter_names = {
-                param.name
-                for param in getattr(
-                    function,
-                    "parameters",
-                    getattr(function, "params", []),
-                )
-            }
-            params = [
-                info
-                for name, info in resources.items()
-                if name in used_names
-                and name not in unsafe_names
-                and name not in parameter_names
-            ]
-            if params:
-                params_by_function[function_id] = params
+        params_by_function, self.rust_resource_capture_params = resource_parameters(
+            entry_functions, helpers, resources
+        )
         return params_by_function
 
     def is_promoted_rust_entry_resource(self, node):
@@ -3582,13 +3636,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if kind in {"position", "color"}:
             if self.is_rust_vec4_float_type(type_name):
                 return
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {semantic} {context} for Rust codegen; "
                 "expected vec4-compatible type"
             )
 
         if kind == "depth" and not self.is_rust_float_scalar_type(type_name):
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {semantic} {context} for Rust codegen; "
                 "expected float type"
             )
@@ -3598,7 +3652,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {semantic} {context} for Rust codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -3612,7 +3666,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         }[kind]
         if shader_type not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {semantic} {context} for Rust {shader_type} stage; "
                 f"valid stage is {allowed}"
             )
@@ -3621,7 +3675,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if semantic is None:
             return
         if self.map_type(return_type) == "()":
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {semantic} return semantic for Rust codegen; "
                 "void return type"
             )
@@ -3727,7 +3781,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             and actual_type in {"u32", "Vec2<u32>"}
         ):
             return
-        raise ValueError(
+        raise RustRefusal(
             f"Unsupported {semantic} stage parameter semantic for Rust codegen; "
             f"expected {expected_type} type"
         )
@@ -3749,13 +3803,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 mapped_semantic, expected_type, allowed_stages = rule
                 if shader_type not in allowed_stages:
                     allowed = ", ".join(sorted(allowed_stages))
-                    raise ValueError(
+                    raise RustRefusal(
                         f"Unsupported {semantic} stage parameter semantic for Rust "
                         f"{shader_type} stage; valid stage is {allowed}"
                     )
                 previous_name = seen_system_semantics.get(mapped_semantic)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise RustRefusal(
                         f"Duplicate Rust stage parameter semantic {mapped_semantic} "
                         f"on '{previous_name}' and '{parameter.name}'"
                     )
@@ -3767,7 +3821,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
             kind = self.rust_semantic_output_kind(semantic)
             if kind in {"color", "depth"}:
-                raise ValueError(
+                raise RustRefusal(
                     f"Unsupported {semantic} stage parameter semantic for Rust "
                     f"{shader_type} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -3793,52 +3847,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return nodes
 
     def map_type_to_rust(self, type_str):
-        """Enhanced type mapping for Rust."""
-        matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
-        if matrix_alias != str(type_str):
-            return self.map_type(matrix_alias)
-
-        mapped_type = self.map_type(type_str)
-        if mapped_type != type_str:
-            return mapped_type
-
-        if type_str.startswith("float") and len(type_str) > 5:
-            size = type_str[5:]
-            if size.isdigit():
-                return f"Vec{size}<f32>"
-        elif type_str.startswith("int") and len(type_str) > 3:
-            size = type_str[3:]
-            if size.isdigit():
-                return f"Vec{size}<i32>"
-
-        # Standard type mapping
-        type_map = {
-            "void": "()",
-            "bool": "bool",
-            "int": "i32",
-            "uint": "u32",
-            "float": "f32",
-            "double": "f64",
-            "vec2": "Vec2<f32>",
-            "vec3": "Vec3<f32>",
-            "vec4": "Vec4<f32>",
-            "ivec2": "Vec2<i32>",
-            "ivec3": "Vec3<i32>",
-            "ivec4": "Vec4<i32>",
-            "uvec2": "Vec2<u32>",
-            "uvec3": "Vec3<u32>",
-            "uvec4": "Vec4<u32>",
-            "mat2": "Mat2<f32>",
-            "mat3": "Mat3<f32>",
-            "mat4": "Mat4<f32>",
-            "float2": "Vec2<f32>",
-            "float3": "Vec3<f32>",
-            "float4": "Vec4<f32>",
-        }
-        mapped_type = type_map.get(type_str, type_str)
-        if mapped_type != type_str:
-            return self.qualify_colliding_runtime_type(mapped_type)
-        return mapped_type
+        """The Rust spelling of a constant-buffer member type: the generator's one type mapping."""
+        return self.map_type(type_str)
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -3953,7 +3963,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         return (
             self.rust_resource_metadata_comment(node, var_type)
-            + self.rust_resource_placeholder_diagnostic_comment(node, var_type)
+            + refuse_unbound_rust_resource(self, node, var_type)
             + self.generate_static_declaration(
                 node.name,
                 rust_type,
@@ -4003,7 +4013,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.register_variable_type(node.name, source_type, scope="static")
         return (
             self.rust_resource_metadata_comment(node, source_type)
-            + self.rust_resource_placeholder_diagnostic_comment(node, source_type)
+            + refuse_unbound_rust_resource(self, node, source_type)
             + self.generate_static_declaration(
                 node.name, rust_type, initializer, lazy_lock=lazy_lock
             )
@@ -4519,14 +4529,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not arguments:
             return None
         if len(arguments) > 3:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust compute stage numthreads requires at most three arguments"
             )
         values = [self.attribute_argument_text(arg) for arg in arguments]
         for index, argument in enumerate(arguments):
             value = self.literal_int_value(argument)
             if value is not None and value <= 0:
-                raise ValueError(
+                raise RustRefusal(
                     f"Rust compute stage numthreads value {index + 1} "
                     "must be positive"
                 )
@@ -4790,6 +4800,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         continue
                     names.update(self.mutable_reference_borrow_root_names(argument))
                 names.update(self.rust_output_argument_roots(func_name, args))
+                names.update(rust_memory_atomic_location_roots(self, func_name, args))
                 collect(current.function)
                 collect(args)
                 return
@@ -5123,8 +5134,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if self.is_user_defined_function(func_name):
             return
 
-        mapped_name = self.function_map.get(func_name, func_name)
-        if mapped_name != "sqrt":
+        if func_name not in call_names_resolving_to(self.function_map, {"sqrt"}):
             return
 
         arguments = getattr(node, "arguments", []) or []
@@ -5530,7 +5540,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
     def wave_op_result_type(self, operation, arguments):
         """Infer the CrossGL result type for a Rust subgroup helper."""
-        helper_name = self.wave_op_map.get(operation, operation)
+        helper_name = self.wave_op_map.get(operation)
+        if helper_name is None:
+            # generate_wave_op_expression refuses the operation; it has no result type.
+            return None
         arg_types = [self.expression_result_type(arg) for arg in arguments or []]
         return self.wave_helper_result_type(helper_name, arg_types)
 
@@ -5679,7 +5692,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         has_unconditional_wildcard = False
         for arm in getattr(node, "arms", []) or []:
             if not self.is_supported_match_arm(arm):
-                raise ValueError("Unsupported match arm for Rust codegen")
+                raise RustRefusal("Unsupported match arm for Rust codegen")
 
             pattern = getattr(arm, "pattern", None)
             guard = getattr(arm, "guard", None)
@@ -6394,7 +6407,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if getattr(pattern, "has_rest", False):
                 fields.append("..")
             return f"{pattern.type_name} {{ {', '.join(fields)} }}"
-        raise ValueError(f"Unsupported match pattern for Rust codegen: {pattern!r}")
+        raise RustRefusal(f"Unsupported match pattern for Rust codegen: {pattern!r}")
 
     def generate_switch_case_body(self, body, indent):
         statements = self.statement_list(body)
@@ -8515,11 +8528,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
     def validate_swizzle_assignment_target(self, target, components):
         if len(components) > 4:
-            raise ValueError(
+            raise RustRefusal(
                 "Rust swizzle assignment target cannot exceed 4 components"
             )
         if len(set(components)) != len(components):
-            raise ValueError("Rust swizzle assignment target cannot repeat components")
+            raise RustRefusal("Rust swizzle assignment target cannot repeat components")
 
         object_expr = getattr(target, "object_expr", getattr(target, "object", None))
         object_type = self.expression_result_type(object_expr)
@@ -8530,7 +8543,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         component_indices = {"x": 0, "y": 1, "z": 2, "w": 3}
         for component in components:
             if component_indices[component] >= vector_info["size"]:
-                raise ValueError(
+                raise RustRefusal(
                     "Rust swizzle assignment target component "
                     f"'{component}' is not available on "
                     f"{self.map_type(object_type)}"
@@ -8564,6 +8577,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 "store", "a readonly block cannot be written"
             )
         root_name = self.glsl_buffer_block_root_name(target)
+        if root_name in self.rust_entry_resource_infos:
+            # The block reaches the entry point and its helpers as a value of the block's struct type, so a store
+            # would change a copy and never reach the bound buffer.
+            return self.unsupported_glsl_buffer_block_statement(
+                "store",
+                "the block is passed by value, so a store would not reach the buffer",
+            )
         if root_name in self.static_variable_names and root_name not in (
             self.local_variable_names
         ):
@@ -8996,9 +9016,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     self.expression_result_type(operand_expr)
                 )
                 return f"{operand} {assignment_op} {increment}"
-            if raw_op in {"~", "BITWISE_NOT"}:
+            if op == "~":
                 operand = self.generate_expression(operand_expr)
                 return f"(!{operand})"
+            if op == "+":
+                # Rust has no unary plus; +x is x.
+                return f"({self.generate_expression(operand_expr)})"
             bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
             if bool_vector_not is not None:
                 return bool_vector_not
@@ -9110,6 +9133,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if bitcast_intrinsic is not None:
                 return bitcast_intrinsic
 
+            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
+            if memory_atomic is not None:
+                return memory_atomic
+
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
             cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
@@ -9187,7 +9214,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             callable_name = self.rust_imported_math_callable_name(func_name or callee)
-            return f"{self.rust_callable_name(callable_name)}({args_str})"
+            call = f"{self.rust_callable_name(callable_name)}({args_str})"
+            foreign_call = rust_foreign_call_reason(self, original_func_name, func_name)
+            if foreign_call is not None:
+                return self.refuse_lowering(foreign_call, call)
+            return call
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
@@ -9507,6 +9538,16 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             or func_name in self.user_function_names
         )
 
+    def rust_runtime_function_names(self):
+        """Functions of the runtime ``math`` module and the names ``function_map`` renames calls to."""
+        names = self.__dict__.get("_rust_runtime_function_names")
+        if names is None:
+            names = frozenset(self.rust_imported_math_function_names()) | frozenset(
+                name for name in self.function_map.values() if isinstance(name, str)
+            )
+            self.__dict__["_rust_runtime_function_names"] = names
+        return names
+
     def rust_imported_math_function_names(self):
         return {
             "abs",
@@ -9621,16 +9662,18 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         )
 
     def generate_ray_tracing_call_expression(self, operation, arguments):
-        if operation not in {
-            "TraceRay",
-            "CallShader",
-            "ReportHit",
-            "IgnoreHit",
-            "AcceptHitAndEndSearch",
-        }:
+        intrinsic = RUST_RAY_TRACING_INTRINSICS.get(operation)
+        if intrinsic is None:
             return None
 
-        func_name = self.function_map.get(operation, operation)
+        func_name, argument_counts = intrinsic
+        if len(arguments or []) not in argument_counts:
+            counts = " or ".join(str(count) for count in argument_counts)
+            return self.refuse_lowering(
+                f"{operation} with {len(arguments or [])} arguments: the Rust runtime's "
+                f"{func_name} takes {counts}",
+                f"{func_name}()",
+            )
         args = ", ".join(self.generate_expression(arg) for arg in arguments or [])
         if operation == "TraceRay" and len(arguments or []) == 11:
             generated_args = [self.generate_expression(arg) for arg in arguments]
@@ -9699,7 +9742,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         call = self.generate_texture_operation_call(operation, args)
         if call is not None:
             return call
-        raise ValueError(f"Unsupported Rust texture operation {operation}")
+        raise RustRefusal(f"Unsupported Rust texture operation {operation}")
 
     def generate_texture_member_function_call(self, func_expr, args):
         member = getattr(func_expr, "member", None)
@@ -9709,12 +9752,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         call = self.generate_hlsl_texture_member_call(member, obj_expr, args or [])
         if call is not None:
             return call
-        raise ValueError(f"Unsupported Rust texture member operation {member}")
+        raise RustRefusal(f"Unsupported Rust texture member operation {member}")
 
     def generate_texture_operation_call(self, operation, args):
         if operation in self.rust_hlsl_texture_member_operations():
             if not args:
-                raise ValueError(f"Unsupported Rust texture operation {operation}")
+                raise RustRefusal(f"Unsupported Rust texture operation {operation}")
             call = self.generate_hlsl_texture_member_call(
                 operation,
                 args[0],
@@ -9989,7 +10032,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         has_sampler = self.is_sampler_type(self.expression_result_type(member_args[0]))
         coord_index = 1 if has_sampler else 0
         if len(member_args) <= coord_index:
-            raise ValueError(
+            raise RustRefusal(
                 self.rust_texture_member_error(operation, "missing coordinates")
             )
 
@@ -10009,7 +10052,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return helper(helper_name, [*base_args, coord])
 
         if len(tail_args) > 2:
-            raise ValueError(
+            raise RustRefusal(
                 self.rust_texture_member_error(
                     operation,
                     "expected at most 2 sample option argument(s), "
@@ -10023,14 +10066,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         if option is None:
             if offset is not None:
-                raise ValueError(
+                raise RustRefusal(
                     self.rust_texture_member_error(
                         operation,
                         "unrecognized sample option before offset",
                     )
                 )
             if shadow:
-                raise ValueError(
+                raise RustRefusal(
                     self.rust_texture_member_error(
                         operation,
                         "shadow texture offsets are unavailable",
@@ -10044,7 +10087,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         option_name, option_args = option
         if option_name == "bias":
             if len(option_args) != 1:
-                raise ValueError(
+                raise RustRefusal(
                     self.rust_texture_member_error(
                         operation,
                         "bias sample option requires 1 argument",
@@ -10052,7 +10095,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 )
             if offset is not None:
                 if shadow:
-                    raise ValueError(
+                    raise RustRefusal(
                         self.rust_texture_member_error(
                             operation,
                             "shadow texture offsets are unavailable",
@@ -10070,7 +10113,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return helper(helper_name, [*base_args, coord, option_args[0]])
 
         if shadow:
-            raise ValueError(
+            raise RustRefusal(
                 self.rust_texture_member_error(
                     operation,
                     f"{option_name} sample option is unavailable for shadow textures",
@@ -10079,7 +10122,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         if option_name == "level":
             if len(option_args) != 1:
-                raise ValueError(
+                raise RustRefusal(
                     self.rust_texture_member_error(
                         operation,
                         "level sample option requires 1 argument",
@@ -10097,7 +10140,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         if option_name == "gradient":
             if len(option_args) != 2:
-                raise ValueError(
+                raise RustRefusal(
                     self.rust_texture_member_error(
                         operation,
                         "gradient sample option requires 2 arguments",
@@ -10113,7 +10156,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 helper_args.append(offset)
             return helper(helper_name, helper_args)
 
-        raise ValueError(
+        raise RustRefusal(
             self.rust_texture_member_error(
                 operation,
                 f"unrecognized sample option {option_name}",
@@ -10142,7 +10185,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def require_rust_texture_member_arg_count(self, operation, args, expected_counts):
         if len(args) not in expected_counts:
             expected = ", ".join(str(count) for count in sorted(expected_counts))
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported Rust texture member operation {operation}; "
                 f"expected {expected} argument(s), got {len(args)}"
             )
@@ -10155,7 +10198,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         texture_type = self.expression_result_type(args[0])
         if texture_type is not None and not self.is_texture_resource_type(texture_type):
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {helper_name} for Rust codegen; texture resource "
                 f"required: {self.map_type(texture_type)}"
             )
@@ -10163,7 +10206,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if helper_name.startswith(
             ("texture_compare", "texture_gather_compare")
         ) and not self.is_shadow_texture_type(texture_type):
-            raise ValueError(
+            raise RustRefusal(
                 f"Unsupported {helper_name} for Rust codegen; shadow texture "
                 f"required: {self.map_type(texture_type)}"
             )
@@ -10351,7 +10394,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             threshold, sampler_name = sampler_mapping
             if has_sampler or (arg_count and arg_count >= threshold):
                 return sampler_name
-        return self.function_map.get(func_name, func_name)
+        mapped_name = self.function_map.get(func_name)
+        if mapped_name is not None:
+            return mapped_name
+        # Not renamed: a constructor, a declared function or a runtime function spelled as in CrossGL. The call
+        # branch refuses a built-in of another language that reaches the output this way.
+        return func_name
 
     def call_has_explicit_sampler_argument(self, arguments):
         if not arguments or len(arguments) < 2:
@@ -10593,18 +10641,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             base_type, sizes = array_parts
             return self.format_c_array_type(base_type, sizes)
 
-        rust_scalar_aliases = {
-            "i16": "short",
-            "u16": "ushort",
-            "i32": "int",
-            "u32": "uint",
-            "i64": "long",
-            "u64": "ulong",
-            "f16": "half",
-            "f32": "float",
-            "f64": "double",
-        }
-        return rust_scalar_aliases.get(type_name, type_name)
+        source_type = RUST_PRIMITIVE_SOURCE_TYPES.get(type_name)
+        if source_type is not None:
+            return source_type
+        # A declared structure, enum or generic type is spelled the same in Rust and CrossGL.
+        return type_name
 
     def rust_array_type_parts(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -11736,7 +11777,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return components
 
     def scalar_constructor_type(self, func_name):
+        if func_name in RUST_EXACT_WIDTH_INTEGER_TYPES:
+            return RUST_EXACT_WIDTH_INTEGER_TYPES[func_name]
         scalar_types = {
+            "i8": "i8",
+            "u8": "u8",
             "bool": "bool",
             "char": "char",
             "short": "i16",
@@ -11766,12 +11811,23 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if operator in comparison_ops or operator in logical_ops:
             return "bool"
 
-        return self.promoted_scalar_type(left_type, right_type)
+        return self.promoted_binary_operand_type(left_type, right_type, operator)
 
     def binary_scalar_operand_type(self, left_type, right_type, operator=None):
         if operator in {"&&", "||"}:
             return None
-        return self.promoted_scalar_type(left_type, right_type)
+        return self.promoted_binary_operand_type(left_type, right_type, operator)
+
+    def promoted_binary_operand_type(self, left_type, right_type, operator):
+        """The type both operands compute in: integer promotion, then the higher-ranked of the two."""
+        left = self.normalize_scalar_type(left_type)
+        right = self.normalize_scalar_type(right_type)
+        if left is None or right is None:
+            return None
+        return self.promoted_scalar_type(
+            promoted_operand_type(left, operator),
+            promoted_operand_type(right, operator),
+        )
 
     def binary_composite_operand_type(self, left_type, right_type, operator=None):
         arithmetic_ops = {"+", "-", "*", "/", "%"}
@@ -12200,18 +12256,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if left is None or right is None:
             return None
 
-        ranks = {
-            "bool": 0,
-            "i16": 1,
-            "u16": 2,
-            "i32": 3,
-            "u32": 4,
-            "i64": 5,
-            "u64": 6,
-            "f16": 7,
-            "f32": 8,
-            "f64": 9,
-        }
+        ranks = RUST_SCALAR_RANKS
         return left if ranks[left] >= ranks[right] else right
 
     def promoted_vector_type(self, left_type, right_type):
@@ -12310,6 +12355,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "f16": "f16",
             "f32": "f32",
             "f64": "f64",
+            **RUST_EXACT_WIDTH_INTEGER_TYPES,
         }
         return aliases.get(type_name)
 
@@ -12369,7 +12415,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return name in self.lazy_static_names and name not in self.local_variable_names
 
     def static_symbol_name(self, name):
-        return self.static_symbol_names.get(name, name)
+        symbol = self.static_symbol_names.get(name)
+        if symbol is None:
+            # collect_static_variable_names names every static before generation; a static it missed would be
+            # declared and referenced under different names.
+            return self.refuse_lowering(
+                f"static {name}: not collected before generation", str(name)
+            )
+        return symbol
 
     def rust_identifier(self, name):
         """Return a Rust-safe value/field identifier for source-level names."""
@@ -12777,6 +12830,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         """Infer result types for shader intrinsics emitted as Rust prelude calls."""
         if not isinstance(func_name, str):
             return None
+
+        if not self.is_user_defined_function(func_name):
+            atomic_type = rust_memory_atomic_result_type(self, func_name, arguments)
+            if atomic_type is not None:
+                return atomic_type
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
@@ -13644,17 +13702,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         }:
             return "buffer"
 
-        mapped_type = self.type_mapping.get(base_name, base_name)
+        mapped_type = self.type_mapping.get(base_name)
+        if mapped_type is None:
+            # Already a Rust runtime spelling, or a type that is not a resource.
+            return rust_resource_kind_of_spelling(base_name)
         mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
-        if mapped_base == "RayTracingAccelerationStructure":
-            return "acceleration_structure"
-        if mapped_base == "Sampler":
-            return "sampler"
-        if mapped_base.startswith(("Image", "IImage", "UImage")):
-            return "image"
-        if mapped_base.startswith(("Texture", "DepthTexture")):
-            return "texture"
-        return None
+        return rust_resource_kind_of_spelling(mapped_base)
 
     def rust_resource_binding_namespace(self, kind):
         if kind in {"cbuffer", "glsl_buffer_block"}:
@@ -13695,7 +13748,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if binding <= used_end and used_start <= end:
                 if used_start == binding and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise RustRefusal(
                     "Conflicting Rust resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "
@@ -13782,7 +13835,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return ""
 
         spirv_args = []
-        if info["kind"] == "buffer":
+        if info["kind"] in {"buffer", "glsl_buffer_block"}:
             spirv_args.append("storage_buffer")
         spirv_args.extend(
             [
@@ -13801,18 +13854,6 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return (
             f"{attribute}{self.rust_identifier(node.name)}: "
             f"{self.map_function_parameter_type(type_name)}"
-        )
-
-    def rust_resource_placeholder_diagnostic_comment(self, node, type_name):
-        name = getattr(node, "name", None)
-        resource_kind = self.rust_resource_kind(type_name, node=node)
-        if not name or resource_kind is None:
-            return ""
-        return (
-            f"// CrossGL Rust limitation: resource {name} is emitted as a "
-            "compile-only placeholder static, not a rust-gpu resource binding; "
-            "pass real spirv_std resources as #[spirv(...)] entry parameters "
-            "when targeting rust-gpu.\n"
         )
 
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
@@ -14572,7 +14613,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not mapped_args:
             return None
 
-        mapped_base = self.type_mapping.get(base_type, base_type)
+        mapped_base = self.type_mapping.get(base_type)
+        if mapped_base is None:
+            reason = rust_generic_template_reason(base_type)
+            if reason is not None:
+                return self.refuse_lowering(reason, type_name)
+            # A user or Rust template (Option, Result, a declared generic structure) is spelled the same.
+            mapped_base = base_type
         if "<" in mapped_base:
             mapped_base = mapped_base.split("<", 1)[0]
         return f"{mapped_base}<{', '.join(mapped_args)}>"
@@ -14608,44 +14655,17 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return rust_type.replace("<", "::<", 1)
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_AND": "&=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "LOGICAL_AND": "&&",
-            "LOGICAL_OR": "||",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "MOD": "%",
-            "NOT": "!",
-        }
-        return op_map.get(op, op)
+        """``op`` spelled for Rust; an operator CrossGL does not define is refused."""
+        return rust_operator(op)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Rust backend attribute name."""
-        if semantic:
-            return self.semantic_map.get(semantic, semantic)
-        return ""
+        if not semantic:
+            return ""
+        mapped = self.semantic_map.get(semantic)
+        if mapped is not None:
+            return mapped
+        reason = rust_unmapped_semantic_reason(semantic)
+        if reason is not None:
+            return self.refuse_lowering(reason, str(semantic))
+        return semantic

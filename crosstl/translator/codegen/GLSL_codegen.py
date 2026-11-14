@@ -99,6 +99,7 @@ from ..metadata_preconditions import (
     validate_codegen_metadata_preconditions,
     with_metadata_precondition_header,
 )
+from ..refusals import OpenGLRefusal, TranslatorArgumentError
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.declared_types import declared_type_names
@@ -657,6 +658,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requested_stage_name,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -2873,13 +2875,15 @@ class GLSLCodeGen(
     def set_cooperative_matrix_software_lowering(self, enabled):
         """Enable exact lane-local cooperative-matrix fragment lowering."""
         if not isinstance(enabled, bool):
-            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+            raise TranslatorArgumentError(
+                "cooperative_matrix_software_lowering must be a boolean"
+            )
         self.cooperative_matrix_software_lowering = enabled
 
     def set_private_pointer_out_of_bounds_read(self, policy):
         """Configure explicit recovery for statically bounded private reads."""
         if not isinstance(policy, str) or policy not in {"error", "zero"}:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "private_pointer_out_of_bounds_read must be 'error' or 'zero'"
             )
         self.private_pointer_out_of_bounds_read = policy
@@ -2895,7 +2899,7 @@ class GLSLCodeGen(
                 "fma-rne-flush",
             }
         ):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "cooperative_matrix_mma_profile must be 'rne-gradual', 'rne-flush', "
                 "'fma-rne-gradual', 'fma-rne-flush', or None"
             )
@@ -3662,9 +3666,11 @@ class GLSLCodeGen(
         if width is not None and (
             isinstance(width, bool) or not isinstance(width, int)
         ):
-            raise TypeError("software_subgroup_width must be an integer or None")
+            raise TranslatorArgumentError(
+                "software_subgroup_width must be an integer or None"
+            )
         if width not in {None, self.GLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "software_subgroup_width currently supports only an exact width "
                 f"of {self.GLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}"
             )
@@ -4256,7 +4262,7 @@ class GLSLCodeGen(
 
         version_line = self.current_glsl_version_line
         if self.glsl_version_is_es(version_line):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL target profile '{version_line}' does not support "
                 f"{self.GLSL_INT64_EXTENSION}; select a desktop GLSL profile "
                 "for 64-bit integer values"
@@ -4269,7 +4275,7 @@ class GLSLCodeGen(
             flags=re.MULTILINE,
         )
         if disabled_extension is not None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL output requires {self.GLSL_INT64_EXTENSION}, but the "
                 "source profile disables that extension"
             )
@@ -9098,7 +9104,7 @@ class GLSLCodeGen(
                 self.walk_ast,
                 self.map_operator,
             )
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(
             ast, target_stage
         )
@@ -10086,7 +10092,7 @@ class GLSLCodeGen(
                 self.record_glsl_buffer_block_variable(var_name, node, vtype)
                 if self.is_shader_record_buffer_block(node):
                     if self.explicit_resource_binding_index(node) is not None:
-                        raise ValueError(
+                        raise OpenGLRefusal(
                             "GLSL shaderRecordEXT buffer blocks cannot declare "
                             "binding layout qualifiers"
                         )
@@ -11054,7 +11060,7 @@ class GLSLCodeGen(
             or self.current_stage_entry_type in (None, "fragment")
         ):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL helper function '{func_name}' uses fragment-only operations "
             "and is only valid in fragment stages"
         )
@@ -19220,7 +19226,7 @@ class GLSLCodeGen(
             return
 
         if collect_stage_entry_records(ast, target_stage, stage_entry_types):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Global helper function 'main' conflicts with the GLSL "
                 f"{target_stage} stage entry point"
             )
@@ -19477,7 +19483,7 @@ class GLSLCodeGen(
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
-            raise ValueError(f"Duplicate cbuffer name(s) in OpenGL output: {names}")
+            raise OpenGLRefusal(f"Duplicate cbuffer name(s) in OpenGL output: {names}")
 
         cbuffer_ast = SimpleNamespace(
             cbuffers=cbuffers,
@@ -19490,21 +19496,21 @@ class GLSLCodeGen(
         declaration_conflicts = collect_cbuffer_declaration_name_conflicts(cbuffer_ast)
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"Cbuffer name(s) conflict with existing OpenGL declaration(s): {names}"
             )
 
         duplicate_members = collect_duplicate_cbuffer_member_names(cbuffers)
         if duplicate_members:
             names = ", ".join(sorted(duplicate_members))
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"Ambiguous cbuffer member name(s) in OpenGL output: {names}"
             )
 
         global_member_conflicts = collect_cbuffer_member_global_conflicts(cbuffer_ast)
         if global_member_conflicts:
             names = ", ".join(sorted(global_member_conflicts))
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Cbuffer member name(s) conflict with OpenGL global declaration(s): "
                 f"{names}"
             )
@@ -19909,7 +19915,7 @@ class GLSLCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL stage attribute {attribute_name} requires exactly one argument"
             )
 
@@ -19917,7 +19923,7 @@ class GLSLCodeGen(
         literal = self.literal_int_value(argument, self.literal_int_constants)
         if not isinstance(literal, int) or isinstance(literal, bool) or literal <= 0:
             layout_name = layout_name or attribute_name
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL {stage_name} {layout_name} layout requires a positive "
                 "integer constant, got "
                 f"{self.glsl_attribute_argument_source(argument)}"
@@ -19960,7 +19966,7 @@ class GLSLCodeGen(
         ):
             arguments = getattr(attr, "arguments", []) or []
             if len(arguments) != 1:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation_control stage patchconstantfunc "
                     "requires exactly one function name"
                 )
@@ -20039,7 +20045,7 @@ class GLSLCodeGen(
         )
         if topology_winding:
             if winding and winding != topology_winding:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting GLSL tessellation outputtopology "
                     f"{output_topology} with winding {winding}"
                 )
@@ -20143,7 +20149,7 @@ class GLSLCodeGen(
             attr_name = self.glsl_stage_control_attribute_name(attr)
             if attr_name in names:
                 if getattr(attr, "arguments", []):
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         f"GLSL stage attribute {attr_name} does not accept arguments"
                     )
                 return attr_name
@@ -20151,7 +20157,7 @@ class GLSLCodeGen(
             attr_name = self.glsl_stage_control_attribute_name(attr)
             if attr_name in names:
                 if getattr(attr, "arguments", []):
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         f"GLSL stage attribute {attr_name} does not accept arguments"
                     )
                 return attr_name
@@ -20179,7 +20185,7 @@ class GLSLCodeGen(
             ):
                 arguments = getattr(attr, "arguments", []) or []
                 if len(arguments) != 1:
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         "GLSL stage attribute "
                         f"{explicit_attribute_name} requires exactly one argument"
                     )
@@ -20187,7 +20193,7 @@ class GLSLCodeGen(
                 source = f"{attr_name} {value}"
             elif attr_name in bare_names:
                 if getattr(attr, "arguments", []):
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         f"GLSL stage attribute {attr_name} does not accept arguments"
                     )
                 value = attr_name
@@ -20204,7 +20210,7 @@ class GLSLCodeGen(
         first_source, first_mapped = choices[0]
         for source, mapped_value in choices[1:]:
             if mapped_value != first_mapped:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"Conflicting GLSL {stage_name} {layout_name} layout "
                     f"{first_source} with {source}"
                 )
@@ -20228,7 +20234,7 @@ class GLSLCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 1:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"GLSL stage attribute {attribute_name} requires exactly one argument"
                 )
 
@@ -20240,7 +20246,7 @@ class GLSLCodeGen(
                 or isinstance(literal, bool)
                 or literal <= 0
             ):
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"GLSL {stage_name} {layout_name} layout requires a positive "
                     f"integer constant, got {source}"
                 )
@@ -20258,7 +20264,7 @@ class GLSLCodeGen(
         first_source, first_literal, first_expression = choices[0]
         for source, literal, _expression in choices[1:]:
             if literal != first_literal:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"Conflicting GLSL {stage_name} {layout_name} layout "
                     f"{first_source} with {source}"
                 )
@@ -20301,7 +20307,7 @@ class GLSLCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL stage attribute {attribute_name} requires exactly one argument"
             )
         return self.attribute_value_to_string(arguments[0])
@@ -20350,7 +20356,7 @@ class GLSLCodeGen(
         }
         mapped = topology_map.get(topology_name)
         if mapped is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL geometry output topology cannot be lowered: {topology}"
             )
         return mapped
@@ -20371,7 +20377,7 @@ class GLSLCodeGen(
         }
         mapped = topology_map.get(topology_name)
         if mapped is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL geometry input topology cannot be lowered: {topology}"
             )
         return mapped
@@ -20388,7 +20394,9 @@ class GLSLCodeGen(
         }
         mapped = topology_map.get(topology_name)
         if mapped is None:
-            raise ValueError(f"GLSL mesh output topology cannot be lowered: {topology}")
+            raise OpenGLRefusal(
+                f"GLSL mesh output topology cannot be lowered: {topology}"
+            )
         return mapped
 
     def map_mesh_intrinsic(self, operation, args):
@@ -20420,7 +20428,7 @@ class GLSLCodeGen(
 
     def glsl_dispatch_mesh_payload_target(self, payload_expr):
         if not self.task_payload_shared_variables:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL DispatchMesh payload argument requires "
                 "taskPayloadSharedEXT storage"
             )
@@ -20442,14 +20450,14 @@ class GLSLCodeGen(
                 return matches[0]
             if len(matches) > 1:
                 names = ", ".join(sorted(info["name"] for info in matches))
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Ambiguous GLSL DispatchMesh payload target for "
                     f"{mapped_payload_type}: {names}"
                 )
             expected_types = ", ".join(
                 sorted({info["type"] for info in self.task_payload_shared_variables})
             )
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL DispatchMesh payload argument type "
                 f"{mapped_payload_type} does not match taskPayloadSharedEXT "
                 f"payload type {expected_types}"
@@ -20461,7 +20469,7 @@ class GLSLCodeGen(
         names = ", ".join(
             sorted(info["name"] for info in self.task_payload_shared_variables)
         )
-        raise ValueError(f"Ambiguous GLSL DispatchMesh payload target: {names}")
+        raise OpenGLRefusal(f"Ambiguous GLSL DispatchMesh payload target: {names}")
 
     def mesh_output_parameter_role(self, node):
         for attr in getattr(node, "attributes", []) or []:
@@ -20527,7 +20535,7 @@ class GLSLCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL stage attribute {attribute_name} requires exactly one argument"
             )
         value = self.literal_int_value(arguments[0])
@@ -20565,7 +20573,7 @@ class GLSLCodeGen(
         self, node, role, element_type, count, count_value, count_limit, topology
     ):
         if count is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh output parameter "
                 f"@{role} '{node.name}' requires an array with explicit size"
             )
@@ -20573,7 +20581,7 @@ class GLSLCodeGen(
         if count_value is not None and count_limit is not None:
             if count_value != count_limit:
                 attribute_name = self.mesh_output_role_count_attribute(role)
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL mesh output parameter "
                     f"@{role} '{node.name}' array size {count_value} must match "
                     f"{attribute_name} {count_limit}"
@@ -20581,7 +20589,7 @@ class GLSLCodeGen(
 
         if role in {"vertices", "primitives"}:
             if element_type not in self.structs_by_name:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL mesh output parameter "
                     f"@{role} '{node.name}' requires a struct element type, "
                     f"got {element_type}"
@@ -20590,7 +20598,7 @@ class GLSLCodeGen(
 
         expected_index_type = self.GLSL_MESH_PRIMITIVE_INDEX_TYPES.get(topology)
         if expected_index_type is not None and element_type != expected_index_type:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh output parameter "
                 f"@indices '{node.name}' for {topology} topology requires "
                 f"{expected_index_type} elements, got {element_type}"
@@ -20663,7 +20671,7 @@ class GLSLCodeGen(
         if not payloads:
             return ""
         if len(payloads) > 1:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh entry declares more than one payload parameter: "
                 + ", ".join(param.name for param in payloads)
             )
@@ -20790,7 +20798,7 @@ class GLSLCodeGen(
             return True
         if receiver_type is None:
             return False
-        raise ValueError(
+        raise OpenGLRefusal(
             f"GLSL ray query {operation} requires a RayQuery receiver, "
             f"got {self.type_name_string(receiver_type)}"
         )
@@ -20803,11 +20811,11 @@ class GLSLCodeGen(
         if actual_arity in allowed_arities:
             return
         if operation in self.RAY_QUERY_POSITION_FETCH_METHODS:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL ray query {operation} requires exactly one "
                 f"output-array argument, got {actual_arity}"
             )
-        raise ValueError(
+        raise OpenGLRefusal(
             f"GLSL ray query {operation} expects "
             f"{self.ray_query_arity_label(allowed_arities)}, got {actual_arity}"
         )
@@ -20858,7 +20866,7 @@ class GLSLCodeGen(
         }
         mapped = domain_map.get(domain_name)
         if mapped is None:
-            raise ValueError(f"GLSL tessellation domain cannot be lowered: {domain}")
+            raise OpenGLRefusal(f"GLSL tessellation domain cannot be lowered: {domain}")
         return mapped
 
     def glsl_tessellation_partitioning(self, partitioning):
@@ -20875,7 +20883,7 @@ class GLSLCodeGen(
         }
         mapped = partition_map.get(partition_name)
         if mapped is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL tessellation partitioning cannot be lowered: {partitioning}"
             )
         return mapped
@@ -20887,28 +20895,28 @@ class GLSLCodeGen(
         topology_name = str(topology).strip().strip('"').lower()
         if topology_name in {"triangle_cw", "triangles_cw"}:
             if domain != "triangles":
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_cw requires "
                     "triangles domain"
                 )
             return "cw", False
         if topology_name in {"triangle_ccw", "triangles_ccw"}:
             if domain != "triangles":
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_ccw requires "
                     "triangles domain"
                 )
             return "ccw", False
         if topology_name in {"line", "lines"}:
             if domain != "isolines":
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation outputtopology line requires isolines domain"
                 )
             return None, False
         if topology_name in {"point", "points"}:
             return None, True
 
-        raise ValueError(
+        raise OpenGLRefusal(
             f"GLSL tessellation outputtopology cannot be lowered: {topology}"
         )
 
@@ -21043,7 +21051,7 @@ class GLSLCodeGen(
             )
             if barrier_name is None:
                 continue
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL tessellation_control barrier() may only be emitted "
                 "directly in main(); helper function "
                 f"'{func.name}' reaches '{barrier_name}'"
@@ -21131,12 +21139,12 @@ class GLSLCodeGen(
         barrier_name = self.glsl_tessellation_control_standalone_barrier_statement(stmt)
         if barrier_name is not None:
             if control_depth:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation_control barrier() must not be emitted "
                     f"inside control flow; found '{barrier_name}'"
                 )
             if return_seen:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation_control barrier() cannot be emitted "
                     f"after a return statement in main(); found '{barrier_name}'"
                 )
@@ -21298,7 +21306,7 @@ class GLSLCodeGen(
         barrier_name = self.glsl_tessellation_control_first_native_barrier(node)
         if barrier_name is None:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             "GLSL tessellation_control barrier() must be emitted as a "
             f"standalone statement in main(); found '{barrier_name}'"
         )
@@ -21891,7 +21899,7 @@ class GLSLCodeGen(
                 getattr(func, "body", [])
             )
             if barrier_name is not None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL tessellation_control barrier() may only be emitted "
                     "directly in main(); helper function "
                     f"'{func.name}' reaches '{barrier_name}'"
@@ -22808,7 +22816,7 @@ class GLSLCodeGen(
                 declarations.append(node)
                 continue
             if existing != signature:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL stage interface declaration for "
                     f"'{name}': {signature} differs from {existing}"
                 )
@@ -22836,7 +22844,7 @@ class GLSLCodeGen(
                 continue
 
             if existing["identity"] != identity:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource declaration for "
                     f"'{name}': {identity} differs from {existing['identity']}"
                 )
@@ -22847,7 +22855,7 @@ class GLSLCodeGen(
                 and binding is not None
                 and existing_binding != binding
             ):
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource binding for "
                     f"'{name}': binding {binding} differs from "
                     f"existing binding {existing_binding}"
@@ -23246,7 +23254,7 @@ class GLSLCodeGen(
                     parameter, stage_name
                 ):
                     continue
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"OpenGL {stage_name} stage {semantic} "
                     f"parameter '{parameter.name}' "
                     f"must be {expected_description}"
@@ -23310,7 +23318,7 @@ class GLSLCodeGen(
         return_base_type, array_suffix = split_array_type_suffix(str(return_type))
         if not array_suffix and return_base_type == "void":
             function_name = getattr(func, "name", "<anonymous>")
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL {stage_name} function '{function_name}' cannot use "
                 f"return semantic '{semantic}' with void return type"
             )
@@ -23335,7 +23343,7 @@ class GLSLCodeGen(
             "gl_NumWorkGroups",
         }
         if mapped_semantic in invalid_return_semantics:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL {stage_name} semantic '{semantic}' cannot be used as "
                 "a function return semantic"
             )
@@ -23351,17 +23359,17 @@ class GLSLCodeGen(
         is_vertex_output = self.is_vertex_builtin_output(mapped_semantic)
 
         if stage_name == "vertex" and is_fragment_output:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL vertex stage function return cannot use fragment output "
                 f"semantic '{semantic}'"
             )
         if stage_name == "fragment" and is_vertex_output:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL fragment stage function return cannot use vertex output "
                 f"semantic '{semantic}'"
             )
         if stage_name == "compute" and (is_fragment_output or is_vertex_output):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL compute stage function return cannot use graphics output "
                 f"semantic '{semantic}'"
             )
@@ -24687,7 +24695,7 @@ class GLSLCodeGen(
                 "dmat4",
             }:
                 return None
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL vertex stage entry point with non-void return type "
                 f"'{output_type}' requires an output semantic"
             )
@@ -33322,7 +33330,7 @@ class GLSLCodeGen(
                     continue
                 previous = seen_layout_parts.get(normalized)
                 if previous is not None:
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         "Duplicate OpenGL layout metadata for "
                         f"'{node_name}': {normalized}"
                     )
@@ -33339,11 +33347,11 @@ class GLSLCodeGen(
             )
             previous = seen_layout_parts.get(normalized)
             if previous == layout_part:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"Duplicate OpenGL layout metadata for '{node_name}': {layout_part}"
                 )
             if previous is not None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL layout metadata for "
                     f"'{node_name}': {previous} differs from {layout_part}"
                 )
@@ -35248,7 +35256,9 @@ class GLSLCodeGen(
                 builtin in self.function_return_types
                 or builtin in self.global_variable_types
             ):
-                raise ValueError(f"OpenGL half bitcasts require unshadowed {builtin}")
+                raise OpenGLRefusal(
+                    f"OpenGL half bitcasts require unshadowed {builtin}"
+                )
         operations = {
             "decode": ("decode",),
             "encode": ("encode",),
@@ -36224,7 +36234,9 @@ complex64_t crossgl_complex64_mod_assign(
             if resolved == type_name == alias_target:
                 return resolved
             type_name = resolved
-        raise ValueError(f"Cyclic OpenGL type alias: {' -> '.join([*seen, type_name])}")
+        raise OpenGLRefusal(
+            f"Cyclic OpenGL type alias: {' -> '.join([*seen, type_name])}"
+        )
 
     def glsl_narrow_integer_contract(self, vtype):
         source_type = self.glsl_normalized_source_type(vtype)
@@ -38423,7 +38435,7 @@ complex64_t crossgl_complex64_mod_assign(
         if arg_type is not None:
             mapped_type = self.map_type(arg_type)
             if not self.is_scalar_integer_type(mapped_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"GLSL DispatchMesh {axis} group count requires a "
                     "non-negative scalar integer value, "
                     f"got {mapped_type}"
@@ -38437,7 +38449,7 @@ complex64_t crossgl_complex64_mod_assign(
             or isinstance(literal_count, bool)
             or literal_count < 0
         ):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL DispatchMesh {axis} group count requires a "
                 "non-negative scalar integer value, got "
                 f"{self.glsl_attribute_argument_source(arg)}"
@@ -38449,7 +38461,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def validate_dispatch_mesh_arguments(self, args):
         if len(args) not in {3, 4}:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL DispatchMesh requires three group counts and optional "
                 "payload argument"
             )
@@ -38501,7 +38513,7 @@ complex64_t crossgl_complex64_mod_assign(
         if count_type is not None:
             mapped_type = self.map_type(count_type)
             if not self.is_scalar_integer_type(mapped_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL mesh SetMeshOutputCounts "
                     f"{label} count requires a non-negative scalar integer "
                     f"value, got {mapped_type}"
@@ -38511,7 +38523,7 @@ complex64_t crossgl_complex64_mod_assign(
         if value is None:
             return
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh SetMeshOutputCounts "
                 f"{label} count requires a non-negative scalar integer value, "
                 f"got {self.glsl_attribute_argument_source(arg)}"
@@ -38519,7 +38531,7 @@ complex64_t crossgl_complex64_mod_assign(
         limit, limit_label = self.mesh_output_role_count_limit(roles)
         if limit is None or value <= limit:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             "GLSL mesh SetMeshOutputCounts "
             f"{label} count {value} exceeds {limit_label} {limit}"
         )
@@ -38529,7 +38541,7 @@ complex64_t crossgl_complex64_mod_assign(
         if index_type is not None:
             mapped_type = self.map_type(index_type)
             if not self.is_scalar_integer_type(mapped_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"GLSL mesh {context} index requires a scalar integer value, "
                     f"got {mapped_type}"
                 )
@@ -38538,7 +38550,7 @@ complex64_t crossgl_complex64_mod_assign(
         if literal_index is None or limit is None:
             return
         if literal_index < 0 or literal_index >= limit:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL mesh {context} index {literal_index} out of range; "
                 f"valid range is 0..{limit - 1}"
             )
@@ -38553,7 +38565,7 @@ complex64_t crossgl_complex64_mod_assign(
         if self.current_stage_entry_type != "mesh":
             return None
         if len(args) != 2:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh SetMeshOutputCounts requires exactly two arguments "
                 "(vertex count, primitive count)"
             )
@@ -38594,7 +38606,7 @@ complex64_t crossgl_complex64_mod_assign(
     def mesh_output_helper_call_components(self, func_name, args):
         if func_name == "SetVertex":
             if len(args) != 2:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL mesh SetVertex helper requires exactly two arguments "
                     "(vertex index, position)"
                 )
@@ -38607,7 +38619,7 @@ complex64_t crossgl_complex64_mod_assign(
 
         if func_name == "SetPrimitive":
             if len(args) != 2:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "GLSL mesh SetPrimitive helper requires exactly two arguments "
                     "(primitive index, primitive indices)"
                 )
@@ -38641,7 +38653,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name not in {"SetVertex", "SetPrimitive"}:
             return
         self.mesh_output_helper_call_components(func_name, args)
-        raise ValueError(
+        raise OpenGLRefusal(
             f"GLSL mesh {func_name} helper can only be used as a statement"
         )
 
@@ -38649,7 +38661,7 @@ complex64_t crossgl_complex64_mod_assign(
         result_type = self.expression_result_type(expr)
         value_type = self.map_type(result_type) if result_type is not None else None
         if value_type is not None and value_type not in {"vec3", "vec4"}:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL mesh SetVertex position requires vec3 or vec4, got {value_type}"
             )
 
@@ -38668,7 +38680,7 @@ complex64_t crossgl_complex64_mod_assign(
         result_type = self.expression_result_type(expr)
         value_type = self.map_type(result_type) if result_type is not None else None
         if expected_type and value_type is not None and value_type != expected_type:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh SetPrimitive for "
                 f"{self.current_mesh_output_topology} topology requires "
                 f"{expected_type} primitive indices, got {value_type}"
@@ -38730,7 +38742,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
 
         if self.mesh_output_constructor_for_type(expr, expected_type):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh output "
                 f"@{info['role']} '{info['name']}' assignment requires a "
                 f"complete {expected_type} constructor value"
@@ -38743,7 +38755,7 @@ complex64_t crossgl_complex64_mod_assign(
         expected_label = self.map_type(expected_type)
         result_label = self.map_type(result_type)
         if result_label != expected_label:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL mesh output "
                 f"@{info['role']} '{info['name']}' assignment requires "
                 f"{expected_label} value, got {result_label}"
@@ -38887,12 +38899,12 @@ complex64_t crossgl_complex64_mod_assign(
 
         builtin_name, is_component, index_expr = target_kind
         if self.current_stage_entry_type not in {None, "tessellation_control"}:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "GLSL tessellation factor assignments are only valid in "
                 "tessellation_control stages"
             )
         if not is_component:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL tessellation factor {builtin_name} assignment requires "
                 "an indexed scalar component target"
             )
@@ -38928,7 +38940,7 @@ complex64_t crossgl_complex64_mod_assign(
         if index_type is not None:
             mapped_type = self.map_type(index_type)
             if not self.is_scalar_integer_type(mapped_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"GLSL tessellation factor {builtin_name} component index "
                     "requires a scalar integer value, "
                     f"got {mapped_type}"
@@ -38940,7 +38952,7 @@ complex64_t crossgl_complex64_mod_assign(
 
         component_count = self.GLSL_TESSELLATION_FACTOR_COMPONENT_COUNTS[builtin_name]
         if literal_index < 0 or literal_index >= component_count:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL tessellation factor {builtin_name} component index "
                 f"{literal_index} out of range; valid range is "
                 f"0..{component_count - 1}"
@@ -38953,7 +38965,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
         mapped_type = self.map_type(value_type)
         if not self.is_scalar_numeric_type(mapped_type):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"GLSL tessellation factor {builtin_name} component assignment "
                 f"requires a scalar numeric value, got {mapped_type}"
             )
@@ -42426,7 +42438,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name != "saturate" or func_name in self.function_return_types:
             return None
         if len(args) != 1:
-            raise ValueError("OpenGL saturate alias requires 1 argument")
+            raise OpenGLRefusal("OpenGL saturate alias requires 1 argument")
 
         value = self.generate_expression(args[0])
         zero, one = self.saturate_bound_literals(args[0])
@@ -42516,7 +42528,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name != "rcp" or func_name in self.function_return_types:
             return None
         if len(args) != 1:
-            raise ValueError("OpenGL rcp alias requires 1 argument")
+            raise OpenGLRefusal("OpenGL rcp alias requires 1 argument")
 
         value_expr = args[0]
         value_type = self.map_type(self.expression_result_type(value_expr))
@@ -43066,7 +43078,7 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return None
         if len(args) != 1:
-            raise ValueError("OpenGL log10 requires 1 argument")
+            raise OpenGLRefusal("OpenGL log10 requires 1 argument")
 
         value = self.generate_expression(args[0])
         return f"(log2({value}) * 0.3010299956639812)"
@@ -43283,12 +43295,12 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return None
         if len(args) != 1:
-            raise ValueError(f"OpenGL {func_name} alias requires 1 argument")
+            raise OpenGLRefusal(f"OpenGL {func_name} alias requires 1 argument")
 
         target = self.glsl_bitcast_target(func_name, args[0])
         if target is None:
             source_type = self.map_type(self.expression_result_type(args[0]))
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL {func_name} alias cannot bitcast from {source_type}"
             )
 
@@ -43434,12 +43446,12 @@ complex64_t crossgl_complex64_mod_assign(
         source = self.glsl_numeric_bitcast_shape(source_type)
         target = self.glsl_numeric_bitcast_shape(target_type)
         if source is None or target is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_type}> requires numeric scalar or vector "
                 f"types; inferred source type is {source_type}"
             )
         if source["total_width"] != target["total_width"]:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target['type']}> cannot bitcast from "
                 f"{source['type']}: total widths are {target['total_width']} and "
                 f"{source['total_width']} bits"
@@ -43509,7 +43521,7 @@ complex64_t crossgl_complex64_mod_assign(
                 }[target_kind]
             return f"{target_name}({value})"
 
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL as_type<{target_name}> cannot exactly bitcast from "
             f"{source_name}; the equal-width shape is unsupported"
         )
@@ -43557,7 +43569,7 @@ complex64_t crossgl_complex64_mod_assign(
                 payload = value if not source_narrow["signed"] else f"uint({value})"
                 return f"{self.glsl_half_bitcast_helper('decode')}({payload})"
             source_display = source_name or self.map_type(source_type)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_name}> cannot bitcast from "
                 f"{source_display}: binary16 requires one exact 16-bit integer "
                 "payload"
@@ -43574,7 +43586,7 @@ complex64_t crossgl_complex64_mod_assign(
                     return f"bitfieldExtract(int({payload}), 0, 16)"
                 return f"bitfieldExtract({payload}, 0, 16)"
             target_display = target_name or self.map_type(target_type)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_display}> cannot bitcast from "
                 f"{source_name}: binary16 requires one exact 16-bit integer "
                 "result"
@@ -43585,7 +43597,7 @@ complex64_t crossgl_complex64_mod_assign(
             if source_mapped in {"int", "uint"} and source_narrow is None:
                 payload = value if source_mapped == "uint" else f"uint({value})"
                 return f"{self.glsl_half_bitcast_helper('unpack')}({payload})"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_name}> requires one exact 32-bit "
                 "integer payload"
             )
@@ -43595,14 +43607,14 @@ complex64_t crossgl_complex64_mod_assign(
             if target_mapped in {"int", "uint"} and target_narrow is None:
                 payload = f"{self.glsl_half_bitcast_helper('pack')}({value})"
                 return payload if target_mapped == "uint" else f"int({payload})"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_name}> cannot bitcast from "
                 f"{source_name}: binary16x2 requires one exact 32-bit integer "
                 "result"
             )
 
         if source_name in half_vector_types or target_name in half_vector_types:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_name}> cannot exactly bitcast from "
                 f"{source_name}: widened binary16 vector shape is unsupported"
             )
@@ -43620,7 +43632,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
             and target_name not in self.GLSL_BFLOAT16_ALIASES
         ):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_name}> cannot exactly bitcast from "
                 f"{source_name}: 16-bit integer payloads require a matching "
                 "logical width and supported shape"
@@ -43635,12 +43647,14 @@ complex64_t crossgl_complex64_mod_assign(
         if target_type is None:
             return None
         if len(args) != 1:
-            raise ValueError(f"OpenGL as_type<{target_type}> alias requires 1 argument")
+            raise OpenGLRefusal(
+                f"OpenGL as_type<{target_type}> alias requires 1 argument"
+            )
 
         value_expr = args[0]
         source_type = self.glsl_source_expression_type(value_expr)
         if source_type is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL as_type<{target_type}> cannot infer its source type"
             )
 
@@ -43657,7 +43671,7 @@ complex64_t crossgl_complex64_mod_assign(
             value_type = self.map_type(source_type)
             component_type = self.vector_component_type(value_type) or value_type
             if component_type not in {"int", "uint"}:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "OpenGL as_type<bfloat16_t> requires an integer payload"
                 )
 
@@ -43704,7 +43718,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name != "mul" or func_name in self.function_return_types:
             return None
         if len(args) != 2:
-            raise ValueError("OpenGL mul alias requires 2 arguments")
+            raise OpenGLRefusal("OpenGL mul alias requires 2 arguments")
 
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
@@ -43738,7 +43752,7 @@ complex64_t crossgl_complex64_mod_assign(
         if template is None or func_name in self.function_return_types:
             return None
         if len(args) != 1:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL {func_name} alias requires 1 argument; got {len(args)}"
             )
         return template.format(value=self.generate_expression(args[0]))
@@ -43747,7 +43761,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name != "mad" or func_name in self.function_return_types:
             return None
         if len(args) != 3:
-            raise ValueError("OpenGL mad alias requires 3 arguments")
+            raise OpenGLRefusal("OpenGL mad alias requires 3 arguments")
 
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
@@ -43778,7 +43792,7 @@ complex64_t crossgl_complex64_mod_assign(
         if lowering is None or func_name in self.function_return_types:
             return None
         if len(args) != 3:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL {func_name} alias requires 3 arguments; got {len(args)}"
             )
 
@@ -43801,9 +43815,9 @@ complex64_t crossgl_complex64_mod_assign(
 
         args = getattr(expression, "arguments", getattr(expression, "args", [])) or []
         if len(args) != 1:
-            raise ValueError("OpenGL clip alias requires 1 argument")
+            raise OpenGLRefusal("OpenGL clip alias requires 1 argument")
         if self.current_stage_entry_type not in (None, "fragment"):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL clip alias lowers to discard and is only valid in "
                 "fragment stages"
             )
@@ -44956,12 +44970,12 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if len(args) != expected_args:
             noun = "argument" if expected_args == 1 else "arguments"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL interpolation operation '{func_name}' requires "
                 f"{expected_args} {noun}"
             )
         if self.current_stage_entry_type not in (None, "fragment"):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL interpolation operation '{func_name}' is only valid "
                 "in fragment stages"
             )
@@ -44969,7 +44983,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name == "interpolateAtSample":
             sample_type = self.expression_result_type(args[1])
             if sample_type is not None and not self.is_scalar_integer_type(sample_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     operation_argument_type_error(
                         "OpenGL",
                         "interpolation",
@@ -44984,7 +44998,7 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name == "interpolateAtOffset":
             offset_type = self.expression_result_type(args[1])
             if offset_type is not None and self.map_type(offset_type) != "vec2":
-                raise ValueError(
+                raise OpenGLRefusal(
                     operation_argument_type_error(
                         "OpenGL",
                         "interpolation",
@@ -45004,12 +45018,12 @@ complex64_t crossgl_complex64_mod_assign(
         if expected_args is None:
             return None
         if len(args) != expected_args:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL derivative operation '{func_name}' requires "
                 f"{expected_args} argument"
             )
         if self.current_stage_entry_type not in (None, "fragment"):
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL derivative operation '{func_name}' is only valid "
                 "in fragment stages"
             )
@@ -45020,7 +45034,7 @@ complex64_t crossgl_complex64_mod_assign(
             self.is_scalar_floating_type(value_type)
             or component_type in {"float", "double"}
         ):
-            raise ValueError(
+            raise OpenGLRefusal(
                 operation_argument_type_error(
                     "OpenGL",
                     "derivative",
@@ -45065,6 +45079,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[2], element_type)
+            value = self.glsl_precise_stored_value(None, args[2], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )
@@ -45085,6 +45100,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[1], element_type)
+            value = self.glsl_precise_stored_value(None, args[1], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )
@@ -45361,7 +45377,11 @@ complex64_t crossgl_complex64_mod_assign(
         object_type = self.type_name_string(self.expression_result_type(object_expr))
         if not object_type:
             return member_name
-        struct_name, _array_suffix = split_array_type_suffix(object_type)
+        struct_name, array_suffix = split_array_type_suffix(object_type)
+        if array_suffix and member_name == "length":
+            # array.length() is the array's method (GLSL 4.60 section 5.9),
+            # not a member of its element structure.
+            return member_name
         struct_name = self.glsl_source_type_identifier_name(struct_name)
         member_map = self.glsl_struct_member_name_map(struct_name)
         if not member_map:
@@ -45423,7 +45443,7 @@ complex64_t crossgl_complex64_mod_assign(
         minimum = max(assertion.value_range.minimum for assertion in matches)
         maximum = min(assertion.value_range.maximum for assertion in matches)
         if minimum > maximum:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Conflicting index range assertions for source expression "
                 f"'{expression_name}'"
             )
@@ -47516,7 +47536,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
 
         texture_name = self.expression_name(args[0]) or str(args[0])
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"
         )
@@ -47530,7 +47550,7 @@ complex64_t crossgl_complex64_mod_assign(
         if self.is_storage_image_type(texture_type):
             return
         texture_name = self.expression_name(args[0]) or str(args[0])
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL image operation '{func_name}' requires a storage "
             f"image resource argument: {texture_name}"
         )
@@ -47545,18 +47565,18 @@ complex64_t crossgl_complex64_mod_assign(
             return
         texture_name = expression_debug_name(args[0])
         if func_name == "imageLoad" and access == "write":
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL image operation '{func_name}' requires read-capable "
                 f"storage image access for {texture_name}: got writeonly"
             )
         if func_name == "imageStore" and access == "read":
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL image operation '{func_name}' requires write-capable "
                 f"storage image access for {texture_name}: got readonly"
             )
         if is_image_atomic_operation(func_name):
             access_name = "readonly" if access == "read" else "writeonly"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL image operation '{func_name}' requires read-write "
                 f"storage image access for {texture_name}: got {access_name}"
             )
@@ -47571,7 +47591,7 @@ complex64_t crossgl_complex64_mod_assign(
         buffer_name = expression_debug_name(args[0])
         required_label = image_access_requirement_label(required_access)
         actual_label = image_access_diagnostic_name(access)
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL buffer operation '{func_name}' requires {required_label} "
             f"SSBO access for {buffer_name}: got {actual_label}"
         )
@@ -47639,7 +47659,7 @@ complex64_t crossgl_complex64_mod_assign(
         member_name = expression_debug_name(expr)
         required_label = image_access_requirement_label(required_access)
         actual_label = image_access_diagnostic_name(access)
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL buffer block member access for {member_name} requires "
             f"{required_label} buffer block access: got {actual_label}"
         )
@@ -47663,7 +47683,7 @@ complex64_t crossgl_complex64_mod_assign(
         mapped_type = self.map_type(target_type)
         if mapped_type not in {"int", "uint"}:
             target_name = expression_debug_name(target)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL buffer block atomic '{func_name}' requires a scalar "
                 f"int or uint buffer block member for {target_name}: got "
                 f"{mapped_type}"
@@ -47689,7 +47709,7 @@ complex64_t crossgl_complex64_mod_assign(
                 value_arg, value_type, target_type
             ):
                 continue
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL buffer block atomic '{func_name}' requires {target_type} "
                 f"{label} argument for {target_name}: "
                 f"{expression_debug_name(value_arg)} has type {value_type}"
@@ -47754,7 +47774,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if binding is not None:
             if binding.get("pointer_reinterpretation"):
-                raise ValueError(
+                raise OpenGLRefusal(
                     "OpenGL atomicCompareExchangeWeak requires an unambiguous typed storage view"
                 )
             rendered = self.glsl_index_expression(index, container)
@@ -47772,7 +47792,7 @@ complex64_t crossgl_complex64_mod_assign(
         access = self.structured_buffer_resource_access(container)
         if access is not None:
             if not image_access_satisfies_requirement("read_write", access):
-                raise ValueError(
+                raise OpenGLRefusal(
                     "OpenGL atomicCompareExchangeWeak requires read-write storage"
                 )
             root = self.generate_expression(container)
@@ -47788,7 +47808,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_glsl_expected_compare_call(self, args, word_storage=None):
         if len(args) != 3:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL atomicCompareExchangeWeak requires target, expected and desired"
             )
         kind = self.map_type(self.expression_result_type(args[0]))
@@ -47796,7 +47816,7 @@ complex64_t crossgl_complex64_mod_assign(
             kind not in {"int", "uint"}
             or self.map_type(self.expression_result_type(args[1])) != kind
         ):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL atomicCompareExchangeWeak requires matching integer target and expected"
             )
         if word_storage is not None:
@@ -47808,7 +47828,7 @@ complex64_t crossgl_complex64_mod_assign(
             self.validate_glsl_storage_pointer_mutation_target(args[0])
             storage = self.glsl_expected_compare_storage(args[0])
         if storage is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL atomicCompareExchangeWeak requires a storage buffer or shared target"
             )
         key = (kind, storage["target"], len(storage["arguments"]))
@@ -47872,9 +47892,9 @@ complex64_t crossgl_complex64_mod_assign(
                 args, word_storage=word_storage
             )
         if func_name == "atomicLoad" and len(args) != 1:
-            raise ValueError("OpenGL atomicLoad requires exactly one target")
+            raise OpenGLRefusal("OpenGL atomicLoad requires exactly one target")
         if func_name == "atomicStore" and len(args) != 2:
-            raise ValueError("OpenGL atomicStore requires a target and value")
+            raise OpenGLRefusal("OpenGL atomicStore requires a target and value")
         if func_name == "atomicLoad" and word_storage is None:
             self.validate_glsl_storage_pointer_mutation_target(args[0])
             root = args[0]
@@ -47894,7 +47914,7 @@ complex64_t crossgl_complex64_mod_assign(
                     break
             access = self.structured_buffer_resource_access(root)
             if not image_access_satisfies_requirement("read_write", access):
-                raise ValueError(
+                raise OpenGLRefusal(
                     "OpenGL atomicLoad requires read-write storage for its "
                     "unchanged-value atomic operation"
                 )
@@ -47939,7 +47959,9 @@ complex64_t crossgl_complex64_mod_assign(
             "int",
             "uint",
         }:
-            raise ValueError(f"OpenGL {func_name} requires a scalar int or uint target")
+            raise OpenGLRefusal(
+                f"OpenGL {func_name} requires a scalar int or uint target"
+            )
         rendered_args = [target_expression]
         value_arg_ids = {
             id(value_arg)
@@ -48010,7 +48032,7 @@ complex64_t crossgl_complex64_mod_assign(
         if mismatch is None:
             return
         value_arg, value_kind = mismatch
-        raise ValueError(
+        raise OpenGLRefusal(
             image_atomic_value_kind_error(
                 "OpenGL",
                 func_name,
@@ -48036,7 +48058,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if expected_kind is None:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             image_atomic_result_kind_error(
                 "OpenGL", func_name, image_format, component_kind, expected_kind
             )
@@ -48064,7 +48086,9 @@ complex64_t crossgl_complex64_mod_assign(
                 image_format,
             )
             return
-        raise ValueError(image_atomic_format_error("OpenGL", func_name, image_format))
+        raise OpenGLRefusal(
+            image_atomic_format_error("OpenGL", func_name, image_format)
+        )
 
     def storage_image_effective_format(self, image_type, explicit_format=None):
         if explicit_format is not None:
@@ -48133,7 +48157,7 @@ complex64_t crossgl_complex64_mod_assign(
         expected_format = expected.get("format")
         if expected_format is not None and actual.get("format") != expected_format:
             actual_format = actual.get("format") or "<unspecified>"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL function call '{func_name}' requires "
                 f"{expected_format} storage image format for argument "
                 f"{actual_name} passed to parameter {param_name}: got "
@@ -48143,7 +48167,7 @@ complex64_t crossgl_complex64_mod_assign(
         expected_type = expected.get("type")
         if expected_type is not None and actual.get("type") != expected_type:
             actual_type = actual.get("type") or "<unknown>"
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL function call '{func_name}' requires "
                 f"{expected_type} storage image for argument {actual_name} "
                 f"passed to parameter {param_name}: got {actual_type}"
@@ -48157,7 +48181,7 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             required_label = image_access_requirement_label(expected_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL function call '{func_name}' requires "
                 f"{required_label} storage image access for argument "
                 f"{actual_name} passed to parameter {param_name}: got "
@@ -48202,7 +48226,7 @@ complex64_t crossgl_complex64_mod_assign(
             actual_name = expression_debug_name(args[index])
             required_label = image_access_requirement_label(required_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got {actual_label}"
@@ -48225,7 +48249,7 @@ complex64_t crossgl_complex64_mod_assign(
             actual_name = expression_debug_name(args[index])
             required_label = image_access_requirement_label(required_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL function call '{func_name}' requires {required_label} "
                 f"SSBO access for argument {actual_name} passed to parameter "
                 f"{param_name}: got {actual_label}"
@@ -48422,7 +48446,7 @@ complex64_t crossgl_complex64_mod_assign(
         coord_type = self.expression_result_type(args[1])
         if coord_type is None or self.is_integer_coordinate_type(coord_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "resource",
@@ -48452,7 +48476,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if coord_dimension is None or coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_dimension_argument_error(
                 "OpenGL",
                 "resource",
@@ -48483,7 +48507,7 @@ complex64_t crossgl_complex64_mod_assign(
             if offset_type is None:
                 continue
             if not self.is_integer_coordinate_type(offset_type):
-                raise ValueError(
+                raise OpenGLRefusal(
                     operation_argument_type_error(
                         "OpenGL",
                         "resource",
@@ -48499,7 +48523,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if offset_dimension is None or offset_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise OpenGLRefusal(
                 operation_dimension_argument_error(
                     "OpenGL",
                     "resource",
@@ -48538,7 +48562,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
         coord_dimension = self.query_lod_coordinate_dimension(coord_type)
         if coord_dimension is None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 texture_query_lod_coordinate_type_error(
                     "OpenGL",
                     func_name,
@@ -48548,7 +48572,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             texture_query_lod_coordinate_dimension_error(
                 "OpenGL",
                 func_name,
@@ -48577,7 +48601,7 @@ complex64_t crossgl_complex64_mod_assign(
                 continue
             gradient_dimension = self.gradient_argument_dimension(gradient_type)
             if gradient_dimension is None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     operation_argument_type_error(
                         "OpenGL",
                         "resource",
@@ -48590,7 +48614,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if gradient_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise OpenGLRefusal(
                 operation_dimension_argument_error(
                     "OpenGL",
                     "resource",
@@ -48633,7 +48657,7 @@ complex64_t crossgl_complex64_mod_assign(
         compare_type = self.expression_result_type(args[compare_index])
         if compare_type is None or self.is_scalar_floating_type(compare_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "texture compare",
@@ -48656,7 +48680,7 @@ complex64_t crossgl_complex64_mod_assign(
         lod_type = self.texture_argument_diagnostic_type(args[lod_index])
         if lod_type is None or self.is_scalar_numeric_type(lod_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "texture LOD",
@@ -48679,7 +48703,7 @@ complex64_t crossgl_complex64_mod_assign(
         bias_type = self.texture_argument_diagnostic_type(args[bias_index])
         if bias_type is None or self.is_scalar_numeric_type(bias_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "texture bias",
@@ -48698,7 +48722,7 @@ complex64_t crossgl_complex64_mod_assign(
         level_type = self.texture_argument_diagnostic_type(args[level_index])
         if level_type is None or self.is_scalar_integer_type(level_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "resource",
@@ -48720,7 +48744,7 @@ complex64_t crossgl_complex64_mod_assign(
         sample_type = self.texture_argument_diagnostic_type(args[sample_index])
         if sample_type is None or self.is_scalar_integer_type(sample_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             texture_multisample_sample_type_error(
                 "OpenGL",
                 func_name,
@@ -48747,7 +48771,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if sample_type is None:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             image_multisample_sample_type_error(
                 "OpenGL",
                 func_name,
@@ -48767,7 +48791,7 @@ complex64_t crossgl_complex64_mod_assign(
         component_type = self.texture_argument_diagnostic_type(args[component_index])
         if component_type is None or self.is_scalar_integer_type(component_type):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_argument_type_error(
                 "OpenGL",
                 "texture gather",
@@ -48811,11 +48835,11 @@ complex64_t crossgl_complex64_mod_assign(
             return
         texture_type = self.resource_base_type(texture_type)
         if len(args) < expected_count:
-            raise ValueError(
+            raise OpenGLRefusal(
                 f"OpenGL texture operation 'textureSize' requires "
                 f"{expected_count} argument(s) for {texture_type}, got {len(args)}"
             )
-        raise ValueError(
+        raise OpenGLRefusal(
             f"OpenGL texture operation 'textureSize' accepts "
             f"{expected_count} argument(s) for {texture_type}, got {len(args)}"
         )
@@ -50248,7 +50272,7 @@ complex64_t crossgl_complex64_mod_assign(
         if offset_type is None:
             return
         if not self.is_integer_coordinate_type(offset_type):
-            raise ValueError(
+            raise OpenGLRefusal(
                 operation_argument_type_error(
                     "OpenGL",
                     "resource",
@@ -50267,7 +50291,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if offset_dimension is None or offset_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             operation_dimension_argument_error(
                 "OpenGL",
                 "resource",
@@ -50307,7 +50331,7 @@ complex64_t crossgl_complex64_mod_assign(
 
         compare_type = self.expression_result_type(compare_arg)
         if compare_type is not None and not self.is_scalar_floating_type(compare_type):
-            raise ValueError(
+            raise OpenGLRefusal(
                 operation_argument_type_error(
                     "OpenGL",
                     "texture compare",
@@ -50713,7 +50737,7 @@ complex64_t crossgl_complex64_mod_assign(
         if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(texture_type)
-        raise ValueError(
+        raise OpenGLRefusal(
             image_store_value_shape_error(
                 "OpenGL",
                 format_label,
@@ -50728,7 +50752,7 @@ complex64_t crossgl_complex64_mod_assign(
         if self.is_matrix_value_type(value_type):
             format_label = image_format or self.resource_base_type(texture_type)
             mapped_type = self.map_type(self.type_name_string(value_type))
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL image store operation 'imageStore' requires scalar or "
                 f"vector value for {format_label} images: "
                 f"{expression_debug_name(value_arg)} has type {mapped_type}"
@@ -50741,7 +50765,7 @@ complex64_t crossgl_complex64_mod_assign(
         if value_kind is None:
             return
         format_label = image_format or self.resource_base_type(texture_type)
-        raise ValueError(
+        raise OpenGLRefusal(
             image_store_value_kind_error(
                 "OpenGL",
                 format_label,
@@ -50755,7 +50779,7 @@ complex64_t crossgl_complex64_mod_assign(
         if self.is_matrix_value_type(self.current_expression_expected_type):
             format_label = image_format or self.resource_base_type(texture_type)
             expected_type = self.map_type(self.current_expression_expected_type)
-            raise ValueError(
+            raise OpenGLRefusal(
                 "OpenGL image load operation 'imageLoad' requires scalar or "
                 f"vector result context for {format_label} images: "
                 f"got {expected_type}"
@@ -50767,7 +50791,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
         expected_kind = image_load_result_kind_mismatch(expected_kind, component_kind)
         if expected_kind is not None:
-            raise ValueError(
+            raise OpenGLRefusal(
                 image_load_result_kind_error(
                     "OpenGL", format_label, component_kind, expected_kind
                 )
@@ -50776,7 +50800,7 @@ complex64_t crossgl_complex64_mod_assign(
         loaded_channels = self.image_load_channel_count(texture_type, image_format)
         if load_context_allowed(loaded_channels, expected_channels):
             return
-        raise ValueError(
+        raise OpenGLRefusal(
             image_load_result_shape_error(
                 "OpenGL", format_label, loaded_channels, expected_channels
             )
@@ -50791,7 +50815,7 @@ complex64_t crossgl_complex64_mod_assign(
             texture_type
         ) in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}:
             if len(args) != 2:
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"{self.GLSL_TARGET_DISPLAY_NAME} texture-buffer operation "
                     f"'{func_name}' requires 2 argument(s), got {len(args)}"
                 )
@@ -51093,7 +51117,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if conflicts:
             names = ", ".join(sorted(conflicts))
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Non-resource local declaration(s) shadow OpenGL global resource(s): "
                 f"{names}"
             )
@@ -56612,7 +56636,7 @@ complex64_t crossgl_complex64_mod_assign(
         }
 
         def raise_fixed_size_conflict(name, left, right):
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{name}': {left} and {right}"
             )
@@ -57105,7 +57129,7 @@ complex64_t crossgl_complex64_mod_assign(
             if explicit_access in {"write", "read_write"}:
                 access_name = image_access_diagnostic_name(explicit_access)
                 node_name = self.resource_node_name(node, "<unnamed>")
-                raise ValueError(
+                raise OpenGLRefusal(
                     "OpenGL StructuredBuffer resource "
                     f"'{node_name}' cannot use {access_name} access metadata"
                 )
@@ -57252,7 +57276,7 @@ complex64_t crossgl_complex64_mod_assign(
         for layout_part in layout_parts:
             normalized = self.normalized_glsl_buffer_block_layout_part(layout_part)
             if normalized in seen:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Duplicate OpenGL buffer block layout metadata for "
                     f"'{node_name}': {layout_part}"
                 )
@@ -57263,7 +57287,7 @@ complex64_t crossgl_complex64_mod_assign(
         if len(memory_layouts) > 1:
             first_layout = memory_layouts[0]
             conflicting_layout = memory_layouts[1]
-            raise ValueError(
+            raise OpenGLRefusal(
                 "Conflicting OpenGL buffer block memory layout metadata for "
                 f"'{node_name}': {first_layout} differs from {conflicting_layout}"
             )
@@ -57991,7 +58015,7 @@ complex64_t crossgl_complex64_mod_assign(
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise OpenGLRefusal(
                     f"Conflicting {target} resource binding for '{name}': "
                     f"{self.resource_binding_range_label(namespace, start, end)} "
                     f"overlaps '{used_name}' "
@@ -58218,7 +58242,7 @@ complex64_t crossgl_complex64_mod_assign(
         while resolved in aliases:
             if resolved in seen:
                 cycle = " -> ".join([*seen, resolved])
-                raise ValueError(f"Cyclic OpenGL type alias: {cycle}")
+                raise OpenGLRefusal(f"Cyclic OpenGL type alias: {cycle}")
             seen.append(resolved)
             resolved = self.type_name_string(aliases[resolved])
         return resolved
@@ -58478,13 +58502,17 @@ complex64_t crossgl_complex64_mod_assign(
             arguments = getattr(attr, "arguments", []) or []
             source = self.attribute_value_to_string(arguments[0]) if arguments else None
             if source is None:
-                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+                raise OpenGLRefusal(
+                    self.invalid_glsl_image_format_message(node, source)
+                )
             format_name = str(source).lower()
             if format_name == self.GLSL_UNKNOWN_IMAGE_FORMAT:
                 choices.append((attr_name, source, format_name))
                 continue
             if format_name not in supported_formats:
-                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+                raise OpenGLRefusal(
+                    self.invalid_glsl_image_format_message(node, source)
+                )
             choices.append((attr_name, source, format_name))
 
         if not choices:
@@ -58496,12 +58524,12 @@ complex64_t crossgl_complex64_mod_assign(
             if previous is not None:
                 previous_source, previous_format = previous
                 if format_name == previous_format:
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         self.duplicate_glsl_image_format_message(
                             node, attr_name, source
                         )
                     )
-                raise ValueError(
+                raise OpenGLRefusal(
                     self.conflicting_glsl_image_format_message(
                         node, attr_name, previous_source, attr_name, source
                     )
@@ -58512,7 +58540,7 @@ complex64_t crossgl_complex64_mod_assign(
         for attr_name, source, format_name in choices[1:]:
             if format_name == first_format:
                 continue
-            raise ValueError(
+            raise OpenGLRefusal(
                 self.conflicting_glsl_image_format_message(
                     node, first_attr, first_source, attr_name, source
                 )
@@ -58524,7 +58552,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
         node_name = self.resource_node_name(node, "<unnamed>")
         type_name = self.type_name_string(self.resource_base_type(vtype))
-        raise ValueError(
+        raise OpenGLRefusal(
             "OpenGL image format metadata for "
             f"'{node_name}' applies only to storage image resources, "
             f"got {type_name}"
@@ -58974,7 +59002,7 @@ complex64_t crossgl_complex64_mod_assign(
             return
 
         node_name = self.resource_node_name(node, "<unnamed>")
-        raise ValueError(
+        raise OpenGLRefusal(
             "Incompatible OpenGL resource register metadata for "
             f"'{node_name}': register {source} uses {actual_prefix}-register, "
             f"expected {expected_prefix}-register for {namespace}"
@@ -59059,17 +59087,17 @@ complex64_t crossgl_complex64_mod_assign(
                 self.binding_index_value(arguments[0]) if arguments else None
             )
             if resource_space is None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     self.invalid_resource_binding_message(node, attr_name, source)
                 )
             description = f"{attr_name} {source if source is not None else '<missing>'}"
             if descriptor_set_description is not None:
                 if resource_space == descriptor_set:
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         "Duplicate OpenGL resource binding metadata for "
                         f"'{node_name}': {description}"
                     )
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource binding metadata for "
                     f"'{node_name}': {descriptor_set_description} differs from "
                     f"{description}"
@@ -59099,7 +59127,7 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 continue
             if binding is None:
-                raise ValueError(
+                raise OpenGLRefusal(
                     self.invalid_resource_binding_message(node, attr_name, source)
                 )
             if flatten_sets:
@@ -59134,11 +59162,11 @@ complex64_t crossgl_complex64_mod_assign(
             if previous is not None:
                 previous_description, previous_binding = previous
                 if binding == previous_binding:
-                    raise ValueError(
+                    raise OpenGLRefusal(
                         "Duplicate OpenGL resource binding metadata for "
                         f"'{node_name}': {description}"
                     )
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource binding metadata for "
                     f"'{node_name}': {previous_description} differs from "
                     f"{description}"
@@ -59154,7 +59182,7 @@ complex64_t crossgl_complex64_mod_assign(
                 current_description = self.explicit_resource_binding_choice_description(
                     attr_name, source, binding
                 )
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource binding metadata for "
                     f"'{node_name}': {first_description} differs from "
                     f"{current_description}"
@@ -59577,11 +59605,15 @@ complex64_t crossgl_complex64_mod_assign(
                     else None
                 )
                 if len(arguments) != 1:
-                    raise ValueError(self.invalid_resource_access_message(node, source))
+                    raise OpenGLRefusal(
+                        self.invalid_resource_access_message(node, source)
+                    )
                 source = self.attribute_value_to_string(arguments[0])
                 access = normalized_image_access(source)
                 if access is None:
-                    raise ValueError(self.invalid_resource_access_message(node, source))
+                    raise OpenGLRefusal(
+                        self.invalid_resource_access_message(node, source)
+                    )
                 choices.append((f"access({source})", access))
                 continue
 
@@ -59601,13 +59633,13 @@ complex64_t crossgl_complex64_mod_assign(
         seen_sources = {first_source}
         for source, access in choices[1:]:
             if source in seen_sources:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Duplicate OpenGL resource access metadata for "
                     f"'{node_name}': {self.resource_access_metadata_label(source)}"
                 )
             seen_sources.add(source)
             if access != first_access:
-                raise ValueError(
+                raise OpenGLRefusal(
                     "Conflicting OpenGL resource access metadata for "
                     f"'{node_name}': {first_source} differs from {source}"
                 )

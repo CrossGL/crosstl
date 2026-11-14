@@ -29,7 +29,11 @@ from .glsl_target_builtins import (
 )
 from .index_range_contracts import WEBGL_INDEX_PROFILE
 from .stage_refusals import StageUnsupportedError
-from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
 
 
 def webgl_refusal(reason):
@@ -690,7 +694,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
         return linked_name or input_name
 
     def generate_program(self, ast, target_stage=None):
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         self.webgl_program_identifier_names = program_identifier_names(ast)
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)

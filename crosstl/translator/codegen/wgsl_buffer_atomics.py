@@ -68,6 +68,7 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from ..refusals import TranslationRefusal
 
 ATOMIC_MODIFY_NAMES = frozenset(
     {
@@ -114,8 +115,10 @@ FIELD_ALIASES = {
 }
 
 
-class WGSLAtomicLoweringError(ValueError):
+class WGSLAtomicLoweringError(TranslationRefusal):
     """An atomic access the WGSL target cannot express exactly."""
+
+    code = "project.translate.wgsl-atomic-unsupported"
 
     def __init__(self, reason):
         super().__init__(f"WGSL target cannot lower this atomic access: {reason}")

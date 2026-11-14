@@ -28,6 +28,7 @@ from .ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .refusals import MetadataContractError
 
 # Source and descriptor spellings of each frozen dtype.
 FROZEN_SPECIALIZATION_DTYPES = {"bool": "bool", "int": "int32", "int32": "int32"}
@@ -47,7 +48,7 @@ def frozen_specializations(records):
         if not isinstance(record, Mapping) or "frozen" not in record:
             continue
         if record["frozen"] is not True:
-            raise ValueError("Frozen specialization flags must be true.")
+            raise MetadataContractError("Frozen specialization flags must be true.")
         name, constant_id, value = (
             record.get("name"),
             record.get("id"),
@@ -64,7 +65,7 @@ def frozen_specializations(records):
             or name in names
             or constant_id in ids
         ):
-            raise ValueError(
+            raise MetadataContractError(
                 "Invalid or duplicate frozen Boolean or int32 specialization."
             )
         names.add(name)
@@ -73,7 +74,7 @@ def frozen_specializations(records):
             dict(name=name, id=constant_id, dtype=dtype, value=value, frozen=True)
         )
     if len(result) > 256:
-        raise ValueError("Too many frozen specialization constants.")
+        raise MetadataContractError("Too many frozen specialization constants.")
     return sorted(result, key=lambda item: item["id"])
 
 
@@ -87,7 +88,9 @@ def frozen_specialization_header(records):
         separators=(",", ":"),
     )
     if len(FROZEN_SPECIALIZATION_PREFIX) + len(payload) > 65536:
-        raise ValueError("Frozen specialization metadata exceeds the byte limit.")
+        raise MetadataContractError(
+            "Frozen specialization metadata exceeds the byte limit."
+        )
     return FROZEN_SPECIALIZATION_PREFIX + payload + "\n"
 
 
@@ -96,13 +99,17 @@ def parse_frozen_specializations(source):
     if line is None:
         return []
     if len(line.encode("utf-8")) > 65536:
-        raise ValueError("Frozen specialization metadata exceeds the byte limit.")
+        raise MetadataContractError(
+            "Frozen specialization metadata exceeds the byte limit."
+        )
 
     def unique(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate frozen specialization metadata key.")
+                raise MetadataContractError(
+                    "Duplicate frozen specialization metadata key."
+                )
             result[key] = value
         return result
 
@@ -111,7 +118,9 @@ def parse_frozen_specializations(source):
             line[len(FROZEN_SPECIALIZATION_PREFIX) :], object_pairs_hook=unique
         )
     except (ValueError, RecursionError) as exc:
-        raise ValueError("Invalid frozen specialization metadata JSON.") from exc
+        raise MetadataContractError(
+            "Invalid frozen specialization metadata JSON."
+        ) from exc
     if (
         not isinstance(record, dict)
         or set(record) != {"schemaVersion", "constants"}
@@ -126,7 +135,9 @@ def parse_frozen_specializations(source):
             for item in record["constants"]
         )
     ):
-        raise ValueError("Unsupported frozen specialization metadata schema.")
+        raise MetadataContractError(
+            "Unsupported frozen specialization metadata schema."
+        )
     return frozen_specializations(record["constants"])
 
 

@@ -15,6 +15,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
 from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
+from crosstl.translator.refusals import DirectXSourceRefusal
 
 from ..comma_expressions import (
     comma_operands,
@@ -78,6 +79,15 @@ from .value_shapes import HLSLValueShapeMixin
 
 # Namespaced HLSL types that CrossGL keeps under the same scoped spelling.
 _SCOPED_BUILTIN_TYPE_NAMES = frozenset({"dx::HitObject"})
+
+
+def _renamed(renames, name):
+    """``name`` as the program spells it: its new name when ``renames`` (which holds only the declarations this
+    importer renamed, to avoid a CrossGL keyword, a scope separator or a clash) renames it, else unchanged.
+    """
+    if name in renames:
+        return renames[name]
+    return name
 
 
 class HLSLSelectOverloadError(ValueError):
@@ -182,7 +192,7 @@ class HLSLToCrossGLConverter(
         can also express.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "matrix_packing must be one of "
                 f"{', '.join(self.MATRIX_PACKINGS)}, got {matrix_packing!r}"
             )
@@ -190,7 +200,7 @@ class HLSLToCrossGLConverter(
             trigonometric_reduction is not None
             and trigonometric_reduction not in self.TRIGONOMETRIC_REDUCTIONS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "trigonometric_reduction must be one of "
                 f"{', '.join(self.TRIGONOMETRIC_REDUCTIONS)}, "
                 f"got {trigonometric_reduction!r}"
@@ -199,7 +209,7 @@ class HLSLToCrossGLConverter(
             floating_point_contraction is not None
             and floating_point_contraction not in self.FLOATING_POINT_CONTRACTIONS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "floating_point_contraction must be one of "
                 f"{', '.join(self.FLOATING_POINT_CONTRACTIONS)}, "
                 f"got {floating_point_contraction!r}"
@@ -211,7 +221,7 @@ class HLSLToCrossGLConverter(
             unorm_store_rounding is not None
             and unorm_store_rounding not in self.UNORM_STORE_ROUNDINGS
         ):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "unorm_store_rounding must be one of "
                 f"{', '.join(self.UNORM_STORE_ROUNDINGS)}, "
                 f"got {unorm_store_rounding!r}"
@@ -223,6 +233,7 @@ class HLSLToCrossGLConverter(
         self.hlsl_static_const_initializers = {}
         self.constant_initializer_depth = 0
         self.function_return_types = {}
+        self.current_function_return_type = None
         self.function_overloads = {}
         self.source_function_names = set()
         self.source_functions = {}
@@ -1635,7 +1646,7 @@ class HLSLToCrossGLConverter(
             return name
         if name in self.current_identifier_renames:
             return self.current_identifier_renames[name]
-        rendered = self.global_identifier_renames.get(name, name)
+        rendered = _renamed(self.global_identifier_renames, name)
         if self.is_opaque_template_value_path(rendered):
             return self.sanitize_scoped_identifier_name(rendered)
         return rendered
@@ -1738,7 +1749,7 @@ class HLSLToCrossGLConverter(
             if isinstance(name, str) and name
         }
         used_names = {
-            self.function_identifier_renames.get(name, name) for name in declared_names
+            _renamed(self.function_identifier_renames, name) for name in declared_names
         }
         renames = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -1757,12 +1768,23 @@ class HLSLToCrossGLConverter(
     def render_function_identifier(self, name):
         if not isinstance(name, str):
             return name
-        return self.function_identifier_renames.get(name, name)
+        return _renamed(self.function_identifier_renames, name)
 
     def render_type_identifier(self, name):
         if not isinstance(name, str):
             return name
-        return self.type_identifier_renames.get(name, name)
+        return _renamed(self.type_identifier_renames, name)
+
+    def crossgl_intrinsic_name(self, name):
+        """The CrossGL name of callee ``name``: the CrossGL spelling of an HLSL intrinsic ``function_map`` renames.
+
+        Any other callee is carried as written: a function or type the program declares, a constructor, or an HLSL
+        built-in CrossGL spells the same way. The IR accepts HLSL built-ins as plain calls for the generators to
+        map or refuse, and ``declared_functions`` refuses any other name (``builtin_function_names``).
+        """
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
 
     def normalize_hlsl_intrinsic_name(self, name):
         """Drop HLSL's intrinsic namespace so builtin lowering still applies."""
@@ -2532,6 +2554,12 @@ class HLSLToCrossGLConverter(
                 deduced = template_call_result_raw_type(self, expr)
                 if deduced is not None:
                     return deduced
+                hit_object_type = self.hit_object_static_call_raw_type(expr)
+                if hit_object_type is not None:
+                    return hit_object_type
+                raytracing_matrix = self.raytracing_matrix_call_raw_type(expr)
+                if raytracing_matrix is not None:
+                    return raytracing_matrix
                 type_name = self.resolve_integer_alias(expr.name)
                 if source_integer_shape(type_name) is not None:
                     return type_name
@@ -2569,6 +2597,12 @@ class HLSLToCrossGLConverter(
         member = self.templated_method_base(expr.name.member)
         resource_type = self.expression_raw_type(expr.name.object)
         resource_base = self.raw_type_base(resource_type)
+        method = self.struct_methods.get(resource_base, {}).get(member)
+        if method is not None and method.definition is not None:
+            return method.definition.return_type
+        raytracing_matrix = self.raytracing_matrix_call_raw_type(expr)
+        if raytracing_matrix is not None:
+            return raytracing_matrix
         if member in {"Load", "Load2", "Load3", "Load4"}:
             if resource_base in {
                 "ByteAddressBuffer",
@@ -4489,7 +4523,10 @@ class HLSLToCrossGLConverter(
             f"{return_type} "
             f"{function_name}({params}){semantic}{stage_entry_attribute} {{\n"
         )
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = func.return_type
         code += self.generate_function_body(func.body, indent=indent + 1)
+        self.current_function_return_type = previous_return_type
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims
@@ -4636,7 +4673,12 @@ class HLSLToCrossGLConverter(
                 if stmt.value is None:
                     code += "return;\n"
                 elif not is_main:
-                    code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+                    value = self.generate_expression(
+                        stmt.value,
+                        is_main,
+                        expected_type=self.current_function_return_type,
+                    )
+                    code += f"return {value};\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, WhileNode):
@@ -5339,13 +5381,21 @@ class HLSLToCrossGLConverter(
         if matrix_assignment is not None:
             return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
-        rhs = self.truncated_assignment_value(node, rhs)
+        rhs = self.scalar_matrix_assignment_value(node, is_main)
+        if rhs is None:
+            rhs = self.generate_expression(node.right, is_main)
+            rhs = self.truncated_assignment_value(node, rhs)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False, expected_type=None):
         """Render a DirectX backend expression node as CrossGL syntax."""
+        if expected_type is not None:
+            splat = self.scalar_matrix_splat_expression(
+                self.hlsl_matrix_shape(expected_type), expr, is_main
+            )
+            if splat is not None:
+                return splat
         if isinstance(expr, str):
             receiver_member = self.struct_method_context_identifier(expr)
             if receiver_member is not None:
@@ -5382,8 +5432,10 @@ class HLSLToCrossGLConverter(
             if matrix_assignment is not None:
                 return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
-            right = self.generate_expression(expr.right, is_main)
-            right = self.truncated_assignment_value(expr, right)
+            right = self.scalar_matrix_assignment_value(expr, is_main)
+            if right is None:
+                right = self.generate_expression(expr.right, is_main)
+                right = self.truncated_assignment_value(expr, right)
             op = expr.operator
             return f"{left} {op} {right}"
 
@@ -5461,7 +5513,13 @@ class HLSLToCrossGLConverter(
                             call += self.texel_narrowing_suffix(resource_type)
                     self.resource_method_diagnostic(method_member, descriptor)
                     return call
-                return f"{obj}.{member}({args})"
+                call = f"{obj}.{member}({args})"
+                if (
+                    self.hlsl_matrix_rows_are_columns()
+                    and self.raytracing_matrix_call_raw_type(expr) is not None
+                ):
+                    return f"transpose({call})"
+                return call
 
             func_name = (
                 expr.name
@@ -5498,7 +5556,10 @@ class HLSLToCrossGLConverter(
                 ]
             else:
                 rendered_args = [
-                    self.generate_expression(arg, is_main) for arg in expr.args
+                    self.generate_expression(arg, is_main, expected_type=param_type)
+                    for arg, param_type in zip(
+                        expr.args, self.source_parameter_types(func_name, expr.args)
+                    )
                 ]
             legacy_texture_call = self.legacy_texture_function_call(
                 func_name, expr.args, rendered_args, is_main
@@ -5559,8 +5620,9 @@ class HLSLToCrossGLConverter(
             if func_name != "round" or not self.source_function_accepts_argument_count(
                 func_name, len(expr.args)
             ):
-                func_name = self.function_map.get(func_name, func_name)
-            func_name = self.interlocked_map.get(func_name, func_name)
+                func_name = self.crossgl_intrinsic_name(func_name)
+            if func_name in self.interlocked_map:
+                func_name = self.interlocked_map[func_name]
             integer_shape = source_integer_shape(self.resolve_integer_alias(func_name))
             if (
                 integer_shape is not None
@@ -5571,7 +5633,13 @@ class HLSLToCrossGLConverter(
             if isinstance(func_name, str) and "<" in func_name:
                 func_name = templated_call_name(self, func_name)
             func_name = self.render_function_identifier(func_name)
-            return f"{func_name}({args})"
+            call = f"{func_name}({args})"
+            if (
+                self.hlsl_matrix_rows_are_columns()
+                and self.raytracing_matrix_call_raw_type(expr) is not None
+            ):
+                return f"transpose({call})"
+            return call
         elif isinstance(expr, MemberAccessNode):
             alias = self.stage_struct_parameter_member_alias(expr)
             if alias is not None:

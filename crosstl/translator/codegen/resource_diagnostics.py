@@ -2,14 +2,19 @@
 
 
 class ResourceDiagnosticMixin:
-    """Fallback helpers for unsupported resource operations in backends."""
+    """Refusals for resource operations an emitter cannot lower.
+
+    Each ``unsupported_*`` helper records the operation through the emitter's ``refuse_lowering``
+    (:class:`~.lowering_refusals.LoweringRefusalMixin`), so the program is refused with a typed diagnostic. The
+    neutral value it returns only lets generation reach the program's other refusals and never reaches output.
+    """
 
     resource_diagnostic_backend = None
     zero_float2 = "make_float2(0.0f, 0.0f)"
     zero_float4 = "make_float4(0.0f, 0.0f, 0.0f, 0.0f)"
 
     def resource_backend_name(self):
-        """Return the backend name used in generated diagnostic comments."""
+        """Return the backend name used in refusal reasons."""
         return self.resource_diagnostic_backend or self.__class__.__name__
 
     def resource_base_type(self, type_name):
@@ -64,18 +69,18 @@ class ResourceDiagnosticMixin:
         return self.zero_float4
 
     def unsupported_multisample_resource_call(self, func_name, resource_type, _args):
-        """Return diagnostic code for unsupported multisample operations."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} multisample resource call: "
-            f"{func_name} on {resource_type} */ "
-            f"{self.multisample_zero_value(func_name, resource_type)}"
+        """Refuse a multisample operation the target cannot express."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} multisample resource call: "
+            f"{func_name} on {resource_type}",
+            self.multisample_zero_value(func_name, resource_type),
         )
 
     def unsupported_resource_query_call(self, func_name, resource_type, _args):
-        """Return diagnostic code for unsupported resource query operations."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ {self.zero_float2}"
+        """Refuse a resource query the target cannot express."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            self.zero_float2,
         )
 
     def shadow_zero_value(self, func_name):
@@ -89,17 +94,19 @@ class ResourceDiagnosticMixin:
         return "0.0f"
 
     def unsupported_shadow_resource_call(self, func_name, resource_type, _args):
-        """Return diagnostic code for unsupported shadow sampler operations."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} shadow resource call: "
-            f"{func_name} on {resource_type} */ {self.shadow_zero_value(func_name)}"
+        """Refuse a shadow-sampler operation the target cannot express."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} shadow resource call: "
+            f"{func_name} on {resource_type}",
+            self.shadow_zero_value(func_name),
         )
 
     def unsupported_sampled_resource_call(self, func_name, resource_type, _args):
-        """Return diagnostic code for unsupported sampled-resource operations."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} sampled resource call: "
-            f"{func_name} on {resource_type} */ {self.zero_float4}"
+        """Refuse a sampled-resource operation the target cannot express."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} sampled resource call: "
+            f"{func_name} on {resource_type}",
+            self.zero_float4,
         )
 
     def image_atomic_zero_value(self, resource_type):
@@ -110,10 +117,10 @@ class ResourceDiagnosticMixin:
         return "0"
 
     def unsupported_image_atomic_resource_call(self, func_name, resource_type, _args):
-        """Return diagnostic code for unsupported image atomic operations."""
+        """Refuse an image atomic the target cannot express."""
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} image atomic resource call: "
-            f"{func_name} on {resource_type} */ "
-            f"{self.image_atomic_zero_value(resource_type)}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} image atomic resource call: "
+            f"{func_name} on {resource_type}",
+            self.image_atomic_zero_value(resource_type),
         )

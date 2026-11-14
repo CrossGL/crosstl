@@ -15,10 +15,14 @@ from crosstl.translator.codegen.lowering_refusals import LoweringRefusals
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 __all__ = [
+    "CudaImportRefused",
     "DirectXImportRefused",
+    "HipImportRefused",
     "ImportRefusalMixin",
     "ImportRefused",
     "MetalImportRefused",
+    "MojoImportRefused",
+    "RustImportRefused",
     "SlangImportRefused",
 ]
 
@@ -54,12 +58,44 @@ class DirectXImportRefused(ImportRefused):
     code = f"{CODE_PREFIX}directx-import-unsupported"
 
 
+class CudaImportRefused(ImportRefused):
+    """One or more CUDA C++ constructs have no faithful CrossGL representation."""
+
+    source_name = "cuda"
+    label = "CUDA"
+    code = f"{CODE_PREFIX}cuda-import-unsupported"
+
+
+class HipImportRefused(ImportRefused):
+    """One or more HIP C++ constructs have no faithful CrossGL representation."""
+
+    source_name = "hip"
+    label = "HIP"
+    code = f"{CODE_PREFIX}hip-import-unsupported"
+
+
 class MetalImportRefused(ImportRefused):
     """One or more Metal Shading Language constructs have no faithful CrossGL representation."""
 
     source_name = "metal"
     label = "Metal"
     code = f"{CODE_PREFIX}metal-import-unsupported"
+
+
+class MojoImportRefused(ImportRefused):
+    """One or more Mojo constructs have no faithful CrossGL representation."""
+
+    source_name = "mojo"
+    label = "Mojo"
+    code = f"{CODE_PREFIX}mojo-import-unsupported"
+
+
+class RustImportRefused(ImportRefused):
+    """One or more Rust constructs have no faithful CrossGL representation."""
+
+    source_name = "rust"
+    label = "Rust"
+    code = f"{CODE_PREFIX}rust-import-unsupported"
 
 
 class SlangImportRefused(ImportRefused):

@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.refusals import DirectXSyntaxError
+
 from ...translator.integer_literals import integer_literal_parts
 from ..common_ast import (
     ArrayAccessNode,
@@ -507,7 +509,7 @@ class HLSLParser:
             attributes.extend(self.parse_attribute_list())
             declarator_type = return_type + self.parse_pointer_declarator_suffix()
             if not self.is_declarator_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
@@ -673,7 +675,7 @@ class HLSLParser:
     def eat(self, expected_type):
         # The end of input is never consumed: a construct that reads past it is unterminated.
         if expected_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise DirectXSyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -682,7 +684,9 @@ class HLSLParser:
             else:
                 self.current_token = ("EOF", "")
             return token
-        raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
+        raise DirectXSyntaxError(
+            f"Expected {expected_type}, got {self.current_token[0]}"
+        )
 
     def peek(self, offset=1):
         idx = self.current_index + offset
@@ -737,14 +741,14 @@ class HLSLParser:
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected identifier, got {self.current_token[0]}")
 
     def parse_declarator_identifier(self):
         if self.is_declarator_identifier_token(self.current_token[0]):
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Expected declarator identifier, got {self.current_token[0]}"
         )
 
@@ -757,7 +761,7 @@ class HLSLParser:
             token = self.current_token
             self.eat(token[0])
             return token[1]
-        raise SyntaxError(f"Expected typedef name, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected typedef name, got {self.current_token[0]}")
 
     def current_token_is_keyword(self, token_type, value):
         return self.current_token[0] == token_type or (
@@ -817,14 +821,14 @@ class HLSLParser:
                     return
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated template argument list")
+        raise DirectXSyntaxError("Unterminated template argument list")
 
     def eat_keyword(self, token_type, value):
         if self.current_token[0] == token_type:
             return self.eat(token_type)
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value:
             return self.eat("IDENTIFIER")
-        raise SyntaxError(f"Expected {value}, got {self.current_token[0]}")
+        raise DirectXSyntaxError(f"Expected {value}, got {self.current_token[0]}")
 
     def eat_double_colon(self):
         self.eat("COLON")
@@ -943,7 +947,7 @@ class HLSLParser:
             self.eat(token_type)
 
         if depth != 0:
-            raise SyntaxError("Unterminated brace block")
+            raise DirectXSyntaxError("Unterminated brace block")
 
     def parse_namespace_block(self):
         self.eat_keyword("NAMESPACE", "namespace")
@@ -1013,7 +1017,9 @@ class HLSLParser:
         if not name:
             # A null directive on its own line is removed by the preprocessor; a '#' that reaches the parser
             # follows other tokens on its line, where C and HLSL give it no meaning.
-            raise SyntaxError(f"Stray '#' outside a preprocessor directive: {text!r}")
+            raise DirectXSyntaxError(
+                f"Stray '#' outside a preprocessor directive: {text!r}"
+            )
         directive = name[0]
         content = text[len(directive) + 1 :].strip() if directive else text
         return PreprocessorNode(directive, content)
@@ -1143,12 +1149,12 @@ class HLSLParser:
             self.eat("IDENTIFIER")
 
         if not self.is_type_token(self.current_token[0]):
-            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
+            raise DirectXSyntaxError(f"Expected type, got {self.current_token[0]}")
 
         if self.current_token[0] == "STRUCT":
             self.eat("STRUCT")
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected struct type name, got {self.current_token[0]}"
                 )
             return self.parse_type_suffixes(self.parse_identifier())
@@ -1183,7 +1189,7 @@ class HLSLParser:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
                 if self.current_token[0] != "IDENTIFIER":
-                    raise SyntaxError(
+                    raise DirectXSyntaxError(
                         "Expected identifier after scoped type, "
                         f"got {self.current_token[0]}"
                     )
@@ -1227,7 +1233,7 @@ class HLSLParser:
                 depth -= 1
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated generic argument list")
+        raise DirectXSyntaxError("Unterminated generic argument list")
 
     def format_generic_argument_tokens(self, tokens):
         result = []
@@ -1346,7 +1352,7 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected semantic identifier, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
@@ -1380,7 +1386,7 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected semantic identifier, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
@@ -1422,7 +1428,7 @@ class HLSLParser:
                 parts.append(str(token_value))
             self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated semantic argument list")
+            raise DirectXSyntaxError("Unterminated semantic argument list")
         return "".join(parts).strip()
 
     def parse_register_binding(self, token_type):
@@ -1444,7 +1450,7 @@ class HLSLParser:
         base_classes = []
         while True:
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected struct base identifier, got {self.current_token[0]}"
                 )
             base_name = self.parse_type_suffixes(self.parse_identifier())
@@ -1585,7 +1591,7 @@ class HLSLParser:
                 members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
@@ -1695,7 +1701,7 @@ class HLSLParser:
                 nested_members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
@@ -1728,7 +1734,9 @@ class HLSLParser:
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
                     return nested_members
-                raise SyntaxError("Expected identifier after anonymous struct member")
+                raise DirectXSyntaxError(
+                    "Expected identifier after anonymous struct member"
+                )
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
             nested_struct = StructNode(nested_name, nested_members)
@@ -1788,10 +1796,10 @@ class HLSLParser:
                 return "operator()"
             if self.is_type_token(self.current_token[0]):
                 return f"operator {self.parse_type()}"
-            raise SyntaxError(
+            raise DirectXSyntaxError(
                 f"Expected overloaded operator name, got {self.current_token[0]}"
             )
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Expected overloaded operator name, got {self.current_token[0]}"
         )
 
@@ -1859,7 +1867,7 @@ class HLSLParser:
             elif self.current_token[0] == "RBRACE":
                 break
             else:
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected comma or closing brace in enum, got {self.current_token[0]}"
                 )
         self.eat("RBRACE")
@@ -1942,7 +1950,7 @@ class HLSLParser:
                 members.extend(self.ensure_statement_list(declarations))
                 continue
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in typedef struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
@@ -2082,7 +2090,7 @@ class HLSLParser:
             self.eat(token_type)
 
         if depth != 0:
-            raise SyntaxError(f"Unterminated {open_token} block")
+            raise DirectXSyntaxError(f"Unterminated {open_token} block")
 
     def looks_like_nested_struct_definition(self):
         if self.current_token[0] != "STRUCT":
@@ -2143,7 +2151,7 @@ class HLSLParser:
                 continue
 
             if not self.is_type_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected type in cbuffer member, got {self.current_token[0]}"
                 )
 
@@ -2583,7 +2591,7 @@ class HLSLParser:
                     attributes, primitive_qualifiers, mesh_parameter_roles
                 )
                 if not self.is_type_token(self.current_token[0]):
-                    raise SyntaxError(
+                    raise DirectXSyntaxError(
                         f"Unexpected token in parameter list: {self.current_token[0]}"
                     )
                 param_type = self.parse_type()
@@ -3223,7 +3231,7 @@ class HLSLParser:
     def parse_anonymous_bitfield_declaration_rest(self):
         bit_width = self.parse_bitfield_width()
         if bit_width is None:
-            raise SyntaxError(
+            raise DirectXSyntaxError(
                 f"Expected anonymous bitfield width, got {self.current_token[0]}"
             )
         self.parse_attribute_list()
@@ -3323,7 +3331,7 @@ class HLSLParser:
                 return
             self.eat(self.current_token[0])
 
-        raise SyntaxError("Unterminated effect annotation block")
+        raise DirectXSyntaxError("Unterminated effect annotation block")
 
     def is_sampler_state_type(self, vtype):
         return str(vtype).split("<", 1)[0] in {
@@ -3376,7 +3384,7 @@ class HLSLParser:
             tokens.append(self.current_token)
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated sampler_state angle-bracket value")
+        raise DirectXSyntaxError("Unterminated sampler_state angle-bracket value")
 
     def parse_condition_expression(self):
         if self.looks_like_declaration():
@@ -4022,7 +4030,7 @@ class HLSLParser:
 
     def parse_scoped_name(self, prefix):
         if not isinstance(prefix, str):
-            raise SyntaxError("Expected identifier before scoped name separator")
+            raise DirectXSyntaxError("Expected identifier before scoped name separator")
 
         scoped_name = prefix
         while self.current_token_is_double_colon():
@@ -4092,7 +4100,7 @@ class HLSLParser:
         if self.current_token_is_double_colon():
             self.eat_double_colon()
             if not self.is_identifier_token(self.current_token[0]):
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Expected identifier after global scope qualifier, got {self.current_token[0]}"
                 )
             scoped_name = self.parse_identifier()
@@ -4147,7 +4155,7 @@ class HLSLParser:
                 return VectorConstructorNode(type_name, args)
             return type_name
 
-        raise SyntaxError(
+        raise DirectXSyntaxError(
             f"Unexpected token in primary expression: {self.current_token}"
         )
 

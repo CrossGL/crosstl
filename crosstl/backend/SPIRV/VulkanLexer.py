@@ -3,6 +3,8 @@
 import re
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import SpirvSyntaxError
+
 from .preprocessor import VulkanPreprocessor
 
 # using sets for faster lookup
@@ -381,7 +383,7 @@ class VulkanLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

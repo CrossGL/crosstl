@@ -18,7 +18,16 @@ WRAP = "wrap"
 UDIV_ZERO = "udiv_zero"
 CONVERT_SAT = "convert_sat"
 FTOI_NAN = "ftoi_nan"
-FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN)
+# Floating-point operations evaluated without a fast-math compilation mode: no mode that assumes NaNs, infinities and
+# signed zeros are absent, reassociates, or selects approximate implementations of the math functions. The family has
+# no intrinsics: a target discharges it for the whole program (program_families.py).
+FP_IEEE = "fp_ieee"
+# Rounding to an integral value with halfway cases away from zero, keeping the sign of a zero result: C11 7.12.9.6
+# round, which CUDA, HIP and OpenCL C adopt. Sources write the hub intrinsic ``__cgl_round_away``; CrossGL's own
+# ``round`` leaves the direction of halfway cases to the target, as GLSL does.
+ROUND_AWAY = "round_away"
+FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE, ROUND_AWAY)
+PROGRAM_FAMILIES = frozenset({FP_IEEE})
 
 
 @dataclass(frozen=True)
@@ -36,11 +45,49 @@ class TargetEntry:
     configuration: str | None = None
 
 
-# Rule families each source language defines. Sources not listed (CUDA, HIP, OpenCL C, Slang, Rust, Mojo and
-# CrossGL itself) leave signed overflow and division by zero undefined or unstated, so their operations carry no
-# obligation; Metal leaves them undefined too. GLSL and SPIR-V leave unsigned division by zero unspecified (GLSL 4.60
-# section 5.9, SPIR-V OpUDiv).
+# Rule families each source language defines. CUDA, HIP, OpenCL C, Slang, Rust, Mojo and CrossGL itself leave signed
+# overflow and division by zero undefined or unstated, so those operations carry no obligation; Metal leaves them
+# undefined too. GLSL and SPIR-V leave unsigned division by zero unspecified (GLSL 4.60 section 5.9, SPIR-V OpUDiv).
+# CUDA, HIP and OpenCL C compile without fast math unless asked to. Metal (fast math by default), HLSL (DXC marks
+# float operations fast unless they are precise or -Gis is given), GLSL and SPIR-V (whose environments need not
+# preserve NaNs, infinities or signed zeros) do not define fp_ieee.
 SOURCE_RULES = {
+    "cuda": (
+        SourceRule(
+            FP_IEEE,
+            "CUDA Programming Guide, floating-point standard: nvcc compiles IEEE 754 arithmetic and the accurate "
+            "math library (--use_fast_math, which implies --ftz=true, --prec-div=false and --prec-sqrt=false, is "
+            "off by default); CUDA Math API: the error bounds of the single-precision functions",
+        ),
+        SourceRule(
+            ROUND_AWAY,
+            "CUDA Math API, roundf and round: round to the nearest integer value, with halfway cases rounded away "
+            "from zero (C11 7.12.9.6)",
+        ),
+    ),
+    "hip": (
+        SourceRule(
+            FP_IEEE,
+            "Clang Users Manual: -ffast-math is off by default, so HIP device code keeps NaNs, infinities and "
+            "signed zeros and is not reassociated; HIP math API: the ULP bounds of the device functions",
+        ),
+        SourceRule(
+            ROUND_AWAY,
+            "HIP math API, roundf and round: halfway cases are rounded away from zero (C11 7.12.9.6)",
+        ),
+    ),
+    "opencl": (
+        SourceRule(
+            FP_IEEE,
+            "OpenCL C 3.0 sections 7.2 and 7.4: the full profile's ULP bounds and IEEE 754 edge cases apply unless "
+            "the program is built with -cl-fast-relaxed-math or -cl-finite-math-only",
+        ),
+        SourceRule(
+            ROUND_AWAY,
+            "OpenCL C 3.0 section 6.15.2, round: round to integral value (using round to nearest even rounding "
+            "mode) rounding halfway cases away from zero, regardless of the current rounding direction",
+        ),
+    ),
     "metal": (
         SourceRule(
             FTOI_NAN,
@@ -283,6 +330,123 @@ TARGET_ENTRIES.update(
     }
 )
 
+# fp_ieee asks only that no fast-math compilation mode applies; the accuracy each language guarantees for its math
+# functions is a separate rule.
+TARGET_ENTRIES.update(
+    {
+        (FP_IEEE, "metal"): TargetEntry(
+            "polyfill",
+            "MSL 4.1 section 1.6.3: the compiler defaults to fast math, and MTLCompileOptions.mathMode is relaxed on "
+            "Apple silicon and fast elsewhere; the output starts with #pragma METAL fp math_mode(safe) and calls "
+            "the metal::precise functions (codegen/metal_safe_math.py)",
+        ),
+        (FP_IEEE, "directx"): TargetEntry(
+            "native",
+            "HLSL cannot select DXC's floating-point mode in source; -Gis forces IEEE strictness",
+            configuration="dxc -Gis",
+        ),
+        (FP_IEEE, "opengl"): TargetEntry(
+            "native", "GLSL 4.60 defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "webgl"): TargetEntry(
+            "native", "ESSL 3.00 defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "wgsl"): TargetEntry(
+            "native", "WGSL defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "vulkan"): TargetEntry(
+            "native",
+            "SPIR-V relaxes floating-point operations only through FPFastMathMode decorations, which CrossTL does "
+            "not emit",
+        ),
+        (FP_IEEE, "cuda"): TargetEntry(
+            "native",
+            "nvcc compiles IEEE 754 arithmetic and the accurate math library unless --use_fast_math is given",
+            configuration="nvcc without --use_fast_math",
+        ),
+        (FP_IEEE, "hip"): TargetEntry(
+            "native",
+            "Clang compiles HIP without fast math unless -ffast-math is given",
+            configuration="hipcc without -ffast-math",
+        ),
+        (FP_IEEE, "slang"): TargetEntry(
+            "native",
+            "slangc's default floating-point mode defers to the downstream compiler, which may be fast; -fp-mode "
+            "precise selects precise",
+            configuration="slangc -fp-mode precise",
+        ),
+        (FP_IEEE, "mojo"): TargetEntry(
+            "native", "the Mojo manual documents no fast-math compilation mode"
+        ),
+        (FP_IEEE, "rust"): TargetEntry(
+            "native",
+            "Rust has no fast-math compilation mode: its floating-point operators are IEEE 754 operations",
+        ),
+    }
+)
+
+# Targets whose ``round`` is not proven to round halfway cases away from zero and keep the sign of a zero result
+# compute the round_away helper from trunc, abs and sign, which every target defines exactly.
+_ROUND_AWAY_POLYFILL = "; the helper rounds with trunc, abs and sign"
+TARGET_ENTRIES.update(
+    {
+        (ROUND_AWAY, "opengl"): TargetEntry(
+            "polyfill",
+            "GLSL 4.60 section 8.3, round: a fractional part of 0.5 rounds in a direction chosen by the "
+            "implementation" + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "webgl"): TargetEntry(
+            "polyfill",
+            "ESSL 3.00 section 8.3, round: a fractional part of 0.5 rounds in a direction chosen by the "
+            "implementation" + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "wgsl"): TargetEntry(
+            "polyfill",
+            "WGSL built-in function round: halfway cases round to the even integer"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "vulkan"): TargetEntry(
+            "polyfill",
+            "GLSL.std.450 Round: the direction of a fractional part of 0.5 is chosen by the implementation"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "metal"): TargetEntry(
+            "polyfill",
+            "MSL 4.1 section 6.5 round rounds halfway cases away from zero, but on Apple GPUs it gives +0.0 for "
+            "negative operands above -0.5, where C11 7.12.9.6 keeps -0.0"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "directx"): TargetEntry(
+            "polyfill",
+            "HLSL round rounds halfway cases to the nearest even integer (DXIL Round_ne)"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "cuda"): TargetEntry(
+            "native",
+            "CUDA Math API: roundf rounds halfway cases away from zero (C11 7.12.9.6)",
+        ),
+        (ROUND_AWAY, "hip"): TargetEntry(
+            "native",
+            "HIP math API: roundf rounds halfway cases away from zero (C11 7.12.9.6)",
+        ),
+        (ROUND_AWAY, "slang"): TargetEntry(
+            "polyfill",
+            "Slang's round follows the target it lowers to, which may round halfway cases to even"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "mojo"): TargetEntry(
+            "polyfill",
+            "the Mojo manual does not state the halfway direction of round on SIMD floats"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "rust"): TargetEntry(
+            "polyfill",
+            "f32::round rounds halfway cases away from zero, but the Rust output's round is not proven to reach "
+            "it" + _ROUND_AWAY_POLYFILL,
+        ),
+    }
+)
+
 # Hub intrinsics of the wrap family: name -> (operator, arity). Statement forms (compound assignment, increment
 # and decrement) reuse the binary templates; see annotate.py and lower.py.
 WRAP_INTRINSICS = {
@@ -321,6 +485,9 @@ CONVERSION_SIGNATURES = {
     "__cgl_nan0_ftoi": ("float", "int"),
     "__cgl_nan0_ftou": ("float", "uint"),
 }
+# Hub intrinsic of the round_away family: name -> (the CrossGL function a native entry calls, arity). Only binary32
+# operands (scalar or vector) have a helper; lowering widens binary16 operands, which is exact, and refuses others.
+ROUND_AWAY_INTRINSICS = {"__cgl_round_away": ("round", 1)}
 # Generic conversions to ``int`` or ``uint`` written by sources, resolved by operand type (see conversions.py):
 # ``__cgl_convert_<result>[_sat][_<mode>]``, where the optional mode rounds a float operand to an integral value first
 # (``rte`` to nearest even, ``rtz`` toward zero, ``rtp`` up, ``rtn`` down): name -> (result, saturate, mode).
@@ -339,6 +506,7 @@ INTRINSICS = {
     **UDIV_ZERO_INTRINSICS,
     **CONVERT_SAT_INTRINSICS,
     **FTOI_NAN_INTRINSICS,
+    **ROUND_AWAY_INTRINSICS,
 }
 INTRINSIC_FAMILY = {
     **{name: WRAP for name in WRAP_INTRINSICS},
@@ -346,6 +514,7 @@ INTRINSIC_FAMILY = {
     **{name: CONVERT_SAT for name in CONVERT_SAT_INTRINSICS},
     **{name: CONVERT_SAT for name in CONVERT_SAT_GENERIC},
     **{name: FTOI_NAN for name in FTOI_NAN_INTRINSICS},
+    **{name: ROUND_AWAY for name in ROUND_AWAY_INTRINSICS},
 }
 BINARY_WRAP_INTRINSIC = {
     "+": "__cgl_wrap_add",
@@ -436,6 +605,16 @@ HELPERS = {
 # The ftoi_nan polyfills are the saturating helpers themselves (one definition per program; see helpers.py).
 HELPERS["__cgl_nan0_ftoi"] = HELPERS["__cgl_sat_ftoi"]
 HELPERS["__cgl_nan0_ftou"] = HELPERS["__cgl_sat_ftou"]
+# x0 - trunc(x0) is exact for every finite binary32 value, and trunc(x0) + sign(x0) is exact wherever the fraction
+# reaches one half (the magnitude is then below 2^23). A zero, NaN or infinite operand keeps trunc(x0), which is the
+# operand itself, so the sign of a zero survives and sign(x0) is only used for nonzero finite values.
+HELPERS["__cgl_round_away"] = Helper(
+    "cgl_rule_round_away",
+    "float",
+    "abs(x0 - trunc(x0)) >= 0.5 ? trunc(x0) + sign(x0) : trunc(x0)",
+    ("float",),
+    "float",
+)
 
 
 def source_families(source: str) -> frozenset:

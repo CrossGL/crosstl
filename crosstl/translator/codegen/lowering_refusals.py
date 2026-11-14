@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import supersedes_pending_refusals
 
 __all__ = [
     "LoweringRefused",
@@ -110,9 +111,11 @@ class LoweringRefusals:
     def run(self, generate, *args, **kwargs):
         """Call ``generate`` and raise the refusals it recorded; nested calls report through the outermost one.
 
-        A typed error (a :class:`TranslationDiagnostic` or an error carrying ``project_diagnostic_code``) propagates
-        unchanged. Any other exception may be the consequence of a placeholder left by an earlier refusal, so the
-        refusals are reported with the exception as their cause and its message as their last reason. The rendered
+        A diagnostic with a code of its own (a :class:`TranslationDiagnostic` or an error carrying
+        ``project_diagnostic_code``) propagates unchanged. Any other exception, and a site refusal
+        (:class:`~crosstl.translator.refusals.TranslationRefusal`), may be the consequence of a placeholder left by an
+        earlier refusal, so the recorded refusals are reported with the exception as their cause and its message as
+        their last reason; with none recorded, the exception propagates. The rendered
         output is checked for loss markers before it is returned.
         """
         outermost = self.depth == 0
@@ -123,8 +126,8 @@ class LoweringRefusals:
         try:
             result = generate(*args, **kwargs)
         except Exception as error:
-            if outermost and _is_typed(error):
-                # A typed refusal already stops the translation with its own code.
+            if outermost and supersedes_pending_refusals(error):
+                # A diagnostic with a code of its own stops the translation with that code.
                 self.reset()
                 raise
             if outermost:
@@ -184,9 +187,3 @@ class LoweringRefusalMixin:
         """
         self.refusals.record(reason)
         return placeholder
-
-
-def _is_typed(error):
-    return isinstance(error, TranslationDiagnostic) or bool(
-        getattr(error, "project_diagnostic_code", None)
-    )

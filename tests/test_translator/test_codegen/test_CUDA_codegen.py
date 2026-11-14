@@ -4140,7 +4140,6 @@ class TestCudaCodeGen:
                     float f_lit = distance(f1, 1.0);
                     float fi = distance(f1, 1);
                     float hi = distance(h1, i1);
-                    float fb = distance(f1, b1);
                 }
             }
         }
@@ -4171,7 +4170,6 @@ class TestCudaCodeGen:
         assert "float f_lit = fabsf(f1 - 1.0f);" in cuda_code
         assert "float fi = fabsf(f1 - 1);" in cuda_code
         assert "float hi = fabsf(__half2float(h1) - i1);" in cuda_code
-        assert "float fb = distance(f1, b1);" in cuda_code
         assert "h1 - f1" not in cuda_code
         assert "h1 - i1" not in cuda_code
         assert "fabsf(f1 - b1)" not in cuda_code
@@ -4184,6 +4182,24 @@ class TestCudaCodeGen:
         assert "distance(f1, 1.0)" not in cuda_code
         assert "distance(f1, 1)" not in cuda_code
         assert "distance(h1, i1)" not in cuda_code
+
+    def test_distance_of_a_bool_operand_is_refused(self):
+        # CUDA has no distance(); a call the generator cannot lower is refused rather than written as it stands.
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f1 = 1.0;
+                    bool b1 = true;
+                    float fb = distance(f1, b1);
+                }
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(CudaLoweringRefused, match="call to 'distance'"):
+            CudaCodeGen().generate(ast)
 
     def test_scalar_normalize_evaluates_operand_once_and_distance_is_typed(self):
         source_code = """
@@ -6114,7 +6130,8 @@ class TestCudaCodeGen:
             "float3 v = cgl_float3_clamp_scalar_min_scalar_max("
             "make_float3(2.0f, -1.0f, 0.5f), 0.0, 1.0);" in cuda_code
         )
-        assert "int i = saturate(n);" in cuda_code
+        assert "int i = cgl_int_clamp(n, 0, 1);" in cuda_code
+        assert "saturate(n)" not in cuda_code
         assert "float x = saturate(" not in cuda_code
         assert "double y = saturate(" not in cuda_code
         assert "float3 v = saturate(" not in cuda_code

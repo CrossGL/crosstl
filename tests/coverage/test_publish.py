@@ -39,6 +39,14 @@ def _row(language, direction, **counts):
     }
 
 
+def _with_compile_only(data):
+    """``data`` with a row whose language the conformance harness has no runtime for."""
+    data["backends"].insert(
+        0, _row("cuda", "output", supported=1) | {"executes": False}
+    )
+    return data
+
+
 def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
     return {
         "schema": 1,
@@ -65,7 +73,11 @@ def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
         },
         "validators": {"glslangValidator": "16.0", "metal": None},
         "backends": [
-            _row("glsl", "output", supported=3, wrong=1, untested=2),
+            _row("glsl", "output", supported=3, wrong=1, untested=2) | {
+                "executes": True,
+                "executed": 2,
+                "runtime": "vulkan-lavapipe",
+            },
             _row("glsl", "input", supported=4),
             {
                 "language": "wgsl",
@@ -79,18 +91,25 @@ def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
 
 
 def test_chart_is_valid_svg_with_scores_commit_and_date():
-    svg = chart.render(_report())
+    svg = chart.render(_with_compile_only(_report()))
     root = ElementTree.fromstring(svg)
     texts = [t.text for t in root.iter(f"{SVG}text")]
     assert "0123456 · 2026-10-19" in texts
     assert "75.0 %" in texts and "100.0 %" in texts
     assert "3 of 4, 2 untested" in texts
+    # Each row says whether its probes ran; the legend says what that means.
+    assert "2 executed" in texts and "compile-only" in texts
+    assert texts[-1] == chart.LEGEND[-1]
+    assert "CUDA output 100.0 %, compile-only" in root.find(f"{SVG}desc").text
     assert "not offered: CrossTL has no WGSL source frontend" in texts
     assert "CrossGL IR" in texts
     assert root.find(f"{SVG}title").text.startswith("CrossTL coverage")
     # The supported share of the bar, in the direction's colour, is proportional to the score.
     bars = [r for r in root.iter(f"{SVG}rect") if r.get("class") == "output"]
-    assert [float(r.get("width")) for r in bars] == [chart.BAR_WIDTH * 0.75]
+    assert [float(r.get("width")) for r in bars] == [
+        chart.BAR_WIDTH,
+        chart.BAR_WIDTH * 0.75,
+    ]
 
 
 def test_chart_has_no_gradients_or_scripts_and_is_deterministic():
@@ -111,10 +130,15 @@ def test_chart_shows_unmeasured_rows_without_a_bar():
 
 
 def test_markdown_lists_scores_sources_and_gaps():
-    text = publish.markdown(_report())
-    assert "| GLSL | output | 75.0 % | 3 | 0 | 1 | 2 |" in text
-    assert "| WGSL | input | not offered | | | | |" in text
-    assert "| CrossGL IR | expressiveness | 100.0 % | 2 | 0 | 0 | 5 |" in text
+    text = publish.markdown(_with_compile_only(_report()))
+    lines = text.splitlines()
+    assert "| GLSL | output | 75.0 % | 3 | 0 | 1 | 2 | 2 on vulkan-lavapipe |" in lines
+    # A report measured without running probes says so for a language that has a runtime.
+    assert "| GLSL | input | 100.0 % | 4 | 0 | 0 | 0 | not run |" in lines
+    assert "| CUDA | output | 100.0 % | 1 | 0 | 0 | 0 | compile-only |" in lines
+    assert "| WGSL | input | not offered | | | | | |" in lines
+    assert "| CrossGL IR | expressiveness | 100.0 % | 2 | 0 | 0 | 5 |  |" in lines
+    assert "The Executed column counts the compute probes" in text
     assert "https://github.com/CrossGL/crosstl/commit/0123456789abcdef" in text
     assert (
         "KhronosGroup/GLSL/blob/0099bf83b0288469917fc2e2972cb0a2b74d6711/chapters"

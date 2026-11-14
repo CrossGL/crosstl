@@ -122,7 +122,7 @@ REFUSAL_SHADER = """shader Probe {
     [
         "if (findMSB(x >> 1u) < 0) {\n                iout[0] = 1;\n            }",
         "iout[0] = findLSB(bitfieldReverse(x));",
-        "iout[0] = bitCount(max(x, 1u)) - 1;",
+        "iout[0] = bitCount(bitfieldReverse(x)) - 1;",
     ],
     ids=["shift", "builtin-result", "bitcount"],
 )
@@ -132,6 +132,16 @@ def test_bit_count_and_scan_refuse_an_argument_of_unknown_type(tmp_path, stateme
     path.write_text(REFUSAL_SHADER.replace("STATEMENT", statement))
     with pytest.raises(ValueError, match="cannot tell the type of"):
         crosstl.translate(str(path), backend="wgsl")
+
+
+def test_bit_count_of_a_math_builtin_result_is_converted_to_int(tmp_path):
+    # max(uint, uint) is a uint, so countOneBits' u32 result is converted to i32.
+    path = tmp_path / "probe.cgl"
+    path.write_text(
+        REFUSAL_SHADER.replace("STATEMENT", "iout[0] = bitCount(max(x, 1u)) - 1;")
+    )
+    generated = crosstl.translate(str(path), backend="wgsl")
+    assert "iout[0] = (i32(countOneBits(max(x, 1u))) - 1);" in generated
 
 
 @pytest.mark.parametrize(

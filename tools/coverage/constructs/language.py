@@ -332,4 +332,12 @@ TYPES = (
     c("type", "vector-truncation", "OpCompositeExtract", "OpConvertSToF"),
     c("type", "matrix-resize", "OpTypeMatrix", "OpCompositeConstruct"),
     c("type", "bool-vector-conversion", "OpINotEqual", "OpSelect"),
+    # OpenCL C's .lo, .hi, .even and .odd, and its .sN component indices.
+    c("type", "vector-halves", "OpVectorShuffle", "OpCompositeExtract"),
+    c("type", "numeric-components", "OpVectorShuffle", "OpCompositeExtract"),
+    # A local that holds the address of a buffer element, and pointers moved by offsets.
+    c("type", "pointer-local", "OpAccessChain", "OpStore"),
+    c("type", "pointer-arithmetic", "OpPtrAccessChain"),
+    # A program-scope variable in device memory with an initializer, shared by every invocation.
+    c("type", "device-global", "StorageClass.CrossWorkgroup"),
 )

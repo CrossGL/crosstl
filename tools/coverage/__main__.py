@@ -146,10 +146,10 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
     ]
-    # SPIR-V input probes are lowered from GLSL, and from HLSL for the constructs GLSL cannot spell.
+    # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
         gap
-        for source in ("glsl", spirv_input.FALLBACK)
+        for source in ("glsl", *spirv_input.FALLBACKS)
         for gap in _lowering_gaps(source)
     )
     if "spirv" in languages and "input" in directions and gaps:
@@ -180,7 +180,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
-    data = report.build(results, languages, directions)
+    data = report.build(results, languages, directions, execute=args.execute)
     report.write(data, args.output)
     print(report.summary(data))
     if args.feature:

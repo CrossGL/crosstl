@@ -126,6 +126,27 @@ SOURCES = {
         "92425955d27a4f703fc88671c4ae6722fcdbf77d61c3b0f1df13c4310bec6b37",
         "LLVM 18.1.3 OpenCL C built-in function declarations",
     ),
+    "opencl-base": Source(
+        "llvm/llvm-project",
+        "c13b7485b87909fcf739f62cfa382b55407433c0",
+        "clang/lib/Headers/opencl-c-base.h",
+        "a27cb3b58c585ebf103ef3055f1da8739d586ce1b7ff1cfc16459b0eadc9a760",
+        "LLVM 18.1.3 OpenCL C as_type operators and printf",
+    ),
+    "opencl-builtins": Source(
+        "llvm/llvm-project",
+        "c13b7485b87909fcf739f62cfa382b55407433c0",
+        "clang/include/clang/Basic/Builtins.def",
+        "8b10e3289fee9e585d33ee61e12007a9a60a3c71890527a2d7235c27810a7002",
+        "LLVM 18.1.3 OpenCL C pipe, enqueue and address-space built-ins",
+    ),
+    "opencl-keywords": Source(
+        "llvm/llvm-project",
+        "c13b7485b87909fcf739f62cfa382b55407433c0",
+        "clang/include/clang/Basic/TokenKinds.def",
+        "c0aa3d79961ac2484d2ccba6abd6ca95483e65c537619daa0b256174db5e5bff",
+        "LLVM 18.1.3 OpenCL C keyword operators",
+    ),
     # rust-gpu v0.11.0, the release CI builds the probes with, and the num-traits and glam versions its lock file
     # resolves for spirv-std.
     "rust-arch": Source(

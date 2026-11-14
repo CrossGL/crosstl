@@ -101,6 +101,10 @@ SPIRV_ENVIRONMENT = "vulkan1.1"
 # Vulkan 1.2.
 SPIRV_1_4_ENVIRONMENT = "vulkan1.2"
 SPIRV_1_4_STAGES = frozenset({*RAYTRACING_STAGES, "task", "mesh"})
+# The SPIR-V version spirv-dis prints in an assembly's header, as CrossTL's generator does, and the highest minor
+# version each Vulkan environment accepts (Vulkan 1.1 takes SPIR-V 1.3, Vulkan 1.2 takes 1.5, Vulkan 1.3 takes 1.6).
+_SPIRV_VERSION = re.compile(r"^; Version: 1\.(\d+)$", re.M)
+_ENVIRONMENTS = ((3, SPIRV_ENVIRONMENT), (5, SPIRV_1_4_ENVIRONMENT), (6, "vulkan1.3"))
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
@@ -463,11 +467,29 @@ def _slang(
     return _dxc(output, generated, stage, "", scratch)
 
 
-def _spirv(name: str, stage: str, scratch: str) -> Verdict:
-    environment = [
-        "--target-env",
-        (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
-    ]
+def spirv_environment(assemblies: list[str]) -> str:
+    """The oldest Vulkan environment that accepts every one of ``assemblies``, by the SPIR-V version each declares."""
+    minor = max(
+        (
+            int(found.group(1))
+            for found in map(_SPIRV_VERSION.search, assemblies)
+            if found
+        ),
+        default=0,
+    )
+    return next(
+        (name for highest, name in _ENVIRONMENTS if minor <= highest),
+        _ENVIRONMENTS[-1][1],
+    )
+
+
+def _spirv(name: str, source: str, stage: str, scratch: str) -> Verdict:
+    # A module is checked for the Vulkan version its SPIR-V version needs, as slangc's SPIR-V 1.5 is, and the stages
+    # that need SPIR-V 1.4 for Vulkan 1.2 at least.
+    found = spirv_environment([source])
+    if stage in SPIRV_1_4_STAGES and found == SPIRV_ENVIRONMENT:
+        found = SPIRV_1_4_ENVIRONMENT
+    environment = ["--target-env", found]
     assembled = run(
         [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
     )
@@ -504,7 +526,7 @@ def validate(
             return run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
             return _slang(name, source, stage, entry, target, scratch)
-        return _spirv(name, stage, scratch)
+        return _spirv(name, source, stage, scratch)
 
 
 # slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the

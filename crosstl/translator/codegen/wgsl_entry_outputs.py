@@ -36,6 +36,7 @@ from ..ast import (
     StructNode,
     VariableNode,
 )
+from ..refusals import TranslationRefusal
 
 __all__ = [
     "EntryOutputLoweringError",
@@ -47,8 +48,10 @@ _OUTPUT_QUALIFIERS = ("out", "inout")
 _LOWERED_STAGES = frozenset({"vertex", "fragment"})
 
 
-class EntryOutputLoweringError(ValueError):
+class EntryOutputLoweringError(TranslationRefusal):
     """An entry point whose output parameters cannot become a WGSL output structure."""
+
+    code = "project.translate.wgsl-entry-output-unsupported"
 
 
 def _qualifiers(parameter):

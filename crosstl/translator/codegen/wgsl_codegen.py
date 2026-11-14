@@ -50,6 +50,7 @@ from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..refusals import WGSLRefusal
 from ..semantics.enum_values import enum_values
 from ..semantics.implicit_lod import ImplicitLodStageUnsupportedError
 from ..semantics.rewrite import is_pure
@@ -74,10 +75,15 @@ from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
-from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
     wgsl_array_constructor_type,
@@ -112,6 +118,7 @@ from .wgsl_float_classification import (
     is_float_classification_call,
     wgsl_float_classification_call,
 )
+from .wgsl_foreign_calls import WGSLForeignBuiltinCallError, is_foreign_wgsl_call
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -125,7 +132,10 @@ from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
     MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
+    is_abstract_integer_literal,
     mixed_integer_call_is_unsigned,
+    mixed_integer_call_type,
+    unsigned_bitwise_operand_types,
     wgsl_bitwise_operands,
     wgsl_mixed_integer_call_arguments,
     wgsl_mixed_integer_operands,
@@ -137,6 +147,11 @@ from .wgsl_integer_textures import (
     is_integer_sampler_type_name,
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
+from .wgsl_matrix_inverse import (
+    is_matrix_inverse_call,
+    wgsl_matrix_inverse_call,
+    wgsl_matrix_inverse_helpers,
+)
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_numeric_types import (
@@ -899,6 +914,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._matrix_inverse_helpers = {}
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -931,7 +947,8 @@ class WGSLCodeGen(
 
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
-        target_stage = normalize_stage_name(target_stage)
+        refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
+        target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
@@ -985,6 +1002,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._matrix_inverse_helpers = {}
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -1124,7 +1142,7 @@ class WGSLCodeGen(
             if var_type is None and getattr(node, "initial_value", None) is not None:
                 var_type = self.expression_type(node.initial_value)
                 if var_type is None:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target cannot infer the type of untyped global "
                         f"{name} from its initializer"
                     )
@@ -1265,6 +1283,9 @@ class WGSLCodeGen(
         if frexp_modf_helpers:
             emitted_sections.append(frexp_modf_helpers)
 
+        matrix_inverse_helpers = wgsl_matrix_inverse_helpers(self)
+        if matrix_inverse_helpers:
+            emitted_sections.append(matrix_inverse_helpers)
         half_conversion_helpers = self.generate_half_conversion_helpers()
         if half_conversion_helpers:
             emitted_sections.append(half_conversion_helpers)
@@ -1316,7 +1337,7 @@ class WGSLCodeGen(
             or (stage and stage not in self.SUPPORTED_STAGE_NAMES)
         )
         if unsupported:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support shader stage(s): "
                 + ", ".join(unsupported)
             )
@@ -1324,7 +1345,9 @@ class WGSLCodeGen(
     def generate_stage(self, stage_node, entry_name=None):
         stage_name = normalize_stage_name(getattr(stage_node, "stage", None))
         if stage_name not in self.SUPPORTED_STAGE_NAMES:
-            raise ValueError(f"WGSL target does not support shader stage: {stage_name}")
+            raise WGSLRefusal(
+                f"WGSL target does not support shader stage: {stage_name}"
+            )
 
         entry_point = self.stage_output_lowered_entry_point(
             stage_node, stage_node.entry_point
@@ -1988,7 +2011,7 @@ class WGSLCodeGen(
         prefix = f"{attributes} " if attributes else ""
         parameter_name = self.identifier_name(node.name)
         if self.is_glsl_buffer_block_parameter(node):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support GLSL buffer block parameters yet; "
                 "use module-scope storage bindings"
             )
@@ -1996,12 +2019,12 @@ class WGSLCodeGen(
             node.param_type
         )
         if unsupported_storage_type is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support "
                 f"{unsupported_storage_type} resources yet"
             )
         if self.structured_buffer_element_type(node.param_type) is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support StructuredBuffer parameters yet; "
                 "declare them as module-scope storage resources"
             )
@@ -2010,7 +2033,7 @@ class WGSLCodeGen(
             resource_type = self.type_display_name(
                 sampled_texture_array["element_type"]
             )
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower sampled texture resource array "
                 f"parameter {node.name} of type {resource_type}; WebGPU/WGSL "
                 "requires project-level binding expansion to pass individual "
@@ -2047,7 +2070,7 @@ class WGSLCodeGen(
             return ()
 
         if workgroup_size_references and stage_name != "compute":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support gl_WorkGroupSize outside compute stages"
             )
 
@@ -2059,7 +2082,7 @@ class WGSLCodeGen(
             if builtin not in self.INPUT_BUILTIN_TYPE_MAP
         )
         if unsupported:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support implicit builtin identifier(s): "
                 + ", ".join(unsupported)
                 + "; model them as entry-point parameters or return values"
@@ -2072,7 +2095,7 @@ class WGSLCodeGen(
             if builtin in self.INPUT_BUILTIN_TYPE_MAP and builtin not in stage_allowed
         )
         if invalid_for_stage:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support implicit builtin identifier(s) "
                 f"in {stage_name} stage: "
                 + ", ".join(invalid_for_stage)
@@ -2089,7 +2112,7 @@ class WGSLCodeGen(
         )
         if colliding_builtins:
             builtin = colliding_builtins[0]
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot inject builtin "
                 f"{builtin} because an entry parameter already uses that name "
                 f"without @builtin({builtin})"
@@ -2105,7 +2128,7 @@ class WGSLCodeGen(
     def validate_helper_function_references(self, function):
         builtin_references = self.stage_direct_builtin_references(function)
         if builtin_references:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support direct builtin identifier(s) "
                 f"in helper function {function.name}: "
                 + ", ".join(sorted(builtin_references))
@@ -2114,14 +2137,14 @@ class WGSLCodeGen(
 
         workgroup_size_references = self.direct_workgroup_size_references(function)
         if workgroup_size_references:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support gl_WorkGroupSize inside helper "
                 f"function {function.name}; keep it directly in compute entry points"
             )
 
         barrier_calls = self.function_barrier_call_names(function)
         if barrier_calls:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support barrier() inside helper function "
                 f"{function.name} yet; keep barriers directly in compute entry points"
             )
@@ -2177,7 +2200,7 @@ class WGSLCodeGen(
 
     def generate_struct(self, node):
         if getattr(node, "generic_params", None):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot emit unspecialized generic struct "
                 f"{node.name}; use concrete type arguments before WGSL generation"
             )
@@ -2188,7 +2211,7 @@ class WGSLCodeGen(
             resource_type_name = self.struct_member_resource_type_name(member)
             if resource_type_name:
                 if node.name in self._glsl_buffer_block_struct_names:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target does not support resource member "
                         f"{node.name}.{member.name} of type {resource_type_name} "
                         "inside GLSL buffer blocks; declare textures, samplers, "
@@ -2196,7 +2219,7 @@ class WGSLCodeGen(
                     )
                 if self.supported_struct_resource_member(member):
                     continue
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target does not support resource member "
                     f"{node.name}.{member.name} of type {resource_type_name}; "
                     "declare textures, samplers, and storage resources as "
@@ -2409,7 +2432,7 @@ class WGSLCodeGen(
         if len(vtype.generic_args) != len(generic_params):
             expected = len(generic_params)
             actual = len(vtype.generic_args)
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot specialize generic struct "
                 f"{vtype.name}; expected {expected} type argument"
                 f"{'s' if expected != 1 else ''}, got {actual}"
@@ -2422,7 +2445,7 @@ class WGSLCodeGen(
         members = []
         for member in getattr(definition, "members", []) or []:
             if not isinstance(member, StructMemberNode):
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target cannot specialize generic struct "
                     f"{definition.name}; member {getattr(member, 'name', '<unnamed>')} "
                     f"uses unsupported {type(member).__name__}"
@@ -2638,14 +2661,14 @@ class WGSLCodeGen(
         )
         if self.type_node_contains_generic_parameter(vtype, generic_parameter_names):
             args = ", ".join(self.generic_type_key(arg) for arg in vtype.generic_args)
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot specialize generic struct "
                 f"{vtype.name}<{args}> because at least one type argument is "
                 "still generic"
             )
         key = self.generic_struct_type_key(vtype.name, vtype.generic_args)
         if key not in self._generic_struct_specialized_names:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot emit generic struct "
                 f"{self.generic_type_key(vtype)}; no concrete specialization was "
                 "collected before WGSL generation"
@@ -2710,7 +2733,7 @@ class WGSLCodeGen(
             )
         resource_array_type = self.resource_array_element_type_name(node.var_type)
         if resource_array_type is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower resource array "
                 f"{node.name} of type {resource_array_type}; WebGPU/WGSL requires "
                 "each texture, sampler, image, and storage-buffer element to be "
@@ -2741,7 +2764,7 @@ class WGSLCodeGen(
             node.var_type
         )
         if unsupported_storage_type is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support "
                 f"{unsupported_storage_type} resources yet"
             )
@@ -2810,7 +2833,7 @@ class WGSLCodeGen(
             node.param_type
         )
         if unsupported_storage_type is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support "
                 f"{unsupported_storage_type} resources yet"
             )
@@ -2838,14 +2861,14 @@ class WGSLCodeGen(
                 f"{attributes}\nvar<uniform> {self.module_identifier_name(node.name)}: "
                 f"{self.type_name_string(uniform_type)};"
             )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot lower stage resource parameter "
             f"{node.name} of type {node.param_type}"
         )
 
     def generate_sampled_texture_global_variable(self, node, texture_type):
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for sampled texture "
                 f"resource {node.name}"
             )
@@ -2866,20 +2889,20 @@ class WGSLCodeGen(
 
     def generate_sampled_texture_array_global_variable(self, node, array_info):
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for sampled texture "
                 f"resource array {node.name}"
             )
         array_size = self.resolve_array_size(node.var_type.size, node.name)
         if array_size is None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower sampled texture resource array "
                 f"{node.name}; WebGPU/WGSL requires project-level binding "
                 "expansion to declare each texture and sampler element as an "
                 "individual module-scope binding"
             )
         if array_size < 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower sampled texture resource array "
                 f"{node.name} with size {array_size}; declare at least one "
                 "texture/sampler binding element"
@@ -2937,7 +2960,7 @@ class WGSLCodeGen(
 
     def generate_sampler_global_variable(self, node):
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for sampler resource "
                 f"{node.name}"
             )
@@ -2951,7 +2974,7 @@ class WGSLCodeGen(
 
     def generate_storage_texture_global_variable(self, node, texture_type):
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for storage texture "
                 f"resource {node.name}"
             )
@@ -3003,7 +3026,7 @@ class WGSLCodeGen(
                 f"{attributes}\nvar {binding_name}: "
                 f"{self.sampler_type(info['member_type'])};"
             )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target does not support resource member "
             f"{info['owner_struct']}.{member.name} of type {info['resource_type_name']}; "
             "declare textures, samplers, and storage resources as module-scope "
@@ -3012,7 +3035,7 @@ class WGSLCodeGen(
 
     def generate_buffer_pointer_global_variable(self, node):
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for buffer pointer "
                 f"resource {node.name}"
             )
@@ -3028,7 +3051,7 @@ class WGSLCodeGen(
     def generate_glsl_buffer_block_global_variable(self, node):
         self.validate_glsl_buffer_block_variable(node)
         if node.initial_value is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support initializers for GLSL buffer block "
                 f"resource {node.name}"
             )
@@ -3138,10 +3161,10 @@ class WGSLCodeGen(
         if isinstance(stmt, WGSLContinuingLoopNode):
             return self.generate_continuing_loop(stmt, indent)
         if isinstance(stmt, ForInNode):
-            raise ValueError("WGSL target does not support for-in statements")
+            raise WGSLRefusal("WGSL target does not support for-in statements")
         if isinstance(stmt, MatchNode):
-            raise ValueError("WGSL target does not support match statements")
-        raise ValueError(
+            raise WGSLRefusal("WGSL target does not support match statements")
+        raise WGSLRefusal(
             f"WGSL target does not support statement {type(stmt).__name__}"
         )
 
@@ -3264,6 +3287,17 @@ class WGSLCodeGen(
                 "assignment to a split stage-interface member",
                 (stage_matrix["object_expr"],),
             )
+        target_shape = self.vector_shape(target_type)
+        value_type = self.expression_type(node.value)
+        value_shape = self.vector_shape(value_type)
+        if (
+            node.operator[:-1] in MIXED_INTEGER_OPERATORS | BITWISE_OPERATORS
+            and target_shape is not None
+            and target_shape[0] == "u32"
+            and value_shape == ("i32", target_shape[1])
+        ):
+            left, right = wgsl_mixed_integer_operands(self, node.target, node.value)
+            return f"{left} {node.operator} {right}"
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
         else:
@@ -3341,7 +3375,7 @@ class WGSLCodeGen(
         pad = "    " * indent
         if index is not None:
             if index < 0 or index >= access["size"]:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target stage interface array "
                     f"{access['member_name']} index {index} is outside the lowered "
                     f"field range 0..{access['size'] - 1}"
@@ -3518,7 +3552,7 @@ class WGSLCodeGen(
 
     def assignable_swizzle_components(self, components):
         if len(set(components)) != len(components):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower assignment to swizzle with duplicate "
                 f"components {components}"
             )
@@ -3593,7 +3627,9 @@ class WGSLCodeGen(
         if narrowed is not None:
             return narrowed
         if splat_scalars:
-            splat = self.vector_splat_expression(rendered, target_type, source_type)
+            splat = self.vector_splat_expression(
+                rendered, target_type, source_type, expr
+            )
             if splat is not None:
                 return splat
         target_scalar = self.scalar_type_name(target_type)
@@ -3691,7 +3727,7 @@ class WGSLCodeGen(
         )
         if inferred_type is not None:
             return inferred_type
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot infer a concrete type for local variable "
             f"{getattr(node, 'name', '<unnamed>')} declared as void"
         )
@@ -3719,10 +3755,12 @@ class WGSLCodeGen(
             self.generate_expression(expr), target_type, self.expression_type(expr)
         )
 
-    def vector_splat_expression(self, rendered, target_type, source_type):
+    def vector_splat_expression(self, rendered, target_type, source_type, expr=None):
         """A scalar stored to a vector, which HLSL, GLSL, MSL and CrossGL replicate into every component.
 
         WGSL has no implicit scalar-to-vector conversion, so the value becomes ``vecN<T>(T(value))``.
+        A negative integer literal ``expr`` stored to a ``vecN<u32>`` is written ``u32(-1i)``, as for a
+        scalar ``u32`` (see ``concrete_negative_integer_literal``).
         """
         target_shape = self.vector_shape(target_type)
         if target_shape is None or source_type is None:
@@ -3734,6 +3772,8 @@ class WGSLCodeGen(
         if source_scalar not in {"bool", "f16", "f32", "i32", "u32"}:
             return None
         element = target_shape[0]
+        if element == "u32" and source_scalar == "i32" and expr is not None:
+            rendered = self.concrete_negative_integer_literal(expr, rendered)
         value = rendered if source_scalar == element else f"{element}({rendered})"
         return f"{self.type_name_string(target_type)}({value})"
 
@@ -3752,12 +3792,107 @@ class WGSLCodeGen(
             return narrowed
         return f"{self.type_name_string(target_type)}({narrowed})"
 
+    def normalized_type_name(self, vtype):
+        try:
+            return self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+
+    ternary_scalar_ranks = {"i32": 0, "u32": 1, "f32": 2}
+
+    def ternary_conversion_target(self, branch_type, other_type):
+        """Return the type a ternary branch converts to, or None.
+
+        GLSL 4.60 §5.8 lets the conditional operator apply the implicit
+        conversions of §4.1.10 to the operands: `int` to `uint` or `float`,
+        and `uint` to `float`, per component for vectors. WGSL has no implicit
+        conversion and `select` requires both operands to share a type, so the
+        conversion has to be written out.
+        """
+        branch_name = self.normalized_type_name(branch_type)
+        other_name = self.normalized_type_name(other_type)
+        branch_shape = self.vector_shape(branch_name)
+        other_shape = self.vector_shape(other_name)
+        if branch_shape is None:
+            branch_rank = self.ternary_scalar_ranks.get(branch_name)
+            other_rank = self.ternary_scalar_ranks.get(other_name)
+            if branch_rank is None or other_rank is None or branch_rank >= other_rank:
+                return None
+            return other_name
+        if other_shape is None or other_shape[1] != branch_shape[1]:
+            return None
+        branch_rank = self.ternary_scalar_ranks.get(branch_shape[0])
+        other_rank = self.ternary_scalar_ranks.get(other_shape[0])
+        if branch_rank is None or other_rank is None or branch_rank >= other_rank:
+            return None
+        return f"vec{other_shape[1]}<{other_shape[0]}>"
+
+    def ternary_result_type(self, true_type, false_type):
+        true_name = self.normalized_type_name(true_type)
+        false_name = self.normalized_type_name(false_type)
+        if true_name == false_name:
+            return true_name
+        if true_name is None or false_name is None:
+            # An unknown branch keeps the declaration unresolved, as the
+            # `_common_value_type` rule did before the conditional got a
+            # conversion rule. Typing it from the known branch would drop the
+            # check on the other one and could emit invalid WGSL.
+            return None
+        target = self.ternary_conversion_target(true_name, false_name)
+        if target is not None:
+            return target
+        target = self.ternary_conversion_target(false_name, true_name)
+        if target is not None:
+            return target
+        # No conversion makes the branches match, so leave the declaration
+        # unresolved and let the emitter refuse it.
+        return None
+
+    def is_integer_literal_expression(self, expr):
+        if isinstance(expr, UnaryOpNode) and expr.operator in {"+", "-"}:
+            expr = expr.operand
+        if not isinstance(expr, LiteralNode):
+            return False
+        return self.normalized_type_name(getattr(expr, "literal_type", None)) == "i32"
+
+    def convert_ternary_int_branch(self, rendered, expr, target):
+        # An integer literal is an abstract value in WGSL, and `u32(-3)` is a
+        # shader-creation error because the value is not representable. Typing
+        # the literal first makes the conversion a runtime one, which wraps the
+        # way GLSL's int -> uint conversion does. Conversions to `float` accept
+        # the literal unchanged.
+        if target == "u32" and self.is_integer_literal_expression(expr):
+            return f"{target}({rendered}i)"
+        return f"{target}({rendered})"
+
+    def generate_ternary_expression(self, expr):
+        true_type = self.expression_type(expr.true_expr)
+        false_type = self.expression_type(expr.false_expr)
+        true_rendered = self.generate_expression(expr.true_expr)
+        false_rendered = self.generate_expression(expr.false_expr)
+        if true_type is not None and false_type is not None:
+            target = self.ternary_conversion_target(true_type, false_type)
+            if target is not None:
+                true_rendered = self.convert_ternary_int_branch(
+                    true_rendered, expr.true_expr, target
+                )
+            else:
+                target = self.ternary_conversion_target(false_type, true_type)
+                if target is not None:
+                    false_rendered = self.convert_ternary_int_branch(
+                        false_rendered, expr.false_expr, target
+                    )
+        return (
+            f"select({false_rendered}, {true_rendered}, "
+            f"{self.generate_expression(expr.condition)})"
+        )
+
     def generate_expression(self, expr):
         if expr is None:
             return ""
         if is_comma_expression(expr):
             # Statement lowering hoists every comma it can reach (wgsl_value_side_effects).
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower a comma expression in this position; WGSL has no "
                 "comma operator"
             )
@@ -3826,7 +3961,7 @@ class WGSLCodeGen(
                 # WGSL has no unary plus. On a number it is the identity, and the
                 # operand text already stands on its own as an expression.
                 if self.boolean_expression_width(expr.operand) is not None:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL has no unary plus, and unary plus on a boolean "
                         "value has no numeric meaning to preserve"
                     )
@@ -3852,11 +3987,7 @@ class WGSLCodeGen(
         if isinstance(expr, TernaryOpNode):
             self.require_select_operands(expr)
             self.require_unconditional_branches(expr)
-            return (
-                f"select({self.generate_expression(expr.false_expr)}, "
-                f"{self.generate_expression(expr.true_expr)}, "
-                f"{self.generate_expression(expr.condition)})"
-            )
+            return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
@@ -3924,10 +4055,10 @@ class WGSLCodeGen(
                 f"({self.generate_expression(expr.expression)})"
             )
         if isinstance(expr, RangeNode):
-            raise ValueError("WGSL target does not support range expressions")
+            raise WGSLRefusal("WGSL target does not support range expressions")
         if isinstance(expr, AssignmentNode):
             self.reject_unordered_side_effect(expr)
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target does not support expression {type(expr).__name__}"
         )
 
@@ -4031,7 +4162,7 @@ class WGSLCodeGen(
             # pointer expression.
             return self.generate_workgroup_uniform_load_call(node)
         if normalized_name in self.UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support storage buffer helper "
                 f"{function_name} yet"
             )
@@ -4047,7 +4178,7 @@ class WGSLCodeGen(
             if member_name in self.UNSUPPORTED_STRUCTURED_BUFFER_MEMBER_HELPERS:
                 receiver_type = self.expression_type(node.function.object_expr)
                 if self.storage_buffer_like_type_name(receiver_type) is not None:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target does not support storage buffer member helper "
                         f"{node.function.member} yet"
                     )
@@ -4076,7 +4207,30 @@ class WGSLCodeGen(
             and not self.is_user_function_name(function_name)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            if not mixed_integer_call_is_unsigned(self, node.arguments):
+                # An unsigned mixed call already has its scalars written as vecN<u32>.
+                args = self.convert_integer_call_arguments(
+                    normalized_name, node.arguments, args
+                )
+                args = self.replicate_scalar_call_arguments(
+                    node.arguments,
+                    args,
+                    self.float_call_component(normalized_name, node.arguments),
+                )
             return f"{normalized_name}({args[0]}, {args[1]})"
+        if normalized_name in {"step", "smoothstep"} and not (
+            self.is_user_function_name(function_name)
+        ):
+            args = [self.generate_expression(arg) for arg in node.arguments]
+            args = self.convert_integer_call_arguments(
+                normalized_name, node.arguments, args
+            )
+            args = self.replicate_scalar_call_arguments(
+                node.arguments,
+                args,
+                self.float_call_component(normalized_name, node.arguments),
+            )
+            return f"{normalized_name}({', '.join(args)})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
@@ -4092,7 +4246,7 @@ class WGSLCodeGen(
             and self.scalar_type_name(self.expression_type(node.arguments[0]))
         ):
             # GLSL's faceforward also takes floats; WGSL's faceForward takes vectors only.
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports faceforward() on vectors only, as WGSL's "
                 "faceForward; write a scalar one as i * nref < 0.0 ? n : -n"
             )
@@ -4128,6 +4282,8 @@ class WGSLCodeGen(
             return self.generate_packed_dot4add_call(node, function_name, packed_dot)
         if is_two_argument_frexp_or_modf(self, node):
             return wgsl_frexp_modf_call(self, node)
+        if is_matrix_inverse_call(self, node):
+            return wgsl_matrix_inverse_call(self, node)
         if is_float_classification_call(self, node):
             return wgsl_float_classification_call(self, node)
 
@@ -4177,10 +4333,31 @@ class WGSLCodeGen(
             )
             if dispatch_call is not None:
                 return dispatch_call
-        args = self.generate_call_arguments(
-            function_name, node.arguments, function=resolved_function
-        )
-        mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
+        if (
+            resolved_function is None
+            and (
+                function_name in self.FLOAT_ARGUMENT_BUILTINS
+                or function_name in self.FLOAT_ONLY_BUILTINS
+            )
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            args = [self.generate_expression(arg) for arg in node.arguments]
+            args = self.convert_integer_call_arguments(
+                function_name, node.arguments, args
+            )
+            args = ", ".join(
+                self.replicate_scalar_call_arguments(
+                    node.arguments,
+                    args,
+                    self.float_call_component(function_name, node.arguments),
+                )
+            )
+        else:
+            args = self.generate_call_arguments(
+                function_name, node.arguments, function=resolved_function
+            )
+        mapped_name = self.FUNCTION_NAME_MAP.get(function_name)
         if (
             function_name == "atan"
             and len(node.arguments) == 2
@@ -4190,16 +4367,38 @@ class WGSLCodeGen(
             # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
             # argument and spells the two-argument form atan2(y, x).
             return f"atan2({args})"
-        if mapped_name == function_name and isinstance(node.function, IdentifierNode):
+        if (
+            function_name == "log10"
+            and len(node.arguments) == 1
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # WGSL declares log2 but no log10 (WGSL section 17.5); the
+            # identity log10(x) = log2(x) * log10(2) is the polyfill the
+            # GLSL target writes for the same call.
+            return f"(log2({args}) * 0.3010299956639812)"
+        if mapped_name is None and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
                     resolved_function
                 )
             else:
                 mapped_name = self.function_identifier_name(function_name)
+                self.refuse_foreign_wgsl_call(function_name, mapped_name)
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
+        elif mapped_name is None:
+            # A callee that is neither a name nor a member access is written as the expression names it.
+            mapped_name = function_name
+            self.refuse_foreign_wgsl_call(function_name, mapped_name)
         return f"{mapped_name}({args})"
+
+    def refuse_foreign_wgsl_call(self, function_name, written_name):
+        """Refuse a call that would be written with a built-in function name of another language."""
+        if self.is_user_function_name(function_name):
+            return
+        if is_foreign_wgsl_call(function_name, written_name):
+            raise WGSLForeignBuiltinCallError(function_name)
 
     # HLSL 8-bit pack intrinsics and their WGSL builtins (WGSL sections
     # 17.9.3 and 17.9.8): the WGSL argument type each takes, the builtin, and
@@ -4219,7 +4418,7 @@ class WGSLCodeGen(
         """HLSL ``pack_*8``/``unpack_*8*32`` as the WGSL 4x8-bit pack builtins."""
         argument_type, mapped_name, _result_type = mapping
         if len(node.arguments) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports {function_name}() with exactly 1 argument; "
                 f"got {len(node.arguments)}"
             )
@@ -4257,7 +4456,7 @@ class WGSLCodeGen(
         arity = {"extractBits": 3, "insertBits": 4}.get(mapped_name, 1)
         if len(node.arguments) != arity:
             noun = "argument" if arity == 1 else "arguments"
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports {function_name}() with exactly {arity} "
                 f"{noun}; got {len(node.arguments)}"
             )
@@ -4279,7 +4478,7 @@ class WGSLCodeGen(
             return f"vec{vector[1]}<i32>({call})" if vector[0] == "u32" else call
         # A u32 result left unconverted is still valid WGSL, but findMSB(x) < 0
         # would never hold and float(findMSB(x)) would give 4294967295.0.
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target writes {function_name}() as {mapped_name}(), which returns "
             "its argument's type where CrossGL returns int, and cannot tell the type "
             f"of {args[0]}; assign the argument to a local variable first"
@@ -4304,7 +4503,7 @@ class WGSLCodeGen(
     def generate_packed_dot4add_call(self, node, function_name, mapped_name):
         """HLSL ``dot4add_*8packed(a, b, acc)`` as WGSL ``(acc + dot4*8Packed(a, b))``."""
         if len(node.arguments) != 3:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports {function_name}() with exactly 3 arguments; "
                 f"got {len(node.arguments)}"
             )
@@ -4332,7 +4531,7 @@ class WGSLCodeGen(
     def generate_bit_cast_call(self, node, function_name, scalar):
         """HLSL ``asuint``/``asint``/``asfloat`` and GLSL ``floatBitsToUint`` and the like as WGSL ``bitcast``."""
         if len(node.arguments) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports {function_name}() with exactly 1 argument; got "
                 f"{len(node.arguments)}"
             )
@@ -4366,7 +4565,7 @@ class WGSLCodeGen(
     def generate_f32tof16_call(self, node):
         """HLSL ``f32tof16`` as WGSL ``pack2x16float``."""
         if len(node.arguments) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports f32tof16() with exactly 1 argument; "
                 f"got {len(node.arguments)}"
             )
@@ -4387,7 +4586,7 @@ class WGSLCodeGen(
     def generate_f16tof32_call(self, node):
         """HLSL ``f16tof32`` as WGSL ``unpack2x16float``."""
         if len(node.arguments) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports f16tof32() with exactly 1 argument; "
                 f"got {len(node.arguments)}"
             )
@@ -4448,7 +4647,7 @@ class WGSLCodeGen(
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports derivative intrinsic "
                 f"{function_name}() with exactly 1 argument; got "
                 f"{len(node.arguments)}"
@@ -4458,7 +4657,7 @@ class WGSLCodeGen(
     def generate_structured_buffer_free_helper_call(self, node, helper_name):
         if helper_name == "buffer_load":
             if len(node.arguments) != 2:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target supports buffer_load() with exactly 2 arguments; "
                     f"got {len(node.arguments)}"
                 )
@@ -4467,7 +4666,7 @@ class WGSLCodeGen(
             return self.structured_buffer_index_expression(resource, index)
 
         if len(node.arguments) != 3:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports buffer_store() with exactly 3 arguments; "
                 f"got {len(node.arguments)}"
             )
@@ -4479,7 +4678,7 @@ class WGSLCodeGen(
         receiver = node.function.object_expr
         if helper_name == "load":
             if len(node.arguments) != 1:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target supports StructuredBuffer.Load() with exactly "
                     f"1 argument; got {len(node.arguments)}"
                 )
@@ -4487,7 +4686,7 @@ class WGSLCodeGen(
             return self.structured_buffer_index_expression(receiver, node.arguments[0])
 
         if len(node.arguments) != 2:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports RWStructuredBuffer.Store() with exactly "
                 f"2 arguments; got {len(node.arguments)}"
             )
@@ -4549,7 +4748,7 @@ class WGSLCodeGen(
             isinstance(resource, IdentifierNode)
             and self.is_pointer_identifier(resource.name)
         ):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target requires "
                 f"{helper_name}() to use a StructuredBuffer or RWStructuredBuffer "
                 "resource"
@@ -4560,26 +4759,29 @@ class WGSLCodeGen(
         resource_type = self.expression_type(resource)
         access = self.structured_buffer_access(resource_type)
         if access == "read":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot store through read-only StructuredBuffer "
                 f"resource in {helper_name}()"
             )
 
     def generate_mod_call(self, node):
         if len(node.arguments) != 2:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports mod() calls with exactly 2 arguments; got "
                 f"{len(node.arguments)}"
             )
-        left = self.generate_expression(node.arguments[0])
-        right = self.generate_expression(node.arguments[1])
+        left, right = self.convert_integer_call_arguments(
+            "mod",
+            node.arguments,
+            [self.generate_expression(arg) for arg in node.arguments],
+        )
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
 
     def generate_fmod_call(self, node):
         # WGSL has no fmod built-in; its floating `%` is the same truncated remainder
         # (e1 - e2 * trunc(e1 / e2), WGSL section 8.7) and accepts a scalar operand.
         if len(node.arguments) != 2:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports fmod() calls with exactly 2 arguments; got "
                 f"{len(node.arguments)}"
             )
@@ -4591,6 +4793,118 @@ class WGSLCodeGen(
     # and no matrixCompMult or outerProduct built-in (WGSL sections 8.7, 17.5), so
     # these build the result one column at a time.
     COLUMNWISE_MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
+    # Built-ins that reduce a vector to its component type (GLSL 4.60 section 8.5).
+    COMPONENT_RESULT_BUILTINS = frozenset({"length", "distance", "dot"})
+    # Component-wise built-ins whose result has the type of their vector argument,
+    # or of their first argument when all are scalars (GLSL 4.60 sections 8.1-8.3, 8.5).
+    COMPONENTWISE_MATH_BUILTINS = frozenset(
+        {
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "trunc",
+            "round",
+            "roundEven",
+            "fract",
+            "mod",
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "normalize",
+            "min",
+            "max",
+            "clamp",
+            "mix",
+            "step",
+            "smoothstep",
+            "fma",
+        }
+    )
+    # GLSL math built-ins declared for floating-point arguments (min, max and clamp
+    # also for integers), whose int or uint argument GLSL converts to float when
+    # another argument is floating point (GLSL 4.60 sections 4.1.10, 6.1, 8.1-8.5).
+    FLOAT_ARGUMENT_BUILTINS = frozenset(
+        {
+            "min",
+            "max",
+            "clamp",
+            "mix",
+            "step",
+            "smoothstep",
+            "pow",
+            "atan",
+            "mod",
+            "distance",
+            "fma",
+        }
+    )
+    # GLSL math built-ins declared only for floating-point arguments, whose int or
+    # uint argument GLSL converts to float even when no argument is floating point
+    # (GLSL 4.60 sections 8.1-8.5). min, max, clamp, mix, abs and sign also have
+    # integer overloads and are not listed.
+    FLOAT_ONLY_BUILTINS = frozenset(
+        {
+            "sqrt",
+            "inversesqrt",
+            "exp",
+            "exp2",
+            "log",
+            "log2",
+            "pow",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "radians",
+            "degrees",
+            "floor",
+            "ceil",
+            "fract",
+            "round",
+            "roundEven",
+            "trunc",
+            "mod",
+            "step",
+            "smoothstep",
+            "fma",
+            "length",
+            "distance",
+            "dot",
+            "normalize",
+        }
+    )
+    # Built-ins whose scalar GLSL overloads are floating-point only. Integer
+    # arguments are implicitly converted to f32 for these calls.
+    FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS = frozenset(
+        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp", "mix"}
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -4638,7 +4952,7 @@ class WGSLCodeGen(
         return f"mat{columns}x{rows}<{element}>({', '.join(parts)})"
 
     def refuse_matrix_scalar_binary(self, expr):
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target lowers matrix {expr.operator} only with a scalar operand "
             "of the matrix element type or an integer literal; convert the operand "
             "first"
@@ -4656,7 +4970,7 @@ class WGSLCodeGen(
 
     def generate_columnwise_matrix_builtin_call(self, node, function_name):
         if len(node.arguments) != 2:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target supports {function_name}() calls with exactly 2 "
                 f"arguments; got {len(node.arguments)}"
             )
@@ -4667,7 +4981,7 @@ class WGSLCodeGen(
                 requirement = "two float matrices of the same type"
             else:
                 requirement = "two float vectors of the same component type"
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target requires {function_name}() operands to be {requirement}"
             )
         self.require_repeatable_matrix_operands(function_name, node.arguments)
@@ -4714,7 +5028,7 @@ class WGSLCodeGen(
         # Each operand appears once per column in the lowered expression.
         for operand in operands:
             if not self.is_repeatable_matrix_operand(operand):
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target lowers {operation} one column at a time and "
                     "requires operands without side effects; assign the operand "
                     "to a local variable first"
@@ -4790,18 +5104,43 @@ class WGSLCodeGen(
 
     def generate_clamp_call(self, node):
         if len(node.arguments) != 3:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports clamp() calls with exactly 3 arguments; got "
                 f"{len(node.arguments)}"
             )
         value_expr = self.generate_expression(node.arguments[0])
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
-        if vector_type_name is None:
+        float_component = self.float_call_component("clamp", node.arguments)
+        if float_component is None and (
+            vector_type_name is None
+            or mixed_integer_call_is_unsigned(self, node.arguments)
+        ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
             return f"clamp({', '.join(args)})"
-        lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
-        upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
+        if vector_type_name is None:
+            # A float argument picks the float overload, so each integer argument converts to
+            # float from its own value; through the mixed-integer u32 form a negative int
+            # would wrap first.
+            args = self.convert_integer_call_arguments(
+                "clamp",
+                node.arguments,
+                [self.generate_expression(argument) for argument in node.arguments],
+            )
+            return f"clamp({', '.join(args)})"
+        if float_component is not None:
+            vector_type_name = (
+                f"vec{self.vector_component_count(value_type)}<{float_component}>"
+            )
+        # generate_clamp_bound replicates a scalar bound, converted or not.
+        value_expr, lower, upper = self.convert_integer_call_arguments(
+            "clamp",
+            node.arguments,
+            [value_expr]
+            + [self.generate_expression(bound) for bound in node.arguments[1:]],
+        )
+        lower = self.generate_clamp_bound(node.arguments[1], vector_type_name, lower)
+        upper = self.generate_clamp_bound(node.arguments[2], vector_type_name, upper)
         return f"clamp({value_expr}, {lower}, {upper})"
 
     def generate_boolean_mix_call(self, node):
@@ -4827,7 +5166,7 @@ class WGSLCodeGen(
             default=selector_width,
         )
         if selector_width not in (1, value_width):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support mix with a "
                 f"{selector_width}-component selector and "
                 f"{value_width}-component values"
@@ -4875,8 +5214,179 @@ class WGSLCodeGen(
             return self.vector_component_count(self.expression_type(expr.arguments[0]))
         return None
 
-    def generate_clamp_bound(self, bound, vector_type_name):
-        rendered = self.generate_expression(bound)
+    def replicate_scalar_call_arguments(
+        self, arguments, rendered, component_override=None
+    ):
+        """Replicate the scalar arguments of a min, max, step or smoothstep call beside a vector.
+
+        GLSL has min(genType, float), max(genType, float), step(float, genType)
+        and smoothstep(float, float, genType) (GLSL 4.60 section 8.3), but WGSL
+        declares them with one type T for every argument, so a scalar is written
+        as the vector type of the other arguments, as clamp's bounds are. Only a
+        scalar of the vector's component type or a literal is replicated; a
+        scalar of another type is left as written. ``component_override`` is the
+        float type of a call whose integer arguments convert_integer_call_arguments
+        converted; those scalars are replicated too.
+        """
+        argument_types = [self.expression_type(arg) for arg in arguments]
+        vector_shape = next(
+            (
+                shape
+                for shape in map(self.vector_shape, argument_types)
+                if shape is not None
+            ),
+            None,
+        )
+        if vector_shape is None:
+            return list(rendered)
+        component, size = vector_shape
+        if component_override is not None:
+            component = component_override
+        replicated = []
+        for arg, arg_type, text in zip(arguments, argument_types, rendered):
+            literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
+            if self.vector_shape(arg_type) is None and (
+                isinstance(literal, LiteralNode)
+                or self.scalar_type_name(arg_type) == component
+                or (
+                    component_override is not None
+                    and self.scalar_type_name(arg_type) in {"i32", "u32"}
+                )
+            ):
+                text = f"vec{size}<{component}>({text})"
+            replicated.append(text)
+        return replicated
+
+    def float_call_component(self, function_name, arguments):
+        """The float type an int or uint argument of a float built-in call is converted to.
+
+        Returns ``f32`` or ``f16`` when an argument other than an abstract integer
+        literal is an integer and either ``function_name`` is one of
+        FLOAT_ARGUMENT_BUILTINS and another argument is floating point, or
+        ``function_name`` is one of FLOAT_ONLY_BUILTINS (``f32`` when no argument is
+        floating point). Else None.
+        """
+        float_only = function_name in self.FLOAT_ONLY_BUILTINS
+        if function_name not in self.FLOAT_ARGUMENT_BUILTINS and not float_only:
+            return None
+        components = [
+            self.call_argument_component(arg, arg_type)
+            for arg, arg_type in zip(
+                arguments, (self.expression_type(arg) for arg in arguments)
+            )
+        ]
+        if not {"i32", "u32"} & set(components):
+            return None
+        float_component = next((c for c in components if c in {"f32", "f16"}), None)
+        if float_component is None and float_only:
+            return "f32"
+        return float_component
+
+    def call_argument_component(self, arg, arg_type):
+        """Scalar or vector component type of a call argument; None for an integer literal."""
+        literal = arg
+        while isinstance(literal, UnaryOpNode) and literal.operator in {"-", "+"}:
+            literal = literal.operand
+        if is_abstract_integer_literal(literal):
+            return None
+        shape = self.vector_shape(arg_type)
+        return shape[0] if shape is not None else self.scalar_type_name(arg_type)
+
+    def convert_integer_call_arguments(self, function_name, arguments, rendered):
+        """Convert the int and uint arguments of a float built-in call to the float type.
+
+        GLSL picks the float overload of max(float, int) and converts the int
+        argument (GLSL 4.60 sections 4.1.10 and 6.1). WGSL has no implicit
+        conversions and its built-ins take arguments of one type, so the argument
+        is written as f32(k), or vecN<f32>(iv) for an ivecN. A converted scalar
+        beside a vector is replicated afterwards, by replicate_scalar_call_arguments
+        or generate_clamp_bound. Integer literals are abstract in WGSL and are
+        left as written.
+        """
+        rendered = list(rendered)
+        float_component = self.float_call_component(function_name, arguments)
+        if float_component is None:
+            return rendered
+        for index, arg in enumerate(arguments):
+            arg_type = self.expression_type(arg)
+            if self.call_argument_component(arg, arg_type) not in {"i32", "u32"}:
+                continue
+            shape = self.vector_shape(arg_type)
+            target = (
+                float_component
+                if shape is None
+                else f"vec{shape[1]}<{float_component}>"
+            )
+            rendered[index] = f"{target}({rendered[index]})"
+        return rendered
+
+    def builtin_math_call_type(self, function_name, arguments):
+        """Return the result type of a GLSL math built-in call, or None if unknown."""
+        if not arguments or self.is_user_function_name(function_name):
+            return None
+        float_component = self.float_call_component(function_name, arguments)
+        if float_component is not None:
+            # The int and uint arguments are converted (convert_integer_call_arguments).
+            if function_name in self.COMPONENT_RESULT_BUILTINS:
+                return float_component
+            size = next(
+                (
+                    shape[1]
+                    for shape in (
+                        self.vector_shape(self.expression_type(arg))
+                        for arg in arguments
+                    )
+                    if shape is not None
+                ),
+                None,
+            )
+            return float_component if size is None else f"vec{size}<{float_component}>"
+        if function_name in self.COMPONENT_RESULT_BUILTINS:
+            argument_type = self.expression_type(arguments[0])
+            return self.vector_component_type(argument_type) or self.scalar_type_name(
+                argument_type
+            )
+        if function_name in self.COMPONENTWISE_MATH_BUILTINS:
+            argument_types = [self.expression_type(arg) for arg in arguments]
+            vector_type = next(
+                (t for t in argument_types if self.vector_shape(t) is not None), None
+            )
+            if vector_type is not None:
+                return vector_type
+            scalar_arguments = argument_types
+            boolean_selector = False
+            if function_name == "mix" and len(arguments) == 3:
+                # A boolean selector may be a comparison or logical expression;
+                # its expression_type is intentionally not a scalar type. Infer
+                # the result from x and y, then let generate_boolean_mix_call
+                # validate the selector shape.
+                boolean_selector = (
+                    self.boolean_expression_width(arguments[2]) is not None
+                )
+                if boolean_selector:
+                    scalar_arguments = argument_types[:2]
+            scalar_names = [self.scalar_type_name(t) for t in scalar_arguments]
+            if any(s is None for s in scalar_names):
+                return None
+            if function_name in self.FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS:
+                return "f32"
+            if (
+                function_name == "mix"
+                and not boolean_selector
+                and "bool" not in scalar_names
+            ):
+                return "f32"
+            for target in ("f32", "u32", "i32"):
+                for t, s in zip(argument_types, scalar_names):
+                    if s == target:
+                        return t
+            if scalar_names and scalar_names[0] is not None:
+                return argument_types[0]
+        return None
+
+    def generate_clamp_bound(self, bound, vector_type_name, rendered=None):
+        if rendered is None:
+            rendered = self.generate_expression(bound)
         if self.vector_component_count(self.expression_type(bound)) is not None:
             return rendered
         return f"{vector_type_name}({rendered})"
@@ -4979,7 +5489,7 @@ class WGSLCodeGen(
             names = ", ".join(
                 arg.array_expr.name for _idx, arg, _param, _info in dynamic_texture_args
             )
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot lower a call with multiple dynamic sampled "
                 f"texture resource arrays ({names}); split the call into one "
                 "array-dispatched texture parameter"
@@ -5160,7 +5670,7 @@ class WGSLCodeGen(
             return self.generate_texel_fetch_call(function_name, args)
         if normalized_name == "texelfetchoffset":
             return self.generate_texel_fetch_offset_call(function_name, args)
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
         )
@@ -5219,7 +5729,7 @@ class WGSLCodeGen(
                 self.generate_expression(sampler),
                 *self.texture_lookup_args(texture, args[2:], function_name),
             ]
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target supports {function_name}() calls with {implicit} or "
             f"{explicit} argument(s); got {len(args)}"
         )
@@ -5275,6 +5785,11 @@ class WGSLCodeGen(
         if len(args) == 3:
             texture, second, third = args
             if self.is_sampler_type(self.expression_type(second)):
+                comparison_call = self.explicit_shadow_comparison_call(
+                    function_name, texture, second, third
+                )
+                if comparison_call is not None:
+                    return comparison_call
                 sample_function = (
                     "textureSampleLevel"
                     if self._current_stage_name == "compute"
@@ -5316,7 +5831,7 @@ class WGSLCodeGen(
                 "not a sampler: "
                 f"{self.raw_type_name_string(self.expression_type(sampler)) or 'an unknown type'}",
             )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target supports texture() calls with texture/coords, "
             "texture/sampler/coords, texture/coords/bias or "
             "texture/sampler/coords/bias arguments; got "
@@ -5418,6 +5933,11 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             texture, sampler, coords, level = args
+            comparison_call = self.explicit_shadow_comparison_call(
+                function_name, texture, sampler, coords, lod=level
+            )
+            if comparison_call is not None:
+                return comparison_call
             self.refuse_comparison_sampler(
                 sampler, function_name, texture, "textureSampleLevel"
             )
@@ -5427,7 +5947,7 @@ class WGSLCodeGen(
                 f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
                 f"{self.generate_expression(level)})"
             )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target supports textureLod() calls with texture/coords/lod or "
             "texture/sampler/coords/lod arguments; got "
             f"{len(args)} argument(s) for {function_name}"
@@ -5435,6 +5955,11 @@ class WGSLCodeGen(
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
         if len(args) == 5:
+            comparison_call = self.explicit_shadow_comparison_call(
+                function_name, args[0], args[1], args[2], lod=args[3], offset=args[4]
+            )
+            if comparison_call is not None:
+                return comparison_call
             self.refuse_comparison_sampler(
                 args[1], function_name, args[0], "textureSampleLevel"
             )
@@ -5467,6 +5992,11 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             if self.is_sampler_type(self.expression_type(args[1])):
+                comparison_call = self.explicit_shadow_comparison_call(
+                    function_name, args[0], args[1], args[2], offset=args[3]
+                )
+                if comparison_call is not None:
+                    return comparison_call
                 self.refuse_comparison_sampler(
                     args[1], function_name, args[0], "textureSample"
                 )
@@ -5493,10 +6023,89 @@ class WGSLCodeGen(
                 "textureSampleBias("
                 f"{texture}, {sampler}, {coords}, {bias}, {offset})"
             )
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target supports textureOffset() calls with texture/coords/offset, "
             "texture/sampler/coords/offset, or texture/sampler/coords/offset/bias "
             f"arguments; got {len(args)} argument(s)"
+        )
+
+    def explicit_shadow_comparison_call(
+        self, function_name, texture, sampler, coords, *, lod=None, offset=None
+    ):
+        """Lower a shadow lookup that pairs a depth texture with a comparison_sampler.
+
+        Returns ``None`` when the call is not such a pairing, so the caller keeps its
+        ordinary path. Otherwise the vec3 coordinate is split into the texture
+        coordinate (``xy``) and the comparison reference (``z``). Outside the fragment
+        stage, and for a literal zero LOD, the level-zero ``textureSampleCompareLevel``
+        is used, since ``textureSampleCompare`` needs implicit derivatives.
+        """
+        if not (
+            self.is_depth_texture_type(self.expression_type(texture))
+            and self.is_comparison_sampler_type(self.expression_type(sampler))
+        ):
+            return None
+        texture_text = self.generate_expression(texture)
+        sampler_text = self.generate_expression(sampler)
+        texture_type = self.expression_type(texture)
+        type_name = self.resource_type_name(texture_type)
+        type_label = (
+            texture_type.name if isinstance(texture_type, NamedType) else type_name
+        )
+
+        def refuse(reason):
+            raise WGSLComparisonSamplerUnsupportedError(
+                function_name,
+                texture_text,
+                "textureSampleCompare",
+                sampler_text,
+                reason=reason,
+            )
+
+        if "cube" in type_name or "array" in type_name:
+            refuse(
+                f"{type_label} lookups take a vec4 coordinate, and WGSL output "
+                "lowers only 2D shadow textures through a comparison_sampler"
+            )
+        coordinate_shape = self.vector_shape(self.expression_type(coords))
+        if coordinate_shape is None or coordinate_shape[1] != 3:
+            refuse(
+                f"{type_label} lookups need a vec3 coordinate (uv plus the "
+                "comparison reference)"
+            )
+        if not self.is_repeatable_matrix_operand(coords):
+            refuse(
+                "the coordinate is split into a texture coordinate and a comparison "
+                "reference, so a coordinate with side effects must be assigned to a "
+                "local variable first"
+            )
+        if lod is not None and not (
+            isinstance(lod, LiteralNode) and lod.value in {0, 0.0}
+        ):
+            refuse(
+                "textureSampleCompareLevel samples mip level 0, so only a literal "
+                "0 LOD can be lowered"
+            )
+
+        arguments = [
+            texture,
+            sampler,
+            MemberAccessNode(coords, "xy"),
+            MemberAccessNode(coords, "z"),
+        ]
+        if offset is not None:
+            arguments.append(offset)
+        level_only = lod is not None or self._current_stage_name in {
+            "compute",
+            "vertex",
+        }
+        builtin = "textureSampleCompareLevel" if level_only else "textureSampleCompare"
+        return self.generate_texture_builtin_call(
+            builtin,
+            function_name,
+            arguments,
+            implicit=len(arguments) - 1,
+            explicit=len(arguments),
         )
 
     def generate_texture_sample_compare_call(self, function_name, args):
@@ -5537,7 +6146,7 @@ class WGSLCodeGen(
 
     def generate_texture_dimensions_call(self, args):
         if len(args) not in {1, 2}:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports textureSize() calls with texture or "
                 f"texture/lod arguments; got {len(args)} argument(s)"
             )
@@ -5594,13 +6203,13 @@ class WGSLCodeGen(
 
     def generate_image_dimensions_call(self, args):
         if len(args) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports imageSize() calls with exactly 1 "
                 f"argument; got {len(args)}"
             )
         image = args[0]
         if self.storage_texture_dimension_for_expression(image) is None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target requires imageSize() to use a storage image resource"
             )
         image_expr = self.generate_expression(image)
@@ -5634,7 +6243,7 @@ class WGSLCodeGen(
 
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports texelFetch() calls with exactly 3 "
                 f"arguments; got {len(args)} for {function_name}"
             )
@@ -5655,7 +6264,7 @@ class WGSLCodeGen(
     def generate_texel_fetch_offset_call(self, function_name, args):
         """``texelFetchOffset(t, P, lod, offset)`` reads the texel at ``P + offset`` (GLSL 4.60 section 8.9.2)."""
         if len(args) != 4:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports texelFetchOffset() calls with exactly 4 "
                 f"arguments; got {len(args)} for {function_name}"
             )
@@ -5676,7 +6285,7 @@ class WGSLCodeGen(
 
     def generate_image_load_call(self, node, function_name):
         if len(node.arguments) != 2:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports imageLoad() calls with exactly 2 "
                 f"arguments; got {len(node.arguments)} for {function_name}"
             )
@@ -5690,7 +6299,7 @@ class WGSLCodeGen(
 
     def generate_image_store_call(self, node, function_name):
         if len(node.arguments) != 3:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target supports imageStore() calls with exactly 3 "
                 f"arguments; got {len(node.arguments)} for {function_name}"
             )
@@ -5730,7 +6339,7 @@ class WGSLCodeGen(
         if size is None:
             return None
         if not self.is_repeatable_matrix_operand(coords_expr):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target splits the layer out of the {function_name}() "
                 "coordinate of an array texture, which reads the coordinate twice; "
                 "assign the coordinate to a local variable first"
@@ -5768,7 +6377,7 @@ class WGSLCodeGen(
             return self.texture_sampler_name(resource_binding["binding_name"])
         if isinstance(texture_expr, IdentifierNode):
             return self.texture_sampler_name(self.identifier_name(texture_expr.name))
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot infer a companion sampler for texture expression "
             f"{self.generate_expression(texture_expr)}; pass an explicit sampler"
         )
@@ -5776,7 +6385,7 @@ class WGSLCodeGen(
     def require_depth_texture_operand(self, texture_expr, function_name):
         texture_type = self.expression_type(texture_expr)
         if not self.is_depth_texture_type(texture_type):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target requires {function_name}() to use a shadow/depth "
                 "texture resource"
             )
@@ -5788,7 +6397,7 @@ class WGSLCodeGen(
             return
         sampler_type = self.expression_type(args[1])
         if not self.is_comparison_sampler_type(sampler_type):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target requires {function_name}() explicit sampler operand "
                 "to be a comparison_sampler"
             )
@@ -5803,7 +6412,7 @@ class WGSLCodeGen(
         level_expr = args[level_index]
         if isinstance(level_expr, LiteralNode) and level_expr.value in {0, 0.0}:
             return
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target only lowers {function_name}() when the explicit LOD "
             "operand is literal 0 because textureSampleCompareLevel samples "
             "mip level 0"
@@ -5829,11 +6438,11 @@ class WGSLCodeGen(
 
     def generate_barrier_call(self, node, function_name):
         if node.arguments:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target does not support arguments for barrier function {function_name}"
             )
         if self._current_stage_name != "compute":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target only supports barrier() inside compute stages"
             )
         lowering = self.WGSL_MEMORY_BARRIER_LOWERING.get(
@@ -5919,7 +6528,7 @@ class WGSLCodeGen(
             return None
         element, columns, rows = shape
         if not self.is_repeatable_matrix_operand(arg):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target writes a one-scalar matrix constructor "
                 f"mat{columns}x{rows}<{element}>(s) one diagonal element at a "
                 "time and requires an argument without side effects; assign the "
@@ -6068,7 +6677,7 @@ class WGSLCodeGen(
             storage_element = self.structured_buffer_element_type(vtype)
             if storage_element is not None:
                 if not allow_storage_resources:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target only supports StructuredBuffer resources as "
                         "module-scope storage bindings"
                     )
@@ -6082,7 +6691,7 @@ class WGSLCodeGen(
                     return self.generic_struct_specialized_type_name(vtype)
                 if vtype.name == "ptr":
                     raise WGSLPointerTypeUnsupportedError(self.generic_type_key(vtype))
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target does not support generic named type "
                     f"{self.generic_type_key(vtype)}; only concrete generic "
                     "struct specializations can be emitted"
@@ -6090,16 +6699,16 @@ class WGSLCodeGen(
             if vtype.name in self._generic_struct_definitions:
                 definition = self._generic_struct_definitions[vtype.name]
                 expected = len(getattr(definition, "generic_params", []) or [])
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target cannot use generic struct "
                     f"{vtype.name} without concrete type arguments; expected "
                     f"{expected} argument{'s' if expected != 1 else ''}"
                 )
             return self.map_type_name(vtype.name)
         if isinstance(vtype, GenericType):
-            raise ValueError("WGSL target does not support generic types yet")
+            raise WGSLRefusal("WGSL target does not support generic types yet")
         if isinstance(vtype, PointerType):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target only supports pointer types for buffer/storage "
                 "resources and helper parameters"
             )
@@ -6122,7 +6731,7 @@ class WGSLCodeGen(
 
     def array_type_name(self, element_type_name, vtype):
         if not isinstance(vtype, ArrayType):
-            raise ValueError("WGSL target expected an array type")
+            raise WGSLRefusal("WGSL target expected an array type")
         if vtype.size is None:
             return f"array<{element_type_name}>"
         size = (
@@ -6476,7 +7085,7 @@ class WGSLCodeGen(
                 return None
             args = list(getattr(node, "arguments", []) or [])
             if len(args) != 1:
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target expects Some() to receive 1 argument, got {len(args)}"
                 )
             payload = self.generate_expression_for_target(
@@ -6487,7 +7096,7 @@ class WGSLCodeGen(
         if base_name in {"is_Some", "is_None", "unwrap_Some"}:
             args = list(getattr(node, "arguments", []) or [])
             if len(args) != 1:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target expects "
                     f"{function_name}() to receive 1 argument, got {len(args)}"
                 )
@@ -6535,7 +7144,7 @@ class WGSLCodeGen(
         if normalized not in self._type_identifier_names:
             refuse_unsupported_wgsl_numeric_type(normalized)
         if self.is_resource_type_name(lower):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support CrossGL resource type "
                 f"{normalized} yet; split texture/sampler/storage bindings are required"
             )
@@ -6604,7 +7213,7 @@ class WGSLCodeGen(
         if base_name not in self.STRUCTURED_BUFFER_TYPE_NAMES:
             return None
         if len(vtype.generic_args) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target requires StructuredBuffer resources to declare one "
                 "element type"
             )
@@ -6625,7 +7234,7 @@ class WGSLCodeGen(
         if base_name not in self.CONSTANT_BUFFER_TYPE_NAMES:
             return None
         if len(vtype.generic_args) != 1:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target requires ConstantBuffer resources to declare one "
                 "element type"
             )
@@ -6693,7 +7302,7 @@ class WGSLCodeGen(
         resource_type = self.resource_array_element_type_name(vtype)
         if resource_type is None:
             return
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target does not support resource arrays of "
             f"{resource_type}; WebGPU/WGSL requires texture, sampler, image, "
             "and storage-buffer resources to be declared as individual "
@@ -6782,7 +7391,7 @@ class WGSLCodeGen(
         layout = self.glsl_buffer_block_layout(node)
         if layout not in self.SUPPORTED_GLSL_BUFFER_BLOCK_LAYOUTS:
             layout_name = layout or "unspecified"
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target only supports std430 GLSL buffer block layout "
                 f"for {resource_name}; got {layout_name}"
             )
@@ -6790,13 +7399,13 @@ class WGSLCodeGen(
     def validate_glsl_buffer_block_variable(self, node):
         self.validate_glsl_buffer_block_layout(node, node.name)
         if isinstance(getattr(node, "var_type", None), ArrayType):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support GLSL buffer block arrays yet; "
                 "declare each block as a separate storage binding"
             )
         struct_name = self.glsl_buffer_block_struct_name(node.var_type)
         if not struct_name:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target requires GLSL buffer block resource "
                 f"{node.name} to use a named struct type"
             )
@@ -6811,7 +7420,7 @@ class WGSLCodeGen(
             if self.structured_buffer_element_type(
                 self.array_element_type(member_type)
             ):
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target does not support storage-buffer resource member "
                     f"{node.name}.{member.name} inside GLSL buffer blocks"
                 )
@@ -6819,7 +7428,7 @@ class WGSLCodeGen(
                 self.unsized_array_type(member_type) is not None
                 and index != len(members) - 1
             ):
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target requires runtime-sized array member "
                     f"{node.name}.{member.name} to be the final GLSL buffer block member"
                 )
@@ -6972,7 +7581,7 @@ class WGSLCodeGen(
 
     def buffer_pointer_element_type(self, vtype):
         if not isinstance(vtype, PointerType):
-            raise ValueError("WGSL target expected a buffer pointer type")
+            raise WGSLRefusal("WGSL target expected a buffer pointer type")
         return vtype.pointee_type
 
     def buffer_pointer_storage_type(self, vtype):
@@ -6999,20 +7608,20 @@ class WGSLCodeGen(
                 if isinstance(element_type, NamedType)
                 else str(element_type)
             )
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support resource member "
                 f"{cbuffer.name}.{member.name} of type {display_type_name} "
                 "inside uniform buffers; declare resources as module-scope "
                 "bindings instead"
             )
         if self.structured_buffer_element_type(element_type) is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support storage-buffer resource member "
                 f"{cbuffer.name}.{member.name} inside uniform buffers; "
                 "declare StructuredBuffer resources as module-scope bindings"
             )
         if self.unsized_array_type(member_type) is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target does not support runtime-sized array member "
                 f"{cbuffer.name}.{member.name} inside uniform buffers"
             )
@@ -7130,7 +7739,7 @@ class WGSLCodeGen(
             return None
         bindings = array_info["bindings"]
         if index < 0 or index >= len(bindings):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target sampled texture resource array "
                 f"{expr.array_expr.name} index {index} is outside the lowered "
                 f"binding range 0..{len(bindings) - 1}"
@@ -7280,7 +7889,7 @@ class WGSLCodeGen(
         index = self.resolve_integer_expression(expr.index_expr)
         if index is not None:
             if index < 0 or index >= access["size"]:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target stage interface array "
                     f"{access['member_name']} index {index} is outside the lowered "
                     f"field range 0..{access['size'] - 1}"
@@ -7340,7 +7949,7 @@ class WGSLCodeGen(
             return resolved
         if size is None:
             return None
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot lower sampled texture resource array "
             f"{resource_name} with non-constant size {self.generate_expression(size)}; "
             "WebGPU/WGSL requires project-level binding expansion with a known "
@@ -7389,7 +7998,7 @@ class WGSLCodeGen(
             if texture_format is not None:
                 return texture_format
         name = getattr(node, "name", "storage texture")
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target requires storage image resource "
             f"{name} to declare a representable image format such as "
             "layout(rgba8) or @rgba8"
@@ -7410,7 +8019,7 @@ class WGSLCodeGen(
             if inferred_access is not None:
                 return inferred_access
         diagnostic_name = name or "storage texture"
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target requires storage image resource "
             f"{diagnostic_name} to declare an access mode "
             "(@readonly, @writeonly, or @readwrite) or use it in "
@@ -7436,13 +8045,13 @@ class WGSLCodeGen(
             )
             is None
         ):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
             )
         access = self.storage_texture_access_for_expression(resource)
         if access == "read":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot store through read-only storage image "
                 f"resource in {function_name}()"
             )
@@ -7455,13 +8064,13 @@ class WGSLCodeGen(
             )
             is None
         ):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
             )
         access = self.storage_texture_access_for_expression(resource)
         if access == "write":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot load from write-only storage image "
                 f"resource in {function_name}()"
             )
@@ -7774,8 +8383,9 @@ class WGSLCodeGen(
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
         if isinstance(expr, TernaryOpNode):
-            # WGSL lowers a ternary to select, whose branches share one type.
-            return self._common_value_type(
+            # WGSL lowers a ternary to select, whose branches share one type;
+            # an int branch is converted to the other branch's type.
+            return self.ternary_result_type(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
@@ -7791,6 +8401,19 @@ class WGSLCodeGen(
                 or self.scalar_type_name(operand_type) is not None
             ):
                 return operand_type
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "!"
+            and not expr.is_postfix
+        ):
+            # `!` keeps the operand's shape: a bvec stays a bvec, and only a
+            # scalar bool becomes `bool`.
+            operand_type = self.expression_type(expr.operand)
+            shape = self.vector_shape(operand_type)
+            if shape is not None and shape[0] == "bool":
+                return f"vec{shape[1]}<bool>"
+            if self.scalar_type_name(operand_type) == "bool":
+                return "bool"
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
             function_name = self.expression_name(expr.function)
@@ -7871,13 +8494,21 @@ class WGSLCodeGen(
                 if operand is not None:
                     element, columns, rows = operand
                     return f"mat{rows}x{columns}<{element}>"
+            if is_matrix_inverse_call(self, expr):
+                # inverse(m) has m's type (GLSL 4.60 section 8.6).
+                return self.expression_type(expr.arguments[0])
             if (
                 function_name in {"min", "max", "clamp"}
                 and not self.is_user_function_name(function_name)
                 and mixed_integer_call_is_unsigned(self, expr.arguments)
+                and self.float_call_component(function_name, expr.arguments) is None
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
-                return "u32"
+                # A float argument picks the float overload instead (generate_clamp_call).
+                return mixed_integer_call_type(self, expr.arguments)
+            math_call_type = self.builtin_math_call_type(function_name, expr.arguments)
+            if math_call_type is not None:
+                return math_call_type
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
@@ -7943,7 +8574,7 @@ class WGSLCodeGen(
             # WGSL's bitwise operators need both operands of one type; a scalar is
             # replicated at rendering, so the result is the type the sides share.
             return self._common_value_type(
-                self.expression_type(expr.left), self.expression_type(expr.right)
+                *unsigned_bitwise_operand_types(self, expr.left, expr.right)
             )
         if expr.operator not in {"+", "-", "*", "/", "%"}:
             return None
@@ -8154,7 +8785,7 @@ class WGSLCodeGen(
             return
         root_name, _path = access_path
         if self.storage_access_mode(root_name) == "read":
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot write read-only GLSL buffer block resource "
                 f"{root_name}"
             )
@@ -8180,7 +8811,7 @@ class WGSLCodeGen(
         arguments = []
         access = self.expression_access_path(arg)
         if access is None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot forward resource-bearing struct expression "
                 f"{self.generate_expression(arg)}; pass a named struct value"
             )
@@ -8190,7 +8821,7 @@ class WGSLCodeGen(
                 root_name, tuple(root_path) + tuple(info["path"])
             )
             if binding is None:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target cannot forward resource member "
                     f"{'.'.join((root_name, *root_path, *info['path']))}; "
                     "no module binding or resource alias is available"
@@ -8273,7 +8904,9 @@ class WGSLCodeGen(
         if mapped_type is not None:
             return re.sub(r"[^0-9A-Za-z]+", "_", mapped_type).strip("_") or "value"
         if isinstance(vtype, PrimitiveType):
-            return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name.lower())
+            # type_name_string spells every scalar PRIMITIVE_TYPE_MAP holds, so this scalar has no WGSL spelling and
+            # its declaration is refused; the overload suffix only has to tell it apart, so it names the source type.
+            return vtype.name.lower()
         if isinstance(vtype, VectorType):
             element = self.function_type_signature(vtype.element_type)
             return f"vec{vtype.size}_{element}"
@@ -8549,7 +9182,7 @@ class WGSLCodeGen(
         ``direction`` is ``"target"`` for a fragment output, whose ``COLORn`` names colour attachment ``n``.
         """
         key = self.semantic_key(semantic)
-        # The Slang importer spells SV_Target<n> as Out_Color<n>.
+        # Out_Color<n>, an older spelling of SV_Target<n>, names attachment n too.
         target = re.fullmatch(r"(?:sv_target|gl_fragcolor|out_color)(\d*)", key)
         if target is None and direction == "target":
             target = re.fullmatch(r"color(\d*)", key)
@@ -8636,7 +9269,7 @@ class WGSLCodeGen(
             source_key = (group, register_class, numeric_binding)
             owner = self._hlsl_register_source_owners.get(source_key)
             if owner is not None:
-                raise ValueError(
+                raise WGSLRefusal(
                     "WGSL target resource binding collision: "
                     f"{self.resource_binding_diagnostic_name(node)} and "
                     f"{self.resource_binding_diagnostic_name(owner)} both declare "
@@ -8653,7 +9286,7 @@ class WGSLCodeGen(
                     (group, numeric_binding)
                 )
                 if owner_class is None:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target resource binding collision: "
                         f"{self.resource_binding_diagnostic_name(node)} and "
                         f"{self.resource_binding_diagnostic_name(owner)} "
@@ -8670,7 +9303,7 @@ class WGSLCodeGen(
 
         owner = self._explicit_binding_owners.setdefault(group, {}).get(numeric_binding)
         if owner is not None:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target resource binding collision: "
                 f"{self.resource_binding_diagnostic_name(node)} and "
                 f"{self.resource_binding_diagnostic_name(owner)} both declare "
@@ -8810,7 +9443,7 @@ class WGSLCodeGen(
                 if not member_name:
                     continue
                 if member_name in accesses:
-                    raise ValueError(
+                    raise WGSLRefusal(
                         "WGSL target cannot flatten duplicate cbuffer member "
                         f"name: {member_name}"
                     )

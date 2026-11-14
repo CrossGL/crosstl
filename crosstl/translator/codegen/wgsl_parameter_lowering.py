@@ -43,6 +43,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import WGSLRefusal
 from .wgsl_frexp_modf import is_two_argument_frexp_or_modf
 
 REFERENCE_PARAMETER_QUALIFIERS = ("inout", "out")
@@ -139,21 +140,21 @@ class WGSLParameterLoweringMixin:
         self, function_name, parameter, qualifier, entry_point, body_nodes
     ):
         if entry_point:
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target cannot lower {qualifier} parameter "
                 f"{parameter.name} of entry point {function_name}: WGSL "
                 "entry-point parameters are pipeline inputs (WGSL 13.3.1); "
                 "return stage outputs from the entry point instead"
             )
         if not self.is_plain_value_parameter(parameter):
-            raise ValueError(
+            raise WGSLRefusal(
                 f"WGSL target cannot pass {qualifier} parameter "
                 f"{parameter.name} of {function_name} by reference: only "
                 "plain value types can become ptr<function, T> parameters"
             )
         for node in body_nodes:
             if isinstance(node, VariableNode) and node.name == parameter.name:
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target cannot lower {qualifier} parameter "
                     f"{parameter.name} of {function_name}: a local variable "
                     "in the body shadows it"
@@ -264,7 +265,7 @@ class WGSLParameterLoweringMixin:
             return body_text
         lines = body_text.split("\n")
         if not lines or not lines[0].rstrip().endswith("{"):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target could not place parameter copies in the body of "
                 f"{getattr(function, 'name', '<anonymous>')}"
             )
@@ -320,7 +321,7 @@ class WGSLParameterLoweringMixin:
             where = "a module-scope variable" if not is_parameter else "a parameter"
         else:
             where = "not a whole local variable"
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target cannot pass {self.argument_display(argument)} to "
             f"{qualifier} parameter {parameter.name} of {callee}: the argument "
             f"is {where}, and a ptr<function, T> argument must be a whole "
@@ -353,7 +354,7 @@ class WGSLParameterLoweringMixin:
             if root is None:
                 continue
             if root.name in seen:
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target cannot pass '{root.name}' to both "
                     f"{seen[root.name]} and {parameter.name} of {callee}: "
                     "WGSL forbids aliased pointer arguments (WGSL 11.4)"

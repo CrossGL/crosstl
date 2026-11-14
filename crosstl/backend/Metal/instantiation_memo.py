@@ -17,6 +17,8 @@ from collections import OrderedDict
 from threading import Lock
 from typing import Callable, List, Optional, Tuple, TypeVar
 
+from crosstl.translator.refusals import TranslatorArgumentError
+
 T = TypeVar("T")
 
 MEMO_ENTRY_LIMIT = 16
@@ -90,7 +92,7 @@ def _has_instance_overrides(preprocessor: object) -> bool:
 def _detached(item: T) -> T:
     """A copy of a frozen dataclass whose container fields are copied too."""
     if not dataclasses.is_dataclass(item) or isinstance(item, type):
-        raise TypeError(f"cannot detach {type(item).__qualname__}")
+        raise TranslatorArgumentError(f"cannot detach {type(item).__qualname__}")
     containers = {}
     for field in dataclasses.fields(item):
         value = getattr(item, field.name)

@@ -6,7 +6,12 @@ import re
 
 import pytest
 
-from crosstl.backend.import_refusals import DirectXImportRefused, MetalImportRefused
+from crosstl.backend.import_refusals import (
+    CudaImportRefused,
+    DirectXImportRefused,
+    HipImportRefused,
+    MetalImportRefused,
+)
 from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.codegen.glsl_refusals import (
     OpenGLLoweringRefused,
@@ -14,7 +19,10 @@ from crosstl.translator.codegen.glsl_refusals import (
 )
 from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
-from crosstl.translator.codegen.lowering_refusals import LoweringRefusals
+from crosstl.translator.codegen.lowering_refusals import (
+    LoweringRefusalMixin,
+    LoweringRefusals,
+)
 
 OPENGL_REFUSAL_CODE = "project.translate.opengl-lowering-unsupported"
 WEBGL_REFUSAL_CODE = "project.translate.webgl-lowering-unsupported"
@@ -23,6 +31,8 @@ CUDA_REFUSAL_CODE = "project.translate.cuda-lowering-unsupported"
 HIP_REFUSAL_CODE = "project.translate.hip-lowering-unsupported"
 DIRECTX_IMPORT_REFUSAL_CODE = "project.translate.directx-import-unsupported"
 METAL_IMPORT_REFUSAL_CODE = "project.translate.metal-import-unsupported"
+CUDA_IMPORT_REFUSAL_CODE = "project.translate.cuda-import-unsupported"
+HIP_IMPORT_REFUSAL_CODE = "project.translate.hip-import-unsupported"
 # A loss marker an emitter wrote into its partial output: ``/* unsupported <reason> */``.
 LOSS_MARKER = re.compile(r"/\*\s*unsupported\s+(.*?)\s*\*/", re.S)
 
@@ -110,9 +120,40 @@ def metal_import_partial_output(generate, *args, **kwargs):
     return partial_output(MetalImportRefused, generate, *args, **kwargs)
 
 
+def refused_cuda_import(generate, *args, **kwargs):
+    return refused(CudaImportRefused, generate, *args, **kwargs)
+
+
+def cuda_import_partial_output(generate, *args, **kwargs):
+    return partial_output(CudaImportRefused, generate, *args, **kwargs)
+
+
+def refused_hip_import(generate, *args, **kwargs):
+    return refused(HipImportRefused, generate, *args, **kwargs)
+
+
+def hip_import_partial_output(generate, *args, **kwargs):
+    return partial_output(HipImportRefused, generate, *args, **kwargs)
+
+
+def _marking_refusal(self, reason, placeholder=""):
+    self.refusals.record(reason)
+    marker = f"/* unsupported {' '.join(str(reason).split())} */"
+    return f"{marker} {placeholder}" if placeholder else marker
+
+
 def marked_partial_output(error_type, generate, *args, **kwargs):
-    """Return a refused program's partial output and message; every loss marker left in it is a listed reason."""
-    output, message = partial_output(error_type, generate, *args, **kwargs)
+    """Return a refused program's partial output and message; every loss marker left in it is a listed reason.
+
+    The CUDA and HIP emitters wrote ``/* unsupported <reason> */ <placeholder>`` in place of a construct they could
+    not lower. They now refuse it, and the partial output marks each refused construct the same way where its
+    placeholder stands, so that a test still checks where each refusal happened as well as why.
+    """
+    message = refused(error_type, generate, *args, **kwargs)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(LoweringRefusals, "raise_pending", lambda self, cause=None: None)
+        patch.setattr(LoweringRefusalMixin, "refuse_lowering", _marking_refusal)
+        output = generate(*args, **kwargs)
     for reason in LOSS_MARKER.findall(output):
         reason = " ".join(reason.split())
         assert (

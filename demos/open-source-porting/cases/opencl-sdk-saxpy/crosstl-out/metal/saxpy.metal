@@ -1,4 +1,5 @@
 
+#pragma METAL fp math_mode(safe)
 #include <metal_stdlib>
 using namespace metal;
 
@@ -9,5 +10,5 @@ struct saxpy_Args {
 // Compute Shader
 kernel void kernel_saxpy(uint3 thread_position_in_grid [[thread_position_in_grid]], constant saxpy_Args& saxpy_Args [[buffer(2)]], device float* x [[buffer(0)]], device float* y [[buffer(1)]]) {
     int gid = thread_position_in_grid.x;
-    y[gid] = fma(saxpy_Args.a, x[gid], y[gid]);
+    y[gid] = metal::precise::fma(saxpy_Args.a, x[gid], y[gid]);
 }

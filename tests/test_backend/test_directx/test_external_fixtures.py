@@ -10,6 +10,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 
 
@@ -22,6 +23,8 @@ class ExternalFixture:
     code: str
     contains: tuple[str, ...]
     absent: tuple[str, ...] = ()
+    # The CrossGL parser refuses the output, which names something CrossGL cannot declare.
+    crossgl_refused: bool = False
 
     @property
     def source_url(self):
@@ -854,6 +857,9 @@ EXTERNAL_FIXTURES = [
             "target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);",
             "target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);",
         ),
+        # vk::util::ConversionSelector is a template of DXC's inline SPIR-V headers, which the fixture does not
+        # include, so the call names nothing CrossGL can declare.
+        crossgl_refused=True,
     ),
     ExternalFixture(
         name="directx_shader_compiler_layout_qualified_matrix_casts",
@@ -1973,6 +1979,10 @@ def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
         assert expected in crossgl
     for unexpected in fixture.absent:
         assert unexpected not in crossgl
+    if fixture.crossgl_refused:
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            parse_crossgl(crossgl)
+        return
     assert parse_crossgl(crossgl) is not None
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 from ..ast import ArrayType, MatrixType
+from ..refusals import TranslationRefusal
 from .glsl_draw_parameters import vertex_builtin_spelling
 from .stage_io_semantic_locations import allocate_locations
 
@@ -31,8 +32,10 @@ __all__ = (
 _LOCATION = re.compile(r"\blocation\s*=\s*(\d+)")
 
 
-class VertexInputLocationError(ValueError):
+class VertexInputLocationError(TranslationRefusal):
     """A vertex input whose locations cannot be counted."""
+
+    code = "project.translate.opengl-vertex-input-location-invalid"
 
 
 def vertex_input_builtin(codegen, member) -> str | None:

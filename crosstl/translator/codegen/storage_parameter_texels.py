@@ -16,6 +16,7 @@ than emit a call DXC or slangc rejects.
 
 from __future__ import annotations
 
+from ..refusals import TargetRefusal
 from .ast_walk import walk_ast_values
 from .stage_utils import collect_stage_local_variables
 
@@ -177,7 +178,7 @@ class StorageParameterTexels:
             f"{', '.join(names)} as {type_name}"
             for type_name, names in sorted(declared.items())
         )
-        raise ValueError(
+        raise TargetRefusal(
             f"storage image parameter '{node.name}' receives images of different "
             f"types ({received}); a resource parameter takes resources of one type"
         )

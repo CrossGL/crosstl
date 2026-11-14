@@ -19,8 +19,5 @@ Code Generation API
 .. automodule:: crosstl.translator.codegen.vector_arithmetic
    :members:
 
-.. automodule:: crosstl.translator.codegen.ast_utils
-   :members:
-
 .. automodule:: crosstl.translator.codegen.array_utils
    :members:

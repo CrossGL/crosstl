@@ -4,6 +4,7 @@ import pytest
 
 import crosstl
 import crosstl.translator
+from crosstl.backend.import_refusals import RustImportRefused
 from crosstl.backend.Rust.RustAst import (
     BinaryOpNode,
     BlockNode,
@@ -660,16 +661,9 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "fragment {" in result
-    assert "AccelerationStructure accel @ set(0) @ binding(0)" in result
-    assert "spirv_std::ray_query!(let mut handle);" in result
-    assert (
-        "handle.initialize(accel, RayFlags::NONE, 0, vec3(0.0, 0.0, 0.0), "
-        "0.0, vec3(0.0, 0.0, 0.0), 0.0);" in result
-    )
-    assert "vec3 origin = handle.get_world_ray_origin();" in result
+    # The importer has no expansion for the ray_query! macro, so it refuses it rather than writing it as text.
+    with pytest.raises(RustImportRefused, match=re.escape("spirv_std::ray_query!")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_compute_shader_method_turbofish_codegen():
@@ -1131,16 +1125,9 @@ def test_rust_gpu_path_qualified_attribute_codegen():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "void emit_vertex()" in result
-    assert 'asm!("OpEmitVertex",);' in result
-    assert (
-        "void emit_mesh_tasks_ext("
-        "uint group_count_x, uint group_count_y, uint group_count_z)" in result
-    )
-    assert "! emit_mesh_tasks_ext" not in result
-    crosstl.translator.parse(result)
+    # Inline SPIR-V targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
@@ -7587,14 +7574,9 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         '                {payload}", payload = in(reg) payload, } } }'
     )
 
-    try:
-        result = parse_and_generate(code)
-
-        asm_line = next(line for line in result.splitlines() if "asm!(" in line)
-        assert r"\n" in asm_line
-        crosstl.translator.parse(result)
-    except Exception as e:
-        pytest.fail(f"Escaped newline string literal conversion failed: {e}")
+    # Inline assembly targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_gpu_turbofish_prefix_string_literal_codegen_reparse():
@@ -7717,15 +7699,9 @@ def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert (
-        "Tuple<uint, bool> match_all_32(uint mask, uint value, bool predicate)"
-        in result
-    )
-    assert "(uint, bool) match_all_32" not in result
-    assert "asm!(" in result
-    crosstl.translator.parse(result)
+    # Inline PTX targets one instruction set; CrossGL has none, so the import is refused.
+    with pytest.raises(RustImportRefused, match=re.escape("inline assembly 'asm!'")):
+        parse_and_generate(code)
 
 
 def test_rust_cuda_global_include_str_macro_initializer_codegen_reparse():
@@ -9044,13 +9020,9 @@ def test_wgpu_shader_loading_host_types_codegen_reparse():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "void init(wgpu_Device device)" in result
-    assert "wgpu_ShaderModuleDescriptor {" in result
-    assert 'include_str!("shader.wgsl")' in result
-    assert 'wgpu::include_wgsl!("shader.wgsl")' in result
-    crosstl.translator.parse(result)
+    # include_str! and include_wgsl! read files at compile time; the importer refuses them rather than writing them as text.
+    with pytest.raises(RustImportRefused, match=re.escape("include_str!")):
+        parse_and_generate(code)
 
 
 def test_wgpu_spawn_impl_future_static_bound_codegen_from_upstream():
@@ -11858,12 +11830,9 @@ def test_matches_macro_subject_codegen_reparse_from_naga_msl_and_wgsl():
     }
     """
 
-    result = parse_and_generate(code)
-
-    assert "context.resolve_type(right)" in result
-    assert "resolve_inner!(ctx, argument)" in result
-    assert "FunctionCallNode" not in result
-    crosstl.translator.parse(result)
+    # A macro_rules! definition is not expanded, so its use is refused rather than written as text.
+    with pytest.raises(RustImportRefused, match=re.escape("resolve_inner!")):
+        parse_and_generate(code)
 
 
 def test_unicode_char_literal_range_codegen_reparse_from_naga_wgsl_lexer():

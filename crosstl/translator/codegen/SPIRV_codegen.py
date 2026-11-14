@@ -51,7 +51,6 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
-from ..diagnostics import TranslationDiagnostic
 from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
@@ -62,6 +61,11 @@ from ..matrix_shape import (
     matrix_type_spelling,
 )
 from ..ray_query_vocabulary import ray_flag_value, ray_query_type_flags
+from ..refusals import (
+    TranslatorArgumentError,
+    VulkanRefusal,
+    supersedes_pending_refusals,
+)
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.shader_records import (
     is_shader_record_buffer,
@@ -126,6 +130,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .precise_dataflow import declaration_is_precise, precise_contributors
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .specialized_workgroup_size import has_specialized_workgroup_size
@@ -142,6 +147,7 @@ from .spirv_byte_address_atomics import (
     process_byte_address_atomic_call,
     process_byte_address_member_min_max,
 )
+from .spirv_compute_derivative_groups import emit_compute_derivative_group
 from .spirv_constant_folding import (
     spirv_evaluated_scalar_initializer,
     spirv_folded_constant,
@@ -161,6 +167,15 @@ from .spirv_entry_workgroup_sizes import (
     emit_entry_local_size_id,
     entry_workgroup_size_value,
     plan_entry_workgroup_sizes,
+)
+from .spirv_exact_lookups import (
+    SPIRV_DERIVATIVE_OPCODES,
+    SPIRV_INTEGER_BIT_BUILTINS,
+    SPIRV_MEMORY_QUALIFIERS,
+    spirv_builtin_call_key,
+    spirv_mesh_output_builtin,
+    spirv_mesh_output_refusal,
+    spirv_scalar_key,
 )
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -599,7 +614,7 @@ class VulkanSPIRVCodeGen(
             return None
         if normalized == self.COOPERATIVE_MATRIX_KHR_PROFILE:
             return normalized
-        raise ValueError(
+        raise VulkanRefusal(
             "Vulkan target profile must be " f"'{self.COOPERATIVE_MATRIX_KHR_PROFILE}'"
         )
 
@@ -684,6 +699,8 @@ class VulkanSPIRVCodeGen(
         self.uniform_block_wrapped_variables = {}
         self.precise_global_variables = set()
         self.precise_local_variables = set()
+        # Variables of the current function whose values flow into a precise variable (precise_dataflow.py).
+        self.precise_flow_names = frozenset()
         self.no_contraction_ids = set()
         self.precise_expression_depth = 0
         self.non_uniform_ids = set()
@@ -876,7 +893,7 @@ class VulkanSPIRVCodeGen(
     def require_compute_derivatives(self):
         """Enable compute shader derivatives for derivative-dependent image ops."""
         self.requires_compute_derivatives = True
-        self.require_capability("ComputeDerivativeGroupQuadsKHR")
+        # The entry's workgroup size picks the derivative group and its capability (emit_entry_point).
         self.require_extension("SPV_KHR_compute_shader_derivatives")
 
     def register_primitive_type(self, name: str) -> SpirvId:
@@ -1041,7 +1058,7 @@ class VulkanSPIRVCodeGen(
 
         info = self.resource_type_info(type_name)
         if info is None:
-            raise ValueError(f"Unknown SPIR-V resource type {type_name}")
+            raise VulkanRefusal(f"Unknown SPIR-V resource type {type_name}")
 
         info = dict(info)
         source_format = None
@@ -1669,7 +1686,7 @@ class VulkanSPIRVCodeGen(
 
         name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
         if len(attributes) > 1:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V specialization constant '{name}' has multiple SpecId "
                 "attributes"
             )
@@ -1679,11 +1696,11 @@ class VulkanSPIRVCodeGen(
             self.literal_int_argument(arguments[0]) if len(arguments) == 1 else None
         )
         if spec_id is None:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V specialization constant '{name}' requires an integer id"
             )
         if spec_id < 0:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V specialization constant '{name}' requires a non-negative id"
             )
         return spec_id
@@ -9636,6 +9653,9 @@ class VulkanSPIRVCodeGen(
             element_count = max(element_count, literal_index + 1)
 
         builtin = self.mesh_output_member_builtin(role, semantic)
+        refusal = spirv_mesh_output_refusal(role, semantic)
+        if refusal is not None:
+            self.refuse_lowering(f"{refusal} (member '{member_name}')")
         location = (
             None
             if builtin
@@ -9678,33 +9698,7 @@ class VulkanSPIRVCodeGen(
         self, role: str, semantic: Optional[str]
     ) -> Optional[str]:
         """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
-        if semantic is None:
-            return None
-        semantic_map = {
-            "SV_Position": "gl_Position",
-            "POSITION": "POSITION",
-            "gl_Position": "gl_Position",
-            "gl_PrimitiveID": "gl_PrimitiveID",
-            "SV_PrimitiveID": "gl_PrimitiveID",
-            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
-            "gl_Layer": "gl_Layer",
-            "gl_ViewportIndex": "gl_ViewportIndex",
-            "gl_CullPrimitiveEXT": "gl_CullPrimitiveEXT",
-        }
-        normalized = semantic_map.get(str(semantic), str(semantic))
-        if role == "vertices" and normalized == "gl_Position":
-            return "Position"
-        if role == "vertices" and normalized == "gl_PointSize":
-            return "PointSize"
-        if role == "primitives":
-            return {
-                "gl_PrimitiveID": "PrimitiveId",
-                "gl_Layer": "Layer",
-                "gl_ViewportIndex": "ViewportIndex",
-                "gl_CullPrimitiveEXT": "CullPrimitiveEXT",
-                "gl_PrimitiveShadingRateEXT": "PrimitiveShadingRateKHR",
-            }.get(normalized)
-        return None
+        return spirv_mesh_output_builtin(role, semantic)
 
     def mesh_output_member_location(
         self, semantic: Optional[str], role: str, member_name: str
@@ -12106,13 +12100,9 @@ class VulkanSPIRVCodeGen(
         source_type = self.infer_expression_result_type(args[0])
         return self.bitcast_builtin_result_type(function_name, source_type)
 
-    def normalize_integer_bit_builtin_name(self, function_name: str) -> str:
-        return {
-            "countbits": "bitCount",
-            "reversebits": "bitfieldReverse",
-            "firstbitlow": "findLSB",
-            "firstbithigh": "findMSB",
-        }.get(function_name, function_name)
+    def normalize_integer_bit_builtin_name(self, function_name: str) -> Optional[str]:
+        """The GLSL name of integer bit built-in ``function_name``, or None when it is not one."""
+        return SPIRV_INTEGER_BIT_BUILTINS.get(function_name)
 
     def integer_bit_builtin_result_type(
         self, function_name: str, source_type: Optional[SpirvId]
@@ -12212,12 +12202,7 @@ class VulkanSPIRVCodeGen(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
-        function_name = {
-            "frac": "fract",
-            "inverseSqrt": "inversesqrt",
-            "lerp": "mix",
-            "rsqrt": "inversesqrt",
-        }.get(function_name, function_name)
+        function_name = spirv_builtin_call_key(function_name)
         if function_name in PACK_FUNCTIONS:
             return spirv_pack_call(self, function_name, args)
         if function_name in BITFIELD_ARITIES:
@@ -12771,29 +12756,7 @@ class VulkanSPIRVCodeGen(
             )
 
     def derivative_function_opcode(self, function_name: str) -> Optional[str]:
-        aliases = {
-            "ddx": "dFdx",
-            "ddx_fine": "dFdxFine",
-            "ddx_coarse": "dFdxCoarse",
-            "ddy": "dFdy",
-            "ddy_fine": "dFdyFine",
-            "ddy_coarse": "dFdyCoarse",
-            "fwidth_fine": "fwidthFine",
-            "fwidth_coarse": "fwidthCoarse",
-        }
-        function_name = aliases.get(function_name, function_name)
-        opcodes = {
-            "dFdx": "OpDPdx",
-            "dFdxFine": "OpDPdxFine",
-            "dFdxCoarse": "OpDPdxCoarse",
-            "dFdy": "OpDPdy",
-            "dFdyFine": "OpDPdyFine",
-            "dFdyCoarse": "OpDPdyCoarse",
-            "fwidth": "OpFwidth",
-            "fwidthFine": "OpFwidthFine",
-            "fwidthCoarse": "OpFwidthCoarse",
-        }
-        return opcodes.get(function_name)
+        return SPIRV_DERIVATIVE_OPCODES.get(function_name)
 
     def derivative_operand_is_valid(self, value: SpirvId) -> bool:
         result_type = self.ensure_registered_type(value.type)
@@ -13647,44 +13610,8 @@ class VulkanSPIRVCodeGen(
         return False
 
     def normalize_primitive_name(self, type_name: str) -> str:
-        aliases = {
-            "f32": "float",
-            "f64": "double",
-            "f16": "float",
-            "float16": "float",
-            "float16_t": "float",
-            "half": "float",
-            "min16float": "float",
-            "bfloat": self.BFLOAT16_TYPE_NAME,
-            "bfloat16_t": self.BFLOAT16_TYPE_NAME,
-            "i8": "int",
-            "int8": "int",
-            "int8_t": "int",
-            "char": "int",
-            "i16": "int",
-            "int16": "int",
-            "int16_t": "int",
-            "short": "int",
-            "i32": "int",
-            "u8": "uint",
-            "uint8": "uint",
-            "uint8_t": "uint",
-            "uchar": "uint",
-            "u16": "uint",
-            "uint16": "uint",
-            "uint16_t": "uint",
-            "ushort": "uint",
-            "u32": "uint",
-            "int64": "i64",
-            "int64_t": "i64",
-            "long": "i64",
-            "ptrdiff_t": "i64",
-            "uint64": "u64",
-            "uint64_t": "u64",
-            "ulong": "u64",
-            "size_t": "u64",
-        }
-        return aliases.get(str(type_name), str(type_name))
+        """The scalar spelling ``type_name`` is classified by; see :func:`.spirv_exact_lookups.spirv_scalar_key`."""
+        return spirv_scalar_key(type_name, self.BFLOAT16_TYPE_NAME)
 
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
@@ -14573,6 +14500,7 @@ class VulkanSPIRVCodeGen(
             "gl_frontfacing",
             "gl_globalinvocationid",
             "gl_instanceid",
+            "gl_instanceindex",
             "gl_invocationid",
             "gl_localinvocationid",
             "gl_localinvocationindex",
@@ -14714,7 +14642,7 @@ class VulkanSPIRVCodeGen(
         if kind == "position":
             if self.is_spirv_float_vector_width(type_name, 4):
                 return
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected vec4-compatible type"
             )
@@ -14722,25 +14650,25 @@ class VulkanSPIRVCodeGen(
         if kind == "color":
             if self.is_spirv_colour_attachment_type(type_name):
                 return
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected a float, int or uint scalar or vector"
             )
 
         if kind == "depth" and not self.is_spirv_float_scalar_type(type_name):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected float type"
             )
 
         if kind == "sample_mask" and not self.is_spirv_sample_mask_type(type_name):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected int-compatible sample-mask type"
             )
 
         if kind == "stencil_ref" and not self.is_spirv_integer_scalar_type(type_name):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected integer scalar type"
             )
@@ -14752,7 +14680,7 @@ class VulkanSPIRVCodeGen(
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -14782,7 +14710,7 @@ class VulkanSPIRVCodeGen(
             }.get(model, model.lower())
             for model in sorted(allowed_models)
         )
-        raise ValueError(
+        raise VulkanRefusal(
             f"Unsupported {semantic} {context} for SPIR-V {stage_name} stage; "
             f"valid stage is {allowed}"
         )
@@ -14793,7 +14721,7 @@ class VulkanSPIRVCodeGen(
         if semantic is None:
             return
         if self.type_name_string(return_type) == "void":
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Unsupported {semantic} return semantic for SPIR-V codegen; "
                 "void return type"
             )
@@ -17683,14 +17611,14 @@ class VulkanSPIRVCodeGen(
 
         named_args = dict(named_args or {})
         if len(positional_args) > len(variant_fields):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} expects at most {len(variant_fields)} "
                 f"arguments, got {len(positional_args)}"
             )
 
         unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
         if unknown_names:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} has no field {', '.join(unknown_names)}"
             )
 
@@ -17713,7 +17641,7 @@ class VulkanSPIRVCodeGen(
             )
 
         if missing_names:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} is missing field {', '.join(missing_names)}"
             )
 
@@ -17747,14 +17675,14 @@ class VulkanSPIRVCodeGen(
 
         named_args = dict(named_args or {})
         if len(positional_args) > len(variant_fields):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} expects at most {len(variant_fields)} "
                 f"arguments, got {len(positional_args)}"
             )
 
         unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
         if unknown_names:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} has no field {', '.join(unknown_names)}"
             )
 
@@ -17777,7 +17705,7 @@ class VulkanSPIRVCodeGen(
             )
 
         if missing_names:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum constructor {path} is missing field {', '.join(missing_names)}"
             )
 
@@ -17832,7 +17760,7 @@ class VulkanSPIRVCodeGen(
         member_names = [member_name for _member_type, member_name in members]
         unknown_names = sorted(set(named_args) - set(member_names))
         if unknown_names:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Struct constructor {type_name} has no field "
                 f"{', '.join(unknown_names)}"
             )
@@ -18278,7 +18206,7 @@ class VulkanSPIRVCodeGen(
         self.uniform_buffers.append(var_id)
         for member_index, (member_type, member_name) in enumerate(members):
             if member_name in self.cbuffer_members:
-                raise ValueError(f"Ambiguous SPIR-V cbuffer member {member_name}")
+                raise VulkanRefusal(f"Ambiguous SPIR-V cbuffer member {member_name}")
             self.cbuffer_members[member_name] = (var_id, member_type, member_index)
 
         return var_id
@@ -18289,7 +18217,7 @@ class VulkanSPIRVCodeGen(
         """Emit a StructuredBuffer/RWStructuredBuffer as a Vulkan BufferBlock."""
         metadata = self.structured_buffer_declared_type_info(type_name)
         if metadata is None:
-            raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
+            raise VulkanRefusal(f"Invalid SPIR-V structured buffer type {type_name}")
         memory_flags = self.storage_buffer_memory_flags(
             node, default_readonly=metadata.get("readonly", False)
         )
@@ -18647,40 +18575,17 @@ class VulkanSPIRVCodeGen(
         return self.storage_buffer_memory_flags(node).get("writeonly", False)
 
     def resource_memory_qualifier_names(self, node) -> set:
-        supported = {
-            "coherent",
-            "globallycoherent",
-            "volatile",
-            "restrict",
-            "readonly",
-            "read",
-            "writeonly",
-            "write",
-            "readwrite",
-            "read_write",
-            "access::read",
-            "access::write",
-            "access::read_write",
-        }
-        aliases = {
-            "read": "readonly",
-            "write": "writeonly",
-            "read_write": "readwrite",
-            "access::read": "readonly",
-            "access::write": "writeonly",
-            "access::read_write": "readwrite",
-        }
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
-            qualifier = memory_qualifier_name(qualifier)
-            if qualifier in supported:
-                qualifiers.add(aliases.get(qualifier, qualifier))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(memory_qualifier_name(qualifier))
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         for qualifier in getattr(node, "resource_qualifiers", []) or []:
-            qualifier = memory_qualifier_name(qualifier)
-            if qualifier in supported:
-                qualifiers.add(aliases.get(qualifier, qualifier))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(memory_qualifier_name(qualifier))
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         if {"coherent(system)", "coherent(host)"} & {
             memory_qualifier_name(qualifier)
@@ -18701,8 +18606,9 @@ class VulkanSPIRVCodeGen(
                 continue
 
             attr_name = str(attr_name).lower()
-            if attr_name in supported:
-                qualifiers.add(aliases.get(attr_name, attr_name))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(attr_name)
+            if canonical is not None:
+                qualifiers.add(canonical)
 
             if attr_name != "access":
                 continue
@@ -18716,9 +18622,9 @@ class VulkanSPIRVCodeGen(
             access_name = self.attribute_value_to_string(arguments[0])
             if access_name is None:
                 continue
-            access_name = str(access_name).lower()
-            if access_name in supported:
-                qualifiers.add(aliases.get(access_name, access_name))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(str(access_name).lower())
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         if "globallycoherent" in qualifiers or needs_device_coherence(node):
             # Coherent under the GLSL450 memory model is device-wide, which holds every scope
@@ -19224,12 +19130,12 @@ class VulkanSPIRVCodeGen(
     def validate_shader_record_buffer(self, node, value_type, block_type):
         """A shader record buffer is one ``Block`` struct with no descriptor slot, read by a ray tracing stage."""
         if value_type is not block_type:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V shader record buffer '{node.name}' must be a single block, not an array of blocks "
                 "(GL_EXT_ray_tracing allows one shaderRecordEXT block per stage)"
             )
         if self.explicit_descriptor_binding(node) is not None:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V shader record buffer '{node.name}' cannot declare a binding: the record is read "
                 "through no descriptor (GL_EXT_ray_tracing)"
             )
@@ -19861,7 +19767,32 @@ class VulkanSPIRVCodeGen(
                 runtime_parameters, execution_model_hint
             )
 
-        self.process_statements(function_node.body)
+        # A precise function evaluates all of its floating-point arithmetic as written.
+        precise_function = self.has_attribute(
+            function_node, "precise"
+        ) or "precise" in {
+            str(qualifier).lower()
+            for qualifier in getattr(function_node, "qualifiers", None) or ()
+        }
+        self.precise_expression_depth += precise_function
+        previous_precise_flow_names = self.precise_flow_names
+        self.precise_flow_names = precise_contributors(
+            function_node.body,
+            seeds=sorted(
+                set(self.precise_global_variables)
+                | {
+                    param.name
+                    for param in getattr(function_node, "parameters", None) or ()
+                    if isinstance(getattr(param, "name", None), str)
+                    and declaration_is_precise(param)
+                }
+            ),
+        )
+        try:
+            self.process_statements(function_node.body)
+        finally:
+            self.precise_expression_depth -= precise_function
+            self.precise_flow_names = previous_precise_flow_names
         self.process_tessellation_patch_constant_function(function_node)
 
         if not self.current_block_has_terminator():
@@ -20498,7 +20429,7 @@ class VulkanSPIRVCodeGen(
                 return
 
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V descriptor resource '{node.name}' cannot be declared "
                 "inside a function; declare it at shader or stage scope"
             )
@@ -20514,7 +20445,9 @@ class VulkanSPIRVCodeGen(
             )
 
         initial_value = getattr(node, "initial_value", None)
-        is_precise = self.has_attribute(node, "precise")
+        is_precise = (
+            declaration_is_precise(node) or node.name in self.precise_flow_names
+        )
         if (
             infer_declared_type
             and initial_value is not None
@@ -20560,14 +20493,11 @@ class VulkanSPIRVCodeGen(
                     if rhs_value is not None:
                         self.store_to_variable(var_id, rhs_value)
                 else:
-                    if is_precise:
-                        rhs_value = self.process_expression_with_precision(
-                            initial_value, is_precise
+                    rhs_value = (
+                        self.process_expression_with_expected_type_and_precision(
+                            initial_value, var_type_name, is_precise
                         )
-                    else:
-                        rhs_value = self.process_expression_with_expected_type(
-                            initial_value, var_type_name
-                        )
+                    )
                     if rhs_value is not None:
                         self.store_to_variable(var_id, rhs_value)
             return
@@ -20587,14 +20517,9 @@ class VulkanSPIRVCodeGen(
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
             else:
-                if is_precise:
-                    rhs_value = self.process_expression_with_precision(
-                        initial_value, is_precise
-                    )
-                else:
-                    rhs_value = self.process_expression_with_expected_type(
-                        initial_value, var_type_name
-                    )
+                rhs_value = self.process_expression_with_expected_type_and_precision(
+                    initial_value, var_type_name, is_precise
+                )
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
 
@@ -20964,7 +20889,7 @@ class VulkanSPIRVCodeGen(
             try:
                 marker_index = self.code_lines.index(state.reset_marker)
             except ValueError as exc:
-                raise RuntimeError(
+                raise AssertionError(
                     "Deferred pointer-offset reset marker is missing"
                 ) from exc
             self.code_lines[marker_index] = f"OpStore %{offset_variable.id} %{zero.id}"
@@ -21013,7 +20938,7 @@ class VulkanSPIRVCodeGen(
         builtin_name, capability = self.DISTANCE_BUILTINS[name]
         execution_model = self.current_execution_model
         if execution_model not in self.DISTANCE_BUILTIN_STAGES.get(storage_class, ()):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V {name} is not a {storage_class.lower()} of the "
                 f"{execution_model or 'current'} stage"
             )
@@ -21023,7 +20948,9 @@ class VulkanSPIRVCodeGen(
             element_type is None
             or self.normalize_primitive_name(element_type.type.base_type) != "float"
         ):
-            raise ValueError(f"SPIR-V {name} must be declared as a sized float array")
+            raise VulkanRefusal(
+                f"SPIR-V {name} must be declared as a sized float array"
+            )
         cache_key = f"__distance_builtin::{name}::{storage_class}"
         if cache_key in self.global_variables:
             builtin = self.global_variables[cache_key]
@@ -21122,10 +21049,10 @@ class VulkanSPIRVCodeGen(
             # of emitting an OpLoad of a runtime variable at constant scope.
             self.emit_named_constant_debug_name(node.name, initializer)
             self.named_constants[node.name] = initializer
-            if self.has_attribute(node, "precise"):
+            if declaration_is_precise(node):
                 self.precise_global_variables.add(node.name)
             return initializer
-        if storage_class == "Private" and not self.has_attribute(node, "precise"):
+        if storage_class == "Private" and not declaration_is_precise(node):
             constant = module_constant(self, node, var_type, initializer)
             if constant is not None:
                 return constant
@@ -21187,7 +21114,7 @@ class VulkanSPIRVCodeGen(
                 self.uniform_buffers.append(var_id)
 
         self.register_global_variable_name(node.name, var_id, storage_class)
-        if self.has_attribute(node, "precise"):
+        if declaration_is_precise(node):
             self.precise_global_variables.add(node.name)
         return var_id
 
@@ -21256,7 +21183,7 @@ class VulkanSPIRVCodeGen(
                     binding = self.next_available_resource_binding(descriptor_set)
                     self.used_resource_bindings.add((descriptor_set, binding))
                     return descriptor_set, binding
-                raise ValueError(
+                raise VulkanRefusal(
                     f"Duplicate SPIR-V resource binding set {descriptor_set} "
                     f"binding {explicit_binding}"
                 )
@@ -21513,7 +21440,7 @@ class VulkanSPIRVCodeGen(
     def explicit_component_attribute(self, node: VariableNode) -> Optional[int]:
         component = self.explicit_interface_integer_attribute(node, "component")
         if component is not None and component > 3:
-            raise ValueError(f"SPIR-V component must be in 0..3: {component}")
+            raise VulkanRefusal(f"SPIR-V component must be in 0..3: {component}")
         return component
 
     def interface_location_span(self, node: VariableNode) -> int:
@@ -21545,7 +21472,7 @@ class VulkanSPIRVCodeGen(
                 continue
 
             if attribute_value < 0:
-                raise ValueError(
+                raise VulkanRefusal(
                     f"SPIR-V {attribute_name} must be non-negative: "
                     f"{attribute_value}"
                 )
@@ -21567,7 +21494,7 @@ class VulkanSPIRVCodeGen(
         try:
             return int(str(value_text), 0)
         except ValueError as exc:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V {attribute_name} must be an integer: {value_text}"
             ) from exc
 
@@ -22269,7 +22196,7 @@ class VulkanSPIRVCodeGen(
     def validate_interface_interpolation_attributes(self, node: VariableNode):
         for first, second in (("flat", "noperspective"), ("centroid", "sample")):
             if self.has_attribute(node, first) and self.has_attribute(node, second):
-                raise ValueError(
+                raise VulkanRefusal(
                     "SPIR-V interpolation attributes "
                     f"@{first} and @{second} cannot be combined"
                 )
@@ -22292,7 +22219,7 @@ class VulkanSPIRVCodeGen(
             self.interface_location_component_widths(node)
         ):
             if component_start + component_width > 4:
-                raise ValueError(
+                raise VulkanRefusal(
                     f"SPIR-V component range overflows location {location + offset}: "
                     f"{component_start}..{component_start + component_width - 1}"
                 )
@@ -25395,7 +25322,7 @@ class VulkanSPIRVCodeGen(
                         if not self.resource_array_param_type_is_compatible(
                             declared_type, arg_type
                         ):
-                            raise ValueError(
+                            raise VulkanRefusal(
                                 "Incompatible SPIR-V resource array parameter shape "
                                 f"for '{param_name}': expected {declared_type}, "
                                 f"got {arg_type}"
@@ -25409,7 +25336,7 @@ class VulkanSPIRVCodeGen(
 
                         existing = hints.setdefault(callee_name, {}).get(param_name)
                         if existing is not None and existing != fixed_type:
-                            raise ValueError(
+                            raise VulkanRefusal(
                                 "Conflicting SPIR-V resource array parameter sizes for "
                                 f"'{param_name}': {existing} and {fixed_type}"
                             )
@@ -28902,6 +28829,8 @@ class VulkanSPIRVCodeGen(
         return False
 
     def variable_name_is_precise(self, name: str) -> bool:
+        if name in self.precise_flow_names:
+            return True
         if name in self.local_variables:
             return name in self.precise_local_variables
         return name in self.precise_global_variables
@@ -28949,7 +28878,7 @@ class VulkanSPIRVCodeGen(
 
         if context.result_pointer is not None:
             if value_expression is None:
-                raise ValueError("non-void inline return requires a value")
+                raise VulkanRefusal("non-void inline return requires a value")
             if isinstance(value_expression, ArrayLiteralNode):
                 return_value = self.process_array_literal(
                     value_expression, context.return_type
@@ -28965,7 +28894,7 @@ class VulkanSPIRVCodeGen(
                     value_expression, expected_type
                 )
             if return_value is None:
-                raise ValueError("non-void inline return value could not be lowered")
+                raise VulkanRefusal("non-void inline return value could not be lowered")
             self.store_to_variable(
                 context.result_pointer,
                 self.convert_value_to_type(return_value, context.return_type),
@@ -29595,7 +29524,7 @@ class VulkanSPIRVCodeGen(
         if variant_fields is None:
             return []
         if len(argument_patterns) != len(variant_fields):
-            raise ValueError(
+            raise VulkanRefusal(
                 f"Enum pattern {path} expects {len(variant_fields)} arguments, "
                 f"got {len(argument_patterns)}"
             )
@@ -29643,7 +29572,7 @@ class VulkanSPIRVCodeGen(
         return self.composite_extract(expression, member_type, member_index)
 
     def raise_match_pattern_gap(self, detail: str):
-        raise ValueError(f"SPIR-V match pattern unsupported: {detail}")
+        raise VulkanRefusal(f"SPIR-V match pattern unsupported: {detail}")
 
     def compare_match_values(self, expression: SpirvId, pattern_value: SpirvId):
         return self.binary_operation(
@@ -29749,7 +29678,7 @@ class VulkanSPIRVCodeGen(
         for case in explicit_cases:
             literal_value = self.switch_case_literal_value(getattr(case, "value", None))
             if literal_value is None:
-                raise ValueError(
+                raise VulkanRefusal(
                     "SPIR-V switch case values must be scalar integer literals"
                 )
             case_labels.append(
@@ -30956,7 +30885,7 @@ class VulkanSPIRVCodeGen(
             "SV_VERTEXID": "gl_VertexID",
             "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
-            "GL_INSTANCEINDEX": "gl_InstanceID",
+            "GL_INSTANCEINDEX": "gl_InstanceIndex",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
@@ -31055,6 +30984,13 @@ class VulkanSPIRVCodeGen(
                 {"Vertex"},
             ),
             "gl_InstanceID": (
+                "uint",
+                "InstanceIndex",
+                "Input",
+                {"Vertex"},
+            ),
+            # Base-inclusive; lower_spirv_instance_ids spells gl_InstanceID as this minus BaseInstance.
+            "gl_InstanceIndex": (
                 "uint",
                 "InstanceIndex",
                 "Input",
@@ -32164,7 +32100,7 @@ class VulkanSPIRVCodeGen(
         }
         normalized = str(topology_name or "triangle").lower()
         if normalized not in topology_modes:
-            raise ValueError(
+            raise VulkanRefusal(
                 "SPIR-V mesh stage outputtopology must be point, line, or "
                 f"triangle: {topology_name}"
             )
@@ -32193,6 +32129,12 @@ class VulkanSPIRVCodeGen(
         for flag in self.stage_layout_flag_names(stage, "in"):
             if flag in mode_map:
                 return mode_map[flag]
+        # A Geometry entry point declares exactly one input primitive mode (SPIR-V specification, Execution
+        # Mode); writing InputPoints for a stage that states none would read its vertices as points.
+        self.refuse_lowering(
+            "SPIR-V geometry stage states no input primitive: it needs points, lines, lines_adjacency, "
+            "triangles or triangles_adjacency as a GLSL input layout or a stage attribute"
+        )
         return "InputPoints"
 
     def geometry_output_mode(self, stage) -> str:
@@ -32220,18 +32162,36 @@ class VulkanSPIRVCodeGen(
         for flag in self.stage_layout_flag_names(stage, "out"):
             if flag in mode_map:
                 return mode_map[flag]
+        # A Geometry entry point declares exactly one output primitive mode (SPIR-V specification, Execution
+        # Mode); writing OutputPoints for a stage that states none would draw its strips as points.
+        self.refuse_lowering(
+            "SPIR-V geometry stage states no output primitive: it needs points, line_strip or triangle_strip "
+            "as a GLSL output layout or an outputtopology attribute"
+        )
         return "OutputPoints"
 
     def emit_geometry_execution_modes(self, function_id: SpirvId, stage):
         """Emit geometry capability and execution modes."""
         self.require_capability("Geometry")
+        vertex_count_names = ("max_vertices", "maxvertexcount")
         max_vertices = self.stage_positive_int_metadata(
             stage,
             "geometry OutputVertices",
-            attribute_names=("max_vertices", "maxvertexcount"),
+            attribute_names=vertex_count_names,
             layout_direction="out",
-            layout_names=("max_vertices", "maxvertexcount"),
+            layout_names=vertex_count_names,
         )
+        if all(
+            self.stage_attribute_value(stage, name) is None
+            for name in vertex_count_names
+        ) and (
+            self.stage_layout_direction_value(stage, "out", vertex_count_names) is None
+        ):
+            # OutputVertices bounds the vertices the stage emits, and a vertex past it is discarded; a stage that
+            # states no bound cannot be given one.
+            self.refuse_lowering(
+                "SPIR-V geometry stage states no max_vertices (or maxvertexcount), which OutputVertices needs"
+            )
         invocations = self.stage_positive_int_metadata(
             stage,
             "geometry Invocations",
@@ -32251,10 +32211,20 @@ class VulkanSPIRVCodeGen(
 
     def tessellation_control_output_vertices(self, stage) -> int:
         """Return tessellation-control output control-point count."""
+        names = ("outputcontrolpoints", "vertices")
+        if all(self.stage_attribute_value(stage, name) is None for name in names) and (
+            self.stage_layout_direction_value(stage, "out", names) is None
+        ):
+            # The output patch size sizes gl_out and OutputVertices. GLSL requires layout(vertices) (4.60
+            # 4.4.2.1) and HLSL outputcontrolpoints, so a stage that states none cannot be given one.
+            self.refuse_lowering(
+                "SPIR-V tessellation control stage states no output patch size (layout(vertices) or "
+                "outputcontrolpoints), which OutputVertices needs"
+            )
         return self.stage_positive_int_metadata(
             stage,
             "tessellation_control OutputVertices",
-            attribute_names=("outputcontrolpoints", "vertices"),
+            attribute_names=names,
             layout_direction="out",
             layout_names=("vertices", "outputcontrolpoints"),
         )
@@ -32484,12 +32454,9 @@ class VulkanSPIRVCodeGen(
             if not emit_entry_local_size_id(self, function_id, stage):
                 declare_specialized_workgroup_size(self, stage)
                 x, y, z = self.compute_local_size(stage)
-                if self.requires_compute_derivatives:
-                    x = max(2, x + (x % 2))
-                    y = max(2, y + (y % 2))
                 self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
-            if self.requires_compute_derivatives:
-                self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
+                if self.requires_compute_derivatives:
+                    emit_compute_derivative_group(self, function_id, (x, y, z))
             if execution_model in {"MeshEXT", "TaskEXT"}:
                 self.require_capability("MeshShadingEXT")
                 self.require_extension("SPV_EXT_mesh_shader")
@@ -32806,7 +32773,7 @@ class VulkanSPIRVCodeGen(
         Raises :class:`SpirvLoweringRefused` listing every construct that has no faithful lowering.
         """
         if not isinstance(ast, ShaderNode):
-            raise TypeError(
+            raise TranslatorArgumentError(
                 f"SPIR-V generation needs a ShaderNode, got {type(ast).__name__}"
             )
 
@@ -32842,9 +32809,11 @@ class VulkanSPIRVCodeGen(
         }
         try:
             module = self._generate_module(ast)
-        except (TranslationDiagnostic, UnsupportedSPIRVFeatureError):
-            raise
         except Exception as error:
+            if isinstance(
+                error, UnsupportedSPIRVFeatureError
+            ) or supersedes_pending_refusals(error):
+                raise
             # A placeholder left by an earlier refusal can break later lowering; report the refusal.
             self.refusals.raise_pending(cause=error)
             raise

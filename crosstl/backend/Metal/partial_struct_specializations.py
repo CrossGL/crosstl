@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Sequence
 
+from crosstl.translator.refusals import TranslationRefusal
+
 MATCH = "match"
 NO_MATCH = "no-match"
 UNDECIDED = "undecided"
@@ -453,8 +455,10 @@ def select_partial_specialization(
     return MATCH, declaration, dict(bindings), ""
 
 
-class UndecidedPartialSpecialization(ValueError):
+class UndecidedPartialSpecialization(TranslationRefusal):
     """A template-id may name a partial specialization that cannot be decided where it is spelled."""
+
+    code = "project.translate.metal-partial-specialization-undecided"
 
     def __init__(self, owner: str, reason: str):
         super().__init__(reason)

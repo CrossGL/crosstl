@@ -16,6 +16,7 @@ program (:func:`explicit_specialization_refusals`).
 from __future__ import annotations
 
 from .ast import FunctionNode, IdentifierNode, LiteralNode
+from .refusals import CrossGLSyntaxError
 
 __all__ = [
     "EXPLICIT_SPECIALIZATION_ATTRIBUTE",
@@ -48,7 +49,7 @@ def explicit_specialization_annotation(attribute):
         for argument in getattr(attribute, "arguments", None) or []
     ]
     if len(texts) < 2 or None in texts:
-        raise SyntaxError(
+        raise CrossGLSyntaxError(
             "@explicit_specialization requires the generic function name and its "
             "template arguments"
         )

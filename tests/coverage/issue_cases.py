@@ -1,7 +1,5 @@
 """Coverage reports and an in-memory repository for the issue reconciliation tests."""
 
-from dataclasses import replace
-
 from tools.coverage import causes, github, issues
 
 
@@ -61,29 +59,13 @@ def bug_for(language, name, direction="output"):
 
 def issues_after(actions, existing=()):
     """The managed issues after ``actions`` run, numbering new issues after the existing ones."""
-    state = {issue.number: issue for issue in existing}
     number = max((issue.number for issue in existing), default=0)
+    done = []
     for action in actions:
         if action.kind == "create":
             number += 1
-            state[number] = issues.Issue(
-                number, action.key, "open", action.title, action.body, action.labels
-            )
-            continue
-        old = state[action.number]
-        status = {"close": "closed", "reopen": "open"}.get(action.kind, old.state)
-        labels = old.labels + tuple(
-            label for label in action.labels if label not in old.labels
-        )
-        state[action.number] = replace(
-            old,
-            key=action.key,
-            state=status,
-            title=action.title,
-            body=action.body,
-            labels=labels,
-        )
-    return list(state.values())
+        done.append((action, number if action.kind == "create" else action.number))
+    return issues.applied(existing, done)
 
 
 def kinds(actions):
@@ -102,4 +84,6 @@ class Repository(github.GitHub):
 
     def apply(self, action):
         self.issues = issues_after([action], self.issues)
+        if action.kind != "create":
+            return action.number
         return max(i.number for i in self.issues)
