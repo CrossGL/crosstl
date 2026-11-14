@@ -2,7 +2,9 @@ import pytest
 
 from crosstl.backend.OpenCL.OpenCLAst import OpenCLBlockLiteralNode
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLBlockUnsupportedError,
     OpenCLRecordSemanticError,
+    OpenCLSizeofUnsupportedError,
     OpenCLToCrossGLConverter,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
@@ -1033,7 +1035,7 @@ def test_external_pocl_core_math_global_designated_initializer_codegen_reparse()
     assert "{.u =" not in crossgl
 
 
-def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
+def test_opencl_unknown_sizeof_is_refused():
     source = """
     kernel void unknown_sizeof_probe(global int *out) {
         int n = sizeof(user_type);
@@ -1041,10 +1043,9 @@ def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
     }
     """
 
-    _ast, crossgl = assert_crossgl_reparses(source)
-
-    assert "unsupported OpenCL size query: user_type" in crossgl
-    assert "var n: i32 = (/* unsupported OpenCL size query: user_type */ 0);" in crossgl
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+    with pytest.raises(OpenCLSizeofUnsupportedError, match=r"sizeof\(user_type\)"):
+        OpenCLToCrossGLConverter().generate(ast)
 
 
 def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
@@ -1184,7 +1185,7 @@ def test_external_opencv_cascadedetect_aligned_typedef_struct_codegen_reparse():
     assert "__attribute__" not in crossgl
 
 
-def test_external_pocl_block_literal_codegen_reparse():
+def test_external_pocl_block_literal_is_refused():
     source_info = EXTERNAL_FIXTURE_SOURCES["pocl_block_literal"]
     assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
     assert source_info["path"] == "tests/kernel/test_block.cl"
@@ -1202,13 +1203,14 @@ def test_external_pocl_block_literal_codegen_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
 
     block_decl = ast.statements[1].body[0]
     assert block_decl.vtype.startswith("__opencl_block float")
     assert isinstance(block_decl.value, OpenCLBlockLiteralNode)
-    assert "// unsupported OpenCL block declaration: add1" in crossgl
-    assert "output(add1);" in crossgl
+    # Dropping the declaration left `output(add1);` naming nothing; the block is refused instead.
+    with pytest.raises(OpenCLBlockUnsupportedError, match="block variable 'add1'"):
+        OpenCLToCrossGLConverter().generate(ast)
 
 
 def test_external_pocl_vector_token_paste_wrapper_codegen_reparse():

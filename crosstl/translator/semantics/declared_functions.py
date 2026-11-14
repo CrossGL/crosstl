@@ -35,11 +35,11 @@ from .builtin_function_names import (
 from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .declared_types import (
     INSTANTIATING_TARGETS,
+    _add_declared_type_name,
     _dead_functions,
     _nodes,
     _short,
     _uninstantiated_templates,
-    declared_type_names,
 )
 from .spirv_instructions import is_spirv_operation_name
 
@@ -77,8 +77,10 @@ def _function_names(node):
 
 def declared_function_names(program) -> frozenset:
     """The names a call in ``program`` may use without a built-in: its functions, methods, types and values."""
-    names = set(declared_type_names(program))
+    names = set()
     for node in _nodes(program):
+        # The declared type names (:func:`~.declared_types.declared_type_names`), read in the same walk.
+        _add_declared_type_name(node, names)
         if isinstance(
             node, (A.FunctionNode, A.VariableNode, A.ConstantNode, A.ParameterNode)
         ):

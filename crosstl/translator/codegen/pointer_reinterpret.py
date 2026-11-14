@@ -113,7 +113,10 @@ def same_scalar_lane_view(target_type, source_layout):
         if match is None:
             return None
         component, lanes = match.group(1), int(match.group(2))
-        component = _CROSSGL_LANE_VIEW_COMPONENTS.get(component, component)
+        # ``f16vec4`` names its lane type by a prefix; ``half4`` names it by the scalar type itself, which
+        # ``scalar_storage_layout`` checks below.
+        if component in _CROSSGL_LANE_VIEW_COMPONENTS:
+            component = _CROSSGL_LANE_VIEW_COMPONENTS[component]
     if (
         not isinstance(component, str)
         or isinstance(lanes, bool)

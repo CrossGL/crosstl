@@ -3964,6 +3964,74 @@ mod gpu {
 
     pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
 
+    // Atomics on buffer and workgroup memory take the location as `&mut`
+    // and return the value it held before the operation.
+    pub fn atomic_add<T>(place: &mut T, value: T) -> T
+    where
+        T: Copy + std::ops::Add<Output = T>,
+    {
+        let previous = *place;
+        *place = previous + value;
+        previous
+    }
+
+    pub fn atomic_min<T: Copy + PartialOrd>(place: &mut T, value: T) -> T {
+        let previous = *place;
+        if value < previous {
+            *place = value;
+        }
+        previous
+    }
+
+    pub fn atomic_max<T: Copy + PartialOrd>(place: &mut T, value: T) -> T {
+        let previous = *place;
+        if value > previous {
+            *place = value;
+        }
+        previous
+    }
+
+    pub fn atomic_and<T>(place: &mut T, value: T) -> T
+    where
+        T: Copy + std::ops::BitAnd<Output = T>,
+    {
+        let previous = *place;
+        *place = previous & value;
+        previous
+    }
+
+    pub fn atomic_or<T>(place: &mut T, value: T) -> T
+    where
+        T: Copy + std::ops::BitOr<Output = T>,
+    {
+        let previous = *place;
+        *place = previous | value;
+        previous
+    }
+
+    pub fn atomic_xor<T>(place: &mut T, value: T) -> T
+    where
+        T: Copy + std::ops::BitXor<Output = T>,
+    {
+        let previous = *place;
+        *place = previous ^ value;
+        previous
+    }
+
+    pub fn atomic_exchange<T: Copy>(place: &mut T, value: T) -> T {
+        let previous = *place;
+        *place = value;
+        previous
+    }
+
+    pub fn atomic_comp_swap<T: Copy + PartialEq>(place: &mut T, compare: T, value: T) -> T {
+        let previous = *place;
+        if previous == compare {
+            *place = value;
+        }
+        previous
+    }
+
     // Rust codegen emits sync and subgroup operations as helper calls.
     // These stubs pin the placeholder prelude contract used by compile tests.
     pub fn workgroup_id() -> Vec3<u32> {

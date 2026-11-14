@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.renames import renamed
+
 from ..comma_expressions import crossgl_tuple_literal
 from .RustAst import *
 from .RustLexer import *
@@ -2714,7 +2716,8 @@ class RustToCrossGLConverter:
             if pattern is None:
                 continue
 
-            subject = name_aliases.get(param.name, param.name)
+            # ``name_aliases`` holds the parameters the converter renamed.
+            subject = renamed(name_aliases, param.name)
             code += self.generate_match_pattern_bindings(subject, pattern, indent)
         return code
 

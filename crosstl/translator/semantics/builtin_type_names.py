@@ -8,7 +8,7 @@ declare. The set is built from families so that every width, component count and
 
 from __future__ import annotations
 
-__all__ = ["BUILTIN_TYPE_NAMES"]
+__all__ = ["BUILTIN_TYPE_NAMES", "MOJO_TYPE_NAMES"]
 
 _COUNTS = (2, 3, 4)
 _SHAPES = tuple(f"{c}x{r}" for c in _COUNTS for r in _COUNTS)
@@ -371,3 +371,6 @@ def _build():
 
 
 BUILTIN_TYPE_NAMES = _build()
+
+# Mojo's own numeric, SIMD and pointer types, which a Mojo program spells with square-bracket parameters.
+MOJO_TYPE_NAMES = frozenset(_MOJO_TYPES)

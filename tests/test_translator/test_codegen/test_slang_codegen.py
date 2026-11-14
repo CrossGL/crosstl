@@ -2773,29 +2773,30 @@ def test_lambda_call_emits_slang_lambda_for_explicit_simple_parameters():
     assert "lambda(" not in generated_code
 
 
-def test_lambda_call_preserves_unsupported_slang_lambda_shapes():
-    code = """
-    shader LambdaFallbackShader {
-        compute {
-            void main() {
-                let mapped = map(values, lambda(x, (x + 1)));
-                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
-                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
-                let qualified = map(values, lambda(const int value, value));
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "lambda_call",
+    [
+        "lambda(x, (x + 1))",
+        "lambda(Result<i32, i32> value, { return value; })",
+        "lambda((i32, i32) pair, { return pair; })",
+        "lambda(const int value, value)",
+    ],
+)
+def test_lambda_shapes_without_a_slang_spelling_are_refused(lambda_call):
+    # Written as a call, lambda(...) named a function no Slang module declares.
+    code = f"""
+    shader LambdaFallbackShader {{
+        compute {{
+            void main() {{
+                let mapped = map(values, {lambda_call});
+            }}
+        }}
+    }}
     """
-
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-
-    assert "lambda(x, (x + 1))" in generated_code
-    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
-    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
-    assert "lambda(const int value, value)" in generated_code
-    assert "=>" not in generated_code
+    with pytest.raises(
+        SlangLoweringRefused, match="Slang lambda expressions take typed"
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_function_parameter_modifiers_are_preserved_for_slang():

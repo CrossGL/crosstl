@@ -57,13 +57,17 @@ class FakeGh:
             )
         if isinstance(answer, subprocess.CompletedProcess):
             return answer
+        if isinstance(answer, str):
+            return subprocess.CompletedProcess(command, 0, answer, "")
         return subprocess.CompletedProcess(command, 0, json.dumps(answer), "")
 
 
-def _run(id, branch, sha, repository=None):
+def _run(id, branch, sha, repository=None, path=None):
     run = {"id": id, "name": "Coverage", "head_branch": branch, "head_sha": sha}
     if repository is not None:
         run["head_repository"] = repository and {"full_name": repository}
+    if path is not None:
+        run["path"] = path
     return run
 
 
@@ -76,7 +80,9 @@ def test_active_runs_reads_every_state_and_page_once_per_run(monkeypatch):
                 "workflow_runs": first
             },
             "actions/runs?event=merge_group&status=queued&per_page=2&page=2": {
-                "workflow_runs": [_run(3, LIVE, "2" * 40)]
+                "workflow_runs": [
+                    _run(3, LIVE, "2" * 40, path=".github/workflows/lint.yml")
+                ]
             },
             # A run that starts between two requests is listed in both states.
             "actions/runs?event=merge_group&status=in_progress&per_page=2&page=1": {
@@ -85,7 +91,11 @@ def test_active_runs_reads_every_state_and_page_once_per_run(monkeypatch):
         }
     )
     runs = GitHub("o/r", run=gh).active_runs()
-    assert sorted(run.id for run in runs) == [1, 2, 3]
+    assert sorted((run.id, run.path) for run in runs) == [
+        (1, ""),
+        (2, ""),
+        (3, ".github/workflows/lint.yml"),
+    ]
     assert {path.split("&")[1] for _, path in gh.calls} == {
         f"status={status}" for status in orphaned_runs.ACTIVE
     }
@@ -250,16 +260,48 @@ def test_required_checks_and_latest_jobs(monkeypatch):
     assert github.jobs(5) == jobs + jobs[:1]
 
 
+def test_names_reads_the_workflow_file_at_the_runs_commit():
+    workflow = (
+        "name: Demo\n"
+        "jobs:\n"
+        "  leg:\n"
+        "    name: MLX leg (${{ matrix.os }})\n"
+        "    steps:\n"
+        "      - name: 'Run the leg'\n"
+        "  result:\n"
+        f'    name: "{REQUIRED}"  \n'
+        "    needs: leg\n"
+    )
+    path = "contents/.github/workflows/demo.yml?ref=" + "2" * 40
+    gh = FakeGh({path: workflow})
+    names = GitHub("o/r", run=gh).names(".github/workflows/demo.yml", "2" * 40)
+    assert names == {"MLX leg (${{ matrix.os }})", "Run the leg", REQUIRED}
+    assert gh.calls == [("GET", path)]
+
+    gh.answers[path] = subprocess.CompletedProcess(
+        [], 1, "", "gh: Not Found (HTTP 404)"
+    )
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        GitHub("o/r", run=gh).names(".github/workflows/demo.yml", "2" * 40)
+
+
+DEMO = ".github/workflows/demo-project-testing.yml"
+CORPUS = ".github/workflows/corpus.yml"
+LINT = ".github/workflows/lint.yml"
+BACKEND = ".github/workflows/backend-tests.yml"
+
+
 class StubGitHub:
     """A queue with one live group (LIVE) and one discarded group (GROUP)."""
 
     def __init__(self):
         self.runs = [
-            Run(1, "Corpus", GROUP, "1" * 40),
+            Run(1, "Corpus", GROUP, "1" * 40, path=CORPUS),
             Run(2, "Coverage", LIVE, "2" * 40),
-            Run(3, "Project Demo Testing", LIVE, "2" * 40),
-            Run(4, "Corpus", LIVE, "2" * 40),
-            Run(5, "Lint", LIVE, "2" * 40),
+            Run(3, "Project Demo Testing", LIVE, "2" * 40, path=DEMO),
+            Run(4, "Corpus", LIVE, "2" * 40, path=CORPUS),
+            Run(5, "Lint", LIVE, "2" * 40, path=LINT),
+            Run(8, "Backend Tests", LIVE, "2" * 40, path=BACKEND),
         ]
         self.pulls = [
             Run(6, "Corpus", "merged", "3" * 40, "o/r"),
@@ -268,24 +310,37 @@ class StubGitHub:
         self.groups_ = {LIVE}
         self.heads = {("o/r", "open")}
         # 1 is not live; 5 was re-run and its latest attempt has not failed.
-        self.failing_ = {1, 3, 4, 5}
+        self.failing_ = {1, 3, 4, 5, 8}
+        # GitHub lists a job that needs others only once they have finished, so a result job that waits for the
+        # slowest leg is missing from the list.
         self.jobs_ = {
-            # The required result job waits for the slowest leg.
             3: [
                 {"name": "leg", "status": "completed", "conclusion": "failure"},
                 {"name": "leg", "status": "in_progress", "conclusion": None},
-                {"name": REQUIRED, "status": "queued", "conclusion": None},
             ],
             # Corpus is not required, so its result decides nothing.
             4: [
                 {"name": "leg", "status": "completed", "conclusion": "timed_out"},
-                {"name": "Corpus result", "status": "queued", "conclusion": None},
-            ],
-            5: [
                 {"name": "leg", "status": "in_progress", "conclusion": None},
-                {"name": REQUIRED, "status": "queued", "conclusion": None},
+            ],
+            5: [{"name": "leg", "status": "in_progress", "conclusion": None}],
+            # Every leg has finished, and the result job waits for a runner.
+            8: [
+                {"name": "leg", "status": "completed", "conclusion": "failure"},
+                {
+                    "name": "Backend Tests result",
+                    "status": "queued",
+                    "conclusion": None,
+                },
             ],
         }
+        self.names_ = {
+            DEMO: {"leg", REQUIRED},
+            CORPUS: {"leg", "Corpus result"},
+            LINT: {"leg", "Lint result"},
+        }
+        # Runs that GitHub answers HTTP 409 for.
+        self.stuck: set[int] = set()
         self.calls: list[tuple] = []
 
     def active_runs(self, event="merge_group"):
@@ -307,26 +362,35 @@ class StubGitHub:
 
     def required(self, branch):
         self.calls.append(("required", branch))
-        return {REQUIRED}
+        return {REQUIRED, "Lint result", "Backend Tests result"}
 
     def jobs(self, run_id):
         self.calls.append(("jobs", run_id))
         return self.jobs_[run_id]
 
+    def names(self, path, sha):
+        self.calls.append(("names", path, sha))
+        return set(self.names_[path])
+
     def cancel(self, run):
         self.calls.append(("cancel", run.id))
-        return True
+        return run.id not in self.stuck
 
 
 def test_a_live_run_has_failed_while_a_failed_job_keeps_a_required_check_waiting():
     github = StubGitHub()
     sweeper = Sweeper(github, apply=False, limit=10, keep=set())
-    assert [run.id for run in sweeper.failed(github.runs, {LIVE})] == [3]
+    assert [run.id for run in sweeper.failed(github.runs, {LIVE})] == [3, 8]
     assert ("failing", ("2" * 40,)) in github.calls
-    assert [call for call in github.calls if call[0] == "jobs"] == [
+    # The workflow file is read only when the result job is not listed.
+    assert [call for call in github.calls if call[0] in ("jobs", "names")] == [
         ("jobs", 3),
+        ("names", DEMO, "2" * 40),
         ("jobs", 4),
+        ("names", CORPUS, "2" * 40),
         ("jobs", 5),
+        ("names", LINT, "2" * 40),
+        ("jobs", 8),
     ]
     # Corpus's run can never hold the queue, so it is not looked at again; Lint's can still fail.
     assert sweeper.keep == {4}
@@ -335,23 +399,49 @@ def test_a_live_run_has_failed_while_a_failed_job_keeps_a_required_check_waiting
     assert [call for call in github.calls if call[0] != "failing"] == [
         ("jobs", 3),
         ("jobs", 5),
+        ("jobs", 8),
     ]
+
+
+def test_a_required_check_waits_until_its_job_completes():
+    github = StubGitHub()
+    sweeper = Sweeper(github, apply=False, limit=10, keep=set())
+    run = Run(3, "Project Demo Testing", LIVE, "2" * 40, path=DEMO)
+    leg = {"name": "leg", "status": "completed", "conclusion": "failure"}
+    result = {"name": REQUIRED, "status": "queued", "conclusion": None}
+    assert sweeper.waiting(run, [leg], {REQUIRED}) == {REQUIRED}
+    assert sweeper.waiting(run, [leg, result], {REQUIRED}) == {REQUIRED}
+    result["status"] = "completed"
+    assert sweeper.waiting(run, [leg, result], {REQUIRED}) == set()
+    # The file is read once per workflow and commit.
+    assert [call for call in github.calls if call[0] == "names"] == [
+        ("names", DEMO, "2" * 40)
+    ]
+    # A run that does not come from a workflow file, such as a dynamic one, declares no required check.
+    dynamic = Run(
+        9, "CodeQL", LIVE, "2" * 40, path="dynamic/github-code-scanning/codeql"
+    )
+    assert sweeper.waiting(dynamic, [leg], {REQUIRED}) == set()
+    assert len([call for call in github.calls if call[0] == "names"]) == 1
 
 
 def test_sweep_cancels_failed_runs_first_and_each_run_once(capsys):
     github = StubGitHub()
+    github.stuck = {6}
     sweeper = Sweeper(github, apply=True, limit=10, keep={2})
     assert sweeper.sweep() is True
-    assert [call[1] for call in github.calls if call[0] == "cancel"] == [3, 1, 6]
+    assert [call[1] for call in github.calls if call[0] == "cancel"] == [3, 8, 1, 6]
     out = capsys.readouterr().out.splitlines()
     assert out == [
         f"cancelled 3 Project Demo Testing on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
+        f"cancelled 8 Backend Tests on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
         f"cancelled 1 Corpus on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
-        "cancelled 6 Corpus on merged (closed)",
-        "4 active merge-group and 2 pull-request runs: "
-        "1 orphaned, 1 failed, 1 closed, 3 cancelled",
+        "not cancelled: 6 Corpus on merged (closed)",
+        "5 active merge-group and 2 pull-request runs: "
+        "1 orphaned, 2 failed, 1 closed, 3 cancelled",
     ]
-    # A cancelled run stays active for a while; the next sweep leaves it alone.
+    # A cancelled run stays active for a while, and one GitHub cannot cancel stays as it is; the next sweep
+    # leaves both alone.
     github.calls.clear()
     assert sweeper.sweep() is True
     assert not [call for call in github.calls if call[0] == "cancel"]
@@ -370,7 +460,7 @@ def _main_answers(cancel=None):
             "workflow_runs": [
                 _run(1, GROUP, "1" * 40),
                 _run(2, GROUP, "1" * 40),
-                _run(3, LIVE, "2" * 40),
+                _run(3, LIVE, "2" * 40, path=".github/workflows/demo.yml"),
                 _run(4, LIVE, "2" * 40),
             ]
         },
@@ -397,9 +487,12 @@ def _main_answers(cancel=None):
         "actions/runs/3/jobs?filter=latest&per_page=100&page=1": {
             "jobs": [
                 {"name": "leg", "status": "completed", "conclusion": "failure"},
-                {"name": REQUIRED, "status": "queued", "conclusion": None},
+                {"name": "leg", "status": "in_progress", "conclusion": None},
             ]
         },
+        "contents/.github/workflows/demo.yml?ref=" + "2" * 40: (
+            f"jobs:\n  result:\n    name: {REQUIRED}\n    needs: leg\n"
+        ),
     }
     answers.update(cancel or {})
     return answers

@@ -348,6 +348,30 @@ class CrossGLFunctionBodyParseError(SyntaxError):
         self.token_value = token_value
 
 
+# How a cooperative-matrix contract mismatch names each field it compares.
+COOPERATIVE_MATRIX_FIELD_LABELS = {
+    "element_type": "component type",
+    "rows": "row count",
+    "cols": "column count",
+    "scope": "scope",
+    "use": "use",
+    "layout": "layout",
+    "subgroup_size": "subgroup size",
+    "elements_per_lane": "elements-per-lane count",
+    "fragment_layout": "fragment layout",
+    "fragment_provenance": "fragment provenance",
+    "fragment_mapping": "fragment mapping",
+    "fragment_mapping_provenance": "fragment mapping provenance",
+}
+# Scalar spellings a vector generic argument may use for the CrossGL scalars ``float``, ``double``, ``int``, ``uint``.
+WGSL_STYLE_SCALAR_SPELLINGS = {
+    "f32": "float",
+    "f64": "double",
+    "i32": "int",
+    "u32": "uint",
+}
+
+
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
@@ -3231,17 +3255,7 @@ class Parser:
         if self.cooperative_matrix_values_equal(left, right):
             return deepcopy(right)
 
-        field_name = {
-            "element_type": "component type",
-            "rows": "row count",
-            "cols": "column count",
-            "subgroup_size": "subgroup size",
-            "elements_per_lane": "elements-per-lane count",
-            "fragment_layout": "fragment layout",
-            "fragment_provenance": "fragment provenance",
-            "fragment_mapping": "fragment mapping",
-            "fragment_mapping_provenance": "fragment mapping provenance",
-        }.get(field, field)
+        field_name = COOPERATIVE_MATRIX_FIELD_LABELS[field]
         raise SyntaxError(
             f"Cooperative matrix {operation} has incompatible {field_name}: "
             f"{left_label} is "
@@ -4217,18 +4231,11 @@ class Parser:
     def vector_element_type_from_generic(self, type_node):
         """Resolve a vector generic argument to a primitive element type."""
         type_name = self.format_type_argument(type_node)
-        aliases = {
-            "f32": "float",
-            "float": "float",
-            "f64": "double",
-            "double": "double",
-            "i32": "int",
-            "int": "int",
-            "u32": "uint",
-            "uint": "uint",
-            "bool": "bool",
-        }
-        return PrimitiveType(aliases.get(type_name, type_name))
+        # The argument names a CrossGL type: a scalar, a type alias or a generic parameter. ``f32``, ``f64``, ``i32``
+        # and ``u32`` are other spellings of four scalars.
+        if type_name in WGSL_STYLE_SCALAR_SPELLINGS:
+            type_name = WGSL_STYLE_SCALAR_SPELLINGS[type_name]
+        return PrimitiveType(type_name)
 
     def format_type_argument(self, type_node):
         """Format a parsed type node back into a compact type argument string."""

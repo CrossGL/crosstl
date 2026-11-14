@@ -55,7 +55,11 @@ from .declared_identifiers import (
     generate_refusing_undeclared_identifiers,
     record_undeclared_identifiers,
 )
-from .declared_types import UndeclaredTypeError, refuse_undeclared_types
+from .declared_types import (
+    UndeclaredTypeError,
+    refuse_undeclared_types,
+    shared_dead_functions,
+)
 from .default_buffer_layouts import mark_default_buffer_layouts
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
@@ -469,9 +473,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_constant_blocks(program, report.target)
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
-    refuse_undeclared_types(program, report.target)
-    record_undeclared_identifiers(program, report.target)
-    refuse_undeclared_functions(program, report.target)
+    # These three passes only read the program, so they share one computation of its unreachable functions.
+    with shared_dead_functions():
+        refuse_undeclared_types(program, report.target)
+        record_undeclared_identifiers(program, report.target)
+        refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)
