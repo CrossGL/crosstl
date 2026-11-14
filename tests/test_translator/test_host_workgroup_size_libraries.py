@@ -5,6 +5,8 @@ it, HLSL reads it from macros the host defines, and Slang reads those macros or 
 kernels of the library keep their own sizes.
 """
 
+import re
+
 import pytest
 
 import crosstl
@@ -56,6 +58,10 @@ shader main {
 }
 """
 
+KERNEL_STAGE_BLOCK = re.sub(
+    r"\n    fragment \{.*?\n    \}\n", "\n", STAGE_BLOCK, flags=re.S
+)
+
 
 def _write(tmp_path, name, source):
     path = tmp_path / name
@@ -70,6 +76,9 @@ def _write(tmp_path, name, source):
     "name, source", [("rotate.cgl", STAGE_BLOCK), ("kernels.metal", KERNELS)]
 )
 def test_no_target_refuses_a_host_sized_kernel(tmp_path, backend, name, source):
+    if backend == "cuda" and source is STAGE_BLOCK:
+        # CUDA declares only kernels; the library's fragment entry is refused on its own.
+        source = KERNEL_STAGE_BLOCK
     assert crosstl.translate(_write(tmp_path, name, source), backend=backend)
 
 

@@ -57,6 +57,7 @@ from ..refusals import RustRefusal
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
+from .char_literals import char_literal_code
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
@@ -132,7 +133,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             **RUST_EXACT_WIDTH_INTEGER_TYPES,
             "string": "&'static str",
             "str": "&'static str",
-            "char": "char",
+            # CrossGL char is a signed 8-bit integer; Rust's char is a Unicode scalar value.
+            "char": "i8",
             # Vector Types (using GPU-style vector types)
             "vec2<f16>": "Vec2<f16>",
             "vec3<f16>": "Vec3<f16>",
@@ -4215,8 +4217,6 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return "0"
         if rust_type == "bool":
             return "false"
-        if rust_type == "char":
-            return r"'\0'"
         if rust_type == "&'static str":
             return '""'
         return None
@@ -11796,7 +11796,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             "i8": "i8",
             "u8": "u8",
             "bool": "bool",
-            "char": "char",
+            "char": "i8",
             "short": "i16",
             "ushort": "u16",
             "int": "i32",
@@ -12345,7 +12345,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         aliases = {
             "bool": "bool",
-            "char": "i32",
+            "char": "i8",
             "short": "i16",
             "ushort": "u16",
             "int": "i32",
@@ -12380,8 +12380,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if lower_value in {"true", "false"}:
                 return lower_value
         if literal_type == "char":
-            escaped = self.escape_literal(value, quote="'")
-            return f"'{escaped}'"
+            return f"{char_literal_code(value, RustRefusal, 'Rust')}i8"
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'

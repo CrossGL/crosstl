@@ -26,9 +26,19 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
+from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.lowering_refusal_helpers import cuda_partial_output
+
+
+def assert_kernel_only_refusal(codegen_class, source):
+    """A graphics or ray-tracing entry has no CUDA form and is refused with a typed diagnostic."""
+    with pytest.raises(StageUnsupportedError) as raised:
+        codegen_class().generate(Parser(Lexer(source).tokens).parse())
+    assert raised.value.code == "project.translate.cuda-stage-unsupported"
+    assert raised.value.stages
+    assert "compute" not in raised.value.stages
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
@@ -227,7 +237,7 @@ class TestCudaCodeGen:
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {
-            vertex {
+            compute {
                 void main() {
                     int x;
                 }
@@ -244,7 +254,7 @@ class TestCudaCodeGen:
 
         assert "#include <cuda_runtime.h>" in cuda_code
         assert "#include <device_launch_parameters.h>" in cuda_code
-        assert "__device__ void main()" in cuda_code
+        assert 'extern "C" __global__ void compute_main()' in cuda_code
 
     def test_global_constants_are_emitted(self):
         source_code = """
@@ -377,8 +387,8 @@ class TestCudaCodeGen:
         if shutil.which("nvcc") is not None:
             compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
-    def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks(self):
-        """Mesh/task stages lower to deterministic CUDA helper representation."""
+    def test_mesh_task_stages_are_refused(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader CudaMeshTaskPipeline {
             struct TaskPayload {
@@ -404,24 +414,11 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert "__device__ inline void cgl_cuda_set_mesh_output_counts" in cuda_code
-        assert "__device__ inline void cgl_cuda_dispatch_mesh" in cuda_code
-        assert "// CrossGL mesh stage" in cuda_code
-        assert "// CrossGL mesh/task numthreads: 4, 2, 1" in cuda_code
-        assert "// CrossGL mesh output topology: triangle" in cuda_code
-        assert "// CrossGL mesh max_vertices: 3" in cuda_code
-        assert "// CrossGL mesh max_primitives: 1" in cuda_code
-        assert "__device__ void mesh_main()" in cuda_code
-        assert "cgl_cuda_set_mesh_output_counts(3, 1);" in cuda_code
-        assert "// CrossGL task stage" in cuda_code
-        assert "// CrossGL mesh/task numthreads: 2, 1, 1" in cuda_code
-        assert "__device__ void task_main()" in cuda_code
-        assert "cgl_cuda_dispatch_mesh(1, 2, 1, payload);" in cuda_code
-
-    def test_mesh_task_stages_validate_cuda_metadata_and_intrinsics(self):
+    def test_invalid_mesh_task_stages_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_topology = """
         shader BadCudaMeshTopology {
             mesh {
@@ -429,11 +426,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(
-            ValueError, match="outputtopology.*point, line, or triangle"
-        ):
-            CudaCodeGen().generate(Parser(Lexer(invalid_topology).tokens).parse())
-
         invalid_numthreads = """
         shader BadCudaTaskNumThreads {
             task {
@@ -441,9 +433,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="numthreads y dimension.*positive"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_numthreads).tokens).parse())
-
         invalid_set_counts = """
         shader BadCudaMeshCounts {
             mesh {
@@ -453,9 +442,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="SetMeshOutputCounts.*two arguments"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_set_counts).tokens).parse())
-
         wrong_dispatch_stage = """
         shader BadCudaDispatchStage {
             compute {
@@ -465,13 +451,17 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (
+            invalid_topology,
+            invalid_numthreads,
+            invalid_set_counts,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
         with pytest.raises(ValueError, match="DispatchMesh.*task, object"):
             CudaCodeGen().generate(Parser(Lexer(wrong_dispatch_stage).tokens).parse())
 
-    def test_geometry_stage_lowers_to_cuda_metadata_and_stream_placeholders(
-        self, tmp_path
-    ):
-        """Geometry stages lower to deterministic CUDA helper representation."""
+    def test_geometry_stage_is_refused(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader CudaGeometryExpansion {
             struct GSInput {
@@ -498,27 +488,11 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-        ast = Parser(Lexer(source_code).tokens).parse()
-        cuda_code = CudaCodeGen().generate(ast)
-
-        assert "template <typename T>" in cuda_code
-        assert "struct CglCudaTriangleStream" in cuda_code
-        assert "// CrossGL geometry stage: maxvertexcount=3" in cuda_code
-        assert "// CrossGL geometry input primitive: triangle:input" in cuda_code
-        assert (
-            "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
-            in cuda_code
-        )
-        assert "__device__ void geometry_main(" in cuda_code
-        assert "GSInput input[3]" in cuda_code
-        assert "CglCudaTriangleStream<GSOutput>& stream" in cuda_code
-        assert "stream.Append(output);" in cuda_code
-        assert "stream.RestartStrip();" in cuda_code
-
-        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
-
-    def test_geometry_stage_validates_maxvertexcount_and_input_shape(self):
+    def test_invalid_geometry_stages_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         missing_attribute = """
         shader MissingCudaGeometryMax {
             struct GSInput { vec4 position @ gl_Position; };
@@ -532,9 +506,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires maxvertexcount"):
-            CudaCodeGen().generate(Parser(Lexer(missing_attribute).tokens).parse())
-
         invalid_max = """
         shader BadCudaGeometryMax {
             struct GSInput { vec4 position @ gl_Position; };
@@ -548,9 +519,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="maxvertexcount.*positive"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_max).tokens).parse())
-
         wrong_arity = """
         shader BadCudaGeometryInputArity {
             struct GSInput { vec4 position @ gl_Position; };
@@ -564,9 +532,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
-            CudaCodeGen().generate(Parser(Lexer(wrong_arity).tokens).parse())
-
         missing_stream = """
         shader BadCudaGeometryStream {
             struct GSInput { vec4 position @ gl_Position; };
@@ -576,13 +541,16 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="must include a PointStream"):
-            CudaCodeGen().generate(Parser(Lexer(missing_stream).tokens).parse())
+        for source in (
+            missing_attribute,
+            invalid_max,
+            wrong_arity,
+            missing_stream,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-    def test_tessellation_stages_lower_to_cuda_metadata_and_patch_placeholders(
-        self, tmp_path
-    ):
-        """Tessellation stages lower to deterministic CUDA helper representation."""
+    def test_tessellation_stages_are_refused(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader CudaTessellationPipeline {
             struct HSInput {
@@ -622,35 +590,11 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-        ast = Parser(Lexer(source_code).tokens).parse()
-        cuda_code = CudaCodeGen().generate(ast)
-
-        assert "template <typename T, int N>" in cuda_code
-        assert "struct CglCudaInputPatch" in cuda_code
-        assert "struct CglCudaOutputPatch" in cuda_code
-        assert (
-            "// CrossGL tessellation control stage: outputcontrolpoints=3" in cuda_code
-        )
-        assert "// CrossGL tessellation domain: tri" in cuda_code
-        assert "// CrossGL tessellation partitioning: fractional_odd" in cuda_code
-        assert "// CrossGL tessellation output topology: triangle_cw" in cuda_code
-        assert "// CrossGL tessellation patch constant function: HSConst" in cuda_code
-        assert "// CrossGL tessellation evaluation stage: domain=tri" in cuda_code
-        assert (
-            "__device__ HSOutput tessellation_control_main"
-            "(CglCudaInputPatch<HSInput, 3> patch)" in cuda_code
-        )
-        assert (
-            "__device__ void tessellation_evaluation_main"
-            "(CglCudaOutputPatch<HSOutput, 3> patch)" in cuda_code
-        )
-        assert "output.position = patch[0].position;" in cuda_code
-        assert "float3 position = patch[0].position;" in cuda_code
-
-        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
-
-    def test_tessellation_stages_validate_cuda_metadata(self):
+    def test_invalid_tessellation_stages_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         missing_control_points = """
         shader MissingCudaTessControlPoints {
             tessellation_control {
@@ -658,9 +602,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires outputcontrolpoints"):
-            CudaCodeGen().generate(Parser(Lexer(missing_control_points).tokens).parse())
-
         invalid_control_points = """
         shader BadCudaTessControlPoints {
             tessellation_control {
@@ -668,9 +609,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_control_points).tokens).parse())
-
         missing_domain = """
         shader MissingCudaTessDomain {
             tessellation_evaluation {
@@ -678,9 +616,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires domain"):
-            CudaCodeGen().generate(Parser(Lexer(missing_domain).tokens).parse())
-
         invalid_domain = """
         shader BadCudaTessDomain {
             tessellation_evaluation {
@@ -688,10 +623,16 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="domain.*must be tri"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_domain).tokens).parse())
+        for source in (
+            missing_control_points,
+            invalid_control_points,
+            missing_domain,
+            invalid_domain,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-    def test_ray_tracing_stages_emit_cuda_metadata_and_hooks(self, tmp_path):
+    def test_ray_tracing_stages_are_refused(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader CudaRayTracingStages {
             struct RayPayload {
@@ -768,43 +709,11 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert (
-            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
-            "set=2 binding=3 binding_source=explicit" in cuda_code
-        )
-        assert "struct CglRayTracingAccelerationStructure" in cuda_code
-        assert "struct CglRayDesc" in cuda_code
-        assert "// CrossGL ray stage: ray_generation" in cuda_code
-        assert "// CrossGL ray stage: closest_hit" in cuda_code
-        assert "// CrossGL ray stage: any_hit" in cuda_code
-        assert "// CrossGL ray stage: miss" in cuda_code
-        assert "// CrossGL ray stage: callable" in cuda_code
-        assert "// CrossGL ray stage: intersection" in cuda_code
-        assert "__device__ void ray_generation_main()" in cuda_code
-        assert "__device__ void ray_closest_hit_main(" in cuda_code
-        assert "// CrossGL parameter semantic: payload: ray_payload" in cuda_code
-        assert "// CrossGL parameter semantic: attributes: hit_attribute" in cuda_code
-        assert "// CrossGL parameter semantic: data: callable_data" in cuda_code
-        assert "uint3 launch = cgl_ray_launch_id();" in cuda_code
-        assert "uint launchWidth = cgl_ray_launch_size().x;" in cuda_code
-        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in cuda_code
-        assert "cgl_call_shader(0, data);" in cuda_code
-        assert "cgl_ignore_hit();" in cuda_code
-        assert "cgl_accept_hit_and_end_search();" in cuda_code
-        assert "bool accepted = cgl_report_hit(1.0f, 0, attributes);" in cuda_code
-        assert (
-            "bool acceptedWithoutAttributes = cgl_report_hit"
-            "(2.0f, 1, CglBuiltInTriangleIntersectionAttributes{});" in cuda_code
-        )
-
-        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
-
-    def test_cuda_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
-        self,
-    ):
+    def test_ray_stage_parameter_semantics_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_type = """
         shader InvalidCudaRayBuiltinType {
             ray_generation {
@@ -813,9 +722,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         invalid_stage = """
         shader InvalidCudaRayBuiltinStage {
             fragment {
@@ -824,9 +730,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         duplicate = """
         shader DuplicateCudaRayBuiltin {
             ray_generation {
@@ -838,10 +741,12 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(
-            ValueError, match="Duplicate CUDA stage parameter semantic launch_id"
+        for source in (
+            invalid_type,
+            invalid_stage,
+            duplicate,
         ):
-            CudaCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
     def test_ray_query_methods_lower_to_cuda_hooks(self):
         source_code = """
@@ -857,7 +762,7 @@ class TestCudaCodeGen:
         assert "__device__ inline bool cgl_ray_query_proceed" in cuda_code
         assert "bool active = cgl_ray_query_proceed(query);" in cuda_code
 
-    def test_mesh_function_stage_qualifier_lowers_cuda_metadata(self):
+    def test_mesh_function_stage_qualifier_is_refused(self):
         ast = ShaderNode(
             name="QualifiedCudaMeshStage",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
@@ -877,11 +782,11 @@ class TestCudaCodeGen:
             ],
         )
 
-        cuda_code = CudaCodeGen().generate(ast)
+        with pytest.raises(StageUnsupportedError) as raised:
 
-        assert "// CrossGL mesh stage" in cuda_code
-        assert "// CrossGL mesh output topology: line" in cuda_code
-        assert "__device__ void main()" in cuda_code
+            CudaCodeGen().generate(ast)
+
+        assert raised.value.stages == ("mesh",)
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
         source_code = """
@@ -2249,7 +2154,8 @@ class TestCudaCodeGen:
         assert "Light named = Light{make_float3(0.25f, 0.5f, 1.0f), 4.0f};" in cuda_code
         assert "ConstructorNode(" not in cuda_code
 
-    def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+    def test_graphics_struct_semantics_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         valid_code = """
         shader CudaStructSemantics {
             struct FSOutput {
@@ -2266,12 +2172,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
-
-        assert "float4 color; // CrossGL semantic: target(1)" in cuda_code
-        assert "float depth; // CrossGL semantic: depth(any)" in cuda_code
-        assert "float2 uv; // CrossGL semantic: texcoord(0)" in cuda_code
-
         invalid_type = """
         shader BadCudaStructSemanticType {
             struct FSOutput {
@@ -2279,9 +2179,6 @@ class TestCudaCodeGen:
             };
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         invalid_stage = """
         shader BadCudaStructSemanticStage {
             struct FSOutput {
@@ -2296,9 +2193,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_input_only = """
         shader BadCudaStructInputOnlySemantic {
             struct VSOutput {
@@ -2313,10 +2207,17 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+        for source in (
+            valid_code,
+            invalid_stage,
+            invalid_input_only,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
 
-    def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+    def test_graphics_return_semantics_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_depth_type = """
         shader BadCudaDepthType {
             fragment {
@@ -2326,9 +2227,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
-
         invalid_stage = """
         shader BadCudaStage {
             vertex {
@@ -2338,9 +2236,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_input_only = """
         shader BadCudaInputOnlyReturn {
             vertex {
@@ -2350,10 +2245,15 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+        for source in (
+            invalid_depth_type,
+            invalid_stage,
+            invalid_input_only,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-    def test_direct_return_semantics_emit_metadata_for_cuda(self, tmp_path):
+    def test_direct_graphics_return_semantics_are_refused(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         color_code = """
         shader CudaDirectReturnSemantics {
             vertex {
@@ -2369,13 +2269,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
-
-        assert "// CrossGL return semantic: position" in cuda_code
-        assert "__device__ float4 vertexMain()" in cuda_code
-        assert "// CrossGL return semantic: target(0)" in cuda_code
-        assert "__device__ float4 fragmentMain()" in cuda_code
-
         depth_code = """
         shader CudaDepthReturnSemantics {
             fragment {
@@ -2385,17 +2278,14 @@ class TestCudaCodeGen:
             }
         }
         """
-        depth_cuda_code = CudaCodeGen().generate(
-            Parser(Lexer(depth_code).tokens).parse()
-        )
+        for source in (
+            color_code,
+            depth_code,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
-        assert "// CrossGL return semantic: depth(any)" in depth_cuda_code
-        assert "__device__ float depthMain()" in depth_cuda_code
-
-        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
-        compile_cuda_if_nvcc_available(depth_cuda_code, tmp_path)
-
-    def test_stage_parameter_semantics_emit_metadata_for_cuda(self, tmp_path):
+    def test_graphics_stage_parameter_semantics_are_refused(self, tmp_path):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         vertex_code = """
         shader CudaVertexStageParameterSemantics {
             vertex {
@@ -2408,12 +2298,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        vertex_cuda = CudaCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
-
-        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_cuda
-        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_cuda
-        assert "__device__ float4 main(uint vertexId" in vertex_cuda
-
         fragment_code = """
         shader CudaFragmentStageParameterSemantics {
             fragment {
@@ -2426,14 +2310,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        fragment_cuda = CudaCodeGen().generate(
-            Parser(Lexer(fragment_code).tokens).parse()
-        )
-
-        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_cuda
-        assert "// CrossGL parameter semantic: front: front_facing" in fragment_cuda
-        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_cuda
-
         compute_code = """
         shader CudaComputeStageParameterSemantics {
             compute {
@@ -2449,6 +2325,11 @@ class TestCudaCodeGen:
             }
         }
         """
+        for source in (
+            vertex_code,
+            fragment_code,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
         compute_cuda = CudaCodeGen().generate(
             Parser(Lexer(compute_code).tokens).parse()
         )
@@ -2475,11 +2356,10 @@ class TestCudaCodeGen:
             "uint copy = (threadIdx.z * blockDim.y * blockDim.x + "
             "threadIdx.y * blockDim.x + threadIdx.x);"
         ) in compute_cuda
-        compile_cuda_if_nvcc_available(vertex_cuda, tmp_path)
-        compile_cuda_if_nvcc_available(fragment_cuda, tmp_path)
         compile_cuda_if_nvcc_available(compute_cuda, tmp_path)
 
-    def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda(self):
+    def test_invalid_graphics_stage_parameters_are_refused_as_stages(self):
+        """CUDA has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_stage = """
         shader BadCudaStageParameterStage {
             fragment {
@@ -2488,9 +2368,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_type = """
         shader BadCudaStageParameterType {
             fragment {
@@ -2499,9 +2376,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
-            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         output_only = """
         shader BadCudaStageParameterOutputOnly {
             vertex {
@@ -2510,9 +2384,6 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
-            CudaCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
-
         duplicate_system_value = """
         shader BadCudaStageParameterDuplicate {
             vertex {
@@ -2521,8 +2392,13 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="Duplicate CUDA stage parameter semantic"):
-            CudaCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
+        for source in (
+            invalid_stage,
+            invalid_type,
+            output_only,
+            duplicate_system_value,
+        ):
+            assert_kernel_only_refusal(CudaCodeGen, source)
 
     def test_enum_generation_and_compute_use(self):
         source_code = """
@@ -6225,7 +6101,7 @@ class TestCudaCodeGen:
     def test_texture_calls_emit_cuda_texture_functions(self, tmp_path):
         source_code = """
         shader TestShader {
-            fragment {
+            compute {
                 void main() {
                     sampler2D tex;
                     vec2 uv = vec2(0.5f, 0.5f);
@@ -6294,9 +6170,10 @@ class TestCudaCodeGen:
                 vec4 grad = textureGrad(tex, sampleState, uv, ddx, ddy);
             }
 
-            fragment {
-                vec4 main(VSOutput input) @ gl_FragColor {
-                    return texture(colorMap, linearSampler, input.uv);
+            compute {
+                void main() {
+                    VSOutput input;
+                    vec4 color = texture(colorMap, linearSampler, input.uv);
                 }
             }
         }
@@ -6316,7 +6193,10 @@ class TestCudaCodeGen:
         assert (
             "float4 grad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx, ddy);" in cuda_code
         )
-        assert "return tex2D<float4>(colorMap, input.uv.x, input.uv.y);" in cuda_code
+        assert (
+            "float4 color = tex2D<float4>(colorMap, input.uv.x, input.uv.y);"
+            in cuda_code
+        )
         assert "sampleState.x" not in cuda_code
         assert "linearSampler.x" not in cuda_code
         assert "texture(tex, sampleState" not in cuda_code
@@ -20533,7 +20413,7 @@ class TestCudaCodeGen:
         shader TextureSamplingBasic {
             sampler2D diffuseMap;
 
-            fragment {
+            compute {
                 void main() {
                     vec2 uv = vec2(0.25, 0.75);
                     vec4 sample = texture(diffuseMap, uv);
@@ -20561,7 +20441,7 @@ class TestCudaCodeGen:
         shader TextureLodCUDA {
             sampler2D mipMap;
 
-            fragment {
+            compute {
                 void main() {
                     vec2 uv = vec2(0.5f, 0.5f);
                     vec4 mip0 = textureLod(mipMap, uv, 0.0f);

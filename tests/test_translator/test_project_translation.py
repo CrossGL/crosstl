@@ -400,6 +400,21 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+# CUDA and HIP declare only kernels, so runtime-package fixtures for them translate this one.
+SIMPLE_COMPUTE_CROSSL = textwrap.dedent("""
+    shader RepoShader {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer vec4* positions;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                positions[i] = vec4(positions[i].xyz, 1.0);
+            }
+        }
+    }
+    """).strip()
+KERNEL_ONLY_TARGETS = frozenset({"cuda", "hip"})
+
 ENTRY_SCOPED_COMPUTE_CROSSL = textwrap.dedent("""
     shader EntryScopedCompute {
         uint selected_helper(uint value) {
@@ -20948,8 +20963,9 @@ def test_translate_project_batches_real_units_targets_and_variants(tmp_path):
     variants = ("debug", "release")
     units = ("shaders/first.cgl", "shaders/second.cgl")
     shader_dir.mkdir(parents=True)
-    (shader_dir / "first.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
-    (shader_dir / "second.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    # A kernel: CUDA and HIP declare no graphics entry points.
+    (shader_dir / "first.cgl").write_text(SIMPLE_COMPUTE_CROSSL, encoding="utf-8")
+    (shader_dir / "second.cgl").write_text(SIMPLE_COMPUTE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
         textwrap.dedent(f"""
             [project]
@@ -40763,6 +40779,8 @@ def _build_runtime_package_fixture(
     source_name="simple.cgl",
     targets=("cgl",),
 ):
+    if source is SIMPLE_CROSSL and KERNEL_ONLY_TARGETS & set(targets):
+        source = SIMPLE_COMPUTE_CROSSL
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / source_name).write_text(source, encoding="utf-8")
@@ -48817,15 +48835,18 @@ def test_translate_project_metal_half3_viewdir_lowers_to_cuda_and_hip(tmp_path):
     (repo / "apple_mesh_viewdir.metal").write_text(
         textwrap.dedent("""
             struct Camera { float4x4 invViewMatrix; };
-            struct Input { float3 position; };
             struct Output { xhalf3 viewDir; };
-
-            vertex Output main_vertex(Input in [[stage_in]],
-                                      constant Camera& camera [[buffer(0)]]) {
+            // CUDA and HIP declare only kernels, so the view direction is computed in one.
+            kernel void main_kernel(constant Camera& camera [[buffer(0)]],
+                                    device const float* positions [[buffer(1)]],
+                                    device Output* outputs [[buffer(2)]],
+                                    uint i [[thread_position_in_grid]]) {
                 Output out;
+                float3 position = float3(positions[3 * i], positions[3 * i + 1],
+                                         positions[3 * i + 2]);
                 out.viewDir =
-                    (xhalf3)normalize(camera.invViewMatrix[3].xyz - in.position);
-                return out;
+                    (xhalf3)normalize(camera.invViewMatrix[3].xyz - position);
+                outputs[i] = out;
             }
             """).strip(),
         encoding="utf-8",
@@ -56783,12 +56804,19 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
         output_dir="out",
     ).to_json()
 
-    assert payload["diagnostics"] == []
+    # CUDA and HIP declare only kernels and refuse the fragment entry.
+    assert sorted(
+        (diagnostic["code"], diagnostic["severity"])
+        for diagnostic in payload["diagnostics"]
+    ) == [
+        ("project.translate.cuda-stage-unsupported", "error"),
+        ("project.translate.hip-stage-unsupported", "error"),
+    ]
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
-        ("cuda", "translated"),
-        ("hip", "translated"),
+        ("cuda", "failed"),
+        ("hip", "failed"),
         ("mojo", "translated"),
         ("rust", "translated"),
         ("slang", "translated"),
@@ -56797,23 +56825,8 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     outputs = {
         artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
         for artifact in payload["artifacts"]
+        if artifact["status"] == "translated"
     }
-
-    cuda = outputs["cuda"]
-    assert "__device__ float4 main_fs()" in cuda
-    assert "float4 output;" in cuda
-    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in cuda
-    assert "return output;" in cuda
-    assert "main_fs(float4 output" not in cuda
-    assert "CrossGL parameter semantic: output" not in cuda
-
-    hip = outputs["hip"]
-    assert "__device__ float4 main_fs()" in hip
-    assert "float4 output;" in hip
-    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in hip
-    assert "return output;" in hip
-    assert "main_fs(float4 output" not in hip
-    assert "CrossGL parameter semantic: output" not in hip
 
     mojo = outputs["mojo"]
     assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
