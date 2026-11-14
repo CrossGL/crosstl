@@ -529,7 +529,9 @@ shader P {
 
 
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl", "wgsl"])
-def test_generic_helper_called_with_type_args_undeclared_type_is_refused(tmp_path, target):
+def test_generic_helper_called_with_type_args_undeclared_type_is_refused(
+    tmp_path, target
+):
     # The #3747 shader: twice<float> must be recognised as a call to ``twice``,
     # so its body is checked and the undeclared type ``foo`` is caught.
     path = _write(tmp_path, "generic_call.cgl", GENERIC_CALLED_WITH_TYPE_ARGS)
