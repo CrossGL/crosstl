@@ -16,9 +16,12 @@ this module follows ``fp_quantized.h`` at the pinned commit:
   or the guards after the last row, into columns the safe store never
   writes. ``simulate`` records those reads apart from the in-row ones.
 
-The ``_hgs`` instantiations pass ``fp_qmm_n_impl`` no global scale, so they
-compute exactly what the plain ones do. Named mutations show which defects
-the expectations reject.
+``fp_qmm_n``'s ``_hgs`` instantiations pass ``fp_qmm_n_impl`` no global
+scale, so they compute exactly what the plain ones do. ``fp_gather_qmm_n``'s
+pass the expert's: its loader folds ``inv_scale_enc`` into each group scale
+and rounds every dequantized weight to the element type, as
+``fp_qmm_t_model``'s does. Named mutations show which defects the
+expectations reject.
 """
 
 import math
@@ -26,8 +29,13 @@ import math
 from demos.integrations.mlx.tests.kernels import fp_qmm_t_model as fp
 from demos.integrations.mlx.tests.kernels import quantized_qmm_n_model as affine
 from demos.integrations.mlx.tests.kernels import quantized_qmm_t_model as base
-from demos.integrations.mlx.tests.kernels.fp_qmv_model import _checked, _scale_value
+from demos.integrations.mlx.tests.kernels.fp_qmv_model import (
+    _checked,
+    _inverse_scale,
+    _scale_value,
+)
 from demos.integrations.mlx.tests.kernels.test_current_quantized import _to_type
+from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import _f32
 
 BM, BN, BK, THREADS = base.BM, base.BN, base.BK, base.THREADS
 
@@ -87,7 +95,7 @@ def _load_w(context, state, loaders, rows, first_column, tiles, mutation):
     Both bound the rows only: a thread whose codes start at or past ``N``
     reads past its row.
     """
-    storage, extra = state["storage"], state["extra"]
+    storage, extra, inverse = state["storage"], state["extra"], state["inverse"]
     shape, ld, ws = context["geometry"], context["ld"], context["Ws"]
     pack_factor, reads = shape["packFactor"], shape["reads"]
     for loader in loaders:
@@ -117,9 +125,11 @@ def _load_w(context, state, loaders, rows, first_column, tiles, mutation):
             narrowed = math.inf
         if context["strict"] and not over:
             assert narrowed == scale, scale_byte
+        scale = _f32(narrowed * inverse)
+        exact = not over and not state["globalScale"]
         for i in range(reads):
             byte = fp._byte(context, storage, extra, loader["src"] + i, over)
-            weights = fp._weights(context, byte, narrowed, mutation, not over)
+            weights = fp._weights(context, byte, scale, mutation, exact)
             for j, weight in enumerate(weights):
                 tiles["Ws"].add(dst + i * pack_factor + j)
                 ws[dst + i * pack_factor + j] = weight
@@ -147,7 +157,7 @@ def _block(context, state, loaders, accumulator, x, bounds, offset, mutation):
 
 def _tile(state, context, bases, tid_x, tid_y, mutation):
     """fp_qmm_n_impl for one threadgroup."""
-    x_base, w_base, s_base, _, y_base = bases
+    x_base, w_base, s_base, expert, y_base = bases
     shape = geometry(context["bits"], context["groupSize"])
     # The fp inputs are exact in float32 but not multiples of 2^-5.
     context = {**context, "mode": state["mode"], "geometry": shape, "check": _checked}
@@ -166,6 +176,14 @@ def _tile(state, context, bases, tid_x, tid_y, mutation):
         f"rows-{'partial' if x_safe else 'whole'}/k-{'tail' if tail else 'whole'}"
         f"/n-{'partial' if columns < BN else 'whole'}"
     )
+    inverse = 1.0
+    if state["globalScale"]:
+        # The loader's constructor reads the expert's global scale.
+        inverse = _inverse_scale(context["load"]("global_scale", expert or 0))
+    folded = inverse if mutation == "fold-scale" else 1.0
+    if mutation in ("global-scale", "fold-scale"):
+        inverse = 1.0
+    state = {**state, "inverse": inverse}
     loaders = _loaders(context, wl, scales, mutation)
     accumulator = [[0.0] * BN for _ in range(BM)]
     for block in range(blocks):
@@ -180,6 +198,9 @@ def _tile(state, context, bases, tid_x, tid_y, mutation):
         if mutation == "tail-mask":
             bounds = (rows, BK, x_safe, y_col)
         _block(context, state, loaders, accumulator, x, bounds, offset, mutation)
+    if folded != 1.0:
+        cast = context["cast"]
+        context = {**context, "cast": lambda value: cast(_f32(value * folded))}
     base._store(context, accumulator, y, rows, columns, mutation)
 
 
@@ -191,7 +212,13 @@ def simulate(info, data, families, mutation=None):
     """
     storage = {name: values for name, (_, values) in data["values"].items()}
     extra = {"overreads": {"w": set(), "scales": set()}, "strides": set()}
-    state = {"storage": storage, "extra": extra, "mode": info["mode"]}
+    # fp_qmm_n_impl reads a global scale only from fp_gather_qmm_n.
+    state = {
+        "storage": storage,
+        "extra": extra,
+        "mode": info["mode"],
+        "globalScale": info["globalScale"] and info["variant"] == "gather",
+    }
 
     def tile(context, bases, tid_x, tid_y, mutation):
         _tile(state, context, bases, tid_x, tid_y, mutation)
@@ -207,6 +234,8 @@ def simulate(info, data, families, mutation=None):
     )
     if "strides" in run["records"]:
         run["records"]["strides"] = set(extra["strides"])
+    if "indices" in run["records"]:
+        run["records"]["indices"] = set(extra.get("indices", ()))
     run["overreads"] = extra["overreads"]
     return run
 

@@ -2212,11 +2212,48 @@ models that keep the activations, weight bytes or scales on the first
 partition, run every partition over all of `K` or place the partitions `N`
 outputs apart are rejected. Every target must match the model word for word
 and leave the guards untouched; on Metal the translation must also match the
-unchanged upstream kernel. The gather matrix-matrix kernels are not gated
-yet. This covers 18/17,832 entries; it does not run the upstream MLX test
-suite or redirect the MLX host runtime. The strided sum that folds the
-partitions is `reduce.metal`'s, which `contracts/reduce.current-tree.translation.json`
-pins.
+unchanged upstream kernel. This covers 18/17,832 entries; it does not run
+the upstream MLX test suite or redirect the MLX host runtime. The strided sum
+that folds the partitions is `reduce.metal`'s, which
+`contracts/reduce.current-tree.translation.json` pins.
+
+`contracts/fp_quantized_gather_qmm.current-tree.translation.json` pins a
+further 54 entries of `fp_quantized.metal` and their 162 artifacts:
+`fp_gather_qmm_t` with aligned and unaligned `N` and `fp_gather_qmm_n`, each
+without and with a global scale (`_hgs`), for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. With `M` at or above the vector limit (33 for
+transposed weights up to 2,048 by 2,048, 4 otherwise) and no sorted
+single-row batch for `gather_qmm_rhs`, `GatherQMM` dispatches them over
+`(32, 2, 2)` threadgroups and a `(ceil(N / 32), ceil(M / 32), B)` grid, the
+`_hgs` entry when the weights come with one global scale per expert, which
+`ops.cpp` admits for `nvfp4` only; the `mx` `_hgs` entries are instantiated
+and run although the host never dispatches them. Both kernels first run the
+gather `adjust_matrix_offsets`, which reads `tid.z`'s lhs and rhs indices
+through one-dimensional strides or `elem_to_loc_broadcast`, moves the
+activations, weights, scales and `y` and the global scale to the expert's,
+then `fp_qmm_t_impl` over the whole reduction or `fp_qmm_n_impl`. Unlike
+`fp_qmm_n`, `fp_gather_qmm_n` passes its global scale on, so both loaders
+fold the expert's `inv_scale_enc` into each group scale and round every
+weight to the element type. The entries run in the `fp-quantized-qmm-0` and
+`fp-quantized-qmm-1` legs with the fp qmm gates' options, each shard taking
+one of every pair of twins. The cases take the `fp_gather_qmv` gate's
+interleaved one-dimensional indices and `(2, 2)` broadcast batch with the
+`fp_qmv` inputs and reach whole and partial row and column tiles, the `nvfp4`
+tail of `fp_qmm_t_impl` alone and after a block, and the last pass of `K`
+and, for `nvfp4`, the 16-column tiles of `fp_qmm_n_impl`. The global scales
+per expert are 3,000, 10,752, 5,376 and 1,344, so `bfloat16_t` and
+`float16_t` E2M1 weights round; rounded `float` or E4M3 weights would exceed
+float32's exact sums, so those entries take 3,024, whose `inv_scale_enc` of
+1.125 is exact. The tile-level models of both implementations replay the
+gathered offsets and must reach direct dot products of the dequantized
+weights, storing every output once. Besides the fp qmm gates' mutations that
+apply, mutated models that use `tid.z` in place of the gathered indices,
+read the first expert's global scale for every expert, drop the global scale
+or apply it to the sums are rejected. Every target must match the models
+word for word and leave the guards untouched; on Metal the translation must
+also match the unchanged upstream kernel. The `gather_qmm_rhs` kernels are
+not gated yet. This covers 54/17,832 entries; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with

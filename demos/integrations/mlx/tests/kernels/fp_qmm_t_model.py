@@ -12,8 +12,9 @@ dequantizes the next row's first bytes and scale, or the guards after the
 last row; ``simulate`` records those reads apart from the in-row ones and,
 unmutated, requires the codes to decode finite, so the zeroed activations
 cancel them. Global-scale entries fold ``inv_scale_enc`` into each group scale
-and round every dequantized weight to the element type, as the loader does.
-Named mutations show which defects the expectations reject.
+and round every dequantized weight to the element type, as the loader does;
+the gather kernels read the expert's global scale after gathering their lhs
+and rhs indices. Named mutations show which defects the expectations reject.
 """
 
 import functools
@@ -213,7 +214,7 @@ def _load_x_tail(context, x, rows, num_k, k_offset, tiles, mutation):
 
 def _tile(state, context, bases, tid_x, tid_y, mutation):
     """fp_qmm_t_impl for one threadgroup."""
-    x_base, w_base, s_base, _, y_base = bases
+    x_base, w_base, s_base, expert, y_base = bases
     shape = geometry(context["bits"], context["groupSize"])
     # The fp inputs are exact in float32 but not multiples of 2^-5.
     context = {**context, "mode": state["mode"], "geometry": shape, "check": _checked}
@@ -235,8 +236,9 @@ def _tile(state, context, bases, tid_x, tid_y, mutation):
     )
     inverse = 1.0
     if state["globalScale"]:
-        # The loader's constructor: *global_scale / (F8E4M3_MAX * F4E2M1_MAX).
-        inverse = _inverse_scale(context["load"]("global_scale", 0))
+        # The loader's constructor: *global_scale / (F8E4M3_MAX * F4E2M1_MAX),
+        # the gather overload's global_scale moved to the expert's.
+        inverse = _inverse_scale(context["load"]("global_scale", expert or 0))
     folded = inverse if mutation == "fold-scale" else 1.0
     if mutation in ("global-scale", "fold-scale"):
         inverse = 1.0
@@ -276,21 +278,43 @@ def _tile(state, context, bases, tid_x, tid_y, mutation):
 
 
 def _offsets(info, extra):
-    """fp adjust_matrix_offsets' x, w word, scale and y offsets for ``tid.z``."""
+    """fp adjust_matrix_offsets' x, w word, scale and y offsets for ``tid.z``.
+
+    The gather overload first reads ``tid.z``'s lhs and rhs indices, which
+    ``extra["indices"]`` collects, and moves ``global_scale`` to the expert's:
+    its index takes the bias slot of the offsets. The ``indices`` mutation
+    takes ``tid.z`` itself, as the batched overload does.
+    """
 
     def offsets(storage, z, mutation):
         if info["variant"] == "batch_0":
             return 0, 0, 0, None, 0
         view = {**storage, "out_vec_size": storage["N"]}
-        x_base, w_base, s_base, _, y_base = _adjust(info, view, z, mutation, [])
+        variant = info["variant"]
+        if variant == "gather" and mutation == "indices":
+            variant = "batch_1"
+        records = []
+        x_base, w_base, s_base, expert, y_base = _adjust(
+            {**info, "variant": variant}, view, z, mutation, records
+        )
+        extra.setdefault("indices", set()).update(
+            (buffer, index)
+            for _, buffer, index in records
+            if buffer in ("lhs_indices", "rhs_indices")
+        )
         # adjust_matrix_offsets reads each batch dimension's stride.
-        for name, ndims in (
+        strides = [
             ("x_strides", "x_batch_ndims"),
             ("w_strides", "w_batch_ndims"),
             ("s_strides", "w_batch_ndims"),
-        ):
+        ]
+        if variant == "gather":
+            strides += [
+                (name, "batch_ndims") for name in ("lhs_strides", "rhs_strides")
+            ]
+        for name, ndims in strides:
             extra["strides"].update((name, axis) for axis in range(storage[ndims][0]))
-        return x_base, w_base, s_base, None, y_base
+        return x_base, w_base, s_base, expert if variant == "gather" else None, y_base
 
     return offsets
 
@@ -325,6 +349,8 @@ def simulate(info, data, families, mutation=None, offsets=None, tile=None):
     )
     if "strides" in run["records"]:
         run["records"]["strides"] = set(extra["strides"])
+    if "indices" in run["records"]:
+        run["records"]["indices"] = set(extra.get("indices", ()))
     run["overreads"] = extra["overreads"]
     return run
 

@@ -7784,9 +7784,10 @@ jobs:
 
       # fp_quantized.metal's 38 fp_qmm_t entries, aligned and unaligned N,
       # with and without batching, and the two with a global scale, its 36
-      # fp_qmm_n entries, with and without batching and their _hgs twins, and
-      # its 18 fp_qmm_t_splitk entries, aligned and unaligned N, in two
-      # shards.
+      # fp_qmm_n entries, with and without batching and their _hgs twins, its
+      # 18 fp_qmm_t_splitk entries, aligned and unaligned N, and its 54
+      # fp_gather_qmm_t and fp_gather_qmm_n entries with their _hgs twins, in
+      # two shards.
       - name: Prove current MLX fp quantized matrix-matrix native parity
         if: matrix.family == 'fp-quantized-qmm'
         shell: bash
@@ -7817,7 +7818,8 @@ jobs:
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_t.py \
               demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_n.py \
-              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_t_splitk.py
+              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_t_splitk.py \
+              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_gather_qmm.py
 
       # quantized.metal's 54 affine_qmv_fast entries with batching, 54 without
       # and 54 affine_gather_qmv_fast entries, in two shards.
