@@ -1,6 +1,7 @@
 """Shared image access analysis and metadata helpers for code generators."""
 
 from ..ast import FunctionCallNode
+from ..refusals import TargetRefusal
 from ..validation import (
     floating_coordinate_dimension,
     integer_coordinate_dimension,
@@ -383,7 +384,7 @@ def validate_texture_operation_arity(
         has_explicit_sampler,
     )
     if min_count is not None and argument_count < min_count:
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' requires at least "
             f"{min_count} argument(s), got {argument_count}"
         )
@@ -393,7 +394,7 @@ def validate_texture_operation_arity(
     )
     if allowed_counts is not None and argument_count not in allowed_counts:
         counts = ", ".join(str(count) for count in allowed_counts)
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' accepts "
             f"{counts} argument(s), got {argument_count}"
         )
@@ -403,7 +404,7 @@ def validate_texture_operation_arity(
     )
     if max_count is None or argument_count <= max_count:
         return
-    raise ValueError(
+    raise TargetRefusal(
         f"{backend_name} texture operation '{operation}' accepts at most "
         f"{max_count} argument(s), got {argument_count}"
     )
@@ -681,7 +682,7 @@ def resolve_image_atomic_component_kind(
             func_name, image_format
         )
         if component_kind is None:
-            raise ValueError(
+            raise TargetRefusal(
                 image_atomic_format_error(backend_name, func_name, image_format)
             )
         return component_kind
@@ -689,7 +690,7 @@ def resolve_image_atomic_component_kind(
     component_kind = image_atomic_storage_component_kind(func_name, component_type)
     if component_kind is not None:
         return component_kind
-    raise ValueError(
+    raise TargetRefusal(
         image_atomic_resource_type_error(backend_name, func_name, resource_type)
     )
 
@@ -2637,14 +2638,14 @@ def image_multisample_sample_argument_index(
     if func_name == "imageLoad":
         if is_multisample_image:
             if argument_count != 3:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image operation 'imageLoad' "
                     "requires image, coordinate, and sample index arguments, "
                     f"got {argument_count}"
                 )
             return 2
         if argument_count > 2:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation 'imageLoad' accepts at most "
                 f"2 argument(s), got {argument_count}"
             )
@@ -2653,14 +2654,14 @@ def image_multisample_sample_argument_index(
     if func_name == "imageStore":
         if is_multisample_image:
             if argument_count != 4:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image operation 'imageStore' "
                     "requires image, coordinate, sample index, and value "
                     f"arguments, got {argument_count}"
                 )
             return 2
         if argument_count > 3:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation 'imageStore' accepts at most "
                 f"3 argument(s), got {argument_count}"
             )
@@ -2669,14 +2670,14 @@ def image_multisample_sample_argument_index(
     if func_name in IMAGE_ATOMIC_VALUE_INTRINSIC_NAMES:
         if is_multisample_image:
             if argument_count != 4:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{backend_name} multisample image atomic operation "
                     f"'{func_name}' requires image, coordinate, sample index, "
                     f"and value arguments, got {argument_count}"
                 )
             return 2
         if argument_count > 3:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} texture operation '{func_name}' accepts at "
                 f"most 3 argument(s), got {argument_count}"
             )
@@ -2684,14 +2685,14 @@ def image_multisample_sample_argument_index(
 
     if is_multisample_image:
         if argument_count != 5:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{backend_name} multisample image atomic operation "
                 "'imageAtomicCompSwap' requires image, coordinate, sample "
                 f"index, compare, and value arguments, got {argument_count}"
             )
         return 2
     if argument_count > 4:
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation 'imageAtomicCompSwap' accepts at "
             f"most 4 argument(s), got {argument_count}"
         )

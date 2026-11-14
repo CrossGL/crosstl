@@ -20,6 +20,7 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from ..refusals import TargetRefusal
 
 
 def split_array_suffix(array_suffix):
@@ -182,7 +183,7 @@ def collect_resource_array_size_hints(
     def assert_not_larger_than_known_fixed(name, fixed_size, required_size):
         """Raise when inferred usage exceeds a known fixed array size."""
         if required_size > fixed_size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{name}': {fixed_size} and {required_size}"
             )
@@ -2225,12 +2226,12 @@ def collect_resource_array_size_hints(
             return
         existing = fixed_requirements.get(scope_key)
         if existing is not None and existing != size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {existing} and {size}"
             )
         if current_size and current_size > size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {current_size} and {size}"
             )
@@ -2240,7 +2241,7 @@ def collect_resource_array_size_hints(
         """Raise when propagated usage exceeds a fixed array requirement."""
         fixed_size = fixed_requirements.get(scope_key)
         if fixed_size is not None and required_size > fixed_size:
-            raise ValueError(
+            raise TargetRefusal(
                 "Conflicting fixed resource array sizes for "
                 f"'{scope_key[-1]}': {fixed_size} and {required_size}"
             )
@@ -2286,7 +2287,7 @@ def collect_resource_array_size_hints(
                         arg_size = fixed_global_array_sizes[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2297,7 +2298,7 @@ def collect_resource_array_size_hints(
                         arg_size = caller_fixed_hints[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2305,7 +2306,7 @@ def collect_resource_array_size_hints(
                         arg_size = caller_local_fixed_hints[arg_name]
                         arg_is_fixed = True
                         if fixed_size is not None and arg_size != fixed_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
@@ -2317,13 +2318,13 @@ def collect_resource_array_size_hints(
                         parameter_key = (callee_name, callee_param_name)
                         existing_size = fixed_local_parameter_sizes.get(parameter_key)
                         if existing_size is not None and existing_size != arg_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Conflicting fixed local array sizes for private "
                                 f"pointer parameter '{callee_name}.{callee_param_name}': "
                                 f"{existing_size} and {arg_size}"
                             )
                         if callee_param_hints[callee_param_name] > arg_size:
-                            raise ValueError(
+                            raise TargetRefusal(
                                 "Private pointer parameter "
                                 f"'{callee_name}.{callee_param_name}' requires at least "
                                 f"{callee_param_hints[callee_param_name]} elements, but "
@@ -2366,7 +2367,7 @@ def collect_resource_array_size_hints(
                         and arg_size
                         and required_size > arg_size
                     ):
-                        raise ValueError(
+                        raise TargetRefusal(
                             "Conflicting fixed resource array sizes for "
                             f"'{arg_name}': {arg_size} and {required_size}"
                         )

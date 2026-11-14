@@ -45,7 +45,7 @@ SHADER_SCOPE_PROGRAM = textwrap.dedent("""
 def parse_strict(code):
     lexer = Lexer(code)
     lexer.tokenize()
-    return Parser(lexer.tokens, strict_function_bodies=True).parse()
+    return Parser(lexer.tokens).parse()
 
 
 def test_untyped_var_declaration_preserves_function_body():

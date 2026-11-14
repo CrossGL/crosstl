@@ -58,7 +58,7 @@ def translate(tmp_path, text, backend):
 
 
 def function_body(program, name="main"):
-    ast = Parser(Lexer(program).tokens, strict_function_bodies=True).parse()
+    ast = Parser(Lexer(program).tokens).parse()
     for stage in ast.stages.values():
         entry = getattr(stage, "entry_point", None)
         if entry is not None and entry.name == name:

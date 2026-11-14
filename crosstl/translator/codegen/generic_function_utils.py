@@ -27,6 +27,7 @@ from ..explicit_specializations import (
     explicit_specialization_for,
     explicit_specialization_index,
 )
+from ..refusals import TargetRefusal
 from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
 from ..semantics.declared_types import declared_type_names
 from .builtin_result_types import swizzle_access_type
@@ -391,7 +392,7 @@ def reject_unsupported_generic_functions(
         ):
             continue
         suffix = f" ({', '.join(generic_params)})" if generic_params else ""
-        raise ValueError(
+        raise TargetRefusal(
             f"{target_name} codegen does not support generic functions{suffix}; "
             f"specialize the function before {target_name} generation"
         )
@@ -508,7 +509,7 @@ def raise_unresolved_generic_function_call(generator, func_name, target_name):
     func = candidates[0]
     generic_params = generic_function_parameters(func)
     suffix = f" ({', '.join(generic_params)})" if generic_params else ""
-    raise ValueError(
+    raise TargetRefusal(
         f"{target_name} codegen cannot infer concrete template arguments for "
         f"generic function '{func_name}'{suffix}; specialize the function before "
         f"{target_name} generation"

@@ -59,6 +59,7 @@ from ..math_namespaces import (
     METAL_PRECISE_MATH_FUNCTIONS,
 )
 from ..matrix_shape import length_method_object
+from ..refusals import MetalRefusal
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
@@ -3705,7 +3706,7 @@ class MetalCodeGen(
             name = getattr(node, "name", getattr(node, "variable_name", None))
             previous_name = used_function_constant_ids.get(function_constant_id)
             if previous_name is not None:
-                raise ValueError(
+                raise MetalRefusal(
                     "Duplicate Metal function constant id "
                     f"{function_constant_id} for '{name}' and '{previous_name}'"
                 )
@@ -3784,7 +3785,7 @@ class MetalCodeGen(
                 name = getattr(
                     node, "name", getattr(node, "variable_name", "<unnamed>")
                 )
-                raise ValueError(
+                raise MetalRefusal(
                     "Conflicting Metal specialization constant ids for "
                     f"'{name}': {constant_id} differs from {value}"
                 )
@@ -3810,7 +3811,7 @@ class MetalCodeGen(
 
         name = getattr(node, "name", getattr(node, "variable_name", None))
         if len(attributes) > 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal function constant '{name}' has multiple function constant "
                 "attributes"
             )
@@ -3820,7 +3821,9 @@ class MetalCodeGen(
             self.binding_index_value(arguments[0]) if len(arguments) == 1 else None
         )
         if function_constant_id is None:
-            raise ValueError(f"Metal function constant '{name}' requires an integer id")
+            raise MetalRefusal(
+                f"Metal function constant '{name}' requires an integer id"
+            )
         return function_constant_id
 
     def validate_metal_function_constant_type(self, node, var_type):
@@ -3836,12 +3839,12 @@ class MetalCodeGen(
             or "&" in mapped_type
         )
         if invalid:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal function constant '{name}' cannot use type '{type_name}'"
             )
 
         if not self.is_metal_function_constant_value_type(mapped_type):
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal function constant '{name}' cannot use type '{type_name}'"
             )
 
@@ -4105,7 +4108,7 @@ class MetalCodeGen(
             if attr_name not in {"buffer", "id", "argument_buffer"}:
                 continue
             if attr_name in seen_attributes:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal argument buffer global '{name}' has multiple "
                     f"{attr_name} attributes"
                 )
@@ -4119,7 +4122,7 @@ class MetalCodeGen(
                     else None
                 )
                 if attr_value is None:
-                    raise ValueError(
+                    raise MetalRefusal(
                         f"Metal argument buffer global '{name}' requires an "
                         f"integer {attr_name} attribute"
                     )
@@ -4128,7 +4131,7 @@ class MetalCodeGen(
                 attributes.append("[[argument_buffer]]")
 
         if "buffer" not in seen_attributes:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal argument buffer global '{name}' requires a buffer attribute"
             )
 
@@ -4154,7 +4157,7 @@ class MetalCodeGen(
             attr_name = self.normalized_metal_abi_attribute_name(attr)
 
             if attr_name in seen_attributes:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal struct member '{member_name}' has multiple {attr_name} "
                     "attributes"
                 )
@@ -4167,7 +4170,7 @@ class MetalCodeGen(
                     else None
                 )
                 if member_id is None:
-                    raise ValueError(
+                    raise MetalRefusal(
                         f"Metal struct member '{member_name}' requires an integer id"
                     )
                 attributes.append(f"[[id({member_id})]]")
@@ -4302,19 +4305,19 @@ class MetalCodeGen(
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
-            raise ValueError(f"Duplicate cbuffer name(s) in Metal output: {names}")
+            raise MetalRefusal(f"Duplicate cbuffer name(s) in Metal output: {names}")
 
         declaration_conflicts = collect_cbuffer_declaration_name_conflicts(ast)
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
-            raise ValueError(
+            raise MetalRefusal(
                 f"Cbuffer name(s) conflict with existing Metal declaration(s): {names}"
             )
 
         global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
         if global_member_conflicts:
             names = ", ".join(sorted(global_member_conflicts))
-            raise ValueError(
+            raise MetalRefusal(
                 "Cbuffer member name(s) conflict with Metal global declaration(s): "
                 f"{names}"
             )
@@ -5200,7 +5203,7 @@ class MetalCodeGen(
         base, suffix = split_array_type_suffix(str(type_text))
         match = self.METAL_PACKED_VECTOR_RE.fullmatch(base.strip())
         if match is None:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal struct member '{getattr(member, 'name', '?')}' is marked packed, but {type_text} has no "
                 "packed vector form"
             )
@@ -6080,7 +6083,7 @@ class MetalCodeGen(
                 # value semantics of a source ``metal::array`` result.
                 return_type = self.metal_value_array_type(raw_return_type)
                 if return_type is None:
-                    raise ValueError(
+                    raise MetalRefusal(
                         "Metal output does not support unsized C-style array "
                         "return types; wrap the array in a struct or use an "
                         "output parameter"
@@ -7037,7 +7040,7 @@ class MetalCodeGen(
                     if len(expected_values) == 1
                     else "one of " + ", ".join(expected_values)
                 )
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal compute semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and requires parameter '{name}' to "
                     f"have type {expected_label}, got {actual_type}"
@@ -7470,7 +7473,7 @@ class MetalCodeGen(
                 continue
             semantic = self.semantic_from_node(parameter)
             if stage_name == "fragment" and str(semantic) == "gl_SampleMask":
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal fragment stage gl_SampleMask parameter is output-only; "
                     "use gl_SampleMaskIn or sample_mask for coverage-mask input"
                 )
@@ -7488,7 +7491,7 @@ class MetalCodeGen(
                 continue
             if actual_type != expected_type:
                 name = getattr(parameter, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal {stage_name} semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and requires parameter '{name}' to "
                     f"have type {expected_type}, got {actual_type}"
@@ -7826,7 +7829,7 @@ class MetalCodeGen(
         """
         function_name = getattr(func, "name", "<anonymous>")
         if str(raw_return_type) in self.structs_by_name:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {shader_type} function '{function_name}' cannot combine "
                 "output parameters with a structure return type; MSL stage outputs "
                 "are the members of one returned structure"
@@ -7873,7 +7876,7 @@ class MetalCodeGen(
             if expected_type == "invalid":
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal struct '{struct_name}' semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and is not supported"
                 )
@@ -7886,7 +7889,7 @@ class MetalCodeGen(
             if actual_type != expected_type and not color_value:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal struct '{struct_name}' semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and requires member '{member_name}' to "
                     f"have type {expected_type}, got {actual_type}"
@@ -8017,7 +8020,7 @@ class MetalCodeGen(
         semantic = self.function_return_semantic(func)
         if semantic is not None and self.map_type(raw_return_type) == "void":
             function_name = getattr(func, "name", "<anonymous>")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {stage_name} function '{function_name}' cannot use "
                 f"return semantic '{semantic}' with void return type"
             )
@@ -8034,7 +8037,7 @@ class MetalCodeGen(
         if expected_type is None:
             return
         if expected_type == "invalid":
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {stage_name} semantic '{semantic}' cannot be used as a "
                 "function return semantic"
             )
@@ -8046,7 +8049,7 @@ class MetalCodeGen(
         )
         if actual_type != expected_type and not color_value:
             function_name = getattr(func, "name", "<anonymous>")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {stage_name} return semantic '{semantic}' maps to "
                 f"'{metal_semantic}' and requires function '{function_name}' "
                 f"to return {expected_type}, got {actual_type}"
@@ -8070,12 +8073,12 @@ class MetalCodeGen(
         is_vertex_output = semantic_text == "gl_Position"
 
         if stage_name == "vertex" and is_fragment_output:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal vertex stage function return cannot use fragment output "
                 f"semantic '{semantic}'"
             )
         if stage_name == "fragment" and is_vertex_output:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal fragment stage function return cannot use vertex output "
                 f"semantic '{semantic}'"
             )
@@ -9069,7 +9072,7 @@ class MetalCodeGen(
         )
         initial_compat_type = self.local_resource_alias_compatibility_type(initial_type)
         if declared_compat_type != initial_compat_type:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal local resource alias '{alias_name}' declares "
                 f"{declared_type_name} but initializer has {initial_type}"
             )
@@ -9078,7 +9081,7 @@ class MetalCodeGen(
         if declared_access is not None:
             initial_access = self.storage_image_access_mode(initial_type)
             if initial_access is not None and declared_access != initial_access:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal local resource alias '{alias_name}' declares "
                     f"access::{declared_access} but initializer has "
                     f"access::{initial_access}"
@@ -9090,7 +9093,7 @@ class MetalCodeGen(
                 getattr(node, "initial_value", None)
             )
             if initial_format is not None and declared_format != initial_format:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal local resource alias '{alias_name}' declares "
                     f"format {declared_format} but initializer has {initial_format}"
                 )
@@ -9203,7 +9206,7 @@ class MetalCodeGen(
             )
             if declared_resource_type != initial_type:
                 alias_name = getattr(node, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal local acceleration structure alias '{alias_name}' "
                     f"declares {declared_type_name} but initializer has "
                     f"{initial_type}"
@@ -11995,7 +11998,7 @@ class MetalCodeGen(
         if isinstance(else_branch, IfNode):
             nested = self.generate_if(else_branch, indent)
             if not nested.startswith(f"{indent_str}if ("):
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal else-if chain did not render as an if statement"
                 )
             return code + " else " + nested[len(indent_str) :]
@@ -12473,7 +12476,7 @@ class MetalCodeGen(
             return None
         template = entry[1]
         if len(args) != 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {func_name} alias requires 1 argument; got {len(args)}"
             )
         return template.format(value=self.generate_expression(args[0]))
@@ -12516,7 +12519,7 @@ class MetalCodeGen(
                 name not in self.local_variable_types
                 and name in self.ambiguous_cbuffer_members
             ):
-                raise ValueError(
+                raise MetalRefusal(
                     f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
                 )
             if (
@@ -13708,7 +13711,7 @@ class MetalCodeGen(
                 name not in self.local_variable_types
                 and name in self.ambiguous_cbuffer_members
             ):
-                raise ValueError(
+                raise MetalRefusal(
                     f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
                 )
             if (
@@ -13988,7 +13991,7 @@ class MetalCodeGen(
                 packed_roles.append(f"target {packed_target}")
             if packed_source is not None:
                 packed_roles.append(f"source {packed_source}")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal as_type<{target_type}> cannot preserve packed vector "
                 f"storage for {', '.join(packed_roles)}"
             )
@@ -13996,13 +13999,13 @@ class MetalCodeGen(
         source_info = self.metal_explicit_bitcast_type_info(source_value_type)
         if target_info is None or source_info is None:
             source_display = self.type_name_string(source_type) or "<unknown>"
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal as_type<{target_type}> requires statically known numeric "
                 f"scalar or vector storage types; inferred source type is "
                 f"{source_display}"
             )
         if target_info["totalWidth"] != source_info["totalWidth"]:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal as_type<{target_info['type']}> cannot bitcast from "
                 f"{source_info['type']}: total widths are "
                 f"{target_info['totalWidth']} and {source_info['totalWidth']} bits"
@@ -15583,7 +15586,7 @@ class MetalCodeGen(
         for parameter in parameters:
             parameter_name = getattr(parameter, "name", "<unnamed>")
             if self.metal_ray_semantic_role(parameter, shader_type) == "ray":
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal ray_generation parameter '{parameter_name}' cannot "
                     "use @ray; construct Metal ray values inside the kernel"
                 )
@@ -15592,7 +15595,7 @@ class MetalCodeGen(
             if not self.is_plain_metal_ray_value_parameter_type(raw_type):
                 continue
             type_name = self.type_name_string(raw_type) or str(raw_type)
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal ray_generation parameter '{parameter_name}' has "
                 f"unsupported ray value type '{type_name}'; construct ray "
                 "values inside the kernel or pass data through an explicitly "
@@ -15613,7 +15616,7 @@ class MetalCodeGen(
                 ):
                     continue
                 parameter_name = getattr(parameter, "name", "<unnamed>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal ray_intersection parameter '{parameter_name}' is not "
                     "a supported intersection parameter; use @payload, a Metal "
                     "intersection builtin semantic, or an explicitly bound "
@@ -15621,7 +15624,7 @@ class MetalCodeGen(
                 )
                 continue
             parameter_name = getattr(parameter, "name", "<unnamed>")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal ray_intersection parameter '{parameter_name}' cannot use "
                 "@ray; Metal intersection functions do not accept ray input "
                 "parameters"
@@ -15689,7 +15692,7 @@ class MetalCodeGen(
         if self.map_type(raw_return_type) == "void":
             return
         function_name = getattr(func, "name", "<entry>")
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal {shader_type} entry point '{function_name}' must return void; "
             "kernel functions cannot return values"
         )
@@ -15703,7 +15706,7 @@ class MetalCodeGen(
             if shader_type in allowed_stages:
                 continue
             parameter_name = getattr(parameter, "name", "<unnamed>")
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal @hit_attribute parameter "
                 f"'{parameter_name}' is only valid on any-hit or closest-hit stages"
             )
@@ -15728,11 +15731,11 @@ class MetalCodeGen(
             return
         if members is None:
             if primitive_type == "triangle":
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal triangle intersection stage must return bool or a "
                     "result struct"
                 )
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal "
                 f"{primitive_type} intersection stage must return a result struct"
             )
@@ -15769,7 +15772,7 @@ class MetalCodeGen(
             if self.map_type(member_type) == expected_type:
                 return
 
-        raise ValueError(
+        raise MetalRefusal(
             "Metal "
             f"{primitive_type} intersection result '{raw_return_type}' requires "
             f"a {expected_type} @{role} member"
@@ -16400,7 +16403,7 @@ class MetalCodeGen(
 
     def unsupported_metal_buffer_resource_atomic_call(self, func_name, target, reason):
         if func_name in {"atomicLoad", "atomicStore", "atomicCompareExchangeWeak"}:
-            raise ValueError(f"Metal {func_name} {reason}")
+            raise MetalRefusal(f"Metal {func_name} {reason}")
         return_type = (
             self.expression_result_type(target) or self.current_expression_expected_type
         )
@@ -16415,7 +16418,7 @@ class MetalCodeGen(
             None,
             "thread",
         }:
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal atomicCompareExchangeWeak requires matching thread expected storage"
             )
         expected = self.generate_expression(args[1])
@@ -17404,14 +17407,14 @@ class MetalCodeGen(
         explicit_spaces = qualifiers & {"constant", "device"}
         if len(explicit_spaces) > 1:
             name = getattr(node, "name", "<anonymous>")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal structured buffer '{name}' has conflicting address-space "
                 f"metadata: {', '.join(sorted(explicit_spaces))}"
             )
         if "constant" in explicit_spaces:
             if self.structured_buffer_type_name(vtype) != "StructuredBuffer":
                 name = getattr(node, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     f"Writable Metal structured buffer '{name}' cannot use the "
                     "constant address space"
                 )
@@ -17824,17 +17827,17 @@ class MetalCodeGen(
             return ""
         name = getattr(node, "name", "<anonymous>")
         if len(attributes) != 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal parameter '{name}' has multiple function constant conditions"
             )
         arguments = getattr(attributes[0], "arguments", []) or []
         if len(arguments) != 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal parameter '{name}' requires one function constant condition"
             )
         condition = self.attribute_value_to_string(arguments[0])
         if not condition:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal parameter '{name}' requires a function constant condition"
             )
         return f" [[function_constant({condition})]]"
@@ -18197,7 +18200,7 @@ class MetalCodeGen(
             return
 
         type_name = self.type_name_string(raw_param_type) or str(raw_param_type)
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal ray tracing resource parameter '{name}' has pointer or "
             f"reference type '{type_name}' for {resource_kind}; Metal ray "
             "tracing resources must be passed by value without address-space "
@@ -18388,7 +18391,7 @@ class MetalCodeGen(
         address_spaces = list(dict.fromkeys(address_spaces))
         if len(address_spaces) > 1:
             name = getattr(node, "name", "<anonymous>")
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal parameter '{name}' has conflicting address-space qualifiers: "
                 f"{', '.join(sorted(qualifiers))}"
             )
@@ -18511,7 +18514,7 @@ class MetalCodeGen(
             if kind == "coherent" and scope is not None:
                 if scope not in {"threadgroup", "device", "system"}:
                     name = getattr(node, "name", "<anonymous>")
-                    raise ValueError(
+                    raise MetalRefusal(
                         f"Metal resource '{name}' has unsupported coherence scope "
                         f"'{scope}'"
                     )
@@ -20207,7 +20210,7 @@ class MetalCodeGen(
         )
         if stage_keyword == "object" and grid_limit:
             if len(grid_limit) != 1:
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal object stage max_total_threadgroups_per_mesh_grid requires exactly one argument"
                 )
             attributes.append(
@@ -20254,7 +20257,7 @@ class MetalCodeGen(
         )
         if arguments:
             if len(arguments) != 1:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal {shader_type} stage max_total_threads_per_threadgroup "
                     "requires exactly one argument"
                 )
@@ -20334,7 +20337,7 @@ class MetalCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal tessellation stage attribute {attribute_name} requires "
                 "exactly one argument"
             )
@@ -20356,7 +20359,7 @@ class MetalCodeGen(
         }
         mapped = domain_map.get(domain_name)
         if mapped is None:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal tessellation domain cannot be represented: {value}"
             )
         return mapped
@@ -20383,7 +20386,7 @@ class MetalCodeGen(
                 break
 
             if array_suffix or not is_floating_type:
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal tessellation_evaluation stage SV_DomainLocation "
                     f"parameter '{parameter.name}' must be a floating-point "
                     "scalar or vector"
@@ -20408,7 +20411,7 @@ class MetalCodeGen(
             if component_count is None:
                 continue
             if component_count != expected_count:
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal tessellation_evaluation stage SV_DomainLocation "
                     f"parameter '{parameter.name}' must have {expected_count} "
                     f"component(s) for {domain} domains, got {component_count}"
@@ -20427,7 +20430,7 @@ class MetalCodeGen(
             if base_type is None:
                 continue
             if array_suffix or base_type not in {"int", "uint"}:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal {shader_type} stage {semantic} parameter "
                     f"'{parameter.name}' must be scalar int or uint"
                 )
@@ -20533,14 +20536,14 @@ class MetalCodeGen(
         missing_roles = {"vertices", "indices"} - set(role_parameters)
         if missing_roles:
             missing = ", ".join(sorted(missing_roles))
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal mesh output parameters require explicit "
                 f"{missing} output role(s)"
             )
 
         topology = self.metal_single_stage_attribute_argument(func, "outputtopology")
         if not topology:
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal mesh output parameters require an outputtopology attribute"
             )
         topology = self.metal_mesh_topology(topology)
@@ -20557,7 +20560,7 @@ class MetalCodeGen(
                 role_parameters["primitives"], "primitives"
             )
             if primitives["count"] != indices["count"]:
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal mesh primitives output count must match indices output count"
                 )
 
@@ -20596,7 +20599,7 @@ class MetalCodeGen(
             if role is None:
                 continue
             if role in role_parameters:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal mesh output role '{role}' can be used by only one parameter"
                 )
             role_parameters[role] = parameter
@@ -20632,7 +20635,7 @@ class MetalCodeGen(
             count = self.metal_mesh_output_array_suffix_size(array_suffix)
 
         if not element_type or count is None:
-            raise ValueError(f"Metal mesh {role} output must be a fixed-size array")
+            raise MetalRefusal(f"Metal mesh {role} output must be a fixed-size array")
         return {
             "name": parameter.name,
             "element_type": element_type,
@@ -20659,7 +20662,7 @@ class MetalCodeGen(
         expected_type = "uint" if expected_width == 1 else f"uint{expected_width}"
         actual_type = indices["element_type"]
         if actual_type != expected_type:
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal mesh indices output for "
                 f"{topology} topology requires {expected_type}, got {actual_type}"
             )
@@ -20989,7 +20992,7 @@ class MetalCodeGen(
         if not isinstance(expr, MeshOpNode) or expr.operation != "SetMeshOutputCounts":
             return None
         if len(expr.arguments) != 2:
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal mesh SetMeshOutputCounts requires exactly 2 arguments"
             )
 
@@ -21021,7 +21024,7 @@ class MetalCodeGen(
         if declared is None:
             return
         if value > declared:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh SetMeshOutputCounts {label} argument "
                 f"({value}) cannot exceed declared output count ({declared})"
             )
@@ -21037,7 +21040,7 @@ class MetalCodeGen(
         role = target_info["role"]
         name = target_info["name"]
         if not set_counts_seen:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output array '{name}' must be written only after "
                 "SetMeshOutputCounts"
             )
@@ -21052,7 +21055,7 @@ class MetalCodeGen(
             target_info["output"]["count"]
         )
         if declared_bound is not None and index_value >= declared_bound:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh {role} output array '{name}' index ({index_value}) "
                 f"must be less than declared array size ({declared_bound})"
             )
@@ -21065,7 +21068,7 @@ class MetalCodeGen(
                 else set_counts.get("primitives")
             )
         if active_bound is not None and index_value >= active_bound:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh {role} output array '{name}' index ({index_value}) "
                 f"must be less than SetMeshOutputCounts "
                 f"{'numVertices' if role == 'vertices' else 'numPrimitives'} "
@@ -21092,12 +21095,12 @@ class MetalCodeGen(
 
         args = getattr(call, "arguments", getattr(call, "args", []))
         if len(args) != 2:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
             )
 
         if not set_counts_seen:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' must be called only after "
                 "SetMeshOutputCounts"
             )
@@ -21112,7 +21115,7 @@ class MetalCodeGen(
             mesh_output.get(declared_key)
         )
         if declared_bound is not None and index_value >= declared_bound:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' index ({index_value}) "
                 f"must be less than declared output count ({declared_bound})"
             )
@@ -21121,7 +21124,7 @@ class MetalCodeGen(
         if set_counts is not None:
             active_bound = set_counts.get(role)
         if active_bound is not None and index_value >= active_bound:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' index ({index_value}) "
                 f"must be less than SetMeshOutputCounts {active_label} "
                 f"({active_bound})"
@@ -21133,12 +21136,12 @@ class MetalCodeGen(
         func_name = self.function_call_name(call)
         args = getattr(call, "arguments", getattr(call, "args", []))
         if len(args) != 2:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
             )
 
         if not set_counts_seen:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' must be called only after "
                 "SetMeshOutputCounts"
             )
@@ -21186,12 +21189,12 @@ class MetalCodeGen(
     ):
         last_index = index_value + write_width - 1
         if index_value < 0:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' index ({index_value}) "
                 "must be non-negative"
             )
         if last_index >= flattened_bound:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output helper '{func_name}' index range "
                 f"[{index_value}, {last_index}] must be less than "
                 f"{bound_label} ({flattened_bound})"
@@ -21282,7 +21285,7 @@ class MetalCodeGen(
             and expected_payload_type is not None
             and dispatch_payload_type != expected_payload_type
         ):
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal DispatchMesh payload type "
                 f"'{dispatch_payload_type}' must match mesh payload type "
                 f"'{expected_payload_type}'"
@@ -21290,7 +21293,7 @@ class MetalCodeGen(
 
         payload_type = expected_payload_type or dispatch_payload_type
         if payload_type is None:
-            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+            raise MetalRefusal("Metal DispatchMesh payload argument type is unknown")
         context["payload"] = True
         context["payload_type"] = payload_type
         return context
@@ -21313,7 +21316,7 @@ class MetalCodeGen(
                 and called_payload_type
                 and payload_type != called_payload_type
             ):
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal mesh dispatch helper payload type mismatch: "
                     f"'{func_name}' calls '{called_name}' requiring "
                     f"'{called_payload_type}' but already requires '{payload_type}'"
@@ -21422,7 +21425,7 @@ class MetalCodeGen(
 
         if len(payload_types) > 1:
             expected = ", ".join(sorted(payload_types))
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal mesh stages in one pipeline must use one mesh payload type; "
                 f"got {expected}"
             )
@@ -21453,7 +21456,7 @@ class MetalCodeGen(
                     continue
                 func_name = getattr(func, "name", "<anonymous>")
                 param_name = getattr(parameter, "name", "<anonymous>")
-                raise ValueError(
+                raise MetalRefusal(
                     "Metal mesh payload parameters are only supported on "
                     "object, task, amplification, or mesh stage entry points; "
                     f"function '{func_name}' parameter '{param_name}' declares "
@@ -21470,7 +21473,7 @@ class MetalCodeGen(
             return
 
         param_name = getattr(parameter, "name", "<anonymous>")
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal mesh payload parameter '{param_name}' on {stage_name} stage "
             f"uses {address_space} address space; mesh payload parameters "
             "require object_data"
@@ -21494,7 +21497,7 @@ class MetalCodeGen(
             and expected_payload_type is not None
             and dispatch_payload_type != expected_payload_type
         ):
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal DispatchMesh payload type "
                 f"'{dispatch_payload_type}' must match mesh payload type "
                 f"'{expected_payload_type}'"
@@ -21502,7 +21505,7 @@ class MetalCodeGen(
 
         payload_type = expected_payload_type or dispatch_payload_type
         if payload_type is None:
-            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+            raise MetalRefusal("Metal DispatchMesh payload argument type is unknown")
 
         reserved_names = set(reserved_parameter_names or ())
         reserved_names.update(self.metal_function_local_variable_names(func))
@@ -21528,7 +21531,7 @@ class MetalCodeGen(
 
         if len(payload_types) > 1:
             expected = ", ".join(sorted(payload_types))
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal DispatchMesh payload arguments must use one type; "
                 f"got {expected}"
             )
@@ -21688,7 +21691,7 @@ class MetalCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal stage attribute {attribute_name} requires exactly one argument"
             )
         return self.attribute_value_to_string(arguments[0])
@@ -21705,7 +21708,7 @@ class MetalCodeGen(
         }
         mapped = topology_map.get(topology_name)
         if mapped is None:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal mesh output topology cannot be lowered: {topology}"
             )
         return mapped
@@ -22157,7 +22160,7 @@ class MetalCodeGen(
         )
         if conflicts:
             names = ", ".join(sorted(conflicts))
-            raise ValueError(
+            raise MetalRefusal(
                 "Non-resource local declaration(s) shadow Metal global resource(s): "
                 f"{names}"
             )
@@ -23035,7 +23038,7 @@ class MetalCodeGen(
         if lowering is None or func_name in self.user_function_names:
             return None
         if len(args) != 3:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal {func_name} alias requires 3 arguments; got {len(args)}"
             )
 
@@ -23391,7 +23394,7 @@ class MetalCodeGen(
                 continue
 
             if set_index is None:
-                raise ValueError(
+                raise MetalRefusal(
                     "Invalid Metal resource binding metadata for "
                     f"'{node_name}': {description} must resolve to a concrete "
                     "integer set"
@@ -23401,7 +23404,7 @@ class MetalCodeGen(
                 selected_description = description
                 continue
             if selected_set != set_index:
-                raise ValueError(
+                raise MetalRefusal(
                     "Conflicting Metal resource binding metadata for "
                     f"'{node_name}': {selected_description} differs from "
                     f"{description}"
@@ -25079,7 +25082,7 @@ class MetalCodeGen(
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise MetalRefusal(
                     f"Conflicting Metal source resource binding for '{name}': "
                     f"{self.source_resource_binding_range_label(namespace, descriptor_set, start, end, stage_scope)} "
                     f"overlaps '{used_name}' "
@@ -25105,7 +25108,7 @@ class MetalCodeGen(
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise MetalRefusal(
                     f"Conflicting {target} resource binding for '{name}': "
                     f"{self.resource_binding_range_label(namespace, start, end)} "
                     f"overlaps '{used_name}' "
@@ -25407,7 +25410,7 @@ class MetalCodeGen(
                 reason="unsupported-type",
                 source_location=getattr(args[0], "source_location", None),
             )
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"
         )
@@ -25421,7 +25424,7 @@ class MetalCodeGen(
         if self.is_storage_image_resource(texture_type):
             return
         texture_name = self.expression_name(args[0]) or str(args[0])
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal image operation '{func_name}' requires a storage "
             f"image resource argument: {texture_name}"
         )
@@ -25442,17 +25445,17 @@ class MetalCodeGen(
             return
         texture_name = expression_debug_name(args[0])
         if func_name == "imageLoad" and access == "write":
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal image operation '{func_name}' requires read-capable "
                 f"storage image access for {texture_name}: got access::write"
             )
         if func_name == "imageStore" and access == "read":
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal image operation '{func_name}' requires write-capable "
                 f"storage image access for {texture_name}: got access::read"
             )
         if is_image_atomic_operation(func_name) and access != "read_write":
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal image operation '{func_name}' requires read_write "
                 f"storage image access for {texture_name}: got access::{access}"
             )
@@ -25482,7 +25485,7 @@ class MetalCodeGen(
             return
         value_arg, value_kind = mismatch
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise MetalRefusal(
             image_atomic_value_kind_error(
                 "Metal",
                 func_name,
@@ -25509,7 +25512,7 @@ class MetalCodeGen(
         if expected_kind is None:
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise MetalRefusal(
             image_atomic_result_kind_error(
                 "Metal", func_name, format_label, component_kind, expected_kind
             )
@@ -25565,7 +25568,7 @@ class MetalCodeGen(
             required_label = image_access_requirement_label(
                 required_access, read_write_label="read_write"
             )
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got access::{actual_access}"
@@ -25755,7 +25758,7 @@ class MetalCodeGen(
             actual_type_label = actual_type or self.type_name_string(
                 self.expression_result_type(args[index])
             )
-            raise ValueError(
+            raise MetalRefusal(
                 f"Metal function call '{func_name}' requires resource parameter "
                 f"{getattr(parameter, 'name', None)} of type {expected_type}: "
                 f"argument {actual_name} has {actual_type_label or 'non-resource'}"
@@ -25774,7 +25777,7 @@ class MetalCodeGen(
         )
         if coord_type is None or self.is_integer_coordinate_type(coord_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "resource",
@@ -25806,7 +25809,7 @@ class MetalCodeGen(
         )
         if coord_dimension is None or coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_dimension_argument_error(
                 "Metal",
                 "resource",
@@ -25839,7 +25842,7 @@ class MetalCodeGen(
             if offset_type is None:
                 continue
             if not self.is_integer_coordinate_type(offset_type):
-                raise ValueError(
+                raise MetalRefusal(
                     operation_argument_type_error(
                         "Metal",
                         "resource",
@@ -25855,7 +25858,7 @@ class MetalCodeGen(
             )
             if offset_dimension is None or offset_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise MetalRefusal(
                 operation_dimension_argument_error(
                     "Metal",
                     "resource",
@@ -25896,7 +25899,7 @@ class MetalCodeGen(
             return
         coord_dimension = self.query_lod_coordinate_dimension(coord_type)
         if coord_dimension is None:
-            raise ValueError(
+            raise MetalRefusal(
                 texture_query_lod_coordinate_type_error(
                     "Metal",
                     func_name,
@@ -25906,7 +25909,7 @@ class MetalCodeGen(
             )
         if coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise MetalRefusal(
             texture_query_lod_coordinate_dimension_error(
                 "Metal",
                 func_name,
@@ -25937,7 +25940,7 @@ class MetalCodeGen(
                 continue
             gradient_dimension = self.gradient_argument_dimension(gradient_type)
             if gradient_dimension is None:
-                raise ValueError(
+                raise MetalRefusal(
                     operation_argument_type_error(
                         "Metal",
                         "resource",
@@ -25950,7 +25953,7 @@ class MetalCodeGen(
                 )
             if gradient_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise MetalRefusal(
                 operation_dimension_argument_error(
                     "Metal",
                     "resource",
@@ -26031,7 +26034,7 @@ class MetalCodeGen(
         )
         if compare_type is None or self.is_scalar_floating_type(compare_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "texture compare",
@@ -26054,7 +26057,7 @@ class MetalCodeGen(
         lod_type = self.texture_argument_diagnostic_type(args[lod_index])
         if lod_type is None or self.is_scalar_numeric_type(lod_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "texture LOD",
@@ -26077,7 +26080,7 @@ class MetalCodeGen(
         bias_type = self.texture_argument_diagnostic_type(args[bias_index])
         if bias_type is None or self.is_scalar_numeric_type(bias_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "texture bias",
@@ -26096,7 +26099,7 @@ class MetalCodeGen(
         level_type = self.texture_argument_diagnostic_type(args[level_index])
         if level_type is None or self.is_scalar_integer_type(level_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "resource",
@@ -26118,7 +26121,7 @@ class MetalCodeGen(
         sample_type = self.texture_argument_diagnostic_type(args[sample_index])
         if sample_type is None or self.is_scalar_integer_type(sample_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             texture_multisample_sample_type_error(
                 "Metal",
                 func_name,
@@ -26145,7 +26148,7 @@ class MetalCodeGen(
         )
         if sample_type is None:
             return
-        raise ValueError(
+        raise MetalRefusal(
             image_multisample_sample_type_error(
                 "Metal",
                 func_name,
@@ -26165,7 +26168,7 @@ class MetalCodeGen(
         component_type = self.texture_argument_diagnostic_type(args[component_index])
         if component_type is None or self.is_scalar_integer_type(component_type):
             return
-        raise ValueError(
+        raise MetalRefusal(
             operation_argument_type_error(
                 "Metal",
                 "texture gather",
@@ -27908,7 +27911,7 @@ class MetalCodeGen(
         if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise MetalRefusal(
             image_store_value_shape_error(
                 "Metal",
                 format_label,
@@ -27927,7 +27930,7 @@ class MetalCodeGen(
         if value_kind is None:
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise MetalRefusal(
             image_store_value_kind_error(
                 "Metal",
                 format_label,
@@ -27945,7 +27948,7 @@ class MetalCodeGen(
             return
         expected_kind = image_load_result_kind_mismatch(expected_kind, component_kind)
         if expected_kind is not None:
-            raise ValueError(
+            raise MetalRefusal(
                 image_load_result_kind_error(
                     "Metal", format_label, component_kind, expected_kind
                 )
@@ -27954,7 +27957,7 @@ class MetalCodeGen(
         loaded_channels = self.image_load_channel_count(image_type, image_format)
         if load_context_allowed(loaded_channels, expected_channels):
             return
-        raise ValueError(
+        raise MetalRefusal(
             image_load_result_shape_error(
                 "Metal", format_label, loaded_channels, expected_channels
             )
@@ -28694,7 +28697,7 @@ class MetalCodeGen(
         while resolved in aliases:
             if resolved in seen:
                 cycle = " -> ".join([*seen, resolved])
-                raise ValueError(f"Cyclic Metal type alias: {cycle}")
+                raise MetalRefusal(f"Cyclic Metal type alias: {cycle}")
             seen.append(resolved)
             resolved = self.type_name_string(aliases[resolved])
         return resolved

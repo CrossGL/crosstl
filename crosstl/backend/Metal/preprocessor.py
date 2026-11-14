@@ -32,6 +32,7 @@ from typing import (
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
+from crosstl.translator.refusals import MetalSourceRefusal
 
 from .alias_template_types import (
     expand_concrete_alias_template_references,
@@ -168,7 +169,7 @@ from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .template_reference_accessors import (
-    TemplateReferenceAccessor,
+    _TemplateReferenceAccessor,
     inline_template_reference_accessor,
 )
 from .text_scanners import (
@@ -1203,27 +1204,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             max_expansion_depth=max_expansion_depth,
         )
         if not isinstance(promote_derived_pointer_members, bool):
-            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
+            raise MetalSourceRefusal(
+                "Metal promote_derived_pointer_members must be a boolean"
+            )
         self.promote_derived_pointer_members = promote_derived_pointer_members
         if not isinstance(group_non_type_template_substitutions, bool):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal group_non_type_template_substitutions must be a boolean"
             )
         self.group_non_type_template_substitutions = (
             group_non_type_template_substitutions
         )
         if isinstance(max_template_specializations, bool):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             )
         try:
             specialization_limit = operator.index(max_template_specializations)
         except TypeError as exc:
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             ) from exc
         if specialization_limit < 0:
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "Metal max_template_specializations must be a non-negative integer"
             )
         self.max_template_specializations = specialization_limit
@@ -17593,7 +17596,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 inline_reference=True,
                 receiver_is_const=receiver_is_const,
             )
-        except TemplateReferenceAccessor as accessor:
+        except _TemplateReferenceAccessor as accessor:
             try:
                 return self._build_direct_reference_accessor_rewrite(
                     code,
@@ -17759,7 +17762,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ):
             # A reference accessor names storage; the caller inlines the instantiated method
             # (template_reference_accessors.py).
-            raise TemplateReferenceAccessor(
+            raise _TemplateReferenceAccessor(
                 self._instantiated_template_member_method(
                     struct,
                     selected,

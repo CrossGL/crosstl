@@ -131,9 +131,7 @@ def let_program(expression):
 
 
 def declared_type_of_r(emitter, expression):
-    ast = Parser(
-        Lexer(let_program(expression)).get_tokens(), strict_function_bodies=True
-    ).parse()
+    ast = Parser(Lexer(let_program(expression)).get_tokens()).parse()
     output = emitter().generate(ast)
     lines = [line for line in output.splitlines() if " r = " in line]
     assert lines, output
@@ -179,7 +177,7 @@ def test_emitters_refuse_a_let_whose_type_cannot_be_inferred(emitter):
             }
         }
         """)
-    ast = Parser(Lexer(program).get_tokens(), strict_function_bodies=True).parse()
+    ast = Parser(Lexer(program).get_tokens()).parse()
     with pytest.raises(LoweringRefused) as raised:
         emitter().generate(ast)
     assert "the type of 't' is not written" in str(raised.value)

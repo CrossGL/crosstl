@@ -12,6 +12,8 @@ which no target compiles, and a struct passed to a function lost its member name
 
 from __future__ import annotations
 
+from crosstl.translator.refusals import SpirvSyntaxError
+
 from .VulkanAst import ArrayAccessNode, MemberAccessNode
 
 __all__ = ["chain_base_pointee", "member_name", "walk_indices"]
@@ -61,7 +63,7 @@ def walk_indices(
             )
             member_types = type_info.get("member_types", [])
             if member_index is None or not 0 <= member_index < len(member_types):
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"SPIR-V access chain indexes struct {type_id} with {index_operand}: a struct index must be an "
                     "in-range OpConstant (SPIR-V 1.6 section 3.49.8, OpAccessChain)"
                 )

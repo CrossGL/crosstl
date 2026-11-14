@@ -32,6 +32,7 @@ from .ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .refusals import MetadataContractError
 from .resource_identity import source_resource_attribute, source_resource_identity
 
 MAX_IMMUTABLE_STORAGE = 256
@@ -60,7 +61,9 @@ def _identifier(value: Any, field: str) -> str:
         or len(value) > 1024
         or not _IDENTIFIER.fullmatch(value)
     ):
-        raise ValueError(f"Immutable storage {field} requires an identifier.")
+        raise MetadataContractError(
+            f"Immutable storage {field} requires an identifier."
+        )
     return value
 
 
@@ -81,7 +84,9 @@ class ImmutableStorageContract:
             or self.source != self.source.strip()
             or any(ord(char) < 32 for char in self.source)
         ):
-            raise ValueError("Immutable storage source requires a nonempty pattern.")
+            raise MetadataContractError(
+                "Immutable storage source requires a nonempty pattern."
+            )
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -98,7 +103,7 @@ def parse_immutable_storage(
     if records is None:
         return ()
     if not isinstance(records, (list, tuple)) or len(records) > MAX_IMMUTABLE_STORAGE:
-        raise ValueError(
+        raise MetadataContractError(
             f"{field_name} requires at most {MAX_IMMUTABLE_STORAGE} records."
         )
     result, keys = [], set()
@@ -107,17 +112,23 @@ def parse_immutable_storage(
             contract = record
         elif isinstance(record, Mapping):
             if set(record) - _FIELDS or not {"entryPoint", "parameter"} <= set(record):
-                raise ValueError(f"{field_name} has unsupported or missing fields.")
+                raise MetadataContractError(
+                    f"{field_name} has unsupported or missing fields."
+                )
             contract = ImmutableStorageContract(
                 entry_point=record["entryPoint"],
                 parameter=record["parameter"],
                 source=record.get("source", "*"),
             )
         else:
-            raise ValueError(f"{field_name} requires immutable storage objects.")
+            raise MetadataContractError(
+                f"{field_name} requires immutable storage objects."
+            )
         key = (contract.source, contract.entry_point, contract.parameter)
         if key in keys:
-            raise ValueError(f"{field_name} names one parameter more than once.")
+            raise MetadataContractError(
+                f"{field_name} names one parameter more than once."
+            )
         keys.add(key)
         result.append(contract)
     return tuple(result)
@@ -126,11 +137,15 @@ def parse_immutable_storage(
 def checked_immutable_storage(records: Any) -> list[dict[str, Any]]:
     """Validate resolved contracts without trusting generated resource names."""
     if not isinstance(records, (list, tuple)) or len(records) > MAX_IMMUTABLE_STORAGE:
-        raise ValueError("Resolved immutable storage requires a bounded sequence.")
+        raise MetadataContractError(
+            "Resolved immutable storage requires a bounded sequence."
+        )
     result, indices, names = [], {}, {}
     for record in records:
         if not isinstance(record, Mapping) or set(record) != {"sourceResource"}:
-            raise ValueError("Unsupported resolved immutable storage fields.")
+            raise MetadataContractError(
+                "Unsupported resolved immutable storage fields."
+            )
         source = record["sourceResource"]
         if (
             not isinstance(source, Mapping)
@@ -138,7 +153,9 @@ def checked_immutable_storage(records: Any) -> list[dict[str, Any]]:
             or type(source["schemaVersion"]) is not int
             or source["schemaVersion"] != 1
         ):
-            raise ValueError("Unsupported immutable storage source resource identity.")
+            raise MetadataContractError(
+                "Unsupported immutable storage source resource identity."
+            )
         source_resource_attribute(
             source["backend"],
             source["entryPoint"],
@@ -148,7 +165,9 @@ def checked_immutable_storage(records: Any) -> list[dict[str, Any]]:
         index = (source["backend"], source["entryPoint"], source["parameterIndex"])
         name = (source["backend"], source["entryPoint"], source["parameter"])
         if index in indices or name in names:
-            raise ValueError("Duplicate immutable storage source resource identity.")
+            raise MetadataContractError(
+                "Duplicate immutable storage source resource identity."
+            )
         indices[index] = name
         names[name] = index
         result.append({"sourceResource": dict(source)})
@@ -170,14 +189,16 @@ def immutable_storage_header(records: Any) -> str:
         ensure_ascii=True,
     )
     if len(header.encode("utf-8")) > MAX_IMMUTABLE_STORAGE_BYTES:
-        raise ValueError("Immutable storage header exceeds its byte limit.")
+        raise MetadataContractError("Immutable storage header exceeds its byte limit.")
     return header + "\n"
 
 
 def with_immutable_storage_header(source: str, records: Any) -> str:
     """Retain every existing leading artifact contract when adding this one."""
     if IMMUTABLE_STORAGE_PREFIX.rstrip() in source:
-        raise ValueError("Source already contains an immutable storage marker.")
+        raise MetadataContractError(
+            "Source already contains an immutable storage marker."
+        )
     return with_artifact_contract_header(source, immutable_storage_header(records))
 
 
@@ -187,13 +208,13 @@ def parse_immutable_storage_header(source: str) -> list[dict[str, Any]]:
     if line is None:
         return []
     if len(line.encode("utf-8")) > MAX_IMMUTABLE_STORAGE_BYTES:
-        raise ValueError("Immutable storage header exceeds its byte limit.")
+        raise MetadataContractError("Immutable storage header exceeds its byte limit.")
 
     def unique(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate immutable storage key.")
+                raise MetadataContractError("Duplicate immutable storage key.")
             result[key] = value
         return result
 
@@ -202,7 +223,7 @@ def parse_immutable_storage_header(source: str) -> list[dict[str, Any]]:
             line[len(IMMUTABLE_STORAGE_PREFIX) :], object_pairs_hook=unique
         )
     except (ValueError, RecursionError) as error:
-        raise ValueError("Invalid immutable storage JSON.") from error
+        raise MetadataContractError("Invalid immutable storage JSON.") from error
     if (
         not isinstance(record, dict)
         or set(record) != {"schemaVersion", "resources"}
@@ -211,10 +232,12 @@ def parse_immutable_storage_header(source: str) -> list[dict[str, Any]]:
         or not isinstance(record["resources"], list)
         or not record["resources"]
     ):
-        raise ValueError("Unsupported immutable storage header schema.")
+        raise MetadataContractError("Unsupported immutable storage header schema.")
     resources = checked_immutable_storage(record["resources"])
     if resources != record["resources"]:
-        raise ValueError("Immutable storage header is not in canonical order.")
+        raise MetadataContractError(
+            "Immutable storage header is not in canonical order."
+        )
     return resources
 
 
@@ -456,13 +479,15 @@ def apply_immutable_storage(resources, records):
             == requirement["sourceResource"]
         ]
         if len(matches) != 1:
-            raise ValueError("Immutable storage resource is missing or ambiguous.")
+            raise MetadataContractError(
+                "Immutable storage resource is missing or ambiguous."
+            )
         resource = matches[0]
         if resource.get("access") != "read" or resource.get("kind") not in {
             "buffer",
             "constant-buffer",
         }:
-            raise ValueError(
+            raise MetadataContractError(
                 "Immutable storage requires a reflected read-only buffer resource."
             )
         pending.append((resource, requirement))
@@ -481,7 +506,7 @@ def binding_immutable_storage(bindings):
         if not isinstance(record, Mapping) or record.get(
             "sourceResource"
         ) != provenance.get("sourceResource"):
-            raise ValueError(
+            raise MetadataContractError(
                 "Immutable storage provenance differs from its source resource."
             )
         records.append(record)

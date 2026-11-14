@@ -136,7 +136,7 @@ def _flat(code):
 
 
 def _parse(source):
-    return Parser(Lexer(source).get_tokens(), strict_function_bodies=True).parse()
+    return Parser(Lexer(source).get_tokens()).parse()
 
 
 def _run(command, cwd):

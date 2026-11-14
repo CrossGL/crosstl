@@ -200,6 +200,11 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .struct_constructor_conversions import convert_struct_constructor_arguments
+from .struct_declarations import (
+    ConflictingConstantError,
+    ConflictingStructError,
+    refuse_conflicting_structs,
+)
 from .struct_methods import StructMethodUnsupportedError, lower_struct_methods
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
@@ -217,6 +222,7 @@ from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
+from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
@@ -234,6 +240,8 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
+    "ConflictingConstantError",
+    "ConflictingStructError",
     "AggregateEqualityOperandError",
     "AggregateEqualityUnsupportedError",
     "AmbiguousMatrixSpellingError",
@@ -297,6 +305,7 @@ __all__ = [
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "TupleFieldUnsupportedError",
     "TypeAliasUnsupportedError",
     "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
@@ -338,6 +347,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Two different structures of one name in a scope are then refused with :class:`ConflictingStructError`, two
+    different program constants of one name with :class:`ConflictingConstantError`, and a repeated identical one
+    is kept once (:mod:`.struct_declarations`).
     Shader-scope functions that name a stage's declarations become functions of the stages that call them
     (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
@@ -469,6 +481,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
+    refuse_conflicting_structs(program, report.target)
     fill_generic_struct_defaults(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
@@ -482,6 +495,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
         refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
+    refuse_tuple_fields(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)

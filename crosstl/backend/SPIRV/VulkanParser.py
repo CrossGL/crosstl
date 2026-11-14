@@ -4,6 +4,8 @@ import re
 import shlex
 import struct
 
+from crosstl.translator.refusals import SpirvSyntaxError
+
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
 from .assembly_validation import (
@@ -789,12 +791,12 @@ class VulkanParser:
 
     def expect_end_of_input(self):
         if self.current_token[0] != "EOF":
-            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+            raise SpirvSyntaxError(f"Expected EOF, got {self.current_token[0]}")
 
     def eat(self, token_type):
         # The end of input is never consumed: a construct that reads past it is unterminated.
         if token_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise SpirvSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -802,7 +804,9 @@ class VulkanParser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise SpirvSyntaxError(
+                f"Expected {token_type}, got {self.current_token[0]}"
+            )
 
     def skip_hlsl_attributes(self):
         while self.current_token[0] == "LBRACKET":
@@ -829,7 +833,7 @@ class VulkanParser:
             else:
                 self.eat(self.current_token[0])
         if depth:
-            raise SyntaxError("Unterminated HLSL attribute")
+            raise SpirvSyntaxError("Unterminated HLSL attribute")
 
     def skip_single_bracket_hlsl_attribute(self):
         self.eat("LBRACKET")
@@ -841,7 +845,7 @@ class VulkanParser:
                 depth -= 1
             self.eat(self.current_token[0])
         if depth:
-            raise SyntaxError("Unterminated HLSL attribute")
+            raise SpirvSyntaxError("Unterminated HLSL attribute")
 
     def parse_optional_hlsl_semantic(self):
         if self.current_token[0] == "SEMANTIC":
@@ -882,7 +886,7 @@ class VulkanParser:
                 parts.append(str(self.current_token[1]))
                 self.eat(self.current_token[0])
         if depth:
-            raise SyntaxError("Unterminated parenthesized semantic")
+            raise SpirvSyntaxError("Unterminated parenthesized semantic")
         return f"({''.join(parts)})"
 
     def skip_balanced_brace_tokens(self):
@@ -895,7 +899,7 @@ class VulkanParser:
                 depth -= 1
             self.eat(self.current_token[0])
         if depth:
-            raise SyntaxError("Unterminated brace block")
+            raise SpirvSyntaxError("Unterminated brace block")
 
     def parse(self):
         module = self.parse_module()
@@ -1330,7 +1334,7 @@ class VulkanParser:
             )
             and not self.spirv_assembly_has_entry_point_metadata_surface(entry_points)
         ):
-            raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
+            raise SpirvSyntaxError(SPIRV_ASSEMBLY_ERROR)
 
         return ShaderNode(
             functions=functions,
@@ -5062,7 +5066,7 @@ class VulkanParser:
                 operands = parts[1:]
 
             if not opcode.startswith("Op"):
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     "Expected SPIR-V opcode on line "
                     f"{instruction_line_number}, got {opcode}"
                 )
@@ -5075,7 +5079,7 @@ class VulkanParser:
             ]
             for text, line_number in unquoted:
                 if text == "=":
-                    raise SyntaxError(
+                    raise SpirvSyntaxError(
                         f"Expected SPIR-V opcode after '=' on line {line_number}"
                     )
             id_operands.append(
@@ -5127,7 +5131,7 @@ class VulkanParser:
                 if self.can_skip_unparseable_legacy_glslang_spirv_line(line):
                     continue
                 if self.legacy_glslang_spirv_line_has_instruction_shape(line):
-                    raise SyntaxError(
+                    raise SpirvSyntaxError(
                         f"Invalid glslang SPIR-V disassembly syntax: {error}"
                     ) from error
                 continue
@@ -5356,7 +5360,7 @@ class VulkanParser:
                 line_number += 1
             index += 1
 
-        raise SyntaxError(
+        raise SpirvSyntaxError(
             "Invalid SPIR-V assembly syntax on line "
             f"{token_line_number}: No closing quotation"
         )
@@ -6840,7 +6844,9 @@ class VulkanParser:
             self.eat(self.current_token[0])
 
         if self.current_token[1] not in VALID_DATA_TYPES:
-            raise SyntaxError(f"Unexpected precision type: {self.current_token[1]}")
+            raise SpirvSyntaxError(
+                f"Unexpected precision type: {self.current_token[1]}"
+            )
         self.eat(self.current_token[0])
         self.eat("SEMICOLON")
 
@@ -6904,7 +6910,7 @@ class VulkanParser:
             elif self.is_data_type_token(allow_identifier=True):
                 data_type = self.parse_data_type(allow_identifier=True)
             else:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     "Expected structured data block after 'uniform' or 'buffer'"
                 )
         else:
@@ -6920,7 +6926,7 @@ class VulkanParser:
             elif self.is_data_type_token(allow_identifier=True):
                 data_type = self.parse_data_type(allow_identifier=True)
             else:
-                raise SyntaxError(f"Unexpected type: {self.current_token[1]}")
+                raise SpirvSyntaxError(f"Unexpected type: {self.current_token[1]}")
 
         variable_name = None
         if self.current_token[0] == "IDENTIFIER":
@@ -6958,11 +6964,11 @@ class VulkanParser:
             self.eat(token_type)
 
         if not parts:
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 f"Expected layout qualifier value, got {self.current_token[0]}"
             )
         if depth:
-            raise SyntaxError("Unterminated layout qualifier value")
+            raise SpirvSyntaxError("Unterminated layout qualifier value")
 
         return self.format_layout_qualifier_value(parts)
 
@@ -6996,7 +7002,7 @@ class VulkanParser:
 
     def parse_data_type(self, allow_identifier=False, error_message=None):
         if not self.is_data_type_token(allow_identifier=allow_identifier):
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 error_message or f"Unexpected type: {self.current_token[1]}"
             )
 
@@ -7015,7 +7021,7 @@ class VulkanParser:
         depth = 1
         while depth:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated type template argument list")
+                raise SpirvSyntaxError("Unterminated type template argument list")
 
             if self.current_token[0] == "LESS_THAN":
                 depth += 1
@@ -7156,7 +7162,7 @@ class VulkanParser:
                 depth -= 1
             self.eat(self.current_token[0])
         if depth:
-            raise SyntaxError("Unterminated layout annotation")
+            raise SpirvSyntaxError("Unterminated layout annotation")
 
     def parse_push_constant(self):
         self.eat("PUSH_CONSTANT")
@@ -7216,7 +7222,7 @@ class VulkanParser:
                 type_name = self.current_token[1]
                 self.eat("IDENTIFIER")
             else:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"Unexpected token in struct member: {self.current_token}"
                 )
             type_name += self.parse_type_template_suffix()
@@ -7335,13 +7341,13 @@ class VulkanParser:
             return self.parse_switch_statement()
         elif token_type == "BREAK":
             if self.breakable_depth == 0:
-                raise SyntaxError("break used outside loop or switch")
+                raise SpirvSyntaxError("break used outside loop or switch")
             self.eat("BREAK")
             self.eat("SEMICOLON")
             return BreakNode()
         elif token_type == "CONTINUE":
             if self.loop_depth == 0:
-                raise SyntaxError("continue used outside loop")
+                raise SpirvSyntaxError("continue used outside loop")
             self.eat("CONTINUE")
             self.eat("SEMICOLON")
             return ContinueNode()
@@ -7379,7 +7385,7 @@ class VulkanParser:
                 value = self.parse_expression()
                 return AssignmentNode(target, value, op_name)
             else:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"Unexpected token in update: {self.current_token[0]}"
                 )
         elif self.current_token[0] == "PRE_INCREMENT":
@@ -7389,17 +7395,21 @@ class VulkanParser:
             self.eat("PRE_DECREMENT")
             return UnaryOpNode("PRE_DECREMENT", self.parse_update_target())
         else:
-            raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
+            raise SpirvSyntaxError(
+                f"Unexpected token in update: {self.current_token[0]}"
+            )
 
     def parse_update_target(self):
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(f"Expected update target, got {self.current_token[0]}")
+            raise SpirvSyntaxError(
+                f"Expected update target, got {self.current_token[0]}"
+            )
 
         target = VariableNode("", self.current_token[1])
         self.eat("IDENTIFIER")
         target = self.parse_postfix_suffixes(target)
         if not isinstance(target, (VariableNode, MemberAccessNode, ArrayAccessNode)):
-            raise SyntaxError(f"Invalid update target: {type(target).__name__}")
+            raise SpirvSyntaxError(f"Invalid update target: {type(target).__name__}")
         return target
 
     def parse_if_statement(self):
@@ -7579,7 +7589,7 @@ class VulkanParser:
             )
             return BinaryOpNode(target, op_name, value)
         else:
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 f"Unexpected token after identifier {name}: {self.current_token[0]}"
             )
 
@@ -7628,14 +7638,14 @@ class VulkanParser:
     ):
         if self.current_token[0] not in terminators:
             expected = " or ".join(sorted(expected_terminators or terminators))
-            raise SyntaxError(f"Expected {expected}, got {self.current_token[0]}")
+            raise SpirvSyntaxError(f"Expected {expected}, got {self.current_token[0]}")
         if consume_terminator:
             self.eat(self.current_token[0])
 
     def parse_member_access(self, object):
         self.eat("DOT")
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 f"Expected identifier after dot, got {self.current_token[0]}"
             )
         member = self.current_token[1]
@@ -7766,7 +7776,7 @@ class VulkanParser:
             self.eat("LBRACKET")
             while self.current_token[0] != "RBRACKET":
                 if self.current_token[0] == "EOF":
-                    raise SyntaxError("Unterminated array suffix")
+                    raise SpirvSyntaxError("Unterminated array suffix")
                 suffix += str(self.current_token[1])
                 self.eat(self.current_token[0])
             self.eat("RBRACKET")
@@ -7810,7 +7820,7 @@ class VulkanParser:
         elif self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         else:
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
@@ -7861,7 +7871,7 @@ class VulkanParser:
         elements = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated initializer list")
+                raise SpirvSyntaxError("Unterminated initializer list")
             elements.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -7909,7 +7919,7 @@ class VulkanParser:
                 parsed_type = self.parse_data_type(allow_identifier=True)
                 type_name = " ".join([*qualifiers, parsed_type])
             else:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"Unexpected token after declaration qualifier: {self.current_token[0]}"
                 )
         elif self.current_token[0] == "IDENTIFIER" and self.peek(1) in [
@@ -7927,7 +7937,7 @@ class VulkanParser:
                 self.consume_terminator(terminators, consume_terminator)
                 return UnaryOpNode("POST_DECREMENT", VariableNode("", name))
             else:
-                raise SyntaxError(
+                raise SpirvSyntaxError(
                     f"Unexpected token after identifier: {self.current_token[0]}"
                 )
         if self.current_token[0] == "IDENTIFIER" and self.peek(1) == "IDENTIFIER":
@@ -8103,11 +8113,11 @@ class VulkanParser:
             while self.current_token[0] not in ["RBRACE", "EOF"]:
                 if self.current_token[0] == "DEFAULT":
                     if seen_default:
-                        raise SyntaxError("duplicate default label in switch")
+                        raise SpirvSyntaxError("duplicate default label in switch")
                     seen_default = True
                 cases.append(self.parse_case_statement())
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated switch statement")
+                raise SpirvSyntaxError("Unterminated switch statement")
         finally:
             self.breakable_depth -= 1
         self.eat("RBRACE")
@@ -8123,7 +8133,7 @@ class VulkanParser:
             value = None
             self.eat("COLON")
         else:
-            raise SyntaxError(
+            raise SpirvSyntaxError(
                 f"Expected CASE or DEFAULT in switch, got {self.current_token[0]}"
             )
         statements = []
@@ -8134,7 +8144,7 @@ class VulkanParser:
             elif statement is not None:
                 statements.append(statement)
         if self.current_token[0] == "EOF":
-            raise SyntaxError("Unterminated switch case")
+            raise SpirvSyntaxError("Unterminated switch case")
         return CaseNode(value, statements)
 
     def parse_default_statement(self):

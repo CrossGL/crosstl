@@ -25,6 +25,7 @@ from ..ast import (
     ParameterNode,
     VariableNode,
 )
+from ..refusals import TargetRefusal
 from ..semantics.rewrite import child_slots, get_child, set_child
 
 __all__ = ["substitute_value_parameters", "value_argument_expression"]
@@ -152,7 +153,7 @@ def substitute_value_parameters(body, substitutions, function_name="") -> int:
     for name in sorted({use[3] for use in uses} | {slot[1] for slot in sizes}):
         if expressions[name] is None:
             label = f" of generic function '{function_name}'" if function_name else ""
-            raise ValueError(
+            raise TargetRefusal(
                 f"Generic parameter '{name}'{label} is read as a value but bound to the type "
                 f"'{substitutions[name]}'"
             )

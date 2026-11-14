@@ -1,35 +1,4 @@
 {
  "schemaVersion": 1,
- "sites": {
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.visit_AtomicOperationNode::identity-fallback": 1,
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.visit_CudaBuiltinNode::identity-fallback": 1,
-  "crosstl/backend/CUDA/CudaParser.py::CudaParser.normalized_operator_value::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.convert_hip_type_to_crossgl::identity-fallback": 2,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.format_fixed_scalar_representation_query::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.record_member_narrow_external_storage_type::identity-fallback": 1,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.visit_HipBuiltinNode::identity-fallback": 1,
-  "crosstl/backend/HIP/HipParser.py::HipParser.normalized_operator_value::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_builtin_function::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_crossgl_type_to_cuda::identity-fallback": 3,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.cuda_math_function_name::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.cuda_mesh_task_stage_label::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.cuda_ray_stage_metadata_name::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.generic_visit::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.map_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.normalize_cuda_integer_bit_function::identity-fallback": 1,
-  "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.visit_IdentifierNode::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.generate_ray_tracing_call_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.hip_math_function_name::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.hip_mesh_task_stage_label::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.hip_ray_stage_metadata_name::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.hip_resource_kind::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.map_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.normalize_hip_integer_bit_function::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.require_byte_address_load_helper::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.visit_FunctionCallNode::identity-fallback": 1,
-  "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.visit_IdentifierNode::identity-fallback": 1,
-  "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.rust_resource_placeholder_diagnostic_comment::fallback-text": 1,
-  "crosstl/translator/parser.py::Parser.parse_function::empty-block-recovery": 1
- }
+ "sites": {}
 }

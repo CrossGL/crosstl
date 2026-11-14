@@ -1,7 +1,9 @@
+import re
 from typing import List
 
 import pytest
 
+from crosstl.backend.import_refusals import MojoImportRefused
 from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
@@ -1466,9 +1468,10 @@ def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
         var tile = iter[]
     """
     ast = parse_code(tokenize_code(code))
-    generated_code = generate_code(ast)
 
-    assert "var tile = iter[];" in generated_code
+    # ``iter[]`` calls __getitem__() with no index; CrossGL has no such form, so the import is refused.
+    with pytest.raises(MojoImportRefused, match=re.escape("'iter[]'")):
+        generate_code(ast)
 
 
 def test_empty_specialization_member_receiver_codegen_from_mxfp4_metadata_reparses_crossgl():
@@ -1519,18 +1522,27 @@ def test_type_like_and_member_empty_postfix_codegen_from_archive_sweep_reparses_
     code = """
     def main(self: Self):
         var base = NVIDIASharedMemoryBasePtr[]
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    # ``Type[]`` names the type with its default parameters.
+    assert "var base = NVIDIASharedMemoryBasePtr;" in generated_code
+    assert "NVIDIASharedMemoryBasePtr[]" not in generated_code
+    parse_crossgl(generated_code)
+
+    # A value's ``[]`` dereferences a pointer or calls another type's __getitem__(); dropping the brackets would
+    # copy the pointer, so both are refused.
+    values = """
+    def main(self: Self):
         var source = self.src[]
         var tile = iter[]
     """
-    ast = parse_code(tokenize_code(code))
-    generated_code = generate_code(ast)
-
-    assert "var base = NVIDIASharedMemoryBasePtr;" in generated_code
-    assert "var source = self.src;" in generated_code
-    assert "var tile = iter[];" in generated_code
-    assert "NVIDIASharedMemoryBasePtr[]" not in generated_code
-    assert "self.src[]" not in generated_code
-    parse_crossgl(generated_code)
+    with pytest.raises(MojoImportRefused) as refusal:
+        generate_code(parse_code(tokenize_code(values)))
+    assert [reason.split(" has no")[0] for reason in refusal.value.reasons] == [
+        "the empty subscript 'self.src[]'",
+        "the empty subscript 'iter[]'",
+    ]
 
 
 def test_mlir_op_payload_specialization_codegen_from_coroutine_intrinsic_reparses_crossgl():
@@ -1560,11 +1572,15 @@ def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
         var open_slice = s[::]
     """
     ast = parse_code(tokenize_code(code))
-    generated_code = generate_code(ast)
 
-    assert 'var new_slice = sliceable[1:"hello":4.0];' in generated_code
-    assert "var reverse = s[2::(-1)];" in generated_code
-    assert "var open_slice = s[::];" in generated_code
+    # CrossGL has no slice values, so each slice is refused rather than written as text.
+    with pytest.raises(MojoImportRefused) as refusal:
+        generate_code(ast)
+    assert refusal.value.reasons == (
+        "the slice '1:\"hello\":4.0' has no CrossGL form: CrossGL has no slice values",
+        "the slice '2::(-1)' has no CrossGL form: CrossGL has no slice values",
+        "the slice '::' has no CrossGL form: CrossGL has no slice values",
+    )
 
 
 def test_keyword_slice_index_codegen_from_modular_stdlib_reparses_crossgl():
@@ -1576,13 +1592,15 @@ def test_keyword_slice_index_codegen_from_modular_stdlib_reparses_crossgl():
         var suffix = self[byte=:-suffix.byte_length()]
     """
     ast = parse_code(tokenize_code(code))
-    generated_code = generate_code(ast)
 
-    assert "var head = path_str[i:];" in generated_code
-    assert "var prefix = String(e)[:expected_msg.byte_length()];" in generated_code
-    assert "var suffix = self[:(-suffix.byte_length())];" in generated_code
-    assert "byte=" not in generated_code
-    parse_crossgl(generated_code)
+    # The ``byte=`` keyword is dropped, and each slice is then refused: CrossGL has no slice values.
+    with pytest.raises(MojoImportRefused) as refusal:
+        generate_code(ast)
+    assert refusal.value.reasons == (
+        "the slice 'i:' has no CrossGL form: CrossGL has no slice values",
+        "the slice ':expected_msg.byte_length()' has no CrossGL form: CrossGL has no slice values",
+        "the slice ':(-suffix.byte_length())' has no CrossGL form: CrossGL has no slice values",
+    )
 
 
 def test_try_except_codegen_from_layout_tensor_gpu_docs():

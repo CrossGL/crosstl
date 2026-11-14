@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, Sequence
 
+from crosstl.translator.refusals import TranslationRefusal
+
 from .deduction_arguments import vector_argument_for_parameter
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*")
@@ -100,8 +102,10 @@ def _match_parameter_type(
     return bindings
 
 
-class TemplateDeductionConflict(ValueError):
+class TemplateDeductionConflict(TranslationRefusal):
     """Two call arguments deduce different arguments for one template parameter."""
+
+    code = "project.translate.metal-template-deduction-conflict"
 
     def __init__(self, parameter_name: str, values: Sequence[str]):
         super().__init__(
