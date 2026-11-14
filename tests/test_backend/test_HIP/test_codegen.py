@@ -1845,6 +1845,78 @@ class TestHipCodeGen:
         assert "__shfl_down_sync" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_nosync_warp_shuffles_lower_without_a_mask(self):
+        # hipcc 5.7.1 does not declare the CUDA-style `_sync` forms, so real
+        # kernels use HIP's own (mask-less) shuffle family.
+        code = """
+        __global__ void shfl_kernel(const float* in, float* out) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            int lane = threadIdx.x % 32;
+            float v = in[i];
+            float a = __shfl(v, 3);
+            float b = __shfl_xor(v, 4);
+            float c = __shfl_down(v, 2);
+            float d = __shfl_up(v, 1);
+            float e = __shfl(v, 3, warpSize);
+            float f = __shfl(v, 3, 16);
+            float g = __shfl_down(v, 2, 16);
+            float h = __shfl(v, lane - 1);
+            float j = __shfl_up(v, 1, 16);
+            float k = __shfl_xor(v, 32);
+            out[i] = a + b + c + d + e + f + g + h + j + k;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        # HIP masks the source lane with width - 1, so a lane index outside
+        # the wave still reads a lane inside it.
+        assert "WaveReadLaneAt(v, ((3) & (WaveGetLaneCount() - 1)))" in result
+        assert "WaveReadLaneAt(v, (((lane - 1)) & (WaveGetLaneCount() - 1)))" in result
+        # xor checks the partner lane first: an out-of-range partner must read
+        # the caller's own value, not an inactive lane.
+        assert (
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() ^ 4) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() ^ 4) : WaveGetLaneIndex()))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() ^ 32) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() ^ 32) : WaveGetLaneIndex()))"
+        ) in result
+        # up/down select the source index and shuffle in every lane. The old
+        # `cond ? WaveReadLaneAt(v, ...) : v` form read an inactive lane from
+        # inside one arm of the branch.
+        assert (
+            "WaveReadLaneAt(v, ((WaveGetLaneIndex() >= (1)) ? "
+            "(WaveGetLaneIndex() - (1)) : WaveGetLaneIndex()))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() + (2)) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() + (2)) : WaveGetLaneIndex()))"
+        ) in result
+        assert "? WaveReadLaneAt(" not in result
+        # A constant width keeps the offset inside the caller's width-lane
+        # segment (HIP __shfl family).
+        assert (
+            "WaveReadLaneAt(v, ((WaveGetLaneIndex() - "
+            "(WaveGetLaneIndex() % 16)) + ((3) & (16 - 1))))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() % 16) >= (1)) ? "
+            "(WaveGetLaneIndex() - (1)) : WaveGetLaneIndex()))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, ((((WaveGetLaneIndex() % 16) + (2)) < 16) ? "
+            "(WaveGetLaneIndex() + (2)) : WaveGetLaneIndex()))"
+        ) in result
+        assert "has no CrossGL form" not in result
+        assert "__shfl" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cooperative_groups_thread_block_sync_rank_and_size_convert(self):
         code = """
         #include <hip/hip_cooperative_groups.h>

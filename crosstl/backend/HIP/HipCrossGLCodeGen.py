@@ -8268,13 +8268,84 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
 
-        if function_name in {
-            "__ballot",
-            "__shfl",
-            "__shfl_up",
-            "__shfl_down",
-            "__shfl_xor",
-        }:
+        if function_name in {"__shfl", "__shfl_up", "__shfl_down", "__shfl_xor"}:
+            # HIP's own (non-``_sync``) shuffle family takes the same
+            # (value, lane/delta[, width]) arguments minus the mask. hipcc
+            # 5.7.1 does not declare the ``_sync`` forms at all, so these are
+            # the ones real kernels compile against.
+            width_limit = self.hip_warp_shuffle_segment_width(args[2:] or None)
+            if len(args) not in {2, 3} or width_limit is None:
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            value, lane = args[0], args[1]
+            if width_limit == "WaveGetLaneCount()":
+                if function_name == "__shfl":
+                    # HIP reads lane src & (width - 1), so a negative or
+                    # out-of-range source lane still reads inside the wave
+                    # (HIP __shfl). Handing the raw index to WaveReadLaneAt is
+                    # undefined outside the subgroup.
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"(({lane}) & (WaveGetLaneCount() - 1)))"
+                    )
+                if function_name == "__shfl_xor":
+                    # The partner lane may leave the wave (HIP __shfl_xor
+                    # returns the caller's own value there), so the index is
+                    # selected before the read; ROCm returns 0 for a disabled
+                    # source lane and the partner is inactive when it leaves.
+                    partner = f"(WaveGetLaneIndex() ^ {lane})"
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"(({partner} < WaveGetLaneCount()) ? {partner} "
+                        f": WaveGetLaneIndex()))"
+                    )
+                # Select the source index first and read in every lane: the
+                # shuffle must not sit in a branch, because the source lane is
+                # inactive in the lanes that take the other arm.
+                if function_name == "__shfl_up":
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"((WaveGetLaneIndex() >= ({lane})) ? "
+                        f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
+                    )
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"(((WaveGetLaneIndex() + ({lane})) < WaveGetLaneCount()) ? "
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
+                )
+            # A width splits the wave into width-lane segments: __shfl reads
+            # the same offset inside the caller's segment, and the up/down/xor
+            # forms return the caller's own value when the source lane leaves
+            # it (HIP __shfl family). These are the same expressions the _sync
+            # family uses.
+            segment_lane = f"(WaveGetLaneIndex() % {width_limit})"
+            segment_base = (
+                f"(WaveGetLaneIndex() - (WaveGetLaneIndex() % {width_limit}))"
+            )
+            if function_name == "__shfl":
+                return (
+                    f"WaveReadLaneAt({value}, ({segment_base} + "
+                    f"(({lane}) & ({width_limit} - 1))))"
+                )
+            if function_name == "__shfl_up":
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"(({segment_lane} >= ({lane})) ? "
+                    f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
+                )
+            if function_name == "__shfl_down":
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"((({segment_lane} + ({lane})) < {width_limit}) ? "
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
+                )
+            partner = f"(WaveGetLaneIndex() ^ {lane})"
+            segment_end = f"({segment_base} + {width_limit})"
+            return (
+                f"WaveReadLaneAt({value}, (({partner} < {segment_end}) ? "
+                f"{partner} : WaveGetLaneIndex()))"
+            )
+
+        if function_name == "__ballot":
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
         return None
@@ -8291,6 +8362,31 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         if normalized in {"32", "32u", "64", "64u"}:
             return normalized.rstrip("u")
         if normalized in {"warpsize", "warp_size", "warp_full_width"}:
+            return "WaveGetLaneCount()"
+        return None
+
+    def hip_warp_shuffle_segment_width(self, width_args):
+        # HIP's mask-less shuffles take any power-of-two width up to warpSize
+        # and work inside width-lane segments (HIP programming guide, "Warp
+        # cross-lane functions"), so the narrow widths must import too. Kept
+        # apart from hip_warp_shuffle_width_limit so widening it here does not
+        # also accept those widths for the _sync family, whose lowering does
+        # not segment yet.
+        if not width_args:
+            return "WaveGetLaneCount()"
+        if len(width_args) != 1:
+            return None
+        normalized = self.normalize_warp_mask_expression(width_args[0])
+        constant_width = normalized.rstrip("u")
+        if constant_width in {"1", "2", "4", "8", "16", "32", "64"}:
+            return constant_width
+        if normalized in {
+            "warpsize",
+            "warp_size",
+            "warp_full_width",
+            "gl_subgroupsize",
+            "int(gl_subgroupsize)",
+        }:
             return "WaveGetLaneCount()"
         return None
 
