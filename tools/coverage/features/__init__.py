@@ -7,6 +7,7 @@ from ..model import Feature
 from ..upstream import fetch
 from . import (
     cuda,
+    glam,
     glsl,
     glsl_subgroup,
     hip,
@@ -95,12 +96,19 @@ RUST_ARCH = (
 
 
 def _rust(offline: bool) -> list[Feature]:
-    return rust.parse(
+    glsl_names = _glsl_names(offline)
+    features = rust.parse(
         {module: fetch(f"rust-{module}", offline=offline) for module in RUST_ARCH},
         fetch("rust-float", offline=offline),
         fetch("rust-vec3", offline=offline),
-        _glsl_names(offline),
+        glsl_names,
     )
+    features += rust.packing(fetch("rust-packing", offline=offline), glsl_names)
+    features += glam.parse(
+        {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
+        glsl_names,
+    )
+    return sorted(features, key=lambda f: (f.group, f.name))
 
 
 def _slang(offline: bool) -> list[Feature]:

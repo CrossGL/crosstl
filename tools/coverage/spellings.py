@@ -161,6 +161,17 @@ RENAMES = {
         "Vec3::cmple": "lessThanEqual",
         "Vec3::cmpgt": "greaterThan",
         "Vec3::cmpge": "greaterThanEqual",
+        # spirv_std::float's packing functions are the GLSL.std.450 instructions of GLSL's packing functions.
+        "vec2_to_f16x2": "packHalf2x16",
+        "f16x2_to_vec2": "unpackHalf2x16",
+        "vec4_to_u8x4_snorm": "packSnorm4x8",
+        "vec4_to_u8x4_unorm": "packUnorm4x8",
+        "vec2_to_u16x2_snorm": "packSnorm2x16",
+        "vec2_to_u16x2_unorm": "packUnorm2x16",
+        "u8x4_to_vec4_snorm": "unpackSnorm4x8",
+        "u8x4_to_vec4_unorm": "unpackUnorm4x8",
+        "u16x2_to_vec2_snorm": "unpackSnorm2x16",
+        "u16x2_to_vec2_unorm": "unpackUnorm2x16",
         "Derivative::dfdx": "dFdx",
         "Derivative::dfdy": "dFdy",
         "Derivative::fwidth": "fwidth",
@@ -318,7 +329,7 @@ COUNTERPARTS = {
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
     # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
-    # with the vec3 constructor, which also builds a vector from an array's or a slice's first three elements. glam's
+    # with the vec3 constructor, which also builds a vector from an array's three elements. glam's
     # extend, truncate and as_dvec3 are vector constructors in CrossGL, as in GLSL (GLSL 4.60 section 5.4.2): vec4
     # appends an element, vec2 keeps the first two and dvec3 widens each one.
     "rust": {
@@ -326,7 +337,6 @@ COUNTERPARTS = {
         "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
         "Vec3::to_vec3a": "vec3 vec3(vec3)",
         "Vec3::from_array": "vec3 vec3(float, float, float)",
-        "Vec3::from_slice": "vec3 vec3(float, float, float)",
         "Vec3::extend": "vec4 vec4(vec3, float)",
         "Vec3::truncate": "vec2 vec2(vec3)",
         "Vec3::as_dvec3": "dvec3 dvec3(vec3)",
@@ -648,6 +658,10 @@ OTHER_NAMES = {
         "Float::recip": "rcp",
         "Vec3::recip": "rcp",
         "Float::powi": "pow({0}, float({1}))",
+        # spirv-std converts one float to a half through the first element of PackHalf2x16, with a zero second
+        # element, and back through the first element of UnpackHalf2x16 (crates/spirv-std/src/float.rs).
+        "f32_to_f16": "packHalf2x16(vec2({0}, 0.0))",
+        "f16_to_f32": "unpackHalf2x16({0}).x",
         # Rust's fract truncates, where CrossGL's fract floors, and num-traits' log takes a base: num-traits computes
         # them as self - trunc(self) and self.ln() / base.ln() (src/float.rs), and glam's Vec3::fract as
         # self - self.trunc() (src/f32/vec3.rs).
@@ -680,6 +694,8 @@ OTHER_NAMES = {
         "Vec3::min_position": (
             "({0}.z < ({0}.y < {0}.x ? {0}.y : {0}.x) ? 2u : ({0}.y < {0}.x ? 1u : 0u))"
         ),
+        # A slice is the probe's whole input buffer, whose first three elements from_slice reads.
+        "Vec3::from_slice": "vec3({0}[0], {0}[1], {0}[2])",
         "Vec3::with_x": "vec3({1}, {0}.y, {0}.z)",
         "Vec3::with_y": "vec3({0}.x, {1}, {0}.z)",
         "Vec3::with_z": "vec3({0}.x, {0}.y, {1})",
