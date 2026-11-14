@@ -29,6 +29,7 @@ from .ast import (
     EnumNode,
     EnumVariantNode,
     ExecutionModel,
+    ExpressionNode,
     ExpressionStatementNode,
     ForInNode,
     ForNode,
@@ -88,7 +89,9 @@ from .explicit_specializations import (
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
+    explicit_workgroup_size,
     host_workgroup_size_mark,
+    padded_workgroup_size_arguments,
     resolve_host_workgroup_sizes,
 )
 from .integer_literals import integer_literal_parts
@@ -1102,7 +1105,7 @@ class Parser:
                         break
                     self.eat("RPAREN")
 
-                attributes.append(AttributeNode(name=name, arguments=arguments))
+                attributes.append(self.source_attribute(name, arguments))
 
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
@@ -1184,7 +1187,16 @@ class Parser:
                 break
             self.eat("RPAREN")
 
-        return [AttributeNode(name=name, arguments=arguments)]
+        return [self.source_attribute(name, arguments)]
+
+    def source_attribute(self, name, arguments):
+        """An attribute as CrossGL source spells it, with a workgroup size's omitted dimensions made 1."""
+        return AttributeNode(
+            name=name,
+            arguments=padded_workgroup_size_arguments(
+                name, arguments, lambda: LiteralNode(1, PrimitiveType("int"))
+            ),
+        )
 
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
@@ -1272,19 +1284,10 @@ class Parser:
 
     def execution_config_from_function_attributes(self, function):
         """Return execution metadata implied by stage function attributes."""
-        for attr in getattr(function, "attributes", []) or []:
-            attr_name = str(getattr(attr, "name", "")).lower()
-            if attr_name not in {"local_size", "numthreads", "workgroup_size"}:
-                continue
-
-            arguments = getattr(attr, "arguments", []) or []
-            if len(arguments) != 3:
-                continue
-
-            values = tuple(self.layout_argument_to_string(arg) for arg in arguments)
-            return {"numthreads": values}
-
-        return {}
+        size = explicit_workgroup_size(
+            getattr(function, "attributes", []) or [], self.layout_argument_to_string
+        )
+        return {} if size is None else {"numthreads": size}
 
     def layout_argument_to_string(self, argument):
         """Return the source-like value for simple layout argument expressions."""
@@ -4323,6 +4326,11 @@ class Parser:
                 type_node = type_node.element_type
             return self.format_type_argument(type_node) + "".join(suffixes)
         if hasattr(type_node, "name"):
+            if type_node.name is None and isinstance(type_node, ExpressionNode):
+                # An expression with no spelling here (a range, for one) names no type or value argument.
+                raise CrossGLSyntaxError(
+                    f"A {type(type_node).__name__} cannot be a type argument"
+                )
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
@@ -4370,7 +4378,7 @@ class Parser:
                         self.eat("COMMA")
                 self.eat("RPAREN")
 
-            attributes.append(AttributeNode(name=name, arguments=arguments))
+            attributes.append(self.source_attribute(name, arguments))
 
         return attributes
 
