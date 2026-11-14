@@ -58,6 +58,8 @@ def refuse_external_function_calls(ast):
     """Raise :class:`MetalExternalFunctionError` for the first call to a declared function no definition provides.
     any function of the unit, in any namespace or as a template, has the same unqualified name.  A preserved
     declaration-only node (``is_free_function_prototype=True``) represents a cross-file callable; calls to it
+    A preserved declaration-only node (``is_free_function_prototype=True``) represents a cross-file callable; calls
+    to it are legitimate and are not refused.
     are legitimate and are not refused.
     ``ast.function_prototypes`` holds the names of the prototypes the parser dropped. A name counts as defined when
     any function of the unit, in any namespace or as a template, has the same unqualified name.
@@ -68,7 +70,15 @@ def refuse_external_function_calls(ast):
     defined = {
         _short(function.name)
         and getattr(function, "body", None) is not None
+    # Names that have a preserved declaration node are cross-file callables;
+    # they don't need a definition in this translation unit.
+    declared_cross_file = {
+        _short(function.name)
         for function in getattr(ast, "functions", None) or []
+        if getattr(function, "name", None)
+        and getattr(function, "is_free_function_prototype", False)
+    }
+    external = {_short(name) for name in prototypes} - defined - declared_cross_file
     # Names that have a preserved declaration node are cross-file callables;
     # they don't need a definition in this translation unit.
     declared_cross_file = {

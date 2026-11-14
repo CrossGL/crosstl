@@ -582,7 +582,7 @@ def test_same_file_decl_then_def_no_duplicate_body(tmp_path):
     generated = _xlat(_SAME_FILE_DECL_DEF, tmp_path)
     assert "fwd_fn" in generated
     bodies = re.findall(r"fwd_fn\s*\([^)]*\)\s*\{", generated)
-    assert len(bodies) <= 1, f"Expected at most one body, found {len(bodies)}"
+    assert len(bodies) == 1, f"Expected exactly one body, found {len(bodies)}"
 
 
 def test_provider_has_body_in_translated_metal(tmp_path):
