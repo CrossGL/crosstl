@@ -321,10 +321,15 @@ COUNTERPARTS = {
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
-    # Mojo returns both parts of frexp and modf as a tuple.
+    # Mojo returns both parts of frexp and modf as a tuple. std.atomic's static load and store are CrossGL's relaxed
+    # atomicLoad and atomicStore, and its max and min return nothing.
     "mojo": {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
+        "Atomic.load": "int atomicLoad(inout int)",
+        "Atomic.store": "void atomicStore(inout int, int)",
+        "Atomic.max": "void atomicMax(inout int, int)",
+        "Atomic.min": "void atomicMin(inout int, int)",
     },
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
@@ -588,6 +593,36 @@ OTHER_NAMES = {
         "recip": "rcp",
         "inf": "(INFINITY)",
         "iota": "(0.0)",
+        # MAX's warp functions (max/gpu/primitives/warp.mojo), which a probe calls through their module, are
+        # GL_KHR_shader_subgroup's. shuffle_idx reads the lane it names, and prefix_sum is inclusive unless asked to
+        # be exclusive. A lane-group reduction over the whole warp, as the probe makes it, is the warp reduction.
+        # broadcast copies lane 0's value, and vote returns the 32-bit ballot of a 32-lane warp, the first component
+        # of CrossGL's. match_any is CUDA's __match_any_sync over the full warp (match.any.sync.b32 with the mask
+        # 0xFFFFFFFF). max.gpu.sync's syncwarp waits for the warp's lanes and orders their memory accesses, as
+        # subgroupBarrier does.
+        "warp.shuffle_idx": "subgroupShuffle",
+        "warp.shuffle_up": "subgroupShuffleUp",
+        "warp.shuffle_down": "subgroupShuffleDown",
+        "warp.shuffle_xor": "subgroupShuffleXor",
+        "warp.sum": "subgroupAdd",
+        "warp.max": "subgroupMax",
+        "warp.min": "subgroupMin",
+        "warp.lane_group_sum": "subgroupAdd",
+        "warp.lane_group_max": "subgroupMax",
+        "warp.lane_group_min": "subgroupMin",
+        "warp.prefix_sum": "subgroupInclusiveAdd",
+        "warp.broadcast": "subgroupBroadcast({0}, 0u)",
+        "warp.vote": "subgroupBallot({0}).x",
+        "warp.match_any": "__match_any_sync(4294967295u, {0})",
+        "syncwarp": "subgroupBarrier",
+        # max.gpu's lane_id is the invocation's index in its warp, and warp_id divides the x index in the block by the
+        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced.
+        "lane_id": "int64(gl_SubgroupInvocationID)",
+        "warp_id": "int64(gl_LocalInvocationID.x / gl_SubgroupSize)",
+        "Atomic.fetch_add": "atomicAdd",
+        # std.atomic's fence is sequentially consistent by default (atomic.mojo, _DEFAULT_MEMORY_ORDERING), as CUDA's
+        # __threadfence is.
+        "fence": "memoryBarrier",
         "mulwide": "(uint64({0}) * uint64({1}))",
         "align_down": (
             "(({0} / {1} - ({0} != {0} / {1} * {1} && ({0} < 0) != ({1} < 0) ? 1 : 0)) * {1})"

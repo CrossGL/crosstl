@@ -104,6 +104,20 @@ SOURCES = {
         "DXC v1.9.2602.24 intrinsic table",
     ),
     # Mojo's standard library at the release CI installs (mojo 1.2.0, tagged mojo/v1.2.0 and max/v26.7.0).
+    "mojo-atomic": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "Mojo/stdlib/std/atomic/atomic.mojo",
+        "33e7ae26d1407df2234bcf156da75d9106d49eb842bdbb8476961644c40bbbae",
+        "Mojo 1.2.0 std.atomic functions and Atomic methods",
+    ),
+    "mojo-atomic-exports": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "Mojo/stdlib/std/atomic/__init__.mojo",
+        "0931118d39830baed30e88d7569a7b8b94c9b73a250b905c746ac9b1e969da88",
+        "Mojo 1.2.0 std.atomic public API",
+    ),
     "mojo-bit": Source(
         "modular/modular",
         "527d069ee11a41ac5320af1f9402db0a66b2b868",
@@ -117,6 +131,49 @@ SOURCES = {
         "Mojo/stdlib/std/bit/__init__.mojo",
         "0cabf5f5474056e435ac69082c42556ed049e8130c94f6a33e91e81cc7b8d5e8",
         "Mojo 1.2.0 std.bit public API",
+    ),
+    # MAX's GPU package at the same tag, as max-mojo-libs 26.7.0 installs it.
+    "mojo-gpu-block": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/primitives/block.mojo",
+        "303b46b1ab87ff6dc3e3bfa09a452e3248934bf238bcb281698451e208a47a79",
+        "MAX 26.7.0 max.gpu.primitives.block functions",
+    ),
+    "mojo-gpu-id": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/primitives/id.mojo",
+        "44256257727011951760602c866a8b3a0bcd1c0fe6c2a513f4efd64eec9b1f75",
+        "MAX 26.7.0 max.gpu.primitives.id functions",
+    ),
+    "mojo-gpu-lanes": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "Mojo/stdlib/std/_gpu/primitives/id.mojo",
+        "b3b415a9328be5ec176092001297123eae6756e44ed604748298c8c294da63a9",
+        "Mojo 1.2.0 GPU index functions max.gpu re-exports",
+    ),
+    "mojo-gpu-sync": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/sync/sync.mojo",
+        "54a2271e7cae969490fd3fa49f46c64fbd5a7a44c0d069ece7765dd861f46686",
+        "MAX 26.7.0 max.gpu synchronization functions",
+    ),
+    "mojo-gpu-sync-exports": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/sync/__init__.mojo",
+        "708174965f4d43d3958b44477ead7952702d692cb161d751c8ce5c00533d476e",
+        "MAX 26.7.0 max.gpu.sync public API",
+    ),
+    "mojo-gpu-warp": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/primitives/warp.mojo",
+        "9d8c07709bf313a81b11ec4568d0aa6ef4a5168853b690379690e359ec79791f",
+        "MAX 26.7.0 max.gpu.primitives.warp functions",
     ),
     "mojo-math": Source(
         "modular/modular",

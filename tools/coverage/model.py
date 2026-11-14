@@ -267,7 +267,7 @@ class Feature:
     probes are checked for when it is not the language's usual one, as ``hlsl`` for a Slang function that SPIR-V
     lacks or ``vulkan`` for a GLSL function that only GLSL for Vulkan has. ``extension`` is the language extension a
     probe in the feature's own language enables to call it, as ``GL_KHR_shader_subgroup_ballot`` for GLSL's
-    ``subgroupBallot``.
+    ``subgroupBallot``, or the module or function a Mojo probe imports, as ``max.gpu.primitives.warp``.
     """
 
     language: str
