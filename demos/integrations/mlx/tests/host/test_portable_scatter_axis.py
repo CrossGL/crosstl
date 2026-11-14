@@ -353,14 +353,28 @@ def test_axis_scatter_requires_complete_matching_workloads(native, fault):
         verify_scatter_axis.validate_records(np, records, native=native)
 
 
+# A signed int32 output starts negative: it uploads signed values, not words.
+SIGNED_OUTPUT = next(
+    case
+    for case in workloads.cases()
+    if case["dtype"] == "int32" and case.get("values") == "signed"
+)
+
+
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
     "fault", (None, "guard", "shape", "dtype", "missing", "storage", "index")
 )
+@pytest.mark.parametrize(
+    "case", (next(workloads.cases()), SIGNED_OUTPUT), ids=("unsigned", "signed")
+)
 def test_axis_scatter_uploads_initialized_output_and_guards_writeback(
-    tmp_path, monkeypatch, target, fault
+    tmp_path, monkeypatch, target, fault, case
 ):
-    entry, supplied, arrays, expected, execution = buffers(next(workloads.cases()))
+    from crosstl.project.runtime_values import scalars_fit
+
+    entry, supplied, arrays, expected, execution = buffers(case)
+    assert case is not SIGNED_OUTPUT or arrays["out"].min() < 0
     initial = arrays["out"].copy()
     descriptor = {"artifact": {}, "bindings": []}
     for name, buffer in supplied.items():
@@ -393,6 +407,8 @@ def test_axis_scatter_uploads_initialized_output_and_guards_writeback(
             inputs["out"]["values"] == initial.flatten().tolist() + runtime.COPY_GUARD
         )
         assert inputs["out"]["shape"] == [expected.size + 32, 1]
+        # The native loader accepts the values its declared storage holds.
+        assert scalars_fit(inputs["out"]["values"], inputs["out"]["dtype"])
         return SimpleNamespace(inputs=inputs, outputs=outputs)
 
     def execute(_host, request):

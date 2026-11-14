@@ -83,10 +83,11 @@ def word_value(host, buffer, layout, name, scatter, guard):
             ).contents
         )
         values = scatter_layout.pack_lanes(lanes, scatter_layout.PADDING[kind])
-    elif kind in scatter_layout.ATOMIC_LANES and (
-        kind == "float32" or name == "out" and scatter
+    elif kind == "float32" or (
+        scatter and name == "out" and scatter_layout.ATOMIC_LANES.get(kind, 1) > 1
     ):
-        # Raw 32-bit words: float32 bits, or a complex64 sum's float lanes.
+        # Raw 32-bit words: float32 bits, or a complex64 sum's float lanes. An
+        # int32 output keeps its signed values, as its readback does.
         words = buffer.count * scatter_layout.ATOMIC_LANES[kind]
         values = list(
             ctypes.cast(buffer.data, ctypes.POINTER(ctypes.c_uint32 * words)).contents
