@@ -3,8 +3,8 @@
 CrossTL must refuse what it cannot translate. Three code shapes break that rule silently:
 
 - ``fallback-text``: a string literal that writes a loss marker into the output (``; WARNING``, ``// WARNING``,
-  ``/* unsupported``, ``placeholder``, ``using default value``, ``not directly supported``, ``not preserved */``)
-  instead of raising a diagnostic;
+  ``/* unsupported``, ``placeholder`` / ``placeholders``, ``using default value``, ``not directly supported``,
+  ``not preserved */``) instead of raising a diagnostic;
 - ``identity-fallback``: ``mapping.get(key, key)``, which passes an unknown name through verbatim;
 - ``empty-block-recovery``: an exception handler that replaces what failed to parse with an empty block.
 
@@ -33,7 +33,7 @@ REPOSITORY = HERE.parents[1]
 BASELINE = HERE / "fail_closed_baseline.json"
 ROOTS = ("crosstl/translator", "crosstl/backend")
 MARKERS = re.compile(
-    r"; WARNING|// WARNING|/\*\s*unsupported|\bplaceholder\b|using default value"
+    r"; WARNING|// WARNING|/\*\s*unsupported|\bplaceholders?\b|using default value"
     r"|not directly supported|\bnot (?:supported|preserved) (?:in CrossGL|\*/)",
     re.I,
 )
