@@ -1151,13 +1151,15 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result, message = cuda_import_partial_output(codegen.generate, ast)
 
-        # The full warp is the subgroup; a mask that may name fewer lanes has no CrossGL barrier.
-        assert "subgroupBarrier();" in result
+        # A full-warp __syncwarp stays a CUDA call: a subgroup barrier waits for a subgroup of another size on most
+        # targets. A mask that may name fewer lanes has no CrossGL barrier.
+        assert "__syncwarp();" in result
+        assert "subgroupBarrier" not in result
         assert (
             "CUDA __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
             in message
         )
-        assert "__syncwarp" not in result
+        assert "__syncwarp(mask)" not in result
         assert "None" not in result
 
     def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
@@ -1173,8 +1175,9 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "return WaveReadLaneAt(value, lane);" in result
-        assert "cuda warp intrinsic __shfl_sync" not in result
+        # A shuffle keeps CUDA's 32-lane warp semantics in CrossGL; wave operations act on subgroups of another size.
+        assert "return __shfl_sync(0xffffffff, value, lane, 32);" in result
+        assert "WaveReadLaneAt" not in result
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_cuda_calls(self):
         code = """
@@ -1195,20 +1198,16 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveBallot(true).x" in result
-        assert "WaveActiveBallot((pred != 0)).x" in result
-        assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
-        assert "WaveReadLaneAt(value, lane)" in result
+        # Warp intrinsics stay CUDA calls, which crosstl.translator.semantics.warp emulates or refuses per target:
+        # wave operations act on subgroups whose size is not the warp's 32 lanes on most targets.
+        assert "__activemask()" in result
+        assert "__ballot_sync(0xffffffff, pred)" in result
+        assert "__any_sync(0xffffffff, pred)" in result
         assert "__ballot_sync(mask, pred)" in result
         assert "not directly supported" not in result
-        assert (
-            "(((WaveGetLaneIndex() + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
-        ) in result
-        assert "__activemask()" not in result
-        assert "__ballot_sync(0xffffffff, pred)" not in result
-        assert "__shfl_sync(0xffffffff, value, lane)" not in result
-        assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_down_sync(0xffffffff, value, 1)" in result
+        assert "Wave" not in result
 
     def test_cuda_full_warp_mask_variable_reassignment_clears_vote_lowering(self):
         code = """
@@ -1227,7 +1226,8 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in result
+        # The mask variable holds the full-warp literal at the first vote only.
+        assert "result[tx] = __any_sync(0xFFFFFFFFu, input[tx]);" in result
         assert "result[(tx + 1)] = __any_sync(mask, input[tx]);" in result
         assert "not directly supported" not in result
 
@@ -1249,18 +1249,11 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
-        ) in result
-        assert (
-            "((WaveGetLaneIndex() + (delta)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
-        ) in result
-        assert "WaveReadLaneAt(value, (WaveGetLaneIndex() ^ (mask)))" in result
-        assert "cuda warp intrinsic __shfl" not in result
-        assert "__shfl_" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_up_sync(0xffffffff, value, delta)" in result
+        assert "__shfl_down_sync(0xffffffff, value, delta, 32)" in result
+        assert "__shfl_xor_sync(0xffffffff, value, mask, 32)" in result
+        assert "WaveReadLaneAt" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_docs_full_warp_reduce_sync_variants_convert(self):
@@ -1284,18 +1277,13 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveSum(value)" in result
-        assert "WaveActiveMin(value)" in result
-        assert "WaveActiveMax(value)" in result
-        assert "WaveActiveBitAnd(value)" in result
-        assert "WaveActiveBitOr(value)" in result
-        assert "WaveActiveBitXor(value)" in result
-        # A partial-mask reduction has no wave equivalent; it stays a CUDA call, never a constant.
+        # Reductions stay CUDA calls, which crosstl.translator.semantics.warp emulates per 32-lane warp or refuses;
+        # a partial-mask reduction is kept too, never replaced by a constant.
+        for name in ("add", "min", "max", "and", "or", "xor"):
+            assert f"__reduce_{name}_sync(0xffffffffu, value)" in result
         assert "__reduce_max_sync(mask, value)" in result
         assert "not directly supported" not in result
-        assert "__reduce_add_sync(0xffffffffu, value)" not in result
-        assert "__reduce_min_sync(0xffffffffu, value)" not in result
-        assert "__reduce_max_sync(0xffffffffu, value)" not in result
+        assert "Wave" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cooperative_groups_thread_block_sync_converts(self):
@@ -2603,7 +2591,9 @@ class TestCudaCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
-    def test_cuda_device_graph_launch_runtime_conversion(self):
+    def test_cuda_device_graph_launch_is_refused(self):
+        # A kernel cannot launch a graph on any CrossGL target, so the launch and its status must not become a
+        # comment and cudaSuccess.
         code = """
         __global__ void launchDeviceGraphs(cudaGraphExec_t child) {
             cudaGraphExec_t current = cudaGetCurrentGraphExec();
@@ -2615,38 +2605,16 @@ class TestCudaCodeGen:
             );
             tail = cudaGetCurrentGraphExec();
             err = cudaGraphLaunch(tail, cudaStreamGraphTailLaunch);
-            err = cudaGraphLaunch(
-                cudaGetCurrentGraphExec(),
-                cudaStreamGraphFireAndForgetAsSibling
-            );
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert "// CUDA device graph get current exec" in result
-        assert "var current: cudaGraphExec_t = 0;" in result
-        assert "tail = 0;" in result
-        assert (
-            "// CUDA graph device launch: exec: child, mode: fire-and-forget" in result
-        )
-        assert "// CUDA graph device launch: exec: tail, mode: tail" in result
-        assert (
-            "// CUDA graph device launch: "
-            "exec: (/* CUDA device graph get current exec */ 0), "
-            "mode: fire-and-forget sibling"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
-        assert "cudaGetCurrentGraphExec(" not in result
-        assert "cudaGraphLaunch(" not in result
+        assert "runtime call cudaGetCurrentGraphExec() in device code" in message
+        assert "runtime call cudaGraphLaunch() in device code" in message
 
-    def test_cuda_device_graph_kernel_node_update_runtime_conversion(self):
+    def test_cuda_device_graph_kernel_node_update_is_refused(self):
         code = """
         __device__ void updateDeviceGraphKernelNode(
             cudaGraphDeviceNode_t node,
@@ -2659,40 +2627,19 @@ class TestCudaCodeGen:
             err = cudaGraphKernelNodeUpdatesApply(updates, 2);
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert (
-            "// CUDA device graph kernel node set enabled: " "node: node, enabled: true"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set grid dim: "
-            "node: node, grid dim: vec3<u32>(2, 3, 4)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set param: "
-            "node: node, offset: 16, value: (&value), bytes: sizeof(value)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node updates apply: "
-            "updates: updates, count: 2"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
         for function_name in [
             "cudaGraphKernelNodeSetEnabled",
             "cudaGraphKernelNodeSetGridDim",
             "cudaGraphKernelNodeSetParam",
             "cudaGraphKernelNodeUpdatesApply",
         ]:
-            assert f"{function_name}(" not in result
+            assert f"runtime call {function_name}() in device code" in message
 
-    def test_cuda_graph_conditional_runtime_conversion(self):
+    def test_cuda_device_graph_set_conditional_is_refused(self):
         code = """
         __device__ void setConditional(
             cudaGraphConditionalHandle handle,
@@ -2700,7 +2647,15 @@ class TestCudaCodeGen:
         ) {
             cudaGraphSetConditional(handle, value);
         }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "runtime call cudaGraphSetConditional() in device code" in message
+
+    def test_cuda_graph_conditional_runtime_conversion(self):
+        code = """
         void buildConditionalGraph(
             cudaGraph_t graph,
             cudaGraphNode_t* deps,
@@ -2756,7 +2711,6 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "// CUDA graph set conditional: handle: handle, value: value" in result
         assert (
             "// CUDA graph conditional handle create: output: handle, "
             "graph: graph, default launch value: 1u, "
@@ -2779,7 +2733,6 @@ class TestCudaCodeGen:
         assert "var err: cudaError_t = cudaSuccess;" in result
         assert "err = cudaSuccess;" in result
         for function_name in [
-            "cudaGraphSetConditional",
             "cudaGraphConditionalHandleCreate",
             "cudaGraphConditionalHandleCreate_v2",
             "cudaGraphAddNode",

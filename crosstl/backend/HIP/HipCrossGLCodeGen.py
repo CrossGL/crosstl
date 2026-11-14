@@ -11,6 +11,7 @@ from ...translator.integer_literals import (
     crossgl_legacy_octal,
     integer_literal_parts,
 )
+from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.directed_rounding import refuse_directed_rounding
@@ -569,6 +570,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
+        # Inside a __global__ kernel or a __device__ function, where host runtime calls are refused.
+        self.in_device_code = False
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -1990,10 +1993,37 @@ class HipToCrossGLConverter(ImportRefusalMixin):
 
         if self.emit_hip_runtime_call_statement(stmt):
             return
+        if self.emit_thread_block_sync_statement(stmt):
+            return
 
         result = self.visit(stmt)
         if isinstance(result, str) and result.strip():
             self.emit(f"{result};")
+
+    def emit_thread_block_sync_statement(self, stmt):
+        """Emit ``g.sync()`` or ``cg::sync(g)`` of a thread block as ``__syncthreads()``; as a value it is refused."""
+        if not isinstance(stmt, FunctionCallNode):
+            return False
+        if isinstance(stmt.name, MemberAccessNode):
+            member_base_name, _ = self.parse_cpp_template(stmt.name.member)
+            member_name = (
+                self.cooperative_group_base_name(member_base_name) or stmt.name.member
+            )
+            if member_name != "sync" or stmt.args:
+                return False
+            group = stmt.name.object
+        elif isinstance(stmt.name, str) and len(stmt.args) == 1:
+            base_call_name, _ = self.parse_cpp_template(stmt.name)
+            if self.cooperative_group_base_name(base_call_name) != "sync":
+                return False
+            group = stmt.args[0]
+        else:
+            return False
+        group_metadata = self.resolve_cooperative_group_metadata(group)
+        if group_metadata is None or group_metadata["kind"] != "thread_block":
+            return False
+        self.emit_block_barrier()
+        return True
 
     def emit_hip_runtime_call_statement(self, stmt):
         if not isinstance(stmt, FunctionCallNode):
@@ -2050,6 +2080,22 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         return self.format_hip_runtime_status_expression(value.args[0])
 
     def format_hip_runtime_call(self, node):
+        """Describe a host runtime call as comments; in device code the call is refused and described by none."""
+        comments = self.describe_hip_runtime_call(node)
+        if comments is not None and self.in_device_code:
+            self.refuse_device_runtime_call(f"runtime call {node.name}()")
+            return []
+        return comments
+
+    def refuse_device_runtime_call(self, what):
+        """Refuse a HIP runtime call or kernel launch made from device code."""
+        return self.refuse_import(
+            f"HIP {what} in device code: CrossGL kernels have no device-side runtime (allocation, memory "
+            "operations, streams or launches); only the host can perform it",
+            "0",
+        )
+
+    def describe_hip_runtime_call(self, node):
         args = [self.visit_runtime_argument_expression(arg) for arg in node.args]
         name = node.name
 
@@ -5158,6 +5204,13 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         return "unknown"
 
     def format_hip_runtime_expression_call(self, node, args):
+        """A host runtime query's value, with a comment naming the query; in device code it is refused."""
+        value = self.describe_hip_runtime_expression_call(node, args)
+        if value is not None and self.in_device_code:
+            return self.refuse_device_runtime_call(f"runtime call {node.name}()")
+        return value
+
+    def describe_hip_runtime_expression_call(self, node, args):
         name = node.name
         if name == "hipGetErrorString" and args:
             return f'/* HIP error string: {args[0]} */ ""'
@@ -5311,6 +5364,17 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             self.emit(f"// {node.directive}")
 
     def visit_FunctionNode(self, node):
+        """Render a HIP function node as a CrossGL function, tracking whether its body is device code."""
+        previous = self.in_device_code
+        self.in_device_code = previous or "__device__" in (
+            getattr(node, "qualifiers", None) or []
+        )
+        try:
+            return self.render_function_node(node)
+        finally:
+            self.in_device_code = previous
+
+    def render_function_node(self, node):
         """Render a HIP function node as a CrossGL function."""
         raw_return_type = node.return_type if hasattr(node, "return_type") else "void"
         self.validate_record_layout_use(
@@ -5412,6 +5476,15 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
+        """Render a HIP ``__global__`` kernel as a CrossGL compute entry point; its body is device code."""
+        previous = self.in_device_code
+        self.in_device_code = True
+        try:
+            return self.render_kernel_as_compute_shader(kernel)
+        finally:
+            self.in_device_code = previous
+
+    def render_kernel_as_compute_shader(self, kernel):
         """Render a HIP kernel as a CrossGL compute shader block."""
         for attribute in getattr(kernel, "attributes", []) or []:
             attribute_text = str(attribute)
@@ -6371,6 +6444,9 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             if isinstance(node.kernel_name, str)
             else self.visit(node.kernel_name)
         )
+        if self.in_device_code:
+            self.refuse_device_runtime_call(f"kernel launch {kernel_name}<<<...>>>")
+            return
         config = [self.visit(node.blocks), self.visit(node.threads)]
         if node.shared_mem is not None:
             config.append(self.visit(node.shared_mem))
@@ -8502,9 +8578,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         group_kind = group_metadata["kind"]
         member_base_name, _ = self.parse_cpp_template(member)
         member_name = self.cooperative_group_base_name(member_base_name) or member
+        # A thread block's sync() is a statement (emit_thread_block_sync_statement); as a value it is refused below.
         if group_kind == "thread_block" and not args:
-            if member_name == "sync":
-                return "workgroupBarrier()"
             if member_name == "thread_rank":
                 return "gl_LocalInvocationIndex"
             if member_name in {"size", "num_threads"}:
@@ -10321,7 +10396,10 @@ class HipToCrossGLConverter(ImportRefusalMixin):
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":
-            self.emit("workgroupBarrier();")
+            # HIP's __syncthreads orders global and shared memory for the block, as CUDA's does.
+            self.emit_block_barrier()
+        elif node.sync_type == "hipDeviceSynchronize" and self.in_device_code:
+            self.refuse_device_runtime_call("runtime call hipDeviceSynchronize()")
         elif node.sync_type == "hipDeviceSynchronize":
             self.emit("// HIP device synchronize")
         elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
@@ -10335,6 +10413,11 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             )
         else:
             self.refuse_import(f"HIP {node.sync_type}() has no CrossGL form")
+
+    def emit_block_barrier(self):
+        """Emit ``__syncthreads()``, which orders global and shared memory for the block as CUDA's does."""
+        for function_name in ORDERED_WORKGROUP_BARRIER:
+            self.emit(f"{function_name}();")
 
     def is_full_warp_mask(self, args):
         """Whether ``__syncwarp`` arguments name every lane: none, or an all-ones 32- or 64-bit literal mask."""

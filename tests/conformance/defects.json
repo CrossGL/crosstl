@@ -571,10 +571,12 @@
       "status": "open",
       "cases": [
         "u_warp_reduce",
+        "x_warp_vote",
+        "x_warp_sync_memory",
         "m_simd_sum",
         "m_simd_divergent"
       ],
-      "note": "Single-file Metal to HLSL still emits numthreads(1, 1, 1) and CUDA to SPIR-V LocalSize 1 1 1; u_warp_reduce diverges on lavapipe. The project layer supplies host sizes, but a single file has no refusal."
+      "note": "Single-file host-sized kernels now take the host's size from the threadgroup_size source option, or emit specialization constants (SPIR-V, GLSL) or macros (HLSL), and refuse where a size is required. CUDA warp shuffles, votes, reductions, __match_any_sync and __syncwarp no longer lower to wave operations, whose subgroup has 4 or 8 lanes on lavapipe: they are emulated per 32-lane warp through workgroup memory (u_warp_reduce and x_warp_vote are preserved on lavapipe, llvmpipe, MoltenVK, KosmicKrisp and Metal); __syncwarp and the CUDA and HIP __syncthreads fence all memory on each side of the workgroup barrier (x_warp_sync_memory), and __activemask and __match_all_sync are refused. Remaining: the WARP cells of u_warp_reduce need a fresh Windows run, and m_simd_sum and m_simd_divergent are driver-rejected on llvmpipe GL."
     },
     {
       "id": "S30",

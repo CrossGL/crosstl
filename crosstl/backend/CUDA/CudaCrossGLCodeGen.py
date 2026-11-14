@@ -3,6 +3,11 @@
 import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
+from ...translator.semantics.warp import (
+    ORDERED_WORKGROUP_BARRIER,
+    OTHER_WARP_INTRINSICS,
+    SHUFFLES,
+)
 from ..assignment_operands import grouped_operand
 from ..device_globals import device_memory_declaration, is_device_memory
 from ..import_refusals import CudaImportRefused, ImportRefusalMixin
@@ -36,6 +41,11 @@ from .directed_rounding import refuse_directed_rounding
 from .keyword_renames import source_identifier_names, unused_identifier_name
 from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
+
+# Warp intrinsics CrossGL keeps as CUDA calls; __syncwarp is a statement (visit_SyncNode).
+CUDA_WARP_INTRINSIC_CALLS = (frozenset(SHUFFLES) | OTHER_WARP_INTRINSICS) - {
+    "__syncwarp"
+}
 
 
 class CudaToCrossGLConverter(ImportRefusalMixin):
@@ -305,6 +315,8 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_scope_variable = False
+        # Inside a __global__ kernel or a __device__ function, where host runtime calls are refused.
+        self.in_device_code = False
         self.namespace_constant_names = set()
 
     def generate(self, ast_node):
@@ -1091,6 +1103,8 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             return
         if self.emit_cuda_output_parameter_call_statement(stmt):
             return
+        if self.emit_cooperative_group_sync_statement(stmt):
+            return
 
         result = self.visit(stmt)
         if isinstance(result, str) and result.strip():
@@ -1100,6 +1114,10 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         if not isinstance(stmt, FunctionCallNode):
             return False
         if self.is_user_defined_function(stmt.name):
+            return False
+        if self.in_device_code:
+            if self.format_cuda_runtime_expression(stmt) is not None:
+                return True
             return False
 
         runtime_wrapper = self.format_cuda_runtime_wrapper_expression(stmt)
@@ -1193,13 +1211,29 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         return "cudaSuccess"
 
     def format_cuda_runtime_expression(self, value):
+        """Host runtime calls become comments plus their success value; in device code they are refused."""
         if isinstance(value, KernelLaunchNode):
-            return self.format_kernel_launch_comments(value), "cudaSuccess"
+            runtime = self.format_kernel_launch_comments(value), "cudaSuccess"
+        else:
+            runtime = self.format_cuda_runtime_value_expression(value)
+            if runtime is None:
+                runtime = self.format_cuda_runtime_status_expression(value)
+        if runtime is not None and self.in_device_code:
+            return [], self.refuse_device_runtime_call(value)
+        return runtime
 
-        runtime_value = self.format_cuda_runtime_value_expression(value)
-        if runtime_value is not None:
-            return runtime_value
-        return self.format_cuda_runtime_status_expression(value)
+    def refuse_device_runtime_call(self, value):
+        """Refuse a CUDA runtime or driver call, or a kernel launch, made from device code."""
+        if isinstance(value, KernelLaunchNode):
+            what = f"kernel launch {self.visit(value.kernel_name)}<<<...>>>"
+        else:
+            name = value.name if isinstance(value.name, str) else self.visit(value.name)
+            what = f"runtime call {name}()"
+        return self.refuse_import(
+            f"CUDA {what} in device code: CrossGL kernels have no device-side runtime (allocation, memory "
+            "operations, graphs or launches); only the host can perform it",
+            "0",
+        )
 
     def format_cuda_runtime_value_expression(self, value):
         if not isinstance(value, FunctionCallNode):
@@ -4215,6 +4249,17 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         return name
 
     def visit_FunctionNode(self, node):
+        """Render a CUDA function node as a CrossGL function, tracking whether its body is device code."""
+        previous = self.in_device_code
+        self.in_device_code = previous or "__device__" in (
+            getattr(node, "qualifiers", None) or []
+        )
+        try:
+            return self.render_function_node(node)
+        finally:
+            self.in_device_code = previous
+
+    def render_function_node(self, node):
         """Render a CUDA function node as a CrossGL function."""
         return_type = self.convert_cuda_type_to_crossgl(node.return_type)
         function_name = self.convert_cuda_function_name_to_crossgl(node.name)
@@ -4279,6 +4324,15 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
+        """Render a ``__global__`` kernel as a CrossGL compute entry point; its body is device code."""
+        previous = self.in_device_code
+        self.in_device_code = True
+        try:
+            return self.render_kernel_as_compute_shader(kernel)
+        finally:
+            self.in_device_code = previous
+
+    def render_kernel_as_compute_shader(self, kernel):
         for attribute in getattr(kernel, "attributes", []) or []:
             attribute_text = str(attribute)
             if attribute_text.startswith("__launch_bounds__"):
@@ -4385,6 +4439,9 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
+        if self.in_device_code:
+            self.refuse_device_runtime_call(node)
+            return
         for comment in self.format_kernel_launch_comments(node):
             self.emit(comment)
 
@@ -5090,82 +5147,29 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
-        if function_name == "__activemask":
-            if not args:
-                return "WaveActiveBallot(true).x"
-            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-
-        if function_name in {"__any_sync", "__all_sync", "__ballot_sync"}:
-            if len(args) != 2 or not self.is_full_or_active_warp_mask(args[0]):
-                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-            predicate = self.format_wave_predicate(args[1])
-            if function_name == "__any_sync":
-                return f"(WaveActiveAnyTrue({predicate}) ? 1 : 0)"
-            if function_name == "__all_sync":
-                return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
-            return f"WaveActiveBallot({predicate}).x"
-
-        if function_name == "__match_any_sync":
-            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
-                return f"WaveMatch({args[1]}).x"
-            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-
-        if function_name in {
-            "__shfl_sync",
-            "__shfl_up_sync",
-            "__shfl_down_sync",
-            "__shfl_xor_sync",
-        }:
-            if (
-                len(args) not in {3, 4}
-                or not self.is_full_or_active_warp_mask(args[0])
-                or not self.is_full_warp_shuffle_width(args[3:] or None)
-            ):
-                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-            value, lane_or_delta = args[1], args[2]
-            if function_name == "__shfl_sync":
-                return f"WaveReadLaneAt({value}, {lane_or_delta})"
-            if function_name == "__shfl_up_sync":
-                return (
-                    f"((WaveGetLaneIndex() >= ({lane_or_delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane_or_delta}))) "
-                    f": {value})"
-                )
-            if function_name == "__shfl_down_sync":
-                return (
-                    f"(((WaveGetLaneIndex() + ({lane_or_delta})) < 32) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane_or_delta}))) "
-                    f": {value})"
-                )
-            return (
-                f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ ({lane_or_delta})))"
-            )
-
-        reduce_map = {
-            "__reduce_add_sync": "WaveActiveSum",
-            "__reduce_min_sync": "WaveActiveMin",
-            "__reduce_max_sync": "WaveActiveMax",
-            "__reduce_and_sync": "WaveActiveBitAnd",
-            "__reduce_or_sync": "WaveActiveBitOr",
-            "__reduce_xor_sync": "WaveActiveBitXor",
-        }
-        if function_name in reduce_map:
-            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
-                return f"{reduce_map[function_name]}({args[1]})"
-            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-
-        if function_name in {
-            "__ballot",
-            "__any",
-            "__all",
-            "__shfl",
-            "__shfl_up",
-            "__shfl_down",
-            "__shfl_xor",
-        }:
+        # Shuffles, votes, reductions and matches act on a warp of 32 consecutive threads. Wave operations act on a
+        # subgroup of implementation-defined size and layout, so they computed something else wherever a subgroup is
+        # not exactly such a warp (lavapipe's has 4 or 8 lanes, WARP's 4). Every warp intrinsic stays a CUDA call:
+        # crosstl.translator.semantics.warp emulates it exactly or refuses it for every target without CUDA warps.
+        if function_name in CUDA_WARP_INTRINSIC_CALLS:
+            if args and function_name.endswith("_sync"):
+                args = [self.literal_full_warp_mask(args[0]), *args[1:]]
             return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
 
         return None
+
+    def literal_full_warp_mask(self, mask):
+        """``0xFFFFFFFFu`` for a mask variable that holds the full-warp literal, else the mask as written."""
+        resolved = self.normalize_warp_mask_expression(
+            self.resolve_warp_mask_expression(mask)
+        )
+        literal = resolved.rstrip("ul")
+        if resolved != self.normalize_warp_mask_expression(mask) and (
+            literal in {"0xffffffff", "0xffffffffffffffff", "4294967295"}
+            or resolved == "uint_max"
+        ):
+            return "0xFFFFFFFFu"
+        return mask
 
     def is_full_warp_shuffle_width(self, width_args):
         if not width_args:
@@ -5589,13 +5593,75 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
                 )
         return None
 
+    def cooperative_group_sync_metadata(self, stmt):
+        """The group a ``g.sync()`` or ``cg::sync(g)`` statement synchronizes, or None for any other statement."""
+        if not isinstance(stmt, FunctionCallNode):
+            return None
+        if isinstance(stmt.name, MemberAccessNode):
+            member_base_name, _ = self.parse_cpp_template(stmt.name.member)
+            member_name = (
+                self.cooperative_group_base_name(member_base_name) or stmt.name.member
+            )
+            if member_name != "sync" or stmt.args:
+                return None
+            return self.resolve_cooperative_group_metadata(stmt.name.object)
+        if not isinstance(stmt.name, str) or len(stmt.args) != 1:
+            return None
+        base_call_name, _ = self.parse_cpp_template(stmt.name)
+        if self.cooperative_group_base_name(base_call_name) != "sync":
+            return None
+        return self.resolve_cooperative_group_metadata(stmt.args[0])
+
+    def emit_cooperative_group_sync_statement(self, stmt):
+        """Emit a thread block's or a warp tile's ``sync()``; other groups' syncs are refused as values are.
+
+        ``thread_block::sync()`` is ``__syncthreads()`` (CUDA C++ Programming Guide, "Cooperative Groups", Thread
+        Block Group). A ``thread_block_tile<N>`` of a thread block with ``N`` a power of two up to 32 lies inside one
+        warp, so its ``sync()`` becomes ``__syncwarp()``, which waits for the whole warp; crosstl.translator.semantics
+        .warp emulates it only where every lane of the warp reaches it, and there waiting for the whole warp also
+        waits for the tile.
+        """
+        group_metadata = self.cooperative_group_sync_metadata(stmt)
+        if group_metadata is None:
+            return False
+        group_kind = group_metadata["kind"]
+        if group_kind == "thread_block":
+            self.emit_block_barrier()
+            return True
+        tile_size = self.literal_warp_tile_size(group_metadata)
+        if (
+            group_kind == "thread_block_tile"
+            and group_metadata.get("parent_kind") == "thread_block"
+            and tile_size is not None
+        ):
+            self.emit("__syncwarp();")
+            return True
+        if group_kind == "thread_block_tile":
+            self.refuse_import(
+                f"CUDA cooperative_groups thread_block_tile<{group_metadata.get('tile_size', '?')}>.sync(): "
+                "CrossGL has barriers over a workgroup and over a 32-lane warp only, so a tile must be a literal "
+                "power of two up to 32 partitioned from a thread block"
+            )
+            return True
+        return False
+
+    def literal_warp_tile_size(self, group_metadata):
+        """The tile size as an int when it is a literal power of two up to 32, else None."""
+        text = str(group_metadata.get("tile_size") or "").strip().rstrip("uU")
+        try:
+            size = int(text, 0)
+        except ValueError:
+            return None
+        if 0 < size <= 32 and size & (size - 1) == 0:
+            return size
+        return None
+
     def format_cooperative_group_member_call(self, group_metadata, member, args):
         group_kind = group_metadata["kind"]
         member_base_name, _ = self.parse_cpp_template(member)
         member_name = self.cooperative_group_base_name(member_base_name) or member
+        # A group's sync() is a statement (emit_cooperative_group_sync_statement); as a value it is refused below.
         if group_kind == "thread_block" and not args:
-            if member_name == "sync":
-                return "workgroupBarrier()"
             if member_name == "thread_rank":
                 return "gl_LocalInvocationIndex"
             if member_name in {"size", "num_threads"}:
@@ -5607,12 +5673,6 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
 
         if group_kind == "thread_block_tile" and not args:
             tile_size = group_metadata.get("tile_size")
-            if (
-                member_name == "sync"
-                and tile_size
-                and group_metadata.get("parent_kind") == "thread_block"
-            ):
-                return "workgroupBarrier()"
             if member_name in {"size", "num_threads"} and tile_size:
                 return tile_size
             if (
@@ -5658,31 +5718,68 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         ):
             return None
 
+        # A 32-thread tile of a thread block is a warp (its threads are the warp's lanes in rank order), so each
+        # collective is the full-mask warp intrinsic, which crosstl.translator.semantics.warp emulates or refuses.
         formatted_args = [self.visit(arg) for arg in args]
-        if member_name == "any" and len(formatted_args) == 1:
-            predicate = self.format_wave_predicate(formatted_args[0])
-            return f"WaveActiveAnyTrue({predicate})"
-        if member_name == "all" and len(formatted_args) == 1:
-            predicate = self.format_wave_predicate(formatted_args[0])
-            return f"WaveActiveAllTrue({predicate})"
-        if member_name == "ballot" and len(formatted_args) == 1:
-            predicate = self.format_wave_predicate(formatted_args[0])
-            return f"WaveActiveBallot({predicate}).x"
-        if member_name == "shfl" and len(formatted_args) >= 2:
-            return f"WaveReadLaneAt({formatted_args[0]}, {formatted_args[1]})"
+        full = "0xFFFFFFFFu"
+        votes = {"any": "__any_sync", "all": "__all_sync", "ballot": "__ballot_sync"}
+        if member_name in votes and len(formatted_args) == 1:
+            return f"{votes[member_name]}({full}, {formatted_args[0]})"
+        shuffles = {
+            "shfl": "__shfl_sync",
+            "shfl_up": "__shfl_up_sync",
+            "shfl_down": "__shfl_down_sync",
+            "shfl_xor": "__shfl_xor_sync",
+        }
+        if member_name in shuffles and len(formatted_args) == 2:
+            value, operand = formatted_args
+            return f"{shuffles[member_name]}({full}, {value}, {operand})"
 
         return None
 
+    # cooperative_groups::reduce operators over 32-bit integers, and the warp reductions computing them.
+    CUDA_TILE_REDUCTIONS = {
+        "plus": "__reduce_add_sync",
+        "less": "__reduce_min_sync",
+        "greater": "__reduce_max_sync",
+        "bit_and": "__reduce_and_sync",
+        "bit_or": "__reduce_or_sync",
+        "bit_xor": "__reduce_xor_sync",
+    }
+    CUDA_TILE_REDUCTION_TYPES = {
+        "int": "int",
+        "int32_t": "int",
+        "signed": "int",
+        "signed int": "int",
+        "unsigned": "unsigned",
+        "unsigned int": "unsigned",
+        "uint32_t": "unsigned",
+    }
+
     def format_cooperative_group_reduce_call(self, group_metadata, args):
         group_kind = group_metadata["kind"]
+        operator, value_type = None, None
+        if len(args) == 2 and isinstance(args[1], FunctionCallNode):
+            operator = self.cooperative_group_reduce_operator(args[1])
+            _, template = self.parse_cpp_template(args[1].name)
+            if len(template) == 1:
+                value_type = self.CUDA_TILE_REDUCTION_TYPES.get(
+                    " ".join(str(template[0]).split())
+                )
         if (
             group_kind == "thread_block_tile"
             and group_metadata.get("tile_size") == "32"
             and group_metadata.get("parent_kind") == "thread_block"
-            and len(args) == 2
-            and self.cooperative_group_reduce_operator(args[1]) == "plus"
+            and operator in self.CUDA_TILE_REDUCTIONS
+            and value_type is not None
+            and (value_type == "unsigned" or not operator.startswith("bit_"))
         ):
-            return f"WaveActiveSum({self.visit(args[0])})"
+            # A warp of 32 consecutive threads, whatever the target's subgroup size; floating-point reductions,
+            # whose association order cg::reduce leaves unspecified, are refused.
+            value = self.visit(args[0])
+            crossgl_type = self.convert_cuda_type_to_crossgl(value_type)
+            reduction = self.CUDA_TILE_REDUCTIONS[operator]
+            return f"{reduction}(0xFFFFFFFFu, {crossgl_type}({value}))"
 
         return self.format_unsupported_cooperative_group_expression(
             group_kind, "reduce", args=args
@@ -6476,11 +6573,11 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":
-            self.emit("workgroupBarrier();")
+            self.emit_block_barrier()
         elif node.sync_type == "__syncwarp" and self.is_full_warp_mask(node.args):
-            # __syncwarp over the whole warp waits for every lane and orders their memory accesses, as
-            # subgroupBarrier does for the subgroup.
-            self.emit("subgroupBarrier();")
+            # __syncwarp waits for the 32 lanes of the warp; a subgroup barrier waits for a subgroup of another size
+            # on most targets. It stays a CUDA call for crosstl.translator.semantics.warp to emulate or refuse.
+            self.emit("__syncwarp();")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
             self.refuse_import(
@@ -6488,6 +6585,17 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             )
         else:
             self.refuse_import(f"CUDA {node.sync_type}() has no CrossGL form")
+
+    def emit_block_barrier(self):
+        """Emit ``__syncthreads()``: an execution barrier for the block that orders global and shared memory.
+
+        ``__syncthreads()`` makes every global and shared memory access made before it visible to every thread of
+        the block (CUDA C++ Programming Guide, "Synchronization Functions"). CrossGL's workgroupBarrier orders
+        workgroup memory only, so a workgroup-scope fence over all memory (groupMemoryBarrier, GLSL 4.60 section
+        8.16) releases the earlier accesses before it and acquires them after it.
+        """
+        for function_name in ORDERED_WORKGROUP_BARRIER:
+            self.emit(f"{function_name}();")
 
     def is_full_warp_mask(self, args):
         """Whether ``__syncwarp`` arguments name every lane: none, or the literal mask ``0xffffffff``."""
