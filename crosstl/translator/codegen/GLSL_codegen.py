@@ -42563,6 +42563,18 @@ complex64_t crossgl_complex64_mod_assign(
             reject("invalid-arity")
         if any(item is None for item in types):
             reject("unresolved-operand-type")
+        if (
+            func_name == "select"
+            and self.is_matrix_value_type(self.map_type(types[0]))
+            and self.map_type(types[0]) == self.map_type(types[1])
+            and self.map_type(types[2]) == "bool"
+        ):
+            false_value, true_value, condition = args
+            return (
+                f"({self.generate_glsl_boolean_context(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
         infos = [self.glsl_value_type_info(item) for item in types]
         if any(info is None or info["width"] not in {1, 2, 3, 4} for info in infos):
             reject("unsupported-operand-type")
