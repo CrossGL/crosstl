@@ -238,6 +238,13 @@ class Rust(Dialect):
         "Mat3A": (Type("float", (3, 3)), "Mat3::from({})"),
         "Quat": (Type("float", (4,)), "Vec4::from({})"),
         "DQuat": (Type("double", (4,)), "DVec4::from({})"),
+        # A ray query's intersection kinds as their discriminants and its ray flags as their bits; an object-to-world
+        # matrix as its translation, and a triangle's vertex positions as its first vertex (features/ray_query.py).
+        "CandidateIntersection": (Type("uint"), "({}) as u32"),
+        "CommittedIntersection": (Type("uint"), "({}) as u32"),
+        "RayFlags": (Type("uint"), "({}).bits()"),
+        "Matrix4x3": (Type("float", (3,)), "({}).w_axis"),
+        "[Vec3; 3]": (Type("float", (3,)), "({})[0]"),
     }
     # Arguments of glam's types that no buffer holds, made from the values glam converts them from. A projective depth
     # comparison's coordinate and depth reference come from one vector in GLSL's order, the depth reference third
@@ -250,7 +257,15 @@ class Rust(Dialect):
         "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
         # A byte-address buffer's index, four times a word index (features/spirv_std.py, BYTE_INDEX).
         "ByteIndex": (Type("uint"), "{} * 4"),
+        # A ray's flags keep the word's bits, as HLSL and GLSL pass them: from_bits_truncate would mask them, and the
+        # mask would join the semantic id of the call that takes them.
+        "RayFlags": (
+            Type("uint"),
+            "spirv_std::ray_tracing::RayFlags::from_bits_retain({})",
+        ),
     }
+    # spirv_std makes a ray query with a macro, which declares a reference to it.
+    own_objects = {"RayQuery": ("spirv_std::ray_query!(let mut {name});",)}
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
 
@@ -345,6 +360,18 @@ class Rust(Dialect):
         ("Image!", "use spirv_std::Image;"),
         ("Sampler", "use spirv_std::Sampler;"),
         ("SampledImage<", "use spirv_std::image::SampledImage;"),
+        ("AccelerationStructure", "use spirv_std::ray_tracing::AccelerationStructure;"),
+    )
+    # What a probe needs for a spirv_std macro it calls: ray_query! names RayQuery unqualified, and expands to inline
+    # assembly, which the crate has to enable for the SPIR-V target.
+    _MACRO_PRELUDES = (
+        (
+            "spirv_std::ray_query!",
+            (
+                "#![feature(asm_experimental_arch)]",
+                "use spirv_std::ray_tracing::RayQuery;",
+            ),
+        ),
     )
 
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
@@ -508,6 +535,9 @@ class Rust(Dialect):
         params += resources
         params += parts.get("params", ())
         prelude = list(parts.get("prelude", ()))
+        for macro, lines in self._MACRO_PRELUDES:
+            if any(macro in line for line in body):
+                prelude += lines
         prelude += [
             line
             for name, line in self._RESOURCE_IMPORTS

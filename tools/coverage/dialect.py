@@ -68,6 +68,9 @@ class Dialect:
     vertex = "emitted"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
+    # The local objects a dialect declares in its own way, by opaque type: the statements that declare ``{name}`` as
+    # one. :data:`.objects.OBJECTS` spells the others.
+    own_objects: dict[str, tuple[str, ...]] = {}
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
     # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, BYTES, PACKED_BYTES and POINTER_SIZED.
     wide_integers = False

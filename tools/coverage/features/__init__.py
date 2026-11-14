@@ -15,6 +15,7 @@ from . import (
     metal,
     mojo,
     opencl,
+    ray_query,
     rust,
     slang,
     spirv,
@@ -115,6 +116,7 @@ def _rust(offline: bool) -> list[Feature]:
     features += rust.packing(fetch("rust-packing", offline=offline), glsl_names)
     features += spirv_std.images(fetch("rust-image", offline=offline))
     features += spirv_std.byte_buffers(fetch("rust-byte-buffer", offline=offline))
+    features += ray_query.parse(fetch("rust-ray-query", offline=offline))
     features += glam.parse(
         {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
         glsl_names,

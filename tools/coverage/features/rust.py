@@ -3,10 +3,11 @@
 
 rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch`` and the packing functions of ``spirv_std::float``, do
 scalar math through the ``num_traits::Float`` trait ``spirv_std`` re-exports, and vector math through glam's methods,
-``Vec3`` among them; :mod:`.glam` reads glam's other types, and :mod:`.spirv_std` the image methods. The lists are
-read from the sources of the versions rust-gpu's lock file resolves. ``spirv_std::arch`` defines some functions with
-``macro_rules!`` macros, which are expanded here. A function generic over a numeric trait is probed with the scalar
-type :data:`_BOUNDS` names for the trait; constant generic parameters take the values of :data:`_CONSTANTS`.
+``Vec3`` among them; :mod:`.glam` reads glam's other types, :mod:`.spirv_std` the image and byte-buffer methods and
+:mod:`.ray_query` the ray-tracing ones. The lists are read from the sources of the versions rust-gpu's lock file
+resolves. ``spirv_std::arch`` defines some functions with ``macro_rules!`` macros, which are expanded here. A function
+generic over a numeric trait is probed with the scalar type :data:`_BOUNDS` names for the trait; constant generic
+parameters take the values of :data:`_CONSTANTS`.
 """
 
 from __future__ import annotations

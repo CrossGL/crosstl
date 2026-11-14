@@ -92,13 +92,14 @@ _COORDINATE = re.compile(r"impl\s+ImageCoordinate(SubpassData)?<\s*(\w+)\s*,(.*)
 _FIXED = re.compile(r"\{\s*(\w+)::(\w+)\s+as\s+u32\s*\}")
 _IMPL = re.compile(r"^impl\s*<", re.M)
 _METHOD = re.compile(r"^    pub (unsafe )?fn (\w+)", re.M)
-_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+# A string literal; one continues on the next line after a backslash, as ray_tracing.rs's OpTraceRayKHR does.
+_STRING = re.compile(r'"(?:\\.|[^"\\])*"', re.S)
 # The instructions that take an implicit level of detail, or compute one.
 _DERIVATIVES = re.compile(r"\bOpImage\w*ImplicitLod\b|\bOpImageQueryLod\b")
 _DIMENSIONS = {"TwoD": "2D", "SubpassData": "subpass"}
 
 
-def _clean(text: str) -> str:
+def clean(text: str) -> str:
     """``text`` without comments, and with the punctuation of its string literals blanked: the ``asm!`` strings hold
     braces that need not balance, and name the instructions a method executes."""
     text = re.sub(r"//[^\n]*", "", text)
@@ -231,7 +232,7 @@ def _signature(parsed: tuple[str, str, str], receiver: str) -> Signature:
 
 def images(text: str) -> list[Feature]:
     """The methods of ``Image`` and ``SampledImage`` in ``image.rs``, each named ``Type::method``."""
-    blocks = _blocks(_clean(text))
+    blocks = _blocks(clean(text))
     bounds = _bounds(blocks)
     features: list[Feature] = []
     for head, body in blocks:
@@ -323,7 +324,7 @@ _BYTE_UNSPELLED = "CrossGL declares a byte-address buffer as a resource, and mak
 
 def byte_buffers(text: str) -> list[Feature]:
     """The methods of ``ByteAddressableBuffer`` in ``byte_addressable_buffer.rs``, counted once by name."""
-    text = _clean(text)
+    text = clean(text)
     features: list[Feature] = []
     for match in re.finditer(r"^impl<'a> ByteAddressableBuffer<(.+)> \{", text, re.M):
         receiver = _BYTE_BUFFERS[match.group(1)]

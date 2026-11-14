@@ -82,12 +82,16 @@ CAPABILITIES = (
     "GeometryStreams",
     "Tessellation",
     "RayTracingKHR",
+    "RayQueryKHR",
+    "RayQueryPositionFetchKHR",
     "RuntimeDescriptorArray",
 )
 EXTENSIONS = (
     "SPV_EXT_demote_to_helper_invocation",
     "SPV_EXT_descriptor_indexing",
     "SPV_KHR_ray_tracing",
+    "SPV_KHR_ray_query",
+    "SPV_KHR_ray_tracing_position_fetch",
     "SPV_EXT_shader_atomic_float_add",
     "SPV_EXT_shader_atomic_float_min_max",
     "SPV_KHR_shader_clock",

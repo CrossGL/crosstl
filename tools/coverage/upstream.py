@@ -311,6 +311,13 @@ SOURCES = {
         "b6d37e572839a57753c6a7ebcf59514f69247b1111d6e396f05b40f4e7124ea5",
         "rust-gpu 0.11.0 spirv_std::ByteAddressableBuffer methods",
     ),
+    "rust-ray-query": Source(
+        "Rust-GPU/rust-gpu",
+        "62401280ab4b512c734ad1aceee7553385e17418",
+        "crates/spirv-std/src/ray_tracing.rs",
+        "ecfe33226a34b62005ec160623cf396a93d75adb8169cebcd0133b1844a259a2",
+        "rust-gpu 0.11.0 spirv_std::ray_tracing RayQuery and AccelerationStructure methods",
+    ),
     "rust-float": Source(
         "rust-num/num-traits",
         "7ec3d41d39b28190ec1d42db38021107b3951f3a",

@@ -203,8 +203,10 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
     # rust-gpu's images as spirv_std's Image! macro spells them, the 2D ones features/spirv_std.py probes methods on,
     # and its sampler. A subpass input names the attachment it reads. A byte-address buffer, and the slice of words one
-    # is made from, is a storage buffer of u32 (kernels.Rust.uniform_argument).
+    # is made from, is a storage buffer of u32 (kernels.Rust.uniform_argument). A ray query traces rays through an
+    # acceleration structure.
     "rust": {
+        **_same("AccelerationStructure"),
         **{
             opaque: Uniform(spelling, "storage_buffer")
             for opaque, spelling in (
@@ -276,9 +278,11 @@ def element(owner: str, method: str) -> Type | None:
 _STARTS = {"RayQuery": "{name}.Proceed();"}
 
 
-def local_object(kind: Type, name: str = "obj") -> list[str]:
+def local_object(kind: Type, dialect: Dialect, name: str = "obj") -> list[str]:
     """The statements that declare ``name`` as the default-constructed local object a parameter of ``kind`` takes,
     such as a ray query or a hit object; none when ``kind`` is no such object."""
+    if kind.opaque in dialect.own_objects:
+        return [line.format(name=name) for line in dialect.own_objects[kind.opaque]]
     found = OBJECTS.get(kind.opaque)
     if found is None or found.register or found.parameter or found.element:
         return []
