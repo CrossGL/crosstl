@@ -238,14 +238,34 @@ class Rust(Dialect):
         "Mat3A": (Type("float", (3, 3)), "Mat3::from({})"),
         "Quat": (Type("float", (4,)), "Vec4::from({})"),
         "DQuat": (Type("double", (4,)), "DVec4::from({})"),
+        # A ray query's intersection kinds as their discriminants and its ray flags as their bits; an object-to-world
+        # matrix as its translation, and a triangle's vertex positions as its first vertex (features/ray_query.py).
+        "CandidateIntersection": (Type("uint"), "({}) as u32"),
+        "CommittedIntersection": (Type("uint"), "({}) as u32"),
+        "RayFlags": (Type("uint"), "({}).bits()"),
+        "Matrix4x3": (Type("float", (3,)), "({}).w_axis"),
+        "[Vec3; 3]": (Type("float", (3,)), "({})[0]"),
     }
-    # Arguments of glam's types that no buffer holds, made from the values glam converts them from.
+    # Arguments of glam's types that no buffer holds, made from the values glam converts them from. A projective depth
+    # comparison's coordinate and depth reference come from one vector in GLSL's order, the depth reference third
+    # (features/spirv_std.py, PROJECTIVE_DEPTH); the argument is two arguments.
     _MADE = {
         "Vec3A": (Type("float", (3,)), "Vec3A::from({})"),
         "Mat3A": (Type("float", (3, 3)), "Mat3A::from({})"),
         "Quat": (Type("float", (4,)), "Quat::from_vec4({})"),
         "DQuat": (Type("double", (4,)), "DQuat::from_vec4({})"),
+        "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
+        # A byte-address buffer's index, four times a word index (features/spirv_std.py, BYTE_INDEX).
+        "ByteIndex": (Type("uint"), "{} * 4"),
+        # A ray's flags keep the word's bits, as HLSL and GLSL pass them: from_bits_truncate would mask them, and the
+        # mask would join the semantic id of the call that takes them.
+        "RayFlags": (
+            Type("uint"),
+            "spirv_std::ray_tracing::RayFlags::from_bits_retain({})",
+        ),
     }
+    # spirv_std makes a ray query with a macro, which declares a reference to it.
+    own_objects = {"RayQuery": ("spirv_std::ray_query!(let mut {name});",)}
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
 
@@ -326,6 +346,53 @@ class Rust(Dialect):
         if kind.scalar == "bool":
             return "false"
         return "0" if kind.scalar in self._INTEGERS else "0.0"
+
+    def constant(self, kind: Type) -> str:
+        # glam's zero vectors are constants.
+        if len(kind.shape) == 1:
+            return f"{self.type(kind)}::ZERO"
+        return super().constant(kind)
+
+    # rust-gpu takes a shader's resources as parameters of its entry point, which _entry moves these declarations to.
+    _RESOURCE = "#[spirv("
+    # The spirv_std items a resource's type names.
+    _RESOURCE_IMPORTS = (
+        ("Image!", "use spirv_std::Image;"),
+        ("Sampler", "use spirv_std::Sampler;"),
+        ("SampledImage<", "use spirv_std::image::SampledImage;"),
+        ("AccelerationStructure", "use spirv_std::ray_tracing::AccelerationStructure;"),
+    )
+    # What a probe needs for a spirv_std macro it calls: ray_query! names RayQuery unqualified, and expands to inline
+    # assembly, which the crate has to enable for the SPIR-V target.
+    _MACRO_PRELUDES = (
+        (
+            "spirv_std::ray_query!",
+            (
+                "#![feature(asm_experimental_arch)]",
+                "use spirv_std::ray_tracing::RayQuery;",
+            ),
+        ),
+    )
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        attributes = [qualifier] if qualifier else []
+        attributes += ["descriptor_set = 0", f"binding = {binding}"]
+        return f"{self._RESOURCE}{', '.join(attributes)})] {name}: &{spelling}"
+
+    # A method takes a sampler by value, which the entry point takes a reference to, and a byte-address buffer is made
+    # from the storage buffer of words the entry point takes.
+    _UNIFORM_ARGUMENTS = {
+        "Sampler": "*{}",
+        "ByteAddressableBuffer<&[u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_slice({})"
+        ),
+        "ByteAddressableBuffer<&mut [u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_mut_slice({})"
+        ),
+    }
+
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        return self._UNIFORM_ARGUMENTS.get(opaque, "{}").format(name)
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         if not value:
@@ -462,11 +529,22 @@ class Rust(Dialect):
             params.append(
                 f"#[spirv(storage_buffer, descriptor_set = 0, binding = {binding})] {name}: {access}[{kind}]"
             )
+        declarations = list(parts.get("declarations", ()))
+        resources = [line for line in declarations if line.startswith(self._RESOURCE)]
+        declarations = [line for line in declarations if line not in resources]
+        params += resources
         params += parts.get("params", ())
         prelude = list(parts.get("prelude", ()))
+        for macro, lines in self._MACRO_PRELUDES:
+            if any(macro in line for line in body):
+                prelude += lines
+        prelude += [
+            line
+            for name, line in self._RESOURCE_IMPORTS
+            if any(name in resource.partition(":")[2] for resource in resources)
+        ]
         # Crate attributes (``#![feature(f16)]``) have to precede every item.
         attributes = [line for line in prelude if line.startswith("#!")]
-        declarations = list(parts.get("declarations", ()))
         if declarations:
             declarations.append("")
         lines = [

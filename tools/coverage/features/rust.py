@@ -3,10 +3,11 @@
 
 rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch`` and the packing functions of ``spirv_std::float``, do
 scalar math through the ``num_traits::Float`` trait ``spirv_std`` re-exports, and vector math through glam's methods,
-``Vec3`` among them; :mod:`.glam` reads glam's other types. The lists are read from the sources of the versions
-rust-gpu's lock file resolves. ``spirv_std::arch`` defines some functions with
-``macro_rules!`` macros, which are expanded here. A function generic over a numeric trait is probed with the scalar
-type :data:`_BOUNDS` names for the trait; constant generic parameters take the values of :data:`_CONSTANTS`.
+``Vec3`` among them; :mod:`.glam` reads glam's other types, :mod:`.spirv_std` the image and byte-buffer methods and
+:mod:`.ray_query` the ray-tracing ones. The lists are read from the sources of the versions rust-gpu's lock file
+resolves. ``spirv_std::arch`` defines some functions with ``macro_rules!`` macros, which are expanded here. A function
+generic over a numeric trait is probed with the scalar type :data:`_BOUNDS` names for the trait; constant generic
+parameters take the values of :data:`_CONSTANTS`.
 """
 
 from __future__ import annotations
@@ -142,7 +143,7 @@ def _nesting(text: str, index: int) -> int:
     return 0
 
 
-def _split(text: str, separators: str = ",") -> list[str]:
+def separated(text: str, separators: str = ",") -> list[str]:
     """``text`` split at its top-level separators."""
     parts, depth, start = [], 0, 0
     for index, char in enumerate(text):
@@ -154,7 +155,7 @@ def _split(text: str, separators: str = ",") -> list[str]:
     return [part for part in parts if part]
 
 
-def _group(text: str, start: int) -> tuple[str, int]:
+def enclosed(text: str, start: int) -> tuple[str, int]:
     """The text inside the bracket group that opens at ``text[start]``, and the index just past it."""
     closing = {"(": ")", "<": ">", "{": "}", "[": "]"}[text[start]]
     depth = 0
@@ -178,8 +179,8 @@ def header(text: str, position: int) -> Header:
     while text[position] == " ":
         position += 1
     if text[position] == "<":
-        generics, position = _group(text, position)
-    parameters, position = _group(text, position)
+        generics, position = enclosed(text, position)
+    parameters, position = enclosed(text, position)
     depth, end = 0, position
     while depth or text[end] not in "{;":
         depth += _nesting(text, end)
@@ -192,13 +193,13 @@ def header(text: str, position: int) -> Header:
 def _bound(generics: str, where: str) -> str:
     """``generics`` with the bounds a ``where`` clause gives its unbounded type parameters."""
     bounds = {}
-    for predicate in _split(where):
+    for predicate in separated(where):
         name, _, bound = predicate.partition(":")
         if re.fullmatch(r"\w+", name.strip()) and bound.strip():
             bounds[name.strip()] = bound.strip()
     return ", ".join(
         f"{part}: {bounds[part]}" if part in bounds else part
-        for part in _split(generics)
+        for part in separated(generics)
     )
 
 
@@ -211,7 +212,7 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
     """The probe type of each type parameter, and every parameter in order as ``(name, is_constant)``."""
     types: dict[str, Type] = {}
     order = []
-    for part in _split(generics):
+    for part in separated(generics):
         if part.startswith("const "):
             order.append((part.split()[1].rstrip(":"), True))
             continue
@@ -225,7 +226,7 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
         closure = _CLOSURE.fullmatch(bounds.strip())
         if closure:
             # A closure keeps its bound as its type, from which a probe writes one (kernels.Rust.handle).
-            arguments = ", ".join(_split(closure.group(2)))
+            arguments = ", ".join(separated(closure.group(2)))
             types[name] = Type.other(
                 f"{closure.group(1)}({arguments}) -> {closure.group(3)}"
             )
@@ -290,7 +291,7 @@ def rust_type(
     if held:
         parts = [
             _spelling(rust_type(part, generics, self_type, aliases))
-            for part in _split(held.group(1) or held.group(2))
+            for part in separated(held.group(1) or held.group(2))
         ]
         if held.group(1):
             return Type.other(f"({', '.join(parts)})")
@@ -321,7 +322,7 @@ def signature(
     generics, parameters, result = parsed
     types, order = _generic_types(generics)
     params, method = [], False
-    for part in _split(parameters):
+    for part in separated(parameters):
         if re.fullmatch(r"(?:mut\s+)?&?(?:mut\s+)?self", part):
             method = True
             params.append(Param(self_type))
@@ -376,7 +377,7 @@ def _expand(text: str) -> str:
     """
     templates: dict[str, str] = {}
     for match in _MACRO.finditer(text):
-        body, _ = _group(text, match.end() - 1)
+        body, _ = enclosed(text, match.end() - 1)
         found = _TEMPLATE.search(body)
         if found:
             end = body.index("{", body.index(")", found.end()))
@@ -384,8 +385,8 @@ def _expand(text: str) -> str:
     expanded = []
     for macro, template in templates.items():
         for match in re.finditer(rf"^{macro}!\(", text, re.M):
-            arguments, _ = _group(text, match.end() - 1)
-            parts = _split(arguments, ",;")
+            arguments, _ = enclosed(text, match.end() - 1)
+            parts = separated(arguments, ",;")
             candidates = parts[1:] if "$scalar" in template else parts
             names = [p for p in candidates if re.fullmatch(r"[a-z_][a-z0-9_]*", p)]
             for name in names:
@@ -431,7 +432,7 @@ def arch(
             )
         trait = re.search(r"^pub unsafe trait Derivative\b[^{]*\{", text, re.M)
         if trait:
-            body, _ = _group(text, trait.end() - 1)
+            body, _ = enclosed(text, trait.end() - 1)
             for match in _TRAIT_METHOD.finditer(body):
                 name = match.group(2)
                 found, spelling, note = signature(
@@ -473,7 +474,7 @@ def methods(
     block = re.search(opening, text, re.M)
     if block is None:
         raise ValueError(f"no block matching {opening!r}")
-    body, _ = _group(text, block.end() - 1)
+    body, _ = enclosed(text, block.end() - 1)
     owner = "f32" if prefix == "Float" else prefix
     features: list[Feature] = []
     pattern = _TRAIT_METHOD if opening.startswith("^pub trait") else _IMPL_METHOD

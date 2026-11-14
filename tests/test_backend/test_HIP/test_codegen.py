@@ -14,6 +14,7 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import (
 )
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.backend.import_refusals import HipImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -398,7 +399,11 @@ class TestHipCodeGen:
         assert "HIP_SCALE" not in result
         assert "@group(0) @binding(0) var<uniform> kLimit: i32 = 64;" in result
         assert "// HIP managed memory: managedValue" in result
-        assert "var managedValue: f32;" in result
+        # Managed memory is device memory shared by the grid: a storage buffer, not a private variable.
+        assert (
+            "@group(0) @binding(1) var<storage, read_write> managedValue: f32;"
+            in result
+        )
         assert "// Kernel: simple_kernel" in result
         assert "// HIP launch bounds: (256, 2)" in result
         assert "var<workgroup> shared_data: array<f32, 256>;" in result
@@ -518,19 +523,23 @@ class TestHipCodeGen:
 
     def test_public_rocm_examples_device_global_variables_conversion(self):
         code = """
-        __device__ auto load_callback_dev = load_callback;
         __device__ __constant__ constexpr float c0 = 299792458.0f;
         """
-        lexer = HipLexer(code)
-        tokens = lexer.tokenize()
-        parser = HipParser(tokens)
-        ast = parser.parse()
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
 
-        codegen = HipToCrossGLConverter()
-        result = codegen.generate(ast)
-
-        assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
+
+        # An initialized __device__ variable is device memory the module load fills, which no buffer the host
+        # binds carries; it used to import as a per-invocation private variable.
+        code = """
+        __device__ auto load_callback_dev = load_callback;
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        with pytest.raises(
+            HipImportRefused, match="'load_callback_dev' has an initializer"
+        ):
+            HipToCrossGLConverter().generate(ast)
 
     def test_public_gpu_template_scope_disambiguator_call_conversion(self):
         code = """

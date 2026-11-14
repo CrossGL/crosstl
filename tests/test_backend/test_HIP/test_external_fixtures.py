@@ -485,7 +485,11 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     assert isinstance(global_var, VariableNode)
     assert set(global_var.qualifiers) == {"__device__"}
     assert global_array.vtype == "float[device_array_size]"
-    assert "var global_array: array<f32, device_array_size>;" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> global: f32;" in crossgl
+    assert (
+        "@group(0) @binding(1) var<storage, read_write> global_array: "
+        "array<f32, device_array_size>;" in crossgl
+    )
     assert "var tid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "in_[tid] + global" in crossgl
     assert (

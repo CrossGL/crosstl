@@ -17,6 +17,7 @@ from ..CUDA.directed_rounding import refuse_directed_rounding
 from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..device_globals import device_memory_declaration, is_device_memory
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..no_contraction import (
@@ -676,8 +677,9 @@ class HipToCrossGLConverter(ImportRefusalMixin):
 
     def is_global_resource_declaration(self, statement):
         """Whether a top-level declaration imports as a resource with a binding."""
-        return isinstance(statement, VariableNode) and "__constant__" in set(
-            getattr(statement, "qualifiers", []) or []
+        return isinstance(statement, VariableNode) and (
+            "__constant__" in set(getattr(statement, "qualifiers", []) or [])
+            or is_device_memory(statement)
         )
 
     def global_resource_binding_for(self, node):
@@ -6209,8 +6211,24 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 )
             return
 
-        if "__managed__" in qualifiers:
-            self.emit(f"// HIP managed memory: {output_name}")
+        if (
+            self.namespace_scope_variable
+            and is_device_memory(node)
+            and not self.is_namespace_scope_constant(node)
+        ):
+            declaration = device_memory_declaration(
+                self,
+                node,
+                output_name,
+                var_type,
+                self.global_resource_binding_for(node),
+                "HIP",
+            )
+            if declaration is not None:
+                if "__managed__" in qualifiers:
+                    self.emit(f"// HIP managed memory: {output_name}")
+                self.emit(declaration)
+            return
 
         dim3_default_value = self.format_hip_dim3_default_initializer(node)
         if dim3_default_value is not None:
