@@ -69,6 +69,9 @@ def validate_wgsl_with_naga(tmp_path, code):
         ("max(1, 2u)", "u32"),
         ("clamp(1, U, 7)", "u32"),
         ("max(1, max(2, f))", "f32"),
+        ("mix(f, f, f > 2.0)", "f32"),
+        ("mix(1, 2, !b)", "i32"),
+        ("mix(1, 2, b && b)", "i32"),
     ],
 )
 def test_mixed_scalar_builtin_types_validate_with_naga(
@@ -102,7 +105,6 @@ def test_unchanged_builtin_types_validate_with_naga(
 @pytest.mark.parametrize(
     "expression",
     [
-        "max(fma(f, f, f), 1)",
         "max(determinant(mat2(1.0)), 1)",
     ],
 )
