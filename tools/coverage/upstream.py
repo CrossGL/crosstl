@@ -45,12 +45,26 @@ SOURCES = {
         "216f56ec0925602aaf8cab05bf226d0efcc531083993cc664d025d1737b3469a",
         "LLVM 23.1.3 CUDA intrinsic and atomic wrappers",
     ),
+    "cuda-intrinsics": Source(
+        "llvm/llvm-project",
+        "0d261d1ca552c95a8f007e061c787ac7132fbcbc",
+        "clang/lib/Headers/__clang_cuda_intrinsics.h",
+        "399ffff6ad1c738839aaf5b0b0e189f52a30a35f8c9a64c82b5f5d1d1c2dd7f5",
+        "LLVM 23.1.3 CUDA warp, cache-hinted load and store, and funnel shift intrinsics",
+    ),
     "glsl": Source(
         "KhronosGroup/GLSL",
         "0099bf83b0288469917fc2e2972cb0a2b74d6711",
         "chapters/builtinfunctions.adoc",
         "95c602702118f5aabba3a5e8569abfca9865d4c86e02a210021eed16b5dd6bc5",
         "GLSL 4.60 specification, chapter 8 (built-in functions)",
+    ),
+    "glsl-subgroup": Source(
+        "KhronosGroup/GLSL",
+        "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+        "extensions/khr/GL_KHR_shader_subgroup.txt",
+        "fc653cfd7e9392e3a42824ebddb7edbd19678fae974b0a925969d4c4a191d2d8",
+        "GL_KHR_shader_subgroup (section 8.18, shader invocation group functions)",
     ),
     # HIP is pinned to the versions Ubuntu 24.04 packages (hipcc 5.7.1 on clang 17.0.6), the compiler the probes are
     # validated with, so the list names exactly what that compiler's headers define.
@@ -74,6 +88,13 @@ SOURCES = {
         "hipamd/include/hip/amd_detail/amd_device_functions.h",
         "1cc905b32475f129990c64892514a822fb18fafa3e5b6f2a1ddb5eb093e3453c",
         "ROCm 5.7.1 HIP device functions (integer intrinsics, conversions, barriers)",
+    ),
+    "hip-warp": Source(
+        "ROCm/clr",
+        "1949b1621a802ffb1492616adbae6154bfbe64ef",
+        "hipamd/include/hip/amd_detail/amd_warp_functions.h",
+        "37df4b765b0546538b07fbaeb3142145273e80326c37f046b64476f1e9751bbd",
+        "ROCm 5.7.1 HIP warp shuffles and lane permutes",
     ),
     "hlsl": Source(
         "microsoft/DirectXShaderCompiler",

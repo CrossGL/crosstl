@@ -146,7 +146,7 @@ def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
     path = tmp_path / "probe.metal"
     path.write_text(NATIVE)
     case = execution._case(
-        "00000-native", path, "metal", execution.inputs("fin"), None, outputs
+        "00000-native", path, "metal", execution.inputs("fin"), None, outputs, 1
     )
     [record] = harness.run_suite(
         [case], ["metal"], ["strict"], {"metal": []}, tmp_path / "run", reference=True

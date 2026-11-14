@@ -23,6 +23,8 @@ GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arit
 probe, or a translation that it compiles at a lower version than the translation declares, both probes run again as
 the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
 
+Each probe runs :data:`THREADS` invocations, each in a workgroup of its own, except a subgroup operation's, which
+runs them as one workgroup (:mod:`.lanes`).
 The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
 A SPIR-V module's names are debug information without semantic impact, which a producer may drop (SPIR-V 1.6,
 section 3.42.2, ``OpName``), and CrossTL's generator renames a buffer block's member. So the inputs of a SPIR-V
@@ -44,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import lowering, validators
+from . import lanes, lowering, validators
 from .model import Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
@@ -318,7 +320,9 @@ def difference(native, translated) -> str:
     )
 
 
-def _case(identity: str, path: Path, language: str, data, constants, capture):
+def _case(
+    identity: str, path: Path, language: str, data, constants, capture, group: int
+):
     import numpy as np
 
     from tests.conformance.cases import Case
@@ -335,7 +339,7 @@ def _case(identity: str, path: Path, language: str, data, constants, capture):
         inputs=data,
         out_dtype=np.uint32,
         threads=THREADS,
-        group=1,
+        group=group,
         out_count=THREADS * WORDS,
         check=check,
         constants=constants,
@@ -422,9 +426,19 @@ def _execute(
             paths.append(path)
         block = declares_constants(runs_as, paths[0], input_count=len(data))
         constants = CONSTANTS if block else None
+        # A subgroup operation's probes run as one workgroup (:mod:`.lanes`), every other probe one per invocation.
+        group = THREADS if lanes.cooperative(result.feature) else 1
         for role, path in zip(("native", "translated"), paths):
             cases.append(
-                _case(f"{index:05d}-{role}", path, runs_as, data, constants, outputs)
+                _case(
+                    f"{index:05d}-{role}",
+                    path,
+                    runs_as,
+                    data,
+                    constants,
+                    outputs,
+                    group,
+                )
             )
         rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:

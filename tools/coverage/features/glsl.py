@@ -30,9 +30,10 @@ TARGETS = {"subpass-input-functions": "vulkan"}
 IMPLICIT_LOD = frozenset(
     {"texture", "textureOffset", "textureProj", "textureProjOffset", "textureQueryLod"}
 )
-# The generic type names of section 8, made concrete for a probe.
+# The generic type names of section 8, made concrete for a probe. GL_KHR_shader_subgroup writes genType for genFType.
 GENERIC = {
     "genFType": "vec3",
+    "genType": "vec3",
     "genDType": "dvec3",
     "genIType": "ivec3",
     "genUType": "uvec3",
