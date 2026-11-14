@@ -13,6 +13,7 @@ from crosstl.translator.codegen.host_workgroup_size_ids import (
 )
 
 from .interface import hlsl_reflected_strides
+from .native import METAL_LANGUAGE_VERSION
 from .process import CommandResult, require_artifact, run
 from .toolchains import tool
 
@@ -122,7 +123,9 @@ def validate(
         missing = _missing("metal")
         if missing:
             return [missing], {}
-        command = [*tool("metal").command, "-c", path, "-o", output]
+        major, minor = METAL_LANGUAGE_VERSION
+        command = [*tool("metal").command, f"-std=metal{major}.{minor}"]
+        command += ["-c", path, "-o", output]
         command += ["-fno-fast-math"] if config == "strict" else ["-ffast-math"]
         return [require_artifact(run(command), output)], {}
     if target == "glsl":
