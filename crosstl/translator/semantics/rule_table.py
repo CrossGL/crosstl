@@ -18,7 +18,12 @@ WRAP = "wrap"
 UDIV_ZERO = "udiv_zero"
 CONVERT_SAT = "convert_sat"
 FTOI_NAN = "ftoi_nan"
-FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN)
+# Floating-point operations evaluated without a fast-math compilation mode: no mode that assumes NaNs, infinities and
+# signed zeros are absent, reassociates, or selects approximate implementations of the math functions. The family has
+# no intrinsics: a target discharges it for the whole program (program_families.py).
+FP_IEEE = "fp_ieee"
+FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE)
+PROGRAM_FAMILIES = frozenset({FP_IEEE})
 
 
 @dataclass(frozen=True)
@@ -36,11 +41,35 @@ class TargetEntry:
     configuration: str | None = None
 
 
-# Rule families each source language defines. Sources not listed (CUDA, HIP, OpenCL C, Slang, Rust, Mojo and
-# CrossGL itself) leave signed overflow and division by zero undefined or unstated, so their operations carry no
-# obligation; Metal leaves them undefined too. GLSL and SPIR-V leave unsigned division by zero unspecified (GLSL 4.60
-# section 5.9, SPIR-V OpUDiv).
+# Rule families each source language defines. CUDA, HIP, OpenCL C, Slang, Rust, Mojo and CrossGL itself leave signed
+# overflow and division by zero undefined or unstated, so those operations carry no obligation; Metal leaves them
+# undefined too. GLSL and SPIR-V leave unsigned division by zero unspecified (GLSL 4.60 section 5.9, SPIR-V OpUDiv).
+# CUDA, HIP and OpenCL C compile without fast math unless asked to. Metal (fast math by default), HLSL (DXC marks
+# float operations fast unless they are precise or -Gis is given), GLSL and SPIR-V (whose environments need not
+# preserve NaNs, infinities or signed zeros) do not define fp_ieee.
 SOURCE_RULES = {
+    "cuda": (
+        SourceRule(
+            FP_IEEE,
+            "CUDA Programming Guide, floating-point standard: nvcc compiles IEEE 754 arithmetic and the accurate "
+            "math library (--use_fast_math, which implies --ftz=true, --prec-div=false and --prec-sqrt=false, is "
+            "off by default); CUDA Math API: the error bounds of the single-precision functions",
+        ),
+    ),
+    "hip": (
+        SourceRule(
+            FP_IEEE,
+            "Clang Users Manual: -ffast-math is off by default, so HIP device code keeps NaNs, infinities and "
+            "signed zeros and is not reassociated; HIP math API: the ULP bounds of the device functions",
+        ),
+    ),
+    "opencl": (
+        SourceRule(
+            FP_IEEE,
+            "OpenCL C 3.0 sections 7.2 and 7.4: the full profile's ULP bounds and IEEE 754 edge cases apply unless "
+            "the program is built with -cl-fast-relaxed-math or -cl-finite-math-only",
+        ),
+    ),
     "metal": (
         SourceRule(
             FTOI_NAN,
@@ -279,6 +308,61 @@ TARGET_ENTRIES.update(
             "polyfill",
             "The Rust Reference's numeric cast maps NaN to 0 in float-to-integer `as` casts, but the hub conversion "
             "is not proven to reach the Rust output as an `as` cast",
+        ),
+    }
+)
+
+# fp_ieee asks only that no fast-math compilation mode applies; the accuracy each language guarantees for its math
+# functions is a separate rule.
+TARGET_ENTRIES.update(
+    {
+        (FP_IEEE, "metal"): TargetEntry(
+            "polyfill",
+            "MSL 4.1 section 1.6.3: the compiler defaults to fast math, and MTLCompileOptions.mathMode is relaxed on "
+            "Apple silicon and fast elsewhere; the output starts with #pragma METAL fp math_mode(safe) and calls "
+            "the metal::precise functions (codegen/metal_safe_math.py)",
+        ),
+        (FP_IEEE, "directx"): TargetEntry(
+            "native",
+            "HLSL cannot select DXC's floating-point mode in source; -Gis forces IEEE strictness",
+            configuration="dxc -Gis",
+        ),
+        (FP_IEEE, "opengl"): TargetEntry(
+            "native", "GLSL 4.60 defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "webgl"): TargetEntry(
+            "native", "ESSL 3.00 defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "wgsl"): TargetEntry(
+            "native", "WGSL defines no fast-math compilation mode"
+        ),
+        (FP_IEEE, "vulkan"): TargetEntry(
+            "native",
+            "SPIR-V relaxes floating-point operations only through FPFastMathMode decorations, which CrossTL does "
+            "not emit",
+        ),
+        (FP_IEEE, "cuda"): TargetEntry(
+            "native",
+            "nvcc compiles IEEE 754 arithmetic and the accurate math library unless --use_fast_math is given",
+            configuration="nvcc without --use_fast_math",
+        ),
+        (FP_IEEE, "hip"): TargetEntry(
+            "native",
+            "Clang compiles HIP without fast math unless -ffast-math is given",
+            configuration="hipcc without -ffast-math",
+        ),
+        (FP_IEEE, "slang"): TargetEntry(
+            "native",
+            "slangc's default floating-point mode defers to the downstream compiler, which may be fast; -fp-mode "
+            "precise selects precise",
+            configuration="slangc -fp-mode precise",
+        ),
+        (FP_IEEE, "mojo"): TargetEntry(
+            "native", "the Mojo manual documents no fast-math compilation mode"
+        ),
+        (FP_IEEE, "rust"): TargetEntry(
+            "native",
+            "Rust has no fast-math compilation mode: its floating-point operators are IEEE 754 operations",
         ),
     }
 )

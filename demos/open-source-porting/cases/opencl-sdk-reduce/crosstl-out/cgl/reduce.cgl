@@ -1,3 +1,4 @@
+#pragma cgl_rules(fp_ieee)
 // OpenCL to CrossGL conversion
 // Function: op
 i32 op(i32 lhs, i32 rhs) {

@@ -463,6 +463,11 @@ from .metal_reference_call_results import generate_call_result_statement
 from .metal_reference_sequenced_calls import generate_conditional_call_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
+from .metal_safe_math import (
+    METAL_SAFE_MATH_PRAGMA,
+    metal_safe_math_requested,
+    precise_namespace_eligible,
+)
 from .metal_signed_builtins import (
     collect_metal_signed_builtin_members,
     metal_signed_builtin_parameter_name,
@@ -2127,6 +2132,7 @@ class MetalCodeGen(
         """Render the program and refuse the types the Metal language does not have."""
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
+        self.metal_safe_math = metal_safe_math_requested(ast)
         try:
             output = self.render_program(ast, target_stage)
             refuse_written_foreign_types(
@@ -2788,6 +2794,8 @@ class MetalCodeGen(
         )
         code = "\n"
         code += source_license_comments(ast, "metal")
+        if getattr(self, "metal_safe_math", False):
+            code += METAL_SAFE_MATH_PRAGMA + "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
         for directive in preprocessors:
@@ -13221,7 +13229,9 @@ class MetalCodeGen(
                     args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 if self.metal_fast_math_call(expr, func_name):
                     return f"metal::fast::{func_name}({args})"
-                if self.metal_precise_math_call(expr, func_name):
+                if self.metal_precise_math_call(
+                    expr, func_name
+                ) or self.metal_safe_math_call(expr, func_name):
                     return f"metal::precise::{func_name}({args})"
                 call_name = (
                     f"metal::{func_name}"
@@ -13573,7 +13583,10 @@ class MetalCodeGen(
                 if wave_lane_args is not None:
                     args.extend(wave_lane_args)
             args = ", ".join(args)
-            if callee == func_name and self.metal_precise_math_call(expr, func_name):
+            if callee == func_name and (
+                self.metal_precise_math_call(expr, func_name)
+                or self.metal_safe_math_call(expr, func_name)
+            ):
                 return f"metal::precise::{func_name}({args})"
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -13753,6 +13766,22 @@ class MetalCodeGen(
     # half scalar converts to float implicitly, a half vector does not, so
     # half vectors keep the plain overload instead of an ill-formed call.
     METAL_PRECISE_MATH_ARGUMENT_TYPES = frozenset({"half"})
+
+    def metal_safe_math_call(self, expr, func_name):
+        """Whether a builtin call takes ``metal::precise::`` to keep IEEE semantics (metal_safe_math.py)."""
+        if (
+            not getattr(self, "metal_safe_math", False)
+            or func_name in self.user_function_names
+            or self.metal_function_name_is_shadowed(func_name)
+        ):
+            return False
+        argument_types = []
+        for argument in expr.args or []:
+            argument_type = self.expression_result_type(argument)
+            if argument_type is None:
+                return False
+            argument_types.append(self.map_type(argument_type))
+        return precise_namespace_eligible(func_name, argument_types)
 
     def metal_precise_math_call(self, expr, func_name):
         """Return whether a builtin call keeps its source ``metal::precise::`` name."""
