@@ -122,9 +122,7 @@ def test_select_passes_the_condition_last_in_crossgl(language):
         language,
         "function",
         "select",
-        Signature(
-            ivec2, (Param(Type("bool", (2,))), Param(ivec2), Param(ivec2))
-        ),
+        Signature(ivec2, (Param(Type("bool", (2,))), Param(ivec2), Param(ivec2))),
         crossgl=spellings.spelling(language, "select", set()),
     )
     native = probes.build(select, language).source
