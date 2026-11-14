@@ -1,10 +1,11 @@
 """HIP device functions from the headers hipcc compiles with.
 
 clang's ``__clang_hip_math.h`` defines the HIP math functions (``sinf``, ``erf``) and their intrinsics (``__fadd_rn``,
-``__expf``). ROCm's ``amd_hip_atomic.h`` defines the atomic functions, and ``amd_device_functions.h`` the integer
-intrinsics, conversions, warp votes and barriers. All three are pinned in :mod:`..upstream` at the versions the
-validating compiler ships, so the list names exactly what a default compile defines. A name defined more than once,
-for several types or architectures, is probed with its first definition.
+``__expf``). ROCm's ``amd_hip_atomic.h`` defines the atomic functions, ``amd_device_functions.h`` the integer
+intrinsics, conversions, warp votes and barriers, and ``amd_warp_functions.h`` the warp shuffles and lane permutes.
+All four are pinned in :mod:`..upstream` at the versions the validating compiler ships, so the list names exactly what
+a default compile defines. A name defined more than once, for several types or architectures, is probed with its
+first definition.
 """
 
 from __future__ import annotations
@@ -13,16 +14,17 @@ import re
 
 from .. import spellings
 from ..model import Feature, Signature, Type
-from .cuda import crossgl_name, cuda_type, parameter
+from .cuda import crossgl_name, cuda_type, declared, parameter
 
 # Definitions in the headers that are not HIP functions a kernel calls: the headers' own helpers, the C library and
-# printf, and AMDGPU builtin wrappers the HIP API does not document.
+# printf, AMDGPU builtin wrappers the HIP API does not document, and the templates behind the ``__hip_ds_swizzle`` and
+# ``__hip_move_dpp`` macros, which take their lane pattern as a template argument.
 LEFT_OUT = frozenset("""
     __suppress_unused_warning __static_assert_equal_size __make_mantissa __make_mantissa_base8
     __make_mantissa_base10 __make_mantissa_base16 hip_cas_expander hip_cas_extrema_expander printf abort memcpy
     memset __lastbit_u32_u64 __hip_hc_add8pk __hip_hc_sub8pk __hip_hc_mul8pk __hip_hc_memcpy __hip_hc_memset
     __local_to_generic __get_dynamicgroupbaseptr __amdgcn_get_dynamicgroupbaseptr __work_group_barrier __barrier
-    __named_sync
+    __named_sync __hip_ds_swizzle_N __hip_ds_swizzlef_N __hip_move_dpp_N
     """.split())
 # Macros a kernel must define on the compiler's command line to get the definitions they guard. clang's HIP
 # headers are included before the kernel's first line, so a default compile never defines them, and the functions
@@ -41,22 +43,18 @@ _SPELLINGS = {
     "uint64_t": "unsigned long long",
     "__RETURN_TYPE": "bool",
 }
-_TYPE_WORDS = frozenset(
-    "const unsigned signed long short int char float double bool void".split()
-)
 
 
 def _plain(text: str) -> str:
-    """A declaration's type without its parameter name, with fixed-width and macro spellings resolved."""
-    text = re.sub(
-        r"\b(?:u?int(?:32|64)_t|__RETURN_TYPE)\b",
-        lambda m: _SPELLINGS[m.group(0)],
-        text,
-    ).strip()
-    words = re.match(r"(.*?[\w*&])\s*\b(\w+)$", text)
-    if words and words.group(2) not in _TYPE_WORDS:
-        return words.group(1).strip()
-    return text
+    """A declaration's type without its parameter name and default argument, with fixed-width and macro spellings
+    resolved."""
+    return declared(
+        re.sub(
+            r"\b(?:u?int(?:32|64)_t|__RETURN_TYPE)\b",
+            lambda m: _SPELLINGS[m.group(0)],
+            text,
+        )
+    )
 
 
 def default_compile(text: str) -> str:
@@ -114,11 +112,13 @@ def parse(
     atomic: str,
     device: str,
     glsl_names: set[str] | frozenset[str] = frozenset(),
+    warp: str = "",
 ) -> list[Feature]:
     entries = (
         definitions(math, "math")
         + definitions(atomic, "atomic")
         + definitions(device, "device")
+        + definitions(warp, "warp")
     )
     double_names = {
         name for name, _, signature in entries if signature.result == Type("double")

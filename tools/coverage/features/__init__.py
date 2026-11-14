@@ -31,6 +31,7 @@ def _cuda(offline: bool) -> list[Feature]:
         fetch("cuda", offline=offline),
         fetch("cuda-device", offline=offline),
         _glsl_names(offline),
+        fetch("cuda-intrinsics", offline=offline),
     )
 
 
@@ -46,6 +47,7 @@ def _hip(offline: bool) -> list[Feature]:
         fetch("hip-atomic", offline=offline),
         fetch("hip-device", offline=offline),
         _glsl_names(offline),
+        fetch("hip-warp", offline=offline),
     )
 
 
