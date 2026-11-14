@@ -770,7 +770,7 @@ def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
 
 
 def test_wgsl_codegen_locates_slang_importer_target_semantics(tmp_path):
-    # The Slang importer spells SV_Target<n> as Out_Color<n>; n is the colour
+    # Out_Color<n> is an older spelling of SV_Target<n>; n is the colour
     # attachment, whatever the declaration order.
     struct_shader = """
     shader WGSLSlangTargetMembers {
@@ -2151,6 +2151,66 @@ def test_wgsl_codegen_converts_mixed_integer_binary_comparisons_and_arithmetic(
     assert "var e: u32 = (u % u32(k));" in generated
     assert "var last: u32 = (u32(i32(arrayLength(&values))) - 1u);" in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_operands(tmp_path):
+    # Signed vectors need a vector conversion; signed scalar swizzles need a scalar
+    # conversion (#4417).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                bvec2 cmp = u < k;
+                uvec2 a = u + k;
+                uvec2 b = u * 2 - k.x;
+                uo[1] = a + b;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var cmp: vec2<bool> = (u < vec2<u32>(k));" in generated
+    assert "var a: vec2<u32> = (u + vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = ((u * 2) - u32(k.x));" in generated
+    if shutil.which("naga") is not None:
+        validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_compound_operands(tmp_path):
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                int t = 2;
+                uvec2 a = u;
+                a += k;
+                a -= k.x;
+                a *= t;
+                uo[1] = a;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "a += vec2<u32>(k);" in generated
+    assert "a -= vec2<u32>(u32(k.x));" in generated
+    assert "a *= vec2<u32>(u32(t));" in generated
+    if shutil.which("naga") is not None:
+        validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):

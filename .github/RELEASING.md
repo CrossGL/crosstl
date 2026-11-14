@@ -5,11 +5,12 @@ manual run, only builds and checks them. Pushing a `v*.*.*` tag builds, checks a
 
 ## Prepare
 
-1. Open a pull request that sets the new version in `pyproject.toml`, `CITATION.cff` and `docs/source/conf.py`,
-   renames `## [Unreleased]` in `CHANGELOG.md` to `## [<version>] - <YYYY-MM-DD>`, and sets `date-released` in
-   `CITATION.cff` to the same date. `tests/test_release.py` fails until these agree. The section becomes the
-   release notes, so shorten any entry that runs past two sentences, and summarize a long list of fixes by area, as
-   the 3.5.0 and 3.6.0 sections do.
+1. Run `python tools/changelog.py fold`, which moves the entries in `changelog.d/` into the `## [Unreleased]`
+   section of `CHANGELOG.md` and deletes their files. Then open a pull request with that change that also sets the
+   new version in `pyproject.toml`, `CITATION.cff` and `docs/source/conf.py`, renames `## [Unreleased]` to
+   `## [<version>] - <YYYY-MM-DD>`, and sets `date-released` in `CITATION.cff` to the same date.
+   `tests/test_release.py` fails until these agree. The section becomes the release notes, so shorten any entry
+   that runs past two sentences, and summarize a long list of fixes by area, as the 3.5.0 and 3.6.0 sections do.
 2. Check the archives locally in a clean checkout:
 
    ```bash
@@ -28,8 +29,8 @@ manual run, only builds and checks them. Pushing a `v*.*.*` tag builds, checks a
    `native-host-loader.yml`, `deferred-native-compilation.yml` and `demo-project-testing.yml` each have a successful
    push run at that exact commit. The last three run on `main` only when their paths change, and every one of those
    path lists includes `pyproject.toml`, so tag the commit that changed the version.
-2. Tag that commit `v<version>` and push the tag. The workflow rejects a tag that is not on `main` or does not match
-   the package version.
+2. Tag that commit `v<version>` and push the tag. The workflow rejects a tag that is not on `main`, does not match
+   the package version, or still has entries in `changelog.d/`.
 3. The build job checks the archive metadata and contents, installs each archive in its own environment on Python
    3.11 and 3.12, and runs the CLI and a translation to DirectX, OpenGL and Metal from each install. The PyPI job
    uploads those archives with the `PYPI_TOKEN` secret. The GitHub job checks that PyPI serves the same files, then

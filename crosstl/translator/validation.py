@@ -1269,8 +1269,8 @@ def validate_node_metadata(node, context):
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
-        metadata_name = SINGLE_VALUE_METADATA_ALIASES.get(attr_name, attr_name)
-        if metadata_name not in SINGLE_VALUE_METADATA_NAMES:
+        metadata_name = _single_value_metadata_name(attr_name)
+        if metadata_name is None:
             continue
         attr_values = _attribute_metadata_values(attr)
         if len(attr_values) > 1:
@@ -1823,14 +1823,11 @@ def _stage_interface_type_name(type_node):
         return matrix_type_spelling(type_node, element_type)
     if type_node.__class__.__name__ == "VectorType":
         element_type = _stage_interface_type_name(type_node.element_type)
-        vector_prefixes = {
-            "float": "vec",
-            "int": "ivec",
-            "uint": "uvec",
-            "double": "dvec",
-            "bool": "bvec",
-        }
-        return f"{vector_prefixes.get(element_type, element_type)}{type_node.size}"
+        prefix = _STAGE_INTERFACE_VECTOR_PREFIXES.get(element_type)
+        if prefix is None:
+            # Other lane types are spelled by the lane type itself, as in ``half3``.
+            return f"{element_type}{type_node.size}"
+        return f"{prefix}{type_node.size}"
     if hasattr(type_node, "name"):
         generic_args = getattr(type_node, "generic_args", []) or []
         if generic_args:
@@ -1840,23 +1837,28 @@ def _stage_interface_type_name(type_node):
     return str(type_node)
 
 
+_STAGE_INTERFACE_VECTOR_PREFIXES = {
+    "float": "vec",
+    "int": "ivec",
+    "uint": "uvec",
+    "double": "dvec",
+    "bool": "bvec",
+}
+# HLSL-style vector spellings of the stage interface types, keyed to the spelling they compare as.
+_HLSL_STYLE_INTERFACE_VECTORS = {
+    f"{scalar}{lanes}": f"{prefix}{lanes}"
+    for scalar, prefix in _STAGE_INTERFACE_VECTOR_PREFIXES.items()
+    if scalar != "bool"
+    for lanes in (2, 3, 4)
+}
+
+
 def _canonical_stage_interface_type(type_name):
+    """The key two stage interface types are compared by: one spelling per vector, the type name otherwise."""
     normalized = str(type_name)
-    aliases = {
-        "float2": "vec2",
-        "float3": "vec3",
-        "float4": "vec4",
-        "int2": "ivec2",
-        "int3": "ivec3",
-        "int4": "ivec4",
-        "uint2": "uvec2",
-        "uint3": "uvec3",
-        "uint4": "uvec4",
-        "double2": "dvec2",
-        "double3": "dvec3",
-        "double4": "dvec4",
-    }
-    return aliases.get(normalized, normalized)
+    if normalized in _HLSL_STYLE_INTERFACE_VECTORS:
+        return _HLSL_STYLE_INTERFACE_VECTORS[normalized]
+    return normalized
 
 
 def _node_metadata_names(node):
@@ -2188,9 +2190,12 @@ def _node_builtin_semantic_metadata(node):
             builtin_name = _normalized_metadata_name(_attribute_metadata_value(attr))
             if not builtin_name:
                 continue
-            metadata[f"builtin({builtin_name})"] = BUILTIN_SEMANTIC_METADATA_NAMES.get(
-                builtin_name, builtin_name
-            )
+            # The key two built-in attributes are compared by. A name the table has no other spelling for is its
+            # own key; codegen refuses the names no target has.
+            semantic = builtin_name
+            if builtin_name in BUILTIN_SEMANTIC_METADATA_NAMES:
+                semantic = BUILTIN_SEMANTIC_METADATA_NAMES[builtin_name]
+            metadata[f"builtin({builtin_name})"] = semantic
             continue
 
         builtin_name = _builtin_semantic_attribute_name(raw_name)
@@ -2580,6 +2585,15 @@ def _stage_layout_names_by_direction(stage):
             if entry_name:
                 direction_names.add(entry_name)
     return names
+
+
+def _single_value_metadata_name(attr_name):
+    """The single-value metadata ``@attr_name`` sets, or ``None`` when it sets none."""
+    if attr_name in SINGLE_VALUE_METADATA_ALIASES:
+        return SINGLE_VALUE_METADATA_ALIASES[attr_name]
+    if attr_name in SINGLE_VALUE_METADATA_NAMES:
+        return attr_name
+    return None
 
 
 def _normalized_metadata_name(name):

@@ -253,8 +253,21 @@ STD430_SCALAR_TYPE_ALIASES = {
 }
 
 
+# The value types the std430 and std140 tables lay out, under the names they use.
+STD430_LAYOUT_VALUE_TYPE_NAMES = frozenset(
+    {**std430_scalar_vector_type_entries(), **std430_matrix_type_entries()}
+)
+
+
 def std430_layout_type_name(type_name):
-    return STD430_SCALAR_TYPE_ALIASES.get(str(type_name), str(type_name))
+    """The name the layout tables give the value type ``type_name``, or ``None`` when it is not a value type they lay
+    out (a structure, for instance, is laid out from its members)."""
+    type_name = str(type_name)
+    if type_name in STD430_SCALAR_TYPE_ALIASES:
+        return STD430_SCALAR_TYPE_ALIASES[type_name]
+    if type_name in STD430_LAYOUT_VALUE_TYPE_NAMES:
+        return type_name
+    return None
 
 
 def std430_value_type_info(type_name):
@@ -459,10 +472,14 @@ def glsl_buffer_block_member_type(
 
     type_name = str(type_name)
     layout_type_name = std430_layout_type_name(type_name)
-    type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
-    if type_info is None and structs_by_name is not None:
+    type_info = None
+    if layout_type_name is not None:
+        type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
+    elif structs_by_name is not None:
+        # Not a value type: a structure is laid out, and named, as declared.
+        layout_type_name = type_name
         type_info = glsl_buffer_struct_type_info(
-            layout_type_name,
+            type_name,
             structs_by_name,
             convert_type_node_to_string,
             literal_int_value or (lambda value: None),

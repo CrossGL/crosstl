@@ -147,6 +147,7 @@ from .sparse_color import (
     refuse_sparse_color_type,
 )
 from .static_member_calls import unresolved_static_member_call_owner
+from .template_text import substitute_template_identifiers
 from .texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
@@ -2579,7 +2580,10 @@ class MetalToCrossGLConverter(
         if operand_type is None:
             return None
 
-        local_alias = self.local_struct_type_aliases.get(operand_type, operand_type)
+        # A structure-local alias names its target; any other operand type is resolved as written.
+        local_alias = operand_type
+        if operand_type in self.local_struct_type_aliases:
+            local_alias = self.local_struct_type_aliases[operand_type]
         resolved_type = self.resolve_type_alias(local_alias)
         layout = self.metal_concrete_type_layout(resolved_type)
         if layout is not None:
@@ -4483,11 +4487,7 @@ class MetalToCrossGLConverter(
             default = defaults.get(name)
             if default is None:
                 return {}, {}, f"template parameter '{name}' could not be inferred"
-            resolved = re.sub(
-                r"\b[A-Za-z_]\w*\b",
-                lambda match: str(all_bindings.get(match.group(0), match.group(0))),
-                str(default),
-            ).strip()
+            resolved = substitute_template_identifiers(default, all_bindings).strip()
             if not resolved:
                 return {}, {}, f"template parameter '{name}' has an empty default"
             target[name] = resolved
@@ -6680,11 +6680,7 @@ class MetalToCrossGLConverter(
     def replace_alias_template_identifiers(text, bindings):
         if not bindings:
             return str(text)
-        return re.sub(
-            r"\b[A-Za-z_]\w*\b",
-            lambda match: str(bindings.get(match.group(0), match.group(0))),
-            str(text),
-        )
+        return substitute_template_identifiers(text, bindings)
 
     def bind_alias_template_parameters(self, declaration, arguments, signature):
         parameters = list(getattr(declaration, "template_parameters", None) or [])
@@ -9164,11 +9160,7 @@ class MetalToCrossGLConverter(
             }
         if not bindings:
             return text
-        return re.sub(
-            r"\b[A-Za-z_]\w*\b",
-            lambda match: str(bindings.get(match.group(0), match.group(0))),
-            text,
-        )
+        return substitute_template_identifiers(text, bindings)
 
     def substitute_template_type_text(self, text, *, bindings=None):
         text = str(text)
@@ -9180,11 +9172,7 @@ class MetalToCrossGLConverter(
             }
         if not bindings:
             return text
-        return re.sub(
-            r"\b[A-Za-z_]\w*\b",
-            lambda match: str(bindings.get(match.group(0), match.group(0))),
-            text,
-        )
+        return substitute_template_identifiers(text, bindings)
 
     def collect_storage_texture_declaration_ids(self, root):
         storage_ids = set()
@@ -14371,7 +14359,10 @@ class MetalToCrossGLConverter(
         reverse_names = {
             mapped: owner for owner, mapped in self.struct_name_map.items()
         }
-        return reverse_names.get(candidate, candidate)
+        # A renamed structure resolves to its source name; any other owner keeps the spelling resolved above.
+        if candidate in reverse_names:
+            return reverse_names[candidate]
+        return candidate
 
     @staticmethod
     def lowered_static_method_is_instance_helper(function):

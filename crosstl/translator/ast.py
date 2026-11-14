@@ -39,25 +39,10 @@ class ASTNode:
         ``AssignmentNode.target`` and ``left``). Such a child is yielded once, so a visitor that acts on every child
         does not evaluate it twice: ``vals[k++]`` increments ``k`` once.
         """
-        children = []
-        yielded_fields = set()
-        for field_name, value in vars(self).items():
-            if field_name in AST_CHILD_FIELD_EXCLUSIONS:
-                continue
-            if isinstance(value, ASTNode):
-                value_id = id(value)
-                if value_id not in yielded_fields:
-                    yielded_fields.add(value_id)
-                    children.append(value)
-            elif isinstance(value, _AST_CHILD_CONTAINERS):
-                value_id = id(value)
-                if value_id not in yielded_fields:
-                    yielded_fields.add(value_id)
-                    _append_ast_child_nodes(value, children)
         # The children are collected eagerly into one list: nested ``yield from``
         # generators made every child pass through one frame per container level,
         # and this method runs for every node of every structural walk.
-        return iter(children)
+        return iter(_child_node_list(self))
 
     def walk(self):
         """Yield this node and all structural descendants once."""
@@ -72,7 +57,7 @@ class ASTNode:
             visited.add(node_id)
             yield node
 
-            children = list(node.child_nodes())
+            children = _child_node_list(node)
             children.reverse()
             stack.extend(children)
 
@@ -99,6 +84,84 @@ AST_CHILD_FIELD_EXCLUSIONS = frozenset({"annotations", "parent", "source_locatio
 
 
 _AST_CHILD_CONTAINERS = (list, tuple, dict, set)
+
+
+# How a structural walk treats a field value, decided once per concrete type. The walks run for every node of
+# every rule pass and generator, and one dictionary lookup on ``type(value)`` replaces a chain of ``isinstance``
+# checks. A value's kind depends only on the classes of its type, so the answer for one value holds for every
+# value of that type.
+FIELD_LEAF = 0
+FIELD_NODE = 1
+FIELD_LIST = 2
+FIELD_STAGES = 3
+FIELD_DICT = 4
+FIELD_TUPLE = 5
+FIELD_SET = 6
+FIELD_KINDS = {
+    type(None): FIELD_LEAF,
+    str: FIELD_LEAF,
+    int: FIELD_LEAF,
+    bool: FIELD_LEAF,
+}
+
+
+def field_kind(value):
+    """The structural kind (``FIELD_*``) of a field value, cached per type in :data:`FIELD_KINDS`.
+
+    The checks run in this order, so a ``StageMap`` is a stage map rather than a dictionary.
+    """
+    value_type = type(value)
+    kind = FIELD_KINDS.get(value_type)
+    if kind is not None:
+        return kind
+    if isinstance(value, ASTNode):
+        kind = FIELD_NODE
+    elif isinstance(value, list):
+        kind = FIELD_LIST
+    elif isinstance(value, StageMap):
+        kind = FIELD_STAGES
+    elif isinstance(value, dict):
+        kind = FIELD_DICT
+    elif isinstance(value, tuple):
+        kind = FIELD_TUPLE
+    elif isinstance(value, set):
+        kind = FIELD_SET
+    else:
+        kind = FIELD_LEAF
+    FIELD_KINDS[value_type] = kind
+    return kind
+
+
+def _child_node_list(node):
+    """A new list of ``node``'s direct structural children, in :meth:`ASTNode.child_nodes` order."""
+    children = []
+    append = children.append
+    yielded = set()
+    kinds = FIELD_KINDS
+    exclusions = AST_CHILD_FIELD_EXCLUSIONS
+    for field_name, value in vars(node).items():
+        if field_name in exclusions:
+            continue
+        kind = kinds.get(type(value))
+        if kind is None:
+            kind = field_kind(value)
+        if kind == FIELD_LEAF:
+            continue
+        value_id = id(value)
+        if value_id in yielded:
+            continue
+        yielded.add(value_id)
+        if kind == FIELD_NODE:
+            append(value)
+        elif kind == FIELD_LIST or kind == FIELD_TUPLE:
+            for item in value:
+                if isinstance(item, ASTNode):
+                    append(item)
+                elif isinstance(item, _AST_CHILD_CONTAINERS):
+                    _append_ast_child_nodes(item, children)
+        else:
+            _append_ast_child_nodes(value, children)
+    return children
 
 
 def _append_ast_child_nodes(value, children):

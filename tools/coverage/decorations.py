@@ -209,6 +209,8 @@ FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
 # kernel names no image format, since the host gives each image its ``cl_image_format`` when it creates it, so the
 # HLSL CrossTL writes from an OpenCL C probe is not checked for one.
 HOSTED = {"opencl": frozenset({"ImageFormat"})}
+# How :func:`lost` begins, which the bug issue for a translation that drops an anchor recognizes.
+LOSES = "the translation loses"
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
@@ -305,4 +307,4 @@ def lost(feature: Feature, language: str, source: str, imported: str = "") -> st
             for anchor, pattern in wanted
             if not re.search(pattern, compiled, re.M)
         ]
-    return f"the translation loses {', '.join(missing)}" if missing else ""
+    return f"{LOSES} {', '.join(missing)}" if missing else ""
