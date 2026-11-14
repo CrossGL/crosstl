@@ -535,20 +535,23 @@ def generic_function_value_arguments(generator, func_name, args):
     """Return value arguments after any leading explicit generic type arguments."""
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
     overloads = definitions.get(func_name)
-    if func is None:
+    if overloads is None:
         return list(args or [])
-
-    generic_params = generic_function_parameters(func)
-    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    explicit_substitutions, value_args = _explicit_generic_call_parts(
-        generator,
-        generic_params,
-        param_list,
-        list(args or []),
-    )
-    if explicit_substitutions is None:
-        return list(args or [])
-    return value_args
+    if not isinstance(overloads, list):
+        overloads = [overloads]
+    call_args = list(args or [])
+    for func in overloads:
+        generic_params = generic_function_parameters(func)
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+        explicit_substitutions, value_args = _explicit_generic_call_parts(
+            generator,
+            generic_params,
+            param_list,
+            call_args,
+        )
+        if explicit_substitutions is not None:
+            return value_args
+    return call_args
 
 
 def generic_function_call_key(generator, func_name, args):
