@@ -151,10 +151,10 @@ def _referenced_names(node, skip):
         if isinstance(child, A.IdentifierNode) and isinstance(child.name, str):
             # Strip explicit type arguments so that ``twice<float>`` resolves to ``twice``.
             raw = child.name
-            names.add(raw.split("<", 1)[0].strip() if "<" in raw else raw)
+            names.add(raw.split("<", 1)[0].strip())
         elif isinstance(child, A.FunctionCallNode) and isinstance(child.function, str):
             raw = child.function
-            names.add(raw.split("<", 1)[0].strip() if "<" in raw else raw)
+            names.add(raw.split("<", 1)[0].strip())
     return names
 
 
