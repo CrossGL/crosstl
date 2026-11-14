@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 65
+; Bound: 66
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
@@ -64,8 +64,8 @@ OpDecorate %40 BuiltIn NumWorkgroups
 %31 = OpTypePointer Input %30
 %37 = OpConstant %9 1
 %38 = OpConstantComposite %30 %37 %37 %37
-%56 = OpConstant %9 8
-%58 = OpConstant %9 15
+%56 = OpConstant %4 8
+%59 = OpConstant %9 15
 %17 = OpVariable %16 Uniform
 %20 = OpVariable %19 Uniform
 %23 = OpVariable %22 Uniform
@@ -101,17 +101,18 @@ OpBranchConditional %52 %47 %49
 %53 = OpLoad %9 %44
 %54 = OpAccessChain %25 %20 %24 %53
 %55 = OpLoad %9 %54
-%57 = OpShiftRightLogical %9 %55 %56
-%59 = OpBitwiseAnd %9 %57 %58
-%60 = OpLoad %9 %44
-%61 = OpAccessChain %25 %17 %24 %60
-OpStore %61 %59
+%57 = OpBitcast %9 %56
+%58 = OpShiftRightLogical %9 %55 %57
+%60 = OpBitwiseAnd %9 %58 %59
+%61 = OpLoad %9 %44
+%62 = OpAccessChain %25 %17 %24 %61
+OpStore %62 %60
 OpBranch %48
 %48 = OpLabel
-%62 = OpLoad %9 %44
-%63 = OpLoad %9 %36
-%64 = OpIAdd %9 %62 %63
-OpStore %44 %64
+%63 = OpLoad %9 %44
+%64 = OpLoad %9 %36
+%65 = OpIAdd %9 %63 %64
+OpStore %44 %65
 OpBranch %46
 %49 = OpLabel
 OpReturn
