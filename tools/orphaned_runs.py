@@ -8,7 +8,9 @@ default branch; the runs of a group that landed are kept, since they test a comm
 A run has failed when a job of its latest attempt failed while one of the branch's required checks in it, the
 ``if: always()`` result job, is still waiting for the other jobs. That check will fail, but the queue drops the
 entry only when it reports, so a slow leg holds every group behind it. Cancelling the run lets the result job
-report at once; the group's other runs are orphaned when the queue rebuilds the groups behind it.
+report at once; the group's other runs are orphaned when the queue rebuilds the groups behind it. GitHub lists a
+job that needs others only once they have finished, so a waiting result job is one that the run's workflow file
+names and the run does not list as completed.
 
 A pull-request run is closed when no open pull request has its head branch. GitHub lets the runs of a pull request
 that merged or closed carry on; the merge group tested what landed, and nothing reads their checks any more.
@@ -22,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -55,6 +58,8 @@ fragment suites on Commit {
   }
 }
 """
+# A literal ``name:`` in a workflow file, which names a job or a step.
+NAME = re.compile(r"^\s+(?:- )?name:\s*(?P<quote>['\"]?)(?P<name>.+?)(?P=quote)\s*$")
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,8 @@ class Run:
     sha: str
     # The full name of the repository the head branch is in; a fork for a pull request from one.
     repository: str = ""
+    # The workflow file, such as .github/workflows/lint.yml.
+    path: str = ""
 
 
 def target(branch: str) -> str | None:
@@ -136,6 +143,7 @@ class GitHub:
                         item["head_branch"],
                         item["head_sha"],
                         (item.get("head_repository") or {}).get("full_name", ""),
+                        item.get("path", ""),
                     )
                 if len(batch) < PAGE:
                     break
@@ -234,8 +242,28 @@ class GitHub:
                 return jobs
             page += 1
 
+    def names(self, path: str, sha: str) -> set[str]:
+        """The literal ``name:`` values, of jobs and steps, in the workflow file ``path`` at commit ``sha``."""
+        command = [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            f"repos/{self.repository}/contents/{quote(path)}?ref={sha}",
+            "-H",
+            "Accept: application/vnd.github.raw",
+        ]
+        done = self._run(command, capture_output=True, text=True, check=False)
+        if done.returncode:
+            raise RuntimeError(f"gh api {path}@{sha[:12]}: {done.stderr.strip()}")
+        return {
+            match["name"]
+            for line in done.stdout.splitlines()
+            if (match := NAME.match(line))
+        }
+
     def cancel(self, run: Run) -> bool:
-        """Cancel ``run``; false when it finished first."""
+        """Cancel ``run``; false when GitHub answers HTTP 409, because the run finished first or was never queued."""
         try:
             self._api("POST", f"actions/runs/{run.id}/cancel")
         except RuntimeError as error:
@@ -255,6 +283,20 @@ class Sweeper:
         # This run, and failed runs without a required check left to report: neither ever needs cancelling.
         self.keep = set(keep)
         self._required: dict[str, set[str]] = {}
+        self._names: dict[tuple[str, str], set[str]] = {}
+
+    def waiting(self, run: Run, jobs: list[dict], required: set[str]) -> set[str]:
+        """The checks in ``required`` that ``run``, with the latest-attempt ``jobs``, has yet to report."""
+        done = {job["name"] for job in jobs if job["status"] == "completed"}
+        listed = {job["name"] for job in jobs}
+        waiting = required & (listed - done)
+        # A job that needs others is not listed until they finish; the workflow file says whether the run has one.
+        if not waiting and required - listed and run.path.startswith(".github/"):
+            key = (run.path, run.sha)
+            if key not in self._names:
+                self._names[key] = self.github.names(run.path, run.sha)
+            waiting = (required & self._names[key]) - done
+        return waiting
 
     def failed(self, runs: Iterable[Run], groups: set[str]) -> list[Run]:
         """The ``runs`` of the merge groups in ``groups`` that have failed, oldest first."""
@@ -270,10 +312,7 @@ class Sweeper:
             if branch not in self._required:
                 self._required[branch] = self.github.required(branch)
             jobs = self.github.jobs(run.id)
-            waiting = self._required[branch] & {
-                job["name"] for job in jobs if job["status"] != "completed"
-            }
-            if not waiting:
+            if not self.waiting(run, jobs, self._required[branch]):
                 self.keep.add(run.id)
             elif any(job["conclusion"] in FAILED for job in jobs):
                 found.append(run)
@@ -307,7 +346,10 @@ class Sweeper:
                 self.keep.add(run.id)
                 print(f"cancelled {line}")
             else:
-                print(f"finished first: {line}")
+                # The run finished first, or GitHub never queued it and cannot cancel it: asking again changes
+                # nothing.
+                self.keep.add(run.id)
+                print(f"not cancelled: {line}")
         if len(found) > self.limit:
             print(
                 f"left {len(found) - self.limit} for the next sweep (limit {self.limit})"
