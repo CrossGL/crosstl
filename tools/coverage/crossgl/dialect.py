@@ -84,7 +84,7 @@ class CrossGL(Dialect):
         lines += [f"    {line}" for line in parts.get("prelude", ())]
         lines += [
             "    compute {",
-            "        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
+            f"        layout(local_size_x = {parts.get('lanes', 1)}, local_size_y = 1, local_size_z = 1) in;",
         ]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
         lines += [f"        {line}" for line in parts.get("declarations", ())]

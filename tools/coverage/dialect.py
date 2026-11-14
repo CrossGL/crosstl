@@ -291,12 +291,25 @@ class Dialect:
         """How a fragment shader reads its input ``name``, which :meth:`fragment` declares from ``inputs``."""
         return name
 
+    def enable(self, extension: str) -> list[str]:
+        """The prelude lines that enable the language extension ``extension``; none where the language has no such
+        directive."""
+        return []
+
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        """``body`` run only by the invocations whose index is not a multiple of ``skipped``."""
+        return [
+            f"if (i % {skipped}u != 0u) {{",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A compute kernel that runs ``body`` once per invocation, with ``i`` the invocation's index.
 
         ``parts`` may add ``prelude`` lines (extensions, enable directives, or for CrossGL shader-level declarations),
         ``declarations`` that precede the entry point and, for languages that pass them as entry-point parameters,
-        ``params``.
+        ``params``. ``lanes`` is the workgroup size, 1 unless given, for languages that declare it in the kernel.
         """
         raise NotImplementedError
 

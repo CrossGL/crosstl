@@ -289,3 +289,31 @@ def test_metal_list_records_its_toolchain():
     # Probes compile against the language version the committed list was read from.
     version = validators.METAL_STANDARD.removeprefix("metal")
     assert f"# language: Metal Shading Language {version}\n" in metal.LIST.read_text()
+
+
+def test_metal_permutes_take_a_lane_the_whole_group_shares_as_a_constant():
+    listed = "\n".join(
+        [
+            "metal_simdgroup simd_broadcast float(float, uint)",
+            "metal_simdgroup simd_shuffle float(float, uint)",
+            "metal_quadgroup quad_shuffle_and_fill_up float(float, float, uint)",
+        ]
+    )
+    features = by_name(metal.parse(listed))
+    assert [p.direction for p in features["simd_broadcast"].signature.params] == [
+        "in",
+        "const",
+    ]
+    assert [
+        p.direction for p in features["quad_shuffle_and_fill_up"].signature.params
+    ] == ["in", "in", "const"]
+    # simd_shuffle's lane "doesn't have to be the same for all threads" (MSL 4.1, table 6.14).
+    assert [p.direction for p in features["simd_shuffle"].signature.params] == [
+        "in",
+        "in",
+    ]
+    assert (
+        "simd_broadcast(a0, 1u)" in probes.build(
+            features["simd_broadcast"], "metal"
+        ).source
+    )

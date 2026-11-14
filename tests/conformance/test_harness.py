@@ -738,7 +738,7 @@ def test_scoreboard_results_scope_keeps_other_routes_and_configs():
     fresh = [record()]
     merged = merge(baseline, fresh, results_scope(fresh))
     assert set(merged["cells"]) == set(baseline["cells"])
-    assert merged["counts"] == {"diverged": 2, "preserved": 1}
+    assert scoreboard.counts(merged) == {"diverged": 2, "preserved": 1}
 
 
 def test_scoreboard_merge_replaces_only_the_runs_scope():
@@ -752,8 +752,18 @@ def test_scoreboard_merge_replaces_only_the_runs_scope():
         "preserved",
         "diverged",
     }
-    assert merged["counts"] == {"diverged": 1, "preserved": 1}
+    assert scoreboard.counts(merged) == {"diverged": 1, "preserved": 1}
     assert scoreboard.SCHEMA == merged["schemaVersion"]
+
+
+def test_committed_scoreboards_store_only_cells():
+    """Stored totals would make every pair of scoreboard updates conflict; they are derived on demand."""
+    paths = sorted((CASES_DIR.parent / "scoreboards").glob("*.json"))
+    assert paths
+    for path in paths:
+        data = json.loads(path.read_text())
+        assert set(data) == {"schemaVersion", "keys", "cells"}, path.name
+        assert sum(scoreboard.counts(data).values()) == len(data["cells"])
 
 
 def test_native_16_bit_hlsl_is_compiled_with_16_bit_types(tmp_path):

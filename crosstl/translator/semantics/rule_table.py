@@ -12,7 +12,10 @@ See docs/source/adr/0001-rule-carrying.md.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from .libm_trig import TRIG, libm_trig_support
 
 WRAP = "wrap"
 UDIV_ZERO = "udiv_zero"
@@ -26,7 +29,12 @@ FP_IEEE = "fp_ieee"
 # round, which CUDA, HIP and OpenCL C adopt. Sources write the hub intrinsic ``__cgl_round_away``; CrossGL's own
 # ``round`` leaves the direction of halfway cases to the target, as GLSL does.
 ROUND_AWAY = "round_away"
-FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE, ROUND_AWAY)
+# The binary32 math functions within the error bound C-family sources document over the whole operand range: sinf and
+# cosf within 2 ulp of the exact result (CUDA and HIP; OpenCL C's 4 ulp is weaker, so its programs are covered), with
+# sin(-0) = -0 and a NaN for infinite and NaN operands. Sources write ``__cgl_libm_sin`` and ``__cgl_libm_cos``;
+# CrossGL's own ``sin`` and ``cos`` have the precision of the target, which graphics targets bound on [-pi, pi] only.
+LIBM = "libm"
+FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE, ROUND_AWAY, LIBM)
 PROGRAM_FAMILIES = frozenset({FP_IEEE})
 
 
@@ -64,6 +72,10 @@ SOURCE_RULES = {
             "CUDA Math API, roundf and round: round to the nearest integer value, with halfway cases rounded away "
             "from zero (C11 7.12.9.6)",
         ),
+        SourceRule(
+            LIBM,
+            "CUDA Math API, single-precision mathematical functions: sinf and cosf have a maximum ulp error of 2",
+        ),
     ),
     "hip": (
         SourceRule(
@@ -74,6 +86,10 @@ SOURCE_RULES = {
         SourceRule(
             ROUND_AWAY,
             "HIP math API, roundf and round: halfway cases are rounded away from zero (C11 7.12.9.6)",
+        ),
+        SourceRule(
+            LIBM,
+            "HIP math API, single-precision mathematical functions: sinf and cosf have a maximum error of 2 ulp",
         ),
     ),
     "opencl": (
@@ -86,6 +102,11 @@ SOURCE_RULES = {
             ROUND_AWAY,
             "OpenCL C 3.0 section 6.15.2, round: round to integral value (using round to nearest even rounding "
             "mode) rounding halfway cases away from zero, regardless of the current rounding direction",
+        ),
+        SourceRule(
+            LIBM,
+            "OpenCL C 3.0 section 7.4, ULP values for single-precision built-in math functions: sin and cos are "
+            "within 4 ulp in the full profile",
         ),
     ),
     "metal": (
@@ -447,6 +468,71 @@ TARGET_ENTRIES.update(
     }
 )
 
+# Targets whose sin and cos are not bounded to 2 ulp over the whole binary32 range evaluate the libm helpers, which
+# compute in 32-bit integer arithmetic and so keep their result under fast math, contraction and flushed subnormals.
+_LIBM_POLYFILL = (
+    "; the helper evaluates the function in 32-bit integer arithmetic (libm_trig.py), and "
+    "tests/conformance/libm_exhaustive.py bounds its error over every binary32 operand"
+)
+TARGET_ENTRIES.update(
+    {
+        (LIBM, "opengl"): TargetEntry(
+            "polyfill",
+            "GLSL 4.60 section 4.7.1: built-in functions that are not listed, the trigonometric functions among "
+            "them, have undefined precision" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "webgl"): TargetEntry(
+            "polyfill",
+            "ESSL 3.00 section 4.5.1 bounds no built-in trigonometric function"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "vulkan"): TargetEntry(
+            "polyfill",
+            "Vulkan 1.3, Precision and Operation of SPIR-V Instructions: GLSL.std.450 Sin and Cos have an absolute "
+            "error of at most 2^-11 inside [-pi, pi] and no bound outside it"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "wgsl"): TargetEntry(
+            "polyfill",
+            "WGSL section 15.7.4, accuracy of built-in functions: sin and cos have an absolute error of at most "
+            "2^-11 inside [-pi, pi] and no bound outside it" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "metal"): TargetEntry(
+            "polyfill",
+            "the MSL 4.1 accuracy tables bound precise::sin and precise::cos at 4 ulp, and the default fast "
+            "versions only inside [-pi, pi]" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "directx"): TargetEntry(
+            "polyfill",
+            "Direct3D 11.3 functional specification, sincos: an absolute error of at most 0.0008 inside "
+            "[-100 pi, 100 pi] and no bound outside it" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "slang"): TargetEntry(
+            "polyfill",
+            "Slang's sin and cos have the precision of the target they lower to"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "mojo"): TargetEntry(
+            "polyfill",
+            "the Mojo manual states no error bound for sin and cos on SIMD floats"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "rust"): TargetEntry(
+            "polyfill",
+            "rust-gpu lowers f32::sin and f32::cos to GLSL.std.450 Sin and Cos, which Vulkan bounds inside "
+            "[-pi, pi] only" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "cuda"): TargetEntry(
+            "native",
+            "CUDA Math API: sinf and cosf have a maximum ulp error of 2, and sin and cos of 2 as well",
+        ),
+        (LIBM, "hip"): TargetEntry(
+            "native",
+            "HIP math API: sinf and cosf have a maximum error of 2 ulp",
+        ),
+    }
+)
+
 # Hub intrinsics of the wrap family: name -> (operator, arity). Statement forms (compound assignment, increment
 # and decrement) reuse the binary templates; see annotate.py and lower.py.
 WRAP_INTRINSICS = {
@@ -485,6 +571,11 @@ CONVERSION_SIGNATURES = {
     "__cgl_nan0_ftoi": ("float", "int"),
     "__cgl_nan0_ftou": ("float", "uint"),
 }
+# Hub intrinsics of the libm family: name -> (the CrossGL function a native entry calls, arity). The helpers take
+# binary32 operands (scalar or vector); lowering refuses others on polyfill targets.
+LIBM_INTRINSICS = {"__cgl_libm_sin": ("sin", 1), "__cgl_libm_cos": ("cos", 1)}
+# The carried bound, in ulps of the exact result.
+LIBM_ULP_BOUND = 2
 # Hub intrinsic of the round_away family: name -> (the CrossGL function a native entry calls, arity). Only binary32
 # operands (scalar or vector) have a helper; lowering widens binary16 operands, which is exact, and refuses others.
 ROUND_AWAY_INTRINSICS = {"__cgl_round_away": ("round", 1)}
@@ -507,6 +598,7 @@ INTRINSICS = {
     **CONVERT_SAT_INTRINSICS,
     **FTOI_NAN_INTRINSICS,
     **ROUND_AWAY_INTRINSICS,
+    **LIBM_INTRINSICS,
 }
 INTRINSIC_FAMILY = {
     **{name: WRAP for name in WRAP_INTRINSICS},
@@ -515,6 +607,7 @@ INTRINSIC_FAMILY = {
     **{name: CONVERT_SAT for name in CONVERT_SAT_GENERIC},
     **{name: FTOI_NAN for name in FTOI_NAN_INTRINSICS},
     **{name: ROUND_AWAY for name in ROUND_AWAY_INTRINSICS},
+    **{name: LIBM for name in LIBM_INTRINSICS},
 }
 BINARY_WRAP_INTRINSIC = {
     "+": "__cgl_wrap_add",
@@ -546,6 +639,8 @@ class Helper:
     body: str
     parameters: tuple[str, ...] | None = None
     result: str | None = None
+    # CrossGL definitions of further reserved functions the body calls, in dependency order (see helpers.py).
+    support: str | None = None
 
     @property
     def parameter_types(self) -> tuple[str, ...]:
@@ -554,6 +649,13 @@ class Helper:
     @property
     def result_type(self) -> str:
         return self.result if self.result is not None else self.scalar
+
+    @property
+    def support_names(self) -> tuple[str, ...]:
+        """The reserved function names ``support`` defines."""
+        if not self.support:
+            return ()
+        return tuple(re.findall(r"^\w+ (cgl_rule_\w+)\(", self.support, re.MULTILINE))
 
 
 # Magnitude bits of a binary32 value, and the bit patterns of 2^31 and 2^32. A conversion helper decides NaN and range
@@ -615,6 +717,15 @@ HELPERS["__cgl_round_away"] = Helper(
     ("float",),
     "float",
 )
+for _intrinsic, (_function, _) in LIBM_INTRINSICS.items():
+    HELPERS[_intrinsic] = Helper(
+        f"cgl_rule_libm_{_function}",
+        "float",
+        f"{TRIG}(x0, {'true' if _function == 'cos' else 'false'})",
+        ("float",),
+        "float",
+        libm_trig_support(),
+    )
 
 
 def source_families(source: str) -> frozenset:

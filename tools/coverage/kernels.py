@@ -152,6 +152,9 @@ class Mojo(Dialect):
     def statement(self, expression: str) -> str:
         return expression
 
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = [
             f"{name}: UnsafePointer[{kind}, MutAnyOrigin]" for kind, name in buffers
@@ -332,9 +335,12 @@ class Rust(Dialect):
             return f"{value}.extend({self.literal(Type(kind.scalar))})"
         return value
 
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        return [f"if i % {skipped} != 0 {{", *(f"    {line}" for line in body), "}"]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         entry = (
-            "#[spirv(compute(threads(1)))]",
+            f"#[spirv(compute(threads({parts.get('lanes', 1)})))]",
             "#[spirv(global_invocation_id)] id: UVec3",
         )
         return self._entry(entry, buffers, ["let i = id.x as usize;", *body], parts)

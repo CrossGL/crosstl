@@ -2522,14 +2522,6 @@
       "sourceSHA256": "bb70cca477a729306b0426f4756f6832cc5bd4d6bf086d5d2a525ac03c754688"
     }
   },
-  "counts": {
-    "diverged": 39,
-    "interface-changed": 2,
-    "invalid": 4,
-    "observed": 18,
-    "preserved": 436,
-    "refused": 2
-  },
   "keys": [
     "case",
     "language",

@@ -759,8 +759,10 @@ HLSL_RAY_SYSTEM_VALUE_TYPES = {
     "GeometryIndex": "uint",
     "PrimitiveIndex": "uint",
     "HitKind": "uint",
+    "ObjectToWorld": "float3x4",
     "ObjectToWorld3x4": "float3x4",
     "ObjectToWorld4x3": "float4x3",
+    "WorldToObject": "float3x4",
     "WorldToObject3x4": "float3x4",
     "WorldToObject4x3": "float4x3",
 }

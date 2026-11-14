@@ -1945,7 +1945,11 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     assert kernel.params[1]["name"] == "in"
     assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
-    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" in message
+    assert (
+        "WaveReadLaneAt(val, ((((y * width) + x)) & (WaveGetLaneCount() - 1)))"
+        in crossgl
+    )
+    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" not in message
     assert "HIP warp intrinsic __shfl_sync" in message
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
@@ -2314,7 +2318,10 @@ def test_external_rocm_hip_complex_math_codegen_reparse():
     assert (
         "vec2<f32> accumulateDFT(f32 sample, vec2<f32> sum, " "i32 k, i32 n, i32 N)"
     ) in crossgl
-    assert "var w: vec2<f32> = vec2<f32>(cos(angle), sin(angle));" in crossgl
+    assert (
+        "var w: vec2<f32> = vec2<f32>(__cgl_libm_cos(angle), __cgl_libm_sin(angle));"
+        in crossgl
+    )
     assert (
         "return (sum + vec2<f32>(((x.x * w.x) - (x.y * w.y)), "
         "((x.x * w.y) + (x.y * w.x))));"

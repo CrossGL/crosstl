@@ -7279,8 +7279,10 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         function_mapping = {
             "sqrtf": "sqrt",
             "powf": "pow",
-            "sinf": "sin",
-            "cosf": "cos",
+            # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
+            # carries; CrossGL's sin and cos have the precision of the target.
+            "sinf": "__cgl_libm_sin",
+            "cosf": "__cgl_libm_cos",
             "tanf": "tan",
             "sinhf": "sinh",
             "coshf": "cosh",
@@ -7312,8 +7314,8 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "ceilf": "ceil",
             "sqrt": "sqrt",
             "pow": "pow",
-            "sin": "sin",
-            "cos": "cos",
+            "sin": "__cgl_libm_sin",
+            "cos": "__cgl_libm_cos",
             "tan": "tan",
             "log": "log",
             "exp": "exp",

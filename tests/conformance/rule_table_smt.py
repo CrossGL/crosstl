@@ -485,6 +485,8 @@ def check_entry(intrinsic, target, entry):
     if entry.kind == "refuse":
         record["result"] = "refused"
         return record
+    if rule_table.INTRINSIC_FAMILY[intrinsic] == rule_table.LIBM:
+        return check_libm_entry(intrinsic, entry, record)
     operator, arity = rule_table.INTRINSICS[intrinsic]
     family = rule_table.INTRINSIC_FAMILY[intrinsic]
     operand_kinds, kind = signature(intrinsic)
@@ -554,6 +556,56 @@ def check_entry(intrinsic, target, entry):
         record["result"] = "unknown"
     if entry.configuration:
         record["configuration"] = entry.configuration
+    return record
+
+
+def check_libm_entry(intrinsic, entry, record):
+    """A libm entry: a native one rests on the target's documented bound, a polyfill on its exhaustive certificate.
+
+    The ulp error of a transcendental function is out of reach of an SMT query, but the binary32 domain is finite:
+    ``libm_exhaustive.py`` evaluates the helper's CrossGL text for all 2^32 operands. The certificate in
+    ``libm_proofs.json`` must name the current text, and a stratified sample is evaluated again here.
+    """
+    from . import libm_exhaustive
+
+    bound = rule_table.LIBM_ULP_BOUND
+    if entry.kind == "native":
+        record["result"] = "sound"
+        record["method"] = "documented bound"
+        record["detail"] = entry.reason
+        return record
+    if entry.kind != "polyfill" or intrinsic not in rule_table.HELPERS:
+        record["result"] = "malformed"
+        record["detail"] = f"a libm entry of kind {entry.kind!r} has no helper to check"
+        return record
+    certificate = libm_exhaustive.load_proofs().get(intrinsic)
+    if certificate is None or certificate.get(
+        "helperSHA256"
+    ) != libm_exhaustive.helper_sha256(intrinsic):
+        record["result"] = "unproven"
+        record["detail"] = (
+            "libm_proofs.json has no certificate for the current helper text; run "
+            "python -m tests.conformance.libm_exhaustive"
+        )
+        return record
+    try:
+        sampled, operand = libm_exhaustive.check(
+            intrinsic, libm_exhaustive.sample_bits()
+        )
+    except (libm_exhaustive.Unmodelled, AssertionError) as error:
+        record["result"] = "unmodelled"
+        record["detail"] = str(error)
+        return record
+    worst = max(sampled, certificate["maxUlp"])
+    record["method"] = "exhaustive certificate and sample"
+    record["maxUlp"] = round(worst, 4)
+    if certificate["operands"] != 1 << 32 or worst > bound:
+        record["result"] = "unsound"
+        record["counterexample"] = {
+            "x0": certificate["maxUlpOperand"] if worst > sampled else hex(operand)
+        }
+    else:
+        record["result"] = "sound"
     return record
 
 

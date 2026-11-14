@@ -1,0 +1,18 @@
+{
+  "__cgl_libm_cos": {
+    "helperSHA256": "523ea1590b8dfa1e01cccacec8a130673abb9360dc5eed2bbdff3afde1d26468",
+    "maxUlp": 0.5132,
+    "maxUlpOperand": "0x41a15a4e",
+    "operands": 4294967296,
+    "reference": "numpy binary64 cos",
+    "seconds": 660
+  },
+  "__cgl_libm_sin": {
+    "helperSHA256": "d360675d40d970a824576b2a9a87ecd050801b31caf26faa5fbb503f5c9dd64e",
+    "maxUlp": 0.5129,
+    "maxUlpOperand": "0x7ecebd80",
+    "operands": 4294967296,
+    "reference": "numpy binary64 sin",
+    "seconds": 565
+  }
+}
