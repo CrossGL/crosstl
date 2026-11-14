@@ -38,9 +38,13 @@ def _cuda(offline: bool) -> list[Feature]:
     )
 
 
+def _subgroup(offline: bool) -> list[str]:
+    return [fetch(source, offline=offline) for source in glsl_subgroup.SOURCES]
+
+
 def _glsl(offline: bool) -> list[Feature]:
     return glsl.parse(fetch("glsl", offline=offline)) + glsl_subgroup.parse(
-        fetch("glsl-subgroup", offline=offline)
+        *_subgroup(offline)
     )
 
 
@@ -137,7 +141,7 @@ def _spirv(offline: bool) -> list[Feature]:
     return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
         fetch("spirv-core", offline=offline),
         glsl_text,
-        fetch("glsl-subgroup", offline=offline),
+        *_subgroup(offline),
     )
 
 
