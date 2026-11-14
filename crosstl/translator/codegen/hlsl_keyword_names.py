@@ -10,6 +10,13 @@ reference to it, is renamed on a copy of the AST before HLSL emission. The
 rename appends underscores until the name is unused, which keeps the program's
 own spellings recognisable.
 
+A function the program defines under the name of a DXR system-value intrinsic
+(``WorldRayOrigin``, ``RayTCurrent``, ``ObjectToWorld``, ...) is renamed the
+same way. DXC resolves a call to such a name to the intrinsic when the two
+return types differ (a ``float4 ObjectToWorld()`` call is read as the
+``float3x4`` intrinsic and fails to convert), so the program's own function is
+given a name no intrinsic has.
+
 Value names are the ones DXC 1.9 rejects in at least one of these positions:
 local variable, struct member, function parameter, static global, function
 name, ``cbuffer`` member and resource name; type names also include the ones it
@@ -50,6 +57,7 @@ from ..ast import (
     VariableNode,
     VectorType,
 )
+from ..semantics.dxr_ray_interfaces import DXR_SYSTEM_VALUE_CALLS
 
 # Storage classes, parameter and interpolation modifiers, and HLSL statements.
 _HLSL_MODIFIER_NAMES = frozenset(
@@ -438,6 +446,7 @@ class _Declarations:
 
     def __init__(self, ast):
         self.values = set()
+        self.functions = set()
         self.members = set()
         self.types = set()
         # Scoped keyword names declared at HLSL program scope.
@@ -455,6 +464,8 @@ class _Declarations:
                     self.callee_members.append(function)
             if isinstance(node, FunctionNode):
                 functions.append(node)
+                if isinstance(name, str):
+                    self.functions.add(name)
             if isinstance(node, StructNode) and isinstance(name, str):
                 struct_names.add(name)
             if _is_type_alias(node) and isinstance(name, str):
@@ -504,7 +515,7 @@ class _Declarations:
             name
             for name in names
             if name not in HLSL_SCOPED_KEYWORD_NAMES or name in self.program_scope
-        }
+        } | (self.functions & DXR_SYSTEM_VALUE_CALLS)
 
     def keyword_types(self):
         return self.types & HLSL_TYPE_KEYWORD_NAMES

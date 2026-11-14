@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
-from .dxr_ray_interfaces import declare_dxr_builtin_structs
+from .dxr_ray_interfaces import declare_dxr_builtin_structs, defined_function_names
 from .hlsl_ray_interfaces import (
     _CONSTANTS,
     _attribute_names,
@@ -117,18 +117,20 @@ class MetalRayDispatchUnsupportedError(TranslationDiagnostic):
         )
 
 
-def _call_name(node):
+def _call_name(node, defined):
     if not isinstance(node, A.FunctionCallNode) or node.arguments:
         return None
     function = node.function
     name = function.name if isinstance(function, A.IdentifierNode) else function
-    return name if isinstance(name, str) and name in _LAUNCH_CALLS else None
+    if not isinstance(name, str) or name not in _LAUNCH_CALLS or name in defined:
+        return None
+    return name
 
 
-def _launch_name(node):
+def _launch_name(node, defined):
     if isinstance(node, A.IdentifierNode) and node.name in _LAUNCH_VARIABLES:
         return node.name
-    return _call_name(node)
+    return _call_name(node, defined)
 
 
 def _payload_variables(program, stage):
@@ -167,19 +169,19 @@ def _stage_functions(program, stage):
     return functions
 
 
-def _rewrite(node):
+def _rewrite(node, defined):
     if isinstance(node, A.IdentifierNode) and node.name in _RAY_FLAGS:
         return A.IdentifierNode(_RAY_FLAGS[node.name])
-    name = _launch_name(node)
+    name = _launch_name(node, defined)
     if name is None or name == _LAUNCH_NAMES[name]:
         return None
     return A.IdentifierNode(_LAUNCH_NAMES[name])
 
 
-def _refuse_launch_values(stage, functions, where):
+def _refuse_launch_values(stage, functions, where, defined):
     for function in functions:
         for node in _walk(function):
-            name = _launch_name(node)
+            name = _launch_name(node, defined)
             if name is not None:
                 raise MetalRayDispatchUnsupportedError(
                     _stage_label(stage),
@@ -190,21 +192,21 @@ def _refuse_launch_values(stage, functions, where):
                 )
 
 
-def _ray_state_name(node):
+def _ray_state_name(node, defined):
     if isinstance(node, A.IdentifierNode) and node.name in _RAY_STATE_VARIABLES:
         return node.name
     if isinstance(node, A.FunctionCallNode) and not node.arguments:
         function = node.function
         name = function.name if isinstance(function, A.IdentifierNode) else function
-        if isinstance(name, str) and name in _RAY_STATE_CALLS:
+        if isinstance(name, str) and name in _RAY_STATE_CALLS and name not in defined:
             return f"{name}()"
     return None
 
 
-def _refuse_ray_state(stage, functions):
+def _refuse_ray_state(stage, functions, defined):
     for function in functions:
         for node in _walk(function):
-            name = _ray_state_name(node)
+            name = _ray_state_name(node, defined)
             if name is not None:
                 raise MetalRayDispatchUnsupportedError(
                     _stage_label(stage),
@@ -242,6 +244,7 @@ def lower_metal_ray_dispatch(program, target) -> int:
     ):
         return 0
     visited = 0
+    defined = defined_function_names(program)
     for stage in _stages(program):
         if getattr(stage, "stage", None) not in _RAY_STAGES:
             continue
@@ -252,14 +255,17 @@ def lower_metal_ray_dispatch(program, target) -> int:
             helpers = [f for f in functions if f is not stage.entry_point]
             for helper in helpers:
                 _refuse_launch_values(
-                    stage, [helper], f"helper '{helper.name}' is an ordinary function"
+                    stage,
+                    [helper],
+                    f"helper '{helper.name}' is an ordinary function",
+                    defined,
                 )
         else:
             _refuse_launch_values(
-                stage, functions, "this stage becomes a [[visible]] function"
+                stage, functions, "this stage becomes a [[visible]] function", defined
             )
-            _refuse_ray_state(stage, functions)
+            _refuse_ray_state(stage, functions, defined)
         for function in functions:
-            _transform(function, _rewrite)
+            _transform(function, lambda node: _rewrite(node, defined))
     declare_dxr_builtin_structs(program, (_TRIANGLE_ATTRIBUTES,))
     return visited

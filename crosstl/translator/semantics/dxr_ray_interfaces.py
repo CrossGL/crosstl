@@ -55,6 +55,7 @@ from .hlsl_ray_interfaces import (
 from .stage_varyings import GLSL_TARGETS, SPIRV_TARGETS
 
 __all__ = [
+    "DXR_SYSTEM_VALUE_CALLS",
     "DxrRayInterfaceUnsupportedError",
     "declare_dxr_builtin_structs",
     "lower_dxr_ray_interfaces",
@@ -93,6 +94,8 @@ _TRANSFORMS = {
     "WorldToObject3x4": ("gl_WorldToObjectEXT", False),
     "WorldToObject4x3": ("gl_WorldToObjectEXT", True),
 }
+# Every zero-argument DXR call above; a function the program defines under one of these names is its own.
+DXR_SYSTEM_VALUE_CALLS = frozenset(_INTRINSICS) | frozenset(_TRANSFORMS)
 TARGETS = GLSL_TARGETS | SPIRV_TARGETS
 _TARGET_LABELS = {
     "opengl": "OpenGL",
@@ -150,7 +153,18 @@ def _type_name(type_node):
     return None
 
 
-def _is_dxr_call(node):
+def defined_function_names(program):
+    """Names of the functions ``program`` defines. A call to one of them calls that function, even when DXR has
+    an intrinsic of the same name: HLSL resolves it to the program's function, and a target that reads the
+    intrinsic's value instead silently computes something else."""
+    return frozenset(
+        function.name
+        for function in _functions(program)
+        if isinstance(getattr(function, "name", None), str)
+    )
+
+
+def _is_dxr_call(node, defined=frozenset()):
     if isinstance(node, A.RayTracingOpNode):
         count = len(node.arguments or [])
         return (
@@ -165,7 +179,7 @@ def _is_dxr_call(node):
     if isinstance(node, A.FunctionCallNode):
         function = getattr(node, "function", None)
         name = getattr(function, "name", function)
-        return name in _INTRINSICS or name in _TRANSFORMS
+        return (name in _INTRINSICS or name in _TRANSFORMS) and name not in defined
     return isinstance(node, A.IdentifierNode) and node.name in _DXR_CONSTANTS
 
 
@@ -188,8 +202,9 @@ def _dxr_stages(program):
         if getattr(stage, "stage", None) in _RAY_STAGES
         and getattr(stage, "entry_point", None) is not None
     ]
+    defined = defined_function_names(program)
     for function in _functions(program):
-        if any(_is_dxr_call(node) for node in _walk(function)):
+        if any(_is_dxr_call(node, defined) for node in _walk(function)):
             return ray_stages
     return []
 
@@ -201,7 +216,8 @@ class _Lowering:
         self.stage = stage
         self.label = _stage_label(stage)
         self.taken = {struct.name for struct in program.structs or []}
-        self.taken.update(function.name for function in _functions(program))
+        self.defined = defined_function_names(program)
+        self.taken.update(self.defined)
         self.types = {}
         for function in _functions(program):
             for node in _walk(function):
@@ -423,6 +439,8 @@ class _Lowering:
             return None
         function = getattr(node, "function", None)
         name = getattr(function, "name", function)
+        if name in self.defined:
+            return None
         if name in _TRANSFORMS and not node.arguments:
             builtin, transposed = _TRANSFORMS[name]
             value = A.IdentifierNode(builtin)
