@@ -66,6 +66,15 @@ import hashlib
 # 6158642934431059529 in merge-queue run 43632540672. Stock Metal fails none
 # of 2,400 and its two sums agree exactly. Run seed 0 passes both; its sum
 # is -1581.85, and its CPU error is 0.015 of the bound.
+#
+# test_layer_norm_grad_no_bias compares second-order gradients of
+# mx.fast.layer_norm with those of a composed reference, relative to the
+# reference's mean magnitude, under 5e-5. Both differentiate float32
+# reductions over 8 elements, and on stock Metal the two differ by up to
+# 2.4e-4. Stock Metal fails 11 of 10000 run seeds (748, 1575 and 2622 among
+# them) and passes run seed 6805220548323891316 by only 7e-7, where the
+# translated DirectX kernels miss the bound by 1.7e-7. The CPU fails none of
+# 10000. Run seed 0 passes stock Metal at 1.1e-6.
 FIXED_RUN_SEEDS = {
     "test_ops.TestOps.test_softmax": 0,
     "test_blas.TestBlas.test_segmented_mm": 1,
@@ -73,6 +82,7 @@ FIXED_RUN_SEEDS = {
     "test_ops.TestOps.test_divmod": 0,
     "test_ops.TestOps.test_scans": 0,
     "test_quantized.TestQuantized.test_gather_matmul_grad": 0,
+    "test_fast.TestFast.test_layer_norm_grad_no_bias": 0,
 }
 
 
