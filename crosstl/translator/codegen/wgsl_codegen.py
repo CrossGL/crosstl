@@ -3279,6 +3279,17 @@ class WGSLCodeGen(
                 "assignment to a split stage-interface member",
                 (stage_matrix["object_expr"],),
             )
+        target_shape = self.vector_shape(target_type)
+        value_type = self.expression_type(node.value)
+        value_shape = self.vector_shape(value_type)
+        if (
+            node.operator[:-1] in MIXED_INTEGER_OPERATORS
+            and target_shape is not None
+            and target_shape[0] == "u32"
+            and value_shape == ("i32", target_shape[1])
+        ):
+            left, right = wgsl_mixed_integer_operands(self, node.target, node.value)
+            return f"{left} {node.operator} {right}"
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
         else:
