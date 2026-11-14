@@ -34,11 +34,13 @@ GATE_ENTRY_COUNTS = {
     # test_current_fp_quantized_gather_qmm.py: fp_gather_qmm_t and
     # fp_gather_qmm_n.
     "gatherQmm": 54,
+    # test_current_fp_quantized_gather_qmm_rhs.py: fp_gather_qmm_rhs.
+    "gatherQmmRhs": 36,
 }
 
-# Kernels of fp_quantized.metal no gate covers yet.
-EXCLUDED_KERNELS = ("fp_gather_qmm_rhs",)
-EXCLUDED_REASON = "the gather_qmm_rhs matrix-matrix kernels are not gated yet"
+# Kernels of fp_quantized.metal no gate covers yet: every kernel is gated.
+EXCLUDED_KERNELS = ()
+EXCLUDED_REASON = "every fp_quantized.metal kernel is gated"
 
 
 def shared_scope(gate):

@@ -2251,9 +2251,44 @@ apply, mutated models that use `tid.z` in place of the gathered indices,
 read the first expert's global scale for every expert, drop the global scale
 or apply it to the sums are rejected. Every target must match the models
 word for word and leave the guards untouched; on Metal the translation must
-also match the unchanged upstream kernel. The `gather_qmm_rhs` kernels are
-not gated yet. This covers 54/17,832 entries; it does not run the upstream
-MLX test suite or redirect the MLX host runtime.
+also match the unchanged upstream kernel. This covers 54/17,832 entries; it
+does not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_gather_qmm_rhs.current-tree.translation.json` pins
+the last 36 entries of `fp_quantized.metal`, so every one of its 518 entries
+is now gated: `fp_gather_qmm_rhs` with transposed (`nt`) and untransposed
+(`nn`) weights, each without and with a global scale per expert, for the
+three element types in `nvfp4`, `mxfp8` and `mxfp4`. `GatherQMM` routes a
+product here when every batch is one row, there are at least 16 batches, the
+rhs indices are sorted and `B / E >= 4`, as does `QQMatmul`'s bfloat16
+`nvfp4` gather; on devices without NAX kernels `gather_qmm_rhs` runs the
+kernel over `M = B` rows, `gather_mm_offsets`' first row of each expert,
+`(32, 2, 1)` threadgroups and a `(ceil(N / 32), min(M, ceil(M / 16) + E -
+1), 1)` grid. The function constants `align_N` (201) and `align_K` (202) are
+frozen per translation to each pair the host reaches: groups of 32 align the
+quantized dimension, `K` for `nt` and `N` for `nn`, so 96 translations per
+target are pinned, keyed by MLX's `hash_name`. `offsets` is declared
+immutable and `num_groups` bounded by `[1, 65535]`, so the early return of
+`schedule_row_tile`, whose lanes scan 32 experts at a time with prefix sums
+and shuffles, is uniform over each threadgroup on DirectX and OpenGL. The
+`experts` case spreads 40 rows over five experts, two of them empty; the
+`chunks` case spreads 136 rows over 34 experts, so the last expert's five
+tiles are found only in the second chunk of 32. Their `N` and `K` reach the
+whole-tile, partial-row, partial-column and partial branches, idle
+threadgroups past the last tile, the partial block of `K`, and the row tails
+where a weight loader, bounding only its rows, reads the next row's first
+bytes and scale or the guards. The tile-level model in
+`tests/kernels/fp_gather_qmm_rhs_model.py` must reproduce the schedule's row
+tiles and reach direct dot products of the dequantized weights, storing every
+output once; mutated models that restart the tile count per chunk, drop
+partial tiles, misplace or oversize a row tile, read the first expert's
+weights or global scale, drop the partial block or its zeroed activations, or
+misread codes, scales, columns or the transposition are rejected. The units
+run in the `fp-quantized-qmm-rhs-0` and `fp-quantized-qmm-rhs-1` legs. Every
+target must match the model word for word and leave the guards untouched; on
+Metal the translation must also match the unchanged upstream kernel run with
+the same function constants. This covers 36/17,832 entries; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with

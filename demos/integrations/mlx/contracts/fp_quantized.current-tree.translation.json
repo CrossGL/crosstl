@@ -686,12 +686,11 @@
     "qmmNGateEntryCount": 36,
     "qmmTSplitKGateEntryCount": 18,
     "gatherQmmGateEntryCount": 54,
+    "gatherQmmRhsGateEntryCount": 36,
     "excludedEntries": {
-      "kernels": [
-        "fp_gather_qmm_rhs"
-      ],
-      "count": 36,
-      "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet"
+      "kernels": [],
+      "count": 0,
+      "reason": "every fp_quantized.metal kernel is gated"
     },
     "runtimeCoveredEntryCount": 36,
     "artifactCountByTarget": 36,
