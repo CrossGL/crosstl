@@ -335,4 +335,7 @@ TYPES = (
     # OpenCL C's .lo, .hi, .even and .odd, and its .sN component indices.
     c("type", "vector-halves", "OpVectorShuffle", "OpCompositeExtract"),
     c("type", "numeric-components", "OpVectorShuffle", "OpCompositeExtract"),
+    # A local that holds the address of a buffer element, and pointers moved by offsets.
+    c("type", "pointer-local", "OpAccessChain", "OpStore"),
+    c("type", "pointer-arithmetic", "OpPtrAccessChain"),
 )

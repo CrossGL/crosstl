@@ -63,15 +63,42 @@ def test_a_language_lists_only_what_it_can_spell():
     }
 
 
-def test_spirv_lists_every_construct_glsl_or_hlsl_spells():
+def test_spirv_lists_every_construct_glsl_hlsl_or_slang_spells():
     spirv = {f.name for f in constructs.features("spirv", GRAMMAR)}
     spelled = {
         c.name
         for c in constructs.universe(GRAMMAR)
-        if constructs.spells(c.name, "glsl") or constructs.spells(c.name, "hlsl")
+        if any(constructs.spells(c.name, lang) for lang in ("glsl", "hlsl", "slang"))
     }
     assert spirv == spelled
     assert not {"vector-halves", "numeric-components"} & spirv
+    # Only Slang spells pointers among the three.
+    assert {"pointer-local", "pointer-arithmetic"} <= spirv
+
+
+def test_pointer_probes_are_absent_where_the_language_has_no_pointers():
+    names = {"pointer-local", "pointer-arithmetic"}
+    listing = {
+        language: names & {f.name for f in constructs.features(language, GRAMMAR)}
+        for language in templates.TEMPLATES
+    }
+    assert {lang for lang, found in listing.items() if found == names} == {
+        "cuda",
+        "hip",
+        "metal",
+        "mojo",
+        "opencl",
+        "slang",
+        "spirv",
+    }
+    # WGSL and rust-gpu have pointers and references but no pointer arithmetic; GLSL and HLSL have neither.
+    assert listing["wgsl"] == listing["rust"] == {"pointer-local"}
+    assert not listing["glsl"] | listing["hlsl"] | listing["webgl"]
+    local = probes.build(construct_feature("opencl", "pointer-local"), "opencl")
+    assert "__global float* p = &outp[i];" in local.source
+    arithmetic = probes.build(construct_feature("slang", "pointer-arithmetic"), "slang")
+    assert "float* p = &outp[0] + i;" in arithmetic.source
+    assert "q = q + i;" in arithmetic.source
 
 
 def test_only_opencl_lists_its_vector_component_names():
