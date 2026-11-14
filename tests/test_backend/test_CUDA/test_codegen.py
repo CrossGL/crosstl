@@ -1149,13 +1149,15 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result, message = cuda_import_partial_output(codegen.generate, ast)
 
-        # The full warp is the subgroup; a mask that may name fewer lanes has no CrossGL barrier.
-        assert "subgroupBarrier();" in result
+        # A full-warp __syncwarp stays a CUDA call: a subgroup barrier waits for a subgroup of another size on most
+        # targets. A mask that may name fewer lanes has no CrossGL barrier.
+        assert "__syncwarp();" in result
+        assert "subgroupBarrier" not in result
         assert (
             "CUDA __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
             in message
         )
-        assert "__syncwarp" not in result
+        assert "__syncwarp(mask)" not in result
         assert "None" not in result
 
     def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
@@ -1194,17 +1196,16 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveBallot(true).x" in result
-        assert "WaveActiveBallot((pred != 0)).x" in result
-        assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
+        # Warp intrinsics stay CUDA calls, which crosstl.translator.semantics.warp emulates or refuses per target:
+        # wave operations act on subgroups whose size is not the warp's 32 lanes on most targets.
+        assert "__activemask()" in result
+        assert "__ballot_sync(0xffffffff, pred)" in result
+        assert "__any_sync(0xffffffff, pred)" in result
         assert "__ballot_sync(mask, pred)" in result
         assert "not directly supported" not in result
-        # Shuffles stay CUDA calls, which crosstl.translator.semantics.warp emulates or refuses per target.
         assert "__shfl_sync(0xffffffff, value, lane)" in result
         assert "__shfl_down_sync(0xffffffff, value, 1)" in result
-        assert "WaveReadLaneAt" not in result
-        assert "__activemask()" not in result
-        assert "__ballot_sync(0xffffffff, pred)" not in result
+        assert "Wave" not in result
 
     def test_cuda_full_warp_mask_variable_reassignment_clears_vote_lowering(self):
         code = """
@@ -1223,7 +1224,8 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in result
+        # The mask variable holds the full-warp literal at the first vote only.
+        assert "result[tx] = __any_sync(0xFFFFFFFFu, input[tx]);" in result
         assert "result[(tx + 1)] = __any_sync(mask, input[tx]);" in result
         assert "not directly supported" not in result
 
@@ -1273,18 +1275,13 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveSum(value)" in result
-        assert "WaveActiveMin(value)" in result
-        assert "WaveActiveMax(value)" in result
-        assert "WaveActiveBitAnd(value)" in result
-        assert "WaveActiveBitOr(value)" in result
-        assert "WaveActiveBitXor(value)" in result
-        # A partial-mask reduction has no wave equivalent; it stays a CUDA call, never a constant.
+        # Reductions stay CUDA calls, which crosstl.translator.semantics.warp emulates per 32-lane warp or refuses;
+        # a partial-mask reduction is kept too, never replaced by a constant.
+        for name in ("add", "min", "max", "and", "or", "xor"):
+            assert f"__reduce_{name}_sync(0xffffffffu, value)" in result
         assert "__reduce_max_sync(mask, value)" in result
         assert "not directly supported" not in result
-        assert "__reduce_add_sync(0xffffffffu, value)" not in result
-        assert "__reduce_min_sync(0xffffffffu, value)" not in result
-        assert "__reduce_max_sync(0xffffffffu, value)" not in result
+        assert "Wave" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cooperative_groups_thread_block_sync_converts(self):

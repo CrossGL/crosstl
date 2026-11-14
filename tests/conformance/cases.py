@@ -2068,6 +2068,18 @@ CASES = [
         out_count=128 * warp_cases.RESULTS,
     ),
     Case(
+        "x_warp_vote",
+        "S29",
+        "CUDA warp votes, reductions, matches and __syncwarp called from CrossGL in a full and a partial warp",
+        "CUDA warp = 32 consecutive threads; a partial warp has only its existing lanes; sums wrap",
+        SMALL[:96],
+        np.int32,
+        warp_cases.vote_reference,
+        threads=96,
+        group=warp_cases.VOTE_GROUP,
+        out_count=96 * warp_cases.VOTE_RESULTS,
+    ),
+    Case(
         "x_buffer_helper_parameters",
         "composite",
         "Helpers that take storage buffers as buffer T name[] parameters",

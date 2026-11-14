@@ -1,0 +1,26 @@
+// CUDA warp votes, reductions and matches called from CrossGL: the 48-invocation workgroup holds a full warp and a
+// 16-lane partial warp, warp k being the invocations whose local index lies in [32 k, 32 k + 32).
+shader WarpVote {
+    compute hazard {
+        layout(local_size_x = 48, local_size_y = 1, local_size_z = 1) in;
+
+        buffer int* inp;
+        buffer int* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int v = inp[i];
+            outp[i * 10u] = int(__ballot_sync(0xFFFFFFFF, v > 0));
+            outp[i * 10u + 1u] = __any_sync(0xFFFFFFFF, v > 900);
+            outp[i * 10u + 2u] = __all_sync(0xFFFFFFFF, v > -990);
+            outp[i * 10u + 3u] = __reduce_add_sync(0xFFFFFFFF, v * 1048576);
+            outp[i * 10u + 4u] = __reduce_min_sync(0xFFFFFFFF, v);
+            outp[i * 10u + 5u] = int(__reduce_max_sync(0xFFFFFFFF, uint(v)));
+            outp[i * 10u + 6u] = int(__reduce_and_sync(0xFFFFFFFF, uint(v) | 0xFFFFF800u));
+            __syncwarp();
+            outp[i * 10u + 7u] = int(__reduce_or_sync(0xFFFFFFFF, uint(v + 1000)));
+            outp[i * 10u + 8u] = int(__reduce_xor_sync(0xFFFFFFFF, uint(v)));
+            outp[i * 10u + 9u] = int(__match_any_sync(0xFFFFFFFF, v & 3));
+        }
+    }
+}

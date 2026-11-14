@@ -1403,12 +1403,12 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "var tx: i32 = gl_LocalInvocationID.x;" in crossgl
-    assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
-    assert "result[tx] = (WaveActiveAllTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
+    # Votes stay CUDA calls over the 32-lane warp; the mask variable holds the full-warp literal.
+    assert "result[tx] = __any_sync(0xFFFFFFFFu, input[tx]);" in crossgl
+    assert "result[tx] = __all_sync(0xFFFFFFFFu, input[tx]);" in crossgl
     assert "cuda warp intrinsic __any_sync(mask, input[tx])" not in crossgl
     assert "cuda warp intrinsic __all_sync(mask, input[tx])" not in crossgl
-    assert "__any_sync(mask, input[tx]);" not in crossgl
-    assert "__all_sync(mask, input[tx]);" not in crossgl
+    assert "Wave" not in crossgl
 
 
 def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
@@ -2159,10 +2159,11 @@ def test_cccl_barrier_match_any_sync_active_mask_codegen_reparse():
     assert body[0].value.name == "::__activemask"
     assert body[1].value.name == "::__match_any_sync"
     assert body[2].value.name == "__match_any_sync"
-    assert "var mask: u32 = WaveActiveBallot(true).x;" in crossgl
-    assert "var activeA: u32 = WaveMatch(update).x;" in crossgl
-    assert "var activeB: u32 = WaveMatch(barrier_key).x;" in crossgl
-    assert "__match_any_sync" not in crossgl
+    # The active mask and matches stay CUDA calls: a wave's lanes are not the warp's 32 lanes on most targets.
+    assert "var mask: u32 = __activemask();" in crossgl
+    assert "var activeA: u32 = __match_any_sync(mask, update);" in crossgl
+    assert "var activeB: u32 = __match_any_sync(mask, barrier_key);" in crossgl
+    assert "Wave" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -2849,13 +2850,15 @@ def test_cuda_samples_cdp_quadtree_tile_collectives_codegen_reparse():
     assert loop.condition.name.member == "any"
     assert loop.body[0].value.name.member == "ballot"
     assert loop.body[2].right.name.member == "shfl"
+    # A 32-thread tile of the block is a warp, so its collectives are the full-mask warp intrinsics.
     assert (
         "for (var range_it: i32 = gl_LocalInvocationID.x; "
-        "WaveActiveAnyTrue(((range_it < limit) != 0)); range_it += 32)" in crossgl
+        "__any_sync(0xFFFFFFFFu, (range_it < limit)); range_it += 32)" in crossgl
     )
-    assert "var vote: u32 = WaveActiveBallot((pred != 0)).x;" in crossgl
+    assert "var vote: u32 = __ballot_sync(0xFFFFFFFFu, pred);" in crossgl
     assert "var dest: u32 = bitCount((vote & lane_mask_lt));" in crossgl
-    assert "out[gl_LocalInvocationID.x] = WaveReadLaneAt(dest, 0);" in crossgl
+    assert "out[gl_LocalInvocationID.x] = __shfl_sync(0xFFFFFFFFu, dest, 0);" in crossgl
+    assert "Wave" not in crossgl
     assert "tile32.any" not in crossgl
     assert "tile32.ballot" not in crossgl
     assert "tile32.shfl" not in crossgl
@@ -3193,11 +3196,11 @@ def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert_crossgl_reparse(crossgl)
-    assert "return WaveActiveSum(mySum);" in crossgl
-    # The partial-mask reduction stays a CUDA call for each target to emulate or refuse; it is never a constant.
+    # Reductions stay CUDA calls for each target to emulate per 32-lane warp or refuse; never a constant.
+    assert "return __reduce_add_sync(0xffffffffu, mySum);" in crossgl
     assert "mySum = __reduce_add_sync(mask, mySum);" in crossgl
     assert "not directly supported" not in crossgl
-    assert "__reduce_add_sync(0xffffffffu, mySum);" not in crossgl
+    assert "Wave" not in crossgl
 
 
 def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():
@@ -3217,14 +3220,38 @@ def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.functions[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(body[2].right, FunctionCallNode)
     assert body[2].right.name == "cg::reduce"
+    # A 32-thread tile is a warp, which a wave of another size does not compute; a double sum, whose association
+    # order cg::reduce leaves open, is refused rather than given a wave's sum.
+    assert "cooperative_groups thread_block_tile.reduce" in message
+    assert "Wave" not in crossgl
+
+
+def test_cg_tile_reduce_of_32_bit_integers_is_the_warp_reduction():
+    source = """
+    namespace cg = cooperative_groups;
+
+    __device__ void reduceTile(int *idata, unsigned int *udata, const cg::thread_block &cta) {
+        const unsigned int tid = cta.thread_rank();
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+        idata[tid] = cg::reduce(tile32, idata[tid], cg::plus<int>());
+        idata[tid] = cg::reduce(tile32, idata[tid], cg::greater<int>());
+        udata[tid] = cg::reduce(tile32, udata[tid], cg::bit_xor<unsigned int>());
+    }
+    """
+
+    crossgl = CudaToCrossGLConverter().generate(parse_cuda(source))
+
     assert_crossgl_reparse(crossgl)
-    assert "sdata[tid] = WaveActiveSum(sdata[tid]);" in crossgl
-    assert "cg::reduce" not in crossgl
-    assert "cooperative_groups::reduce" not in crossgl
+    assert "idata[tid] = __reduce_add_sync(0xFFFFFFFFu, i32(idata[tid]));" in crossgl
+    assert "idata[tid] = __reduce_max_sync(0xFFFFFFFFu, i32(idata[tid]));" in crossgl
+    assert "udata[tid] = __reduce_xor_sync(0xFFFFFFFFu, u32(udata[tid]));" in crossgl
+    assert "cg::reduce" not in crossgl and "Wave" not in crossgl
 
 
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():

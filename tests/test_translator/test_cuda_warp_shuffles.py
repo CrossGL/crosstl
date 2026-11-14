@@ -301,8 +301,21 @@ def test_partial_workgroup_reads_only_existing_lanes(tmp_path):
             None,
             "conditional-evaluation",
         ),
-        ("v = int(__ballot_sync(0xFFFFFFFF, v > 0));", None, "intrinsic"),
-        ("__syncwarp(0xFFFFFFFF);", None, "intrinsic"),
+        ("v = int(__activemask());", None, "intrinsic"),
+        ("v = __match_all_sync(0xFFFFFFFF, v, count);", None, "intrinsic"),
+        ("v = int(__ballot_sync(0x0000FFFF, v > 0));", None, "mask"),
+        (
+            "v = __reduce_add_sync(0xFFFFFFFF, float(v)) > 0.0 ? 1 : 0;",
+            None,
+            "value-type",
+        ),
+        ("v = int(__reduce_or_sync(0xFFFFFFFF, v, 1));", None, "arguments"),
+        ("__syncwarp(0x0000FFFF);", None, "mask"),
+        (
+            "if (v > 3) { __syncwarp(); }",
+            "layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;",
+            "non-uniform-control-flow",
+        ),
         (
             "data[i + 1u] = v++ + __shfl_sync(0xFFFFFFFF, v, 0);",
             None,
