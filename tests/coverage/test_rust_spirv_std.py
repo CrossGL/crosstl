@@ -4,8 +4,8 @@ import pytest
 
 from tools.coverage import objects, probes, rustgpu, validators
 from tools.coverage.features import spirv_std
-from tools.coverage.kernels import Rust
 from tools.coverage.model import Type
+from tools.coverage.rust import Rust
 
 # An excerpt of spirv-std 0.11's image.rs, with the shapes the parser reads: impl blocks that fix some of Image's
 # constant parameters, asm! strings whose braces need not balance, doc comments that quote across lines, a method
