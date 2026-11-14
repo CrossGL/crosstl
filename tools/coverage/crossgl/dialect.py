@@ -296,6 +296,12 @@ class CrossGL(Dialect):
             return f"Tuple<{', '.join([kind.scalar] * held[1])}>"
         return super().type(kind)
 
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        # An array an output parameter fills in, such as a ray query's triangle vertex positions.
+        if kind.count and not value:
+            return f"{self.type(kind.element)} {name}[{kind.count}];"
+        return super().declare(kind, name, value)
+
     def literal(self, kind: Type) -> str:
         return slang_literal(kind) or super().literal(kind)
 
