@@ -394,7 +394,7 @@ def test_external_rocprim_enable_if_trailing_return_codegen_reparse():
     assert ast.statements[0].return_type == (
         "std::enable_if_t<rocprim::is_floating_point<T>::value, bool>"
     )
-    assert "void get_safe_maxval(u32 maxval)" in crossgl
+    assert "void get_safe_maxval(u64 maxval)" in crossgl
     assert "std::enable_if_t" not in crossgl
 
 
@@ -1224,7 +1224,7 @@ def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse()
 
     _, crossgl = assert_crossgl_reparses(source)
 
-    assert "const u32 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
+    assert "const u64 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
     assert "64ul" not in crossgl
     assert "1024ul" not in crossgl
 

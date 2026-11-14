@@ -7951,7 +7951,7 @@ class TestCudaCodeGen:
 
         assert "void prepare(inout std::vector<float> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(std::vector<float> h) {" in result
+        assert "u64 count(std::vector<float> h) {" in result
         assert "return h.size();" in result
 
     def test_multi_declarator_host_setup_conversion(self):

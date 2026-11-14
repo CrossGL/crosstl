@@ -808,7 +808,7 @@ def test_native_hip_linear_pitch2d_resource_desc_edges_parse_and_compile_if_avai
         "// Function: texture_resource_desc_linear_pitch2d_edges",
         "void texture_resource_desc_linear_pitch2d_edges("
         "ptr<f32> device, hipChannelFormatDesc channel_desc, "
-        "u32 width_elems, u32 height, u32 pitch_bytes)",
+        "u64 width_elems, u64 height, u64 pitch_bytes)",
         "var linear_tex: sampler = 0;",
         "var pitch_tex: sampler = 0;",
         "var linear_resource_desc: hipResourceDesc = {0};",
@@ -1046,7 +1046,7 @@ def test_native_hip_memory_lifecycle_parses_and_compiles_if_available(tmp_path):
     crossgl = convert_native_hip_to_crossgl(hip_code)
 
     assert "// Function: memory_lifecycle" in crossgl
-    assert "void memory_lifecycle(ptr<f32> host, u32 n)" in crossgl
+    assert "void memory_lifecycle(ptr<f32> host, u64 n)" in crossgl
     assert "var device: ptr<f32> = NULL;" in crossgl
     assert "// HIP memory allocate: device, bytes: (n * 4)" in crossgl
     assert "// HIP memory set: device, value: 0, bytes: (n * 4)" in crossgl
@@ -1099,7 +1099,7 @@ def test_native_hip_managed_async_memory_parses_and_compiles_if_available(
 
     assert "// Function: managed_async_memory" in crossgl
     assert (
-        "void managed_async_memory(ptr<f32> host, u32 n, hipStream_t stream)" in crossgl
+        "void managed_async_memory(ptr<f32> host, u64 n, hipStream_t stream)" in crossgl
     )
     assert "var managed: ptr<f32> = NULL;" in crossgl
     assert "var async_ptr: ptr<f32> = NULL;" in crossgl
@@ -1210,7 +1210,7 @@ def test_native_hip_memory_pool_virtual_memory_parses_and_compiles_if_available(
     crossgl = convert_native_hip_to_crossgl(hip_code)
 
     assert "// Function: memory_pool_virtual_memory" in crossgl
-    assert "void memory_pool_virtual_memory(u32 bytes, hipStream_t stream)" in crossgl
+    assert "void memory_pool_virtual_memory(u64 bytes, hipStream_t stream)" in crossgl
     assert "var pool: hipMemPool_t;" in crossgl
     assert "var imported_pool: hipMemPool_t;" in crossgl
     assert "var pool_props: hipMemPoolProps;" in crossgl
@@ -1225,8 +1225,8 @@ def test_native_hip_memory_pool_virtual_memory_parses_and_compiles_if_available(
     assert "var pooled_ptr: ptr<void> = NULL;" in crossgl
     assert "var imported_ptr: ptr<void> = NULL;" in crossgl
     assert "var virtual_address: ptr<void> = NULL;" in crossgl
-    assert "var threshold: u32 = bytes;" in crossgl
-    assert "var granularity: u32 = 0;" in crossgl
+    assert "var threshold: u64 = bytes;" in crossgl
+    assert "var granularity: u64 = 0;" in crossgl
     assert "var pool_flags: u32 = 0;" in crossgl
     assert "var access_flags: u64 = 0;" in crossgl
     assert (
@@ -1514,7 +1514,7 @@ def test_native_hip_opengl_graphics_interop_parses_and_compiles_if_available(
     assert "var resources: array<hipGraphicsResource_t, 2>;" in crossgl
     assert "var mapped_array: ptr<void>;" in crossgl
     assert "var mapped_ptr: ptr<void> = NULL;" in crossgl
-    assert "var mapped_bytes: u32 = 0;" in crossgl
+    assert "var mapped_bytes: u64 = 0;" in crossgl
     assert (
         "// HIP OpenGL register buffer: output: buffer_resource, "
         "buffer: gl_buffer, flags: hipGraphicsRegisterFlagsWriteDiscard"
@@ -1785,11 +1785,11 @@ def test_native_hip_graph_dependency_queries_parse_and_compile_if_available(
     assert "var edge_from: array<hipGraphNode_t, 4>;" in crossgl
     assert "var edge_to: array<hipGraphNode_t, 4>;" in crossgl
     assert "var node_type: hipGraphNodeType;" in crossgl
-    assert "var num_nodes: u32 = 4;" in crossgl
-    assert "var num_roots: u32 = 4;" in crossgl
-    assert "var num_edges: u32 = 4;" in crossgl
-    assert "var num_dependencies: u32 = 4;" in crossgl
-    assert "var num_dependents: u32 = 4;" in crossgl
+    assert "var num_nodes: u64 = 4;" in crossgl
+    assert "var num_roots: u64 = 4;" in crossgl
+    assert "var num_edges: u64 = 4;" in crossgl
+    assert "var num_dependencies: u64 = 4;" in crossgl
+    assert "var num_dependents: u64 = 4;" in crossgl
     assert "// HIP graph create: output: graph, flags: 0" in crossgl
     assert (
         "// HIP graph add empty node: output: root, graph: graph, "
@@ -2089,7 +2089,7 @@ def test_native_hip_graph_memory_user_objects_parse_and_compile_if_available(
         "var user_object: hipUserObject_t;",
         "var destructor: hipHostFn_t = user_object_destructor;",
         "var resource: ptr<void> = NULL;",
-        "var bytes: u32 = 0;",
+        "var bytes: u64 = 0;",
         "var device: i32 = 0;",
         "// HIP graph create: output: graph, flags: 0",
         "// HIP device graph memory get attribute: device: device, "
@@ -2241,7 +2241,7 @@ def test_native_hip_graph_memcpy_nodes_parse_and_compile_if_available(
     assert "var log: array<i8, 128>;" in crossgl
     assert "var dst: ptr<void> = NULL;" in crossgl
     assert "var src: ptr<void> = NULL;" in crossgl
-    assert "var bytes: u32 = 64;" in crossgl
+    assert "var bytes: u64 = 64;" in crossgl
     assert "// HIP graph create: output: graph, flags: 0" in crossgl
     assert (
         "// HIP graph add memcpy node: output: generic_node, graph: graph, "
@@ -2344,8 +2344,8 @@ def test_native_hip_graph_symbol_memcpy_nodes_parse_and_compile_if_available(
     assert "var dst: ptr<void> = NULL;" in crossgl
     assert "var symbol: ptr<void> = NULL;" in crossgl
     assert "var src: ptr<void> = NULL;" in crossgl
-    assert "var bytes: u32 = 64;" in crossgl
-    assert "var offset: u32 = 4;" in crossgl
+    assert "var bytes: u64 = 64;" in crossgl
+    assert "var offset: u64 = 4;" in crossgl
     assert "var log: array<i8, 128>;" in crossgl
     assert "// HIP graph create: output: graph, flags: 0" in crossgl
     assert (
@@ -2589,14 +2589,14 @@ def test_native_hip_peer_access_copy_parses_and_compiles_if_available(tmp_path):
     expected_fragments = (
         "// Function: peer_access_copy",
         "void peer_access_copy("
-        "ptr<f32> dst, ptr<f32> src, hipStream_t stream, u32 n)",
+        "ptr<f32> dst, ptr<f32> src, hipStream_t stream, u64 n)",
         "var can_access: i32 = 0;",
         "var p2p_attribute: i32 = 0;",
         "var device: i32 = 0;",
         "var peer_device: i32 = 1;",
         "var link_type: u32 = 0;",
         "var hop_count: u32 = 0;",
-        "var bytes: u32 = (n * 4);",
+        "var bytes: u64 = (n * 4);",
         "// HIP device can access peer: output: can_access, "
         "device: device, peer device: peer_device",
         "// HIP get P2P attribute: output: p2p_attribute, "
@@ -2654,7 +2654,7 @@ def test_native_hip_host_pinned_memory_parses_and_compiles_if_available(
     crossgl = convert_native_hip_to_crossgl(hip_code)
 
     assert "// Function: host_pinned_memory" in crossgl
-    assert "void host_pinned_memory(ptr<f32> registered, u32 n)" in crossgl
+    assert "void host_pinned_memory(ptr<f32> registered, u64 n)" in crossgl
     assert "var host: ptr<f32> = NULL;" in crossgl
     assert "var device: ptr<f32> = NULL;" in crossgl
     assert "var flags: u32 = 0;" in crossgl
@@ -2810,7 +2810,7 @@ def test_native_hip_module_occupancy_launch_parses_and_compiles_if_available(
     assert "var function: hipFunction_t;" in crossgl
     assert "var symbol_function: hipFunction_t;" in crossgl
     assert "var attrs: hipFuncAttributes;" in crossgl
-    assert "var global_bytes: u32 = 0;" in crossgl
+    assert "var global_bytes: u64 = 0;" in crossgl
     assert "var function_count: u32 = 0;" in crossgl
     assert "var min_grid: i32 = 0;" in crossgl
     assert "var block_size: i32 = 0;" in crossgl
@@ -2977,11 +2977,11 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
     assert "// Function: pitched_array_memory_copy" in crossgl
     assert (
         "void pitched_array_memory_copy("
-        "ptr<f32> host, hipStream_t stream, u32 width_elems)"
+        "ptr<f32> host, hipStream_t stream, u64 width_elems)"
     ) in crossgl
     assert "var pitched_device: ptr<f32> = NULL;" in crossgl
-    assert "var pitch: u32 = 0;" in crossgl
-    assert "var width_bytes: u32 = (width_elems * 4);" in crossgl
+    assert "var pitch: u64 = 0;" in crossgl
+    assert "var width_bytes: u64 = (width_elems * 4);" in crossgl
     assert "var pitched_3d: hipPitchedPtr;" in crossgl
     assert "var array: ptr<void>;" in crossgl
     assert "var array_3d: ptr<void>;" in crossgl
@@ -3207,7 +3207,7 @@ def test_native_hip_mipmapped_array_lifecycle_parses_and_compiles_if_available(
 
     expected_fragments = (
         "// Function: mipmapped_array_lifecycle",
-        "void mipmapped_array_lifecycle(u32 width_elems)",
+        "void mipmapped_array_lifecycle(u64 width_elems)",
         "var allocated_mipmapped_array: hipMipmappedArray_t;",
         "var created_mipmapped_array: hipMipmappedArray_t;",
         "var allocated_level: ptr<void>;",
@@ -3315,7 +3315,7 @@ def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
 
     expected_fragments = (
         "// Function: driver_memory_memset_smoke",
-        "void driver_memory_memset_smoke(" "ptr<f32> host, hipStream_t stream, u32 n)",
+        "void driver_memory_memset_smoke(" "ptr<f32> host, hipStream_t stream, u64 n)",
         "var device_ptr: hipDeviceptr_t;",
         "var pitched_device_ptr: hipDeviceptr_t;",
         "var mapped_device_ptr: hipDeviceptr_t;",
@@ -3323,9 +3323,9 @@ def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
         "var driver_host: ptr<void> = NULL;",
         "var device_void: ptr<void> = ptr<void>(device_ptr);",
         "var attribute_data: ptr<void> = NULL;",
-        "var pitch: u32 = 0;",
-        "var range_bytes: u32 = 0;",
-        "var bytes: u32 = (n * 4);",
+        "var pitch: u64 = 0;",
+        "var range_bytes: u64 = 0;",
+        "var bytes: u64 = (n * 4);",
         "var pointer_attrs: hipPointerAttribute_t;",
         "var pointer_attribute: hipPointer_attribute = "
         "hipPointerAttributeMemoryType;",
@@ -3501,10 +3501,10 @@ def test_native_hip_stream_callback_launch_config_parses_and_compiles_if_availab
         "var block: vec3<u32> = vec3<u32>(32, 1, 1);",
         "var out_grid: vec3<u32> = vec3<u32>(1, 1, 1);",
         "var out_block: vec3<u32> = vec3<u32>(1, 1, 1);",
-        "var shared_mem: u32 = (4 * 32);",
+        "var shared_mem: u64 = (4 * 32);",
         "var out_stream: hipStream_t;",
         "var value: i32 = 7;",
-        "var offset: u32 = 0;",
+        "var offset: u64 = 0;",
         "var callback: hipStreamCallback_t = stream_callback;",
         "var host_fn: hipHostFn_t = host_function;",
         "// HIP stream add callback: stream: stream, callback: callback, "
@@ -3609,7 +3609,7 @@ def test_native_hip_stream_priority_capture_info_parses_and_compiles_if_availabl
         "var capture_status: hipStreamCaptureStatus;",
         "var capture_mode: hipStreamCaptureMode = hipStreamCaptureModeGlobal;",
         "var capture_id: u64 = 0;",
-        "var num_dependencies: u32 = 0;",
+        "var num_dependencies: u64 = 0;",
         "var least_priority: i32 = 0;",
         "var greatest_priority: i32 = 0;",
         "var priority: i32 = 0;",
