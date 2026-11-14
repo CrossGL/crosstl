@@ -85,6 +85,204 @@ def test_casts_truncate_matrices_and_splat_scalars():
     assert "mat2 d = mat2(vec2(o[0]), vec2(o[0]));" in output
 
 
+def test_scalar_stored_to_a_matrix_fills_every_component():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        float3x3 a = 1.0;
+        float3x3 b = x;
+        float3x3 m;
+        m = 2.0;
+        o[1] = a[0][0] + b[1][1] + m[2][2] + total(4.0);
+    """,
+        """
+        float total(float3x3 v) { return v[0][0]; }
+        float3x3 filled(float s) { return s; }
+        """,
+    )
+    assert "mat3 a = mat3(vec3(1.0), vec3(1.0), vec3(1.0));" in output
+    assert "mat3 b = mat3(vec3(x), vec3(x), vec3(x));" in output
+    assert "m = mat3(vec3(2.0), vec3(2.0), vec3(2.0));" in output
+    assert "total(mat3(vec3(4.0), vec3(4.0), vec3(4.0)))" in output
+    assert "return mat3(vec3(s), vec3(s), vec3(s));" in output
+
+
+def test_scalar_expressions_are_splatted_like_single_operands():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 r = x * 2.0 + 1.0;
+        float3x3 t = id.x > 0 ? x : 1.0;
+        float3x3 c = (float)id.x;
+        float3x3 n = -x;
+        float3x3 s = sin(x);
+        o[1] = r[0][0] + t[1][1] + c[2][2] + n[0][0] + s[1][2];
+    """)
+    assert "mat3 r = mat3(vec3((x * 2.0) + 1.0)," in output
+    assert "mat3 t = mat3(vec3(id.x > 0 ? x : 1.0)," in output
+    assert (
+        "mat3 c = mat3(vec3(float(id.x)), vec3(float(id.x)), vec3(float(id.x)));"
+        in output
+    )
+    assert "mat3 n = mat3(vec3(-x), vec3(-x), vec3(-x));" in output
+    assert "mat3 s = mat3(vec3(sin(x)), vec3(sin(x)), vec3(sin(x)));" in output
+
+
+def test_scalar_results_of_known_intrinsics_are_splatted():
+    output = to_crossgl("""
+        float3 v = float3(o[0], 1.0, 2.0);
+        float3x3 a = length(v);
+        float3x3 b = dot(v, v);
+        float3x3 c = distance(v, v);
+        float3x3 d = asfloat(id.x) * 1.0;
+        float3x3 e = true;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0];
+    """)
+    assert "mat3 a = mat3(vec3(length(v)), vec3(length(v)), vec3(length(v)));" in output
+    assert "mat3 b = mat3(vec3(dot(v, v)), vec3(dot(v, v)), vec3(dot(v, v)));" in output
+    assert "mat3 c = mat3(vec3(distance(v, v))," in output
+    assert "mat3 d = mat3(vec3(uintBitsToFloat(id.x) * 1.0)," in output
+    assert (
+        "mat3 e = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+
+
+def test_scalar_mul_and_select_are_splatted():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 a = mul(x, 2.0);
+        float3x3 b = select(x > 1.0, 1.0, 2.0);
+        o[1] = a[0][0] + b[1][1];
+    """)
+    assert "mat3 a = mat3(vec3((x * 2.0)), vec3((x * 2.0)), vec3((x * 2.0)));" in output
+    assert "mat3 b = mat3(vec3(select(2.0, 1.0, x > 1.0))," in output
+
+
+def test_bool_and_integer_scalars_are_converted_to_float_before_the_splat():
+    # WGSL's vec3<f32>(true) is a type error, and an integer dot is an integer.
+    output = to_crossgl("""
+        float x = o[0];
+        int3 iv = int3(1, 2, 3);
+        float3x3 a = true;
+        float3x3 b = x > 1.0;
+        float3x3 c = (bool)id.x;
+        float3x3 d = dot(iv, iv);
+        float3x3 e = id.x * 2 + 1;
+        float3x3 f = x * 2.0;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0] + f[0][0];
+    """)
+    assert (
+        "mat3 a = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+    assert "mat3 b = mat3(vec3(float(x > 1.0)), vec3(float(x > 1.0))," in output
+    assert "mat3 c = mat3(vec3(float(bool(id.x))), vec3(float(bool(id.x)))," in output
+    assert "mat3 d = mat3(vec3(float(dot(iv, iv))), vec3(float(dot(iv, iv)))," in output
+    assert (
+        "mat3 e = mat3(vec3(float((id.x * 2) + 1)), vec3(float((id.x * 2) + 1)),"
+        in output
+    )
+    # A float stays as it is.
+    assert "mat3 f = mat3(vec3(x * 2.0), vec3(x * 2.0), vec3(x * 2.0));" in output
+
+
+def test_values_of_unknown_type_are_not_written_unchanged():
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl("float3x3 m = mystery;\no[1] = m[0][0];")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["float3x3 m = x++;", "float3x3 m = f(x);", "float3x3 m = (float)(x++);"],
+)
+def test_scalar_stores_that_cannot_be_repeated_are_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\n" + statement + "\no[1] = m[0][0];",
+            "float f(float v) { return v; }\n",
+        )
+
+
+METHOD_STRUCT = """
+    struct S {
+        float3x3 m;
+        float3x3 get() { return m; }
+        float sc() { return m[0][0]; }
+        float two() { float t = m[0][0]; return t * 2.0; }
+        float3x3 bump() { m[0][0] += 1.0; return m; }
+        float sbump() { m[0][0] += 1.0; return m[0][0]; }
+        float tw(inout float q) { q = 1.0; return q; }
+    };
+"""
+
+
+def test_matrix_returned_by_a_method_is_stored_as_it_is():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get();
+        float3x3 b = s.bump();
+        o[1] = a[0][0] + b[1][1];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = S_get(s);" in output
+    assert "mat3 b = S_bump(s);" in output
+
+
+def test_scalar_returned_by_a_pure_method_is_splatted():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get()[0][0];
+        float3x3 b = s.sc();
+        float3x3 c = s.two();
+        o[1] = a[0][0] + b[1][1] + c[2][2];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = mat3(vec3(S_get(s)[0][0]), vec3(S_get(s)[0][0])," in output
+    assert "mat3 b = mat3(vec3(S_sc(s)), vec3(S_sc(s)), vec3(S_sc(s)));" in output
+    assert "mat3 c = mat3(vec3(S_two(s)), vec3(S_two(s)), vec3(S_two(s)));" in output
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float3x3 a = s.sbump();",
+        "float3x3 a = s.bump()[0][0];",
+        "float3x3 a = s.tw(x);",
+    ],
+)
+def test_scalar_returned_by_a_method_that_changes_state_is_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\nS s;\ns.m = (float3x3)x;\n"
+            + statement
+            + "\no[1] = a[0][0];",
+            METHOD_STRUCT,
+        )
+
+
+def test_matrix_values_are_not_splatted():
+    output = to_crossgl("""
+        float3x3 a = (float3x3)1.0;
+        float3x3 b = a;
+        float3x3 c;
+        c = b;
+        c *= 2.0;
+        c._m00 = 3.0;
+        o[0] = c[0][0];
+    """)
+    assert "mat3 b = a;" in output
+    assert "c = b;" in output
+    assert "c[0][0] = 3.0;" in output
+
+
 def test_rows_elements_and_swizzles():
     output = to_crossgl("""
         float2x3 m = (float2x3)0;

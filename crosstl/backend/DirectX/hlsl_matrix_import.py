@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from ..common_ast import InitializerListNode
+from ..common_ast import InitializerListNode, ReturnNode
 from .DirectxAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -85,6 +85,18 @@ _ELEMENTWISE_INTRINSICS = frozenset(
         "trunc",
     }
 )
+# Always a scalar, whatever the operands.
+_SCALAR_RESULT_INTRINSICS = frozenset({"determinant", "distance", "dot", "length"})
+# Vector or matrix results whatever the operands; these are never splatted.
+_AGGREGATE_RESULT_INTRINSICS = frozenset({"transpose"})
+# Scalar for scalar operands, the operands' shape otherwise.
+_OPERAND_SHAPED_INTRINSICS = frozenset({"and", "mul", "or", "select"})
+_FLOAT_TYPES = frozenset(
+    {"double", "fixed", "float", "float16_t", "half", "min10float", "min16float"}
+)
+_FAMILY_RANK = {"bool": 0, "int": 1, "float": 2}
+# Keep the shape of the operand, only changing the element type.
+_REINTERPRET_INTRINSICS = frozenset({"asfloat", "asint", "asuint"})
 _ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
 # Componentwise on integer matrices, keeping the shape.
 _BITWISE_OPERATORS = frozenset({"<<", ">>", "&", "|", "^"})
@@ -471,7 +483,11 @@ class HLSLMatrixImportMixin:
             and value == 0
         ):
             return f"{target}({rendered})"
-        if raw_type not in _SCALAR_TYPES and not isinstance(value, (int, float, bool)):
+        if (
+            raw_type not in _SCALAR_TYPES
+            and not isinstance(value, (int, float, bool))
+            and self.hlsl_value_kind(value) != "scalar"
+        ):
             return self.refuse_import(
                 "HLSL matrix conversion from a value whose type the importer cannot determine",
                 f"{target}({rendered})",
@@ -485,8 +501,196 @@ class HLSLMatrixImportMixin:
         if self.hlsl_matrix_rows_are_columns():
             column_length, column_count = column_count, column_length
         column_type = self.matrix_vector_type(shape[0], column_length)
-        columns = ", ".join(f"{column_type}({rendered})" for _ in range(column_count))
+        element = self.splat_scalar_text(shape, value, rendered)
+        columns = ", ".join(f"{column_type}({element})" for _ in range(column_count))
         return f"{target}({columns})"
+
+    def scalar_matrix_splat_expression(self, shape, value, is_main):
+        """The splat of a scalar ``value`` stored to a matrix of ``shape``, or ``None`` for any other value.
+
+        HLSL repeats a scalar into every component of the matrix it is stored to, so ``float3x3 m = 1.0;`` is the
+        all-ones matrix. CrossGL reads ``mat3 m = 1.0;`` as a type error and ``mat3(1.0)`` as the identity, so the
+        importer writes the same splat the cast ``(float3x3)v`` gets.
+        """
+        if shape is None or isinstance(value, InitializerListNode):
+            return None
+        if self.matrix_expression_shape(value) is not None:
+            return None
+        if self.hlsl_value_kind(value) == "other":
+            return None
+        # A value whose type cannot be worked out is refused by the conversion.
+        return self.matrix_conversion_expression(shape, value, is_main)
+
+    def hlsl_value_kind(self, expr):
+        """``"scalar"`` or ``"other"`` for a value of known type, ``None`` when the type cannot be told.
+
+        ``expression_value_raw_type`` only types integer arithmetic, so float expressions such as ``x * 2.0 + 1.0``,
+        ``c ? x : 1.0`` and ``sin(x)`` are typed here from their operands.
+        """
+        if isinstance(expr, (bool, int, float)):
+            return "scalar"
+        if isinstance(expr, CastNode):
+            target = self.resolve_integer_alias(str(expr.target_type).strip())
+            if target in _SCALAR_TYPES:
+                return "scalar"
+        elif isinstance(expr, UnaryOpNode):
+            if _operator_text(expr.op) not in {"++", "--"}:
+                return self.hlsl_value_kind(expr.operand)
+        elif isinstance(expr, BinaryOpNode):
+            if _operator_text(
+                expr.op
+            ) in _ARITHMETIC_OPERATORS | _BITWISE_OPERATORS | _COMPARISON_OPERATORS | {
+                "&&",
+                "||",
+            }:
+                return self._combined_value_kind([expr.left, expr.right])
+        elif isinstance(expr, TernaryOpNode):
+            return self._combined_value_kind(
+                [expr.condition, expr.true_expr, expr.false_expr]
+            )
+        elif isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            if name not in self.source_function_names:
+                if name in _SCALAR_TYPES:
+                    return "scalar"
+                if name in _SCALAR_RESULT_INTRINSICS:
+                    return "scalar"
+                if name in _AGGREGATE_RESULT_INTRINSICS:
+                    return "other"
+                if (
+                    name
+                    in _ELEMENTWISE_INTRINSICS
+                    | _REINTERPRET_INTRINSICS
+                    | _OPERAND_SHAPED_INTRINSICS
+                ):
+                    return self._combined_value_kind(list(expr.args or []))
+        try:
+            raw_type = self.expression_value_raw_type(expr)
+            raw_type = self.resolve_integer_alias(raw_type) if raw_type else None
+        except ValueError:
+            return None
+        if not raw_type:
+            return None
+        return "scalar" if raw_type in _SCALAR_TYPES else "other"
+
+    def hlsl_scalar_family(self, expr):
+        """``"bool"``, ``"int"`` or ``"float"`` for the scalar type of ``expr``.
+
+        ``"literal"`` is an integer literal, which takes the type it is stored as, and ``None`` is a value whose
+        type the importer cannot tell. A vector reports the family of its elements.
+        """
+        if isinstance(expr, bool):
+            return "bool"
+        if isinstance(expr, float):
+            return "float"
+        if isinstance(expr, int):
+            return "literal"
+        if isinstance(expr, CastNode):
+            return self._type_family(str(expr.target_type).strip())
+        if isinstance(expr, UnaryOpNode):
+            if _operator_text(expr.op) == "!":
+                return "bool"
+            return self.hlsl_scalar_family(expr.operand)
+        if isinstance(expr, BinaryOpNode):
+            operator = _operator_text(expr.op)
+            if operator in _COMPARISON_OPERATORS | {"&&", "||"}:
+                return "bool"
+            if operator in _ARITHMETIC_OPERATORS | _BITWISE_OPERATORS:
+                family = self._promoted_family([expr.left, expr.right])
+                return "int" if family == "bool" else family
+        elif isinstance(expr, TernaryOpNode):
+            return self._promoted_family([expr.true_expr, expr.false_expr])
+        elif isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            args = list(expr.args or [])
+            if name not in self.source_function_names:
+                if name in _SCALAR_TYPES:
+                    return self._type_family(name)
+                if name in {"length", "distance", "determinant", "asfloat"}:
+                    return "float"
+                if name in {"asint", "asuint"}:
+                    return "int"
+                if name in {"and", "or"}:
+                    return "bool"
+                if name == "select":
+                    return self._promoted_family(args[1:])
+                if name in {"dot", "mul"} | _ELEMENTWISE_INTRINSICS:
+                    return self._promoted_family(args)
+        try:
+            raw_type = self.expression_value_raw_type(expr)
+        except ValueError:
+            return None
+        if not raw_type:
+            return None
+        return self._type_family(self.vector_element_raw_type(raw_type) or raw_type)
+
+    def _type_family(self, type_name):
+        type_name = self.resolve_integer_alias(type_name)
+        if type_name == "bool":
+            return "bool"
+        if type_name in _FLOAT_TYPES:
+            return "float"
+        return "int" if type_name in _SCALAR_TYPES else None
+
+    def _promoted_family(self, operands):
+        families = [self.hlsl_scalar_family(operand) for operand in operands]
+        if not families or None in families:
+            return None
+        typed = [family for family in families if family != "literal"]
+        if not typed:
+            return "literal"
+        return max(typed, key=_FAMILY_RANK.__getitem__)
+
+    def splat_scalar_text(self, shape, value, rendered):
+        """``rendered`` converted to the matrix's element type when ``value`` is a scalar of another one.
+
+        WGSL's ``vec3<f32>(true)`` is a type error and ``dot`` of integer vectors is an integer, so a bool or
+        integer value is written ``float(...)`` before it is repeated into the columns.
+        """
+        family = self.hlsl_scalar_family(value)
+        if family in (None, "literal"):
+            return rendered
+        if family == self._type_family(shape[0]):
+            return rendered
+        return f"{self.map_type(shape[0])}({rendered})"
+
+    def _combined_value_kind(self, operands):
+        kinds = [self.hlsl_value_kind(operand) for operand in operands]
+        if "other" in kinds:
+            return "other"
+        if None in kinds:
+            return None
+        return "scalar"
+
+    def scalar_matrix_assignment_value(self, node, is_main):
+        """The splat for ``m = scalar;``, or ``None`` when ``node`` is anything else."""
+        if node.operator != "=":
+            return None
+        target = node.left
+        if isinstance(target, MemberAccessNode) and self.matrix_element_members(
+            target.member
+        ):
+            # ``m._m01 = s`` writes one element; the matrix_assignment path owns it.
+            return None
+        shape = self.matrix_expression_shape(target)
+        return self.scalar_matrix_splat_expression(shape, node.right, is_main)
+
+    def source_parameter_types(self, name, args):
+        """Declared parameter types of the one source function ``name(args)`` calls.
+
+        Every entry is ``None`` when the call is not to a source function or the
+        overload set is ambiguous, so callers keep the argument as written.
+        """
+        unknown = [None] * len(args)
+        candidates = [
+            f for f in self.source_functions.get(name, []) if len(f.params) == len(args)
+        ]
+        if not candidates:
+            return unknown
+        signatures = {tuple(p.vtype for p in f.params) for f in candidates}
+        if len(signatures) != 1:
+            return unknown
+        return list(signatures.pop())
 
     def matrix_initializer_expression(self, expected_type, initializer, is_main):
         """A brace initializer of an HLSL matrix lists its rows; render the equal CrossGL constructor."""
@@ -722,7 +926,74 @@ class HLSLMatrixImportMixin:
                 "++",
                 "--",
             } and self.matrix_operand_is_pure(expr.operand)
+        if isinstance(expr, CastNode):
+            return self.matrix_operand_is_pure(expr.expression)
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.matrix_operand_is_pure(part)
+                for part in (expr.condition, expr.true_expr, expr.false_expr)
+            )
+        if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            return (
+                name
+                in _ELEMENTWISE_INTRINSICS
+                | _SCALAR_RESULT_INTRINSICS
+                | _REINTERPRET_INTRINSICS
+                | _OPERAND_SHAPED_INTRINSICS
+                and name not in self.source_function_names
+                and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
+            )
+        if isinstance(expr, FunctionCallNode) and isinstance(
+            expr.name, MemberAccessNode
+        ):
+            method = self.source_struct_method(expr.name)
+            return (
+                method is not None
+                and self.struct_method_is_pure(method)
+                and self.matrix_operand_is_pure(expr.name.object)
+                and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
+            )
         return False
+
+    def source_struct_method(self, member):
+        """The source struct method that ``object.member(...)`` calls, or ``None``."""
+        owner = self.raw_type_base(self.expression_raw_type(member.object))
+        method = self.struct_methods.get(owner, {}).get(
+            self.templated_method_base(member.member)
+        )
+        if method is None or method.definition is None:
+            return None
+        return method
+
+    def struct_method_is_pure(self, method):
+        """Whether calling ``method`` twice does the same as calling it once.
+
+        Only a body of declarations and a ``return`` over reads, intrinsics and arithmetic qualifies, and the
+        method must neither modify its receiver nor take an ``out`` or ``inout`` parameter.
+        """
+        definition = method.definition
+        if method.mutates_receiver or getattr(definition, "template_parameters", None):
+            return False
+        for param in getattr(definition, "params", []) or []:
+            qualifiers = {
+                str(q).lower() for q in getattr(param, "qualifiers", []) or []
+            }
+            if qualifiers & {"out", "inout"}:
+                return False
+        body = getattr(definition, "body", None)
+        if not isinstance(body, list):
+            return False
+        for statement in body:
+            if isinstance(statement, ReturnNode):
+                value = statement.value
+            elif isinstance(statement, VariableNode):
+                value = statement.value
+            else:
+                return False
+            if value is not None and not self.matrix_operand_is_pure(value):
+                return False
+        return True
 
     def matrix_row_setter_name(self, shape):
         helpers = self.__dict__.setdefault("matrix_row_setters", {})
