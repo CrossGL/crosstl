@@ -13440,6 +13440,11 @@ class CudaCodeGen(
                 member_type = member.member_type
             else:
                 member_type = member.vtype
+            # Record the member's type so expressions on it, such as vector
+            # arithmetic, lower through the same helpers as other vectors.
+            self.register_variable_type(
+                member.name, self.type_name_string(member_type), member
+            )
             declaration = self.format_typed_declarator(member_type, member.name)
             self.emit(f"__constant__ {declaration};")
 
