@@ -248,6 +248,8 @@ class Rust(Dialect):
         "Quat": (Type("float", (4,)), "Quat::from_vec4({})"),
         "DQuat": (Type("double", (4,)), "DQuat::from_vec4({})"),
         "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
+        # A byte-address buffer's index, four times a word index (features/spirv_std.py, BYTE_INDEX).
+        "ByteIndex": (Type("uint"), "{} * 4"),
     }
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
@@ -350,9 +352,20 @@ class Rust(Dialect):
         attributes += ["descriptor_set = 0", f"binding = {binding}"]
         return f"{self._RESOURCE}{', '.join(attributes)})] {name}: &{spelling}"
 
-    def uniform_argument(self, spelling: str, name: str) -> str:
-        # A method takes a sampler by value, which the entry point takes a reference to.
-        return f"*{name}" if spelling == "Sampler" else name
+    # A method takes a sampler by value, which the entry point takes a reference to, and a byte-address buffer is made
+    # from the storage buffer of words the entry point takes.
+    _UNIFORM_ARGUMENTS = {
+        "Sampler": "*{}",
+        "ByteAddressableBuffer<&[u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_slice({})"
+        ),
+        "ByteAddressableBuffer<&mut [u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_mut_slice({})"
+        ),
+    }
+
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        return self._UNIFORM_ARGUMENTS.get(opaque, "{}").format(name)
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         if not value:

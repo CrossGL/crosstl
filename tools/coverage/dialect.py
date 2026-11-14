@@ -225,8 +225,8 @@ class Dialect:
         it needs besides its binding."""
         raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
 
-    def uniform_argument(self, spelling: str, name: str) -> str:
-        """The argument that passes the uniform ``name``, of type ``spelling``."""
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        """The argument that passes the uniform ``name`` for a parameter of the opaque type ``opaque``."""
         return name
 
     def call(self, name: str, arguments: list[str]) -> str:

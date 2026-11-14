@@ -1,4 +1,4 @@
-"""spirv_std's Image and SampledImage methods in the Rust feature list, and the probes that call them."""
+"""spirv_std's Image, SampledImage and ByteAddressableBuffer methods in the Rust feature list, and their probes."""
 
 import pytest
 
@@ -602,4 +602,104 @@ def test_image_probes_compile_with_rust_gpu(features):
         verdict = validators.validate(
             "rust", probe.source, feature.stage, entry=probe.entry
         )
+        assert verdict.accepted, (feature.name, verdict.log)
+
+
+BYTE_BUFFER = r"""
+impl<'a> ByteAddressableBuffer<&'a [u32]> {
+    #[inline]
+    pub fn from_slice(data: &'a [u32]) -> Self {
+        Self { data }
+    }
+
+    pub unsafe fn load<T>(&self, byte_index: u32) -> T {
+        bounds_check::<T>(self.data, byte_index);
+        unsafe { buffer_load_intrinsic(self.data, byte_index) }
+    }
+}
+
+impl<'a> ByteAddressableBuffer<&'a mut [u32]> {
+    #[inline]
+    pub fn from_mut_slice(data: &'a mut [u32]) -> Self {
+        Self { data }
+    }
+
+    pub fn as_ref(&self) -> ByteAddressableBuffer<&[u32]> {
+        ByteAddressableBuffer { data: self.data }
+    }
+
+    pub unsafe fn load<T>(&self, byte_index: u32) -> T {
+        unsafe { self.as_ref().load(byte_index) }
+    }
+
+    pub unsafe fn store<T>(&mut self, byte_index: u32, value: T) {
+        bounds_check::<T>(self.data, byte_index);
+        unsafe { buffer_store_intrinsic(self.data, byte_index, value) }
+    }
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def byte_features():
+    return {feature.name: feature for feature in spirv_std.byte_buffers(BYTE_BUFFER)}
+
+
+def test_byte_buffer_methods_are_counted_once_and_constructors_have_no_crossgl_spelling(
+    byte_features,
+):
+    assert sorted(byte_features) == [
+        "ByteAddressableBuffer::as_ref",
+        "ByteAddressableBuffer::from_mut_slice",
+        "ByteAddressableBuffer::from_slice",
+        "ByteAddressableBuffer::load",
+        "ByteAddressableBuffer::store",
+    ]
+    # load is the read-only view's, the first block that defines it.
+    load = byte_features["ByteAddressableBuffer::load"]
+    assert load.signature.params[0].type.opaque == spirv_std.BYTE_BUFFER
+    for name in ("from_slice", "from_mut_slice", "as_ref"):
+        feature = byte_features[f"ByteAddressableBuffer::{name}"]
+        assert feature.crossgl == "" and "byte-address buffer" in feature.note
+        assert feature.signature is not None
+        with pytest.raises(probes.NoSpelling):
+            probes.build(feature, "crossgl")
+
+
+def test_byte_buffer_probes_load_and_store_a_word_at_four_times_a_word_index(
+    byte_features,
+):
+    native = probes.build(byte_features["ByteAddressableBuffer::load"], "rust").source
+    assert (
+        "#[spirv(storage_buffer, descriptor_set = 0, binding = 8)] u0: &[u32],"
+        in native
+    )
+    assert (
+        "let r: u32 = unsafe { spirv_std::ByteAddressableBuffer::from_slice(u0).load(a1 * 4) };"
+        in native
+    )
+    crossgl = probes.build(
+        byte_features["ByteAddressableBuffer::load"], "crossgl"
+    ).source
+    assert "uniform ByteAddressBuffer u0;" in crossgl
+    assert "uint r = u0.Load(a1 * 4u);" in crossgl
+    store = byte_features["ByteAddressableBuffer::store"]
+    native = probes.build(store, "rust").source
+    assert "u0: &mut [u32]," in native
+    assert (
+        "spirv_std::ByteAddressableBuffer::from_mut_slice(u0).store(a1 * 4, a2)"
+        in native
+    )
+    crossgl = probes.build(store, "crossgl").source
+    assert "uniform RWByteAddressBuffer u0;" in crossgl
+    assert "u0.Store(a1 * 4u, a2);" in crossgl
+
+
+@pytest.mark.skipif(
+    not validators.available("rust"), reason="rust-gpu is not installed"
+)
+def test_byte_buffer_probes_compile_with_rust_gpu(byte_features):
+    for feature in byte_features.values():
+        probe = probes.build(feature, "rust")
+        verdict = validators.validate("rust", probe.source, entry=probe.entry)
         assert verdict.accepted, (feature.name, verdict.log)

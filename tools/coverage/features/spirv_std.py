@@ -1,5 +1,6 @@
 """spirv_std's image types, ``Image`` and ``SampledImage``, through whose methods a rust-gpu shader samples, fetches,
-reads, writes and queries textures.
+reads, writes and queries textures, and its ``ByteAddressableBuffer``, through which it loads and stores words of an
+untyped storage buffer.
 
 ``image.rs`` gives ``Image`` its methods in ``impl`` blocks that fix some of the type's constant parameters, such as
 a sampled or a storage image, and leave the others generic. A ``where Self: HasGather`` bound limits a method further,
@@ -291,5 +292,79 @@ def _feature(
         stage="fragment" if fragment else "compute",
         note="" if image else "no probe image has the type the method is defined for",
         spelling=f"{'unsafe ' if unsafe else ''}.{bare}",
+        counterpart=counterpart,
+    )
+
+
+# ByteAddressableBuffer views a storage buffer of u32 words, as HLSL's byte-address buffers are: a probe makes one from
+# the storage buffer an entry point takes (:data:`..objects.UNIFORMS`), and loads or stores a u32 at a byte index
+# that is four times a word index read from the input, since the index must be a multiple of 4. CrossGL declares
+# the byte-address buffer itself and calls HLSL's Load and Store on it, which take the same byte index.
+BYTE_BUFFER = "ByteAddressableBuffer<&[u32]>"
+MUTABLE_BYTE_BUFFER = "ByteAddressableBuffer<&mut [u32]>"
+# The opaque argument :class:`..kernels.Rust` makes for a byte index from a word index.
+BYTE_INDEX = "ByteIndex"
+_BYTE_BUFFERS = {"&'a [u32]": BYTE_BUFFER, "&'a mut [u32]": MUTABLE_BYTE_BUFFER}
+_BYTE_METHODS = {
+    "load": (
+        "{}.Load({} * 4u)",
+        "uint Load(ByteAddressBuffer, uint)",
+    ),
+    "store": (
+        "{}.Store({} * 4u, {})",
+        "void Store(RWByteAddressBuffer, uint, uint)",
+    ),
+}
+# load_unchecked and store_unchecked skip the bounds check, which HLSL's Load and Store never make.
+_BYTE_METHODS["load_unchecked"] = _BYTE_METHODS["load"]
+_BYTE_METHODS["store_unchecked"] = _BYTE_METHODS["store"]
+_BYTE_UNSPELLED = "CrossGL declares a byte-address buffer as a resource, and makes none from a storage buffer or from another"
+
+
+def byte_buffers(text: str) -> list[Feature]:
+    """The methods of ``ByteAddressableBuffer`` in ``byte_addressable_buffer.rs``, counted once by name."""
+    text = _clean(text)
+    features: list[Feature] = []
+    for match in re.finditer(r"^impl<'a> ByteAddressableBuffer<(.+)> \{", text, re.M):
+        receiver = _BYTE_BUFFERS[match.group(1)]
+        body, _ = enclosed(text, match.end() - 1)
+        for method in _METHOD.finditer(body):
+            bare = method.group(2)
+            name = f"ByteAddressableBuffer::{bare}"
+            if any(feature.name == name for feature in features):
+                continue
+            features.append(_byte_feature(name, bool(method.group(1)), receiver))
+    return features
+
+
+def _byte_feature(name: str, unsafe: bool, receiver: str) -> Feature:
+    bare = name.rpartition("::")[2]
+    word = Type("uint")
+    params = [Param(Type.other(receiver)), Param(Type.other(BYTE_INDEX))]
+    spelling = f"{'unsafe ' if unsafe else ''}.{bare}"
+    if bare.startswith("load"):
+        found = Signature(word, tuple(params))
+    elif bare.startswith("store"):
+        found = Signature(VOID, (*params, Param(word)))
+    elif bare == "as_ref":
+        found = Signature(Type.other(BYTE_BUFFER), (Param(Type.other(receiver)),))
+    else:
+        # from_slice and from_mut_slice take the storage buffer of words itself.
+        words = "&[u32]" if receiver == BYTE_BUFFER else "&mut [u32]"
+        found = Signature(Type.other(receiver), (Param(Type.other(words)),))
+        spelling = f"spirv_std::{name}"
+    spelled, counterpart = "", None
+    if bare in _BYTE_METHODS:
+        spelled, text = _BYTE_METHODS[bare]
+        counterpart = prototype(text)[1]
+    return Feature(
+        "rust",
+        "function",
+        name,
+        found,
+        group="byte_addressable_buffer",
+        crossgl=spelled,
+        note="" if spelled else _BYTE_UNSPELLED,
+        spelling=spelling,
         counterpart=counterpart,
     )

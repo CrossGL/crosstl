@@ -304,6 +304,13 @@ SOURCES = {
         "3f2404046458f4cb85f0ff0b04f325daf310acfc418c5d8aaefef18ac2256b7e",
         "rust-gpu 0.11.0 spirv_std::image Image and SampledImage methods",
     ),
+    "rust-byte-buffer": Source(
+        "Rust-GPU/rust-gpu",
+        "62401280ab4b512c734ad1aceee7553385e17418",
+        "crates/spirv-std/src/byte_addressable_buffer.rs",
+        "b6d37e572839a57753c6a7ebcf59514f69247b1111d6e396f05b40f4e7124ea5",
+        "rust-gpu 0.11.0 spirv_std::ByteAddressableBuffer methods",
+    ),
     "rust-float": Source(
         "rust-num/num-traits",
         "7ec3d41d39b28190ec1d42db38021107b3951f3a",
