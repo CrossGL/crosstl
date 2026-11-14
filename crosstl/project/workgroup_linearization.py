@@ -391,9 +391,7 @@ def _parse_entry(
         "    }\n"
         "}\n"
     )
-    program = SOURCE_REGISTRY.get("cgl").parse(
-        source, source_options={"strict_function_bodies": True}
-    )
+    program = SOURCE_REGISTRY.get("cgl").parse(source)
     # Spell the added built-in parameters the way the program's other parameters are spelled for this target.
     canonicalize_builtin_values(program, target)
     for _name, stage in _stage_items(program):

@@ -1,11 +1,13 @@
 """Fixed-width interval sets for source integer conversions and arithmetic."""
 
+from ..refusals import TargetRefusal
+
 
 def merge_integer_intervals(intervals):
     result = []
     for lower, upper in sorted(intervals):
         if lower > upper:
-            raise ValueError("Integer interval minimum exceeds maximum.")
+            raise TargetRefusal("Integer interval minimum exceeds maximum.")
         if result and lower <= result[-1][1] + 1:
             result[-1] = result[-1][0], max(result[-1][1], upper)
         else:
@@ -19,12 +21,12 @@ def merge_integer_intervals(intervals):
 def convert_integer_intervals(intervals, bits, signed):
     """Retain low bits, then interpret the destination sign bit if present."""
     if not 1 <= bits <= 64:
-        raise ValueError("Integer conversion requires a width from 1 to 64 bits.")
+        raise TargetRefusal("Integer conversion requires a width from 1 to 64 bits.")
     modulus = 1 << bits
     unsigned = []
     for lower, upper in intervals:
         if lower > upper:
-            raise ValueError("Integer interval minimum exceeds maximum.")
+            raise TargetRefusal("Integer interval minimum exceeds maximum.")
         if upper - lower >= modulus - 1:
             unsigned = [(0, modulus - 1)]
             break

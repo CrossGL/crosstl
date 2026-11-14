@@ -8,6 +8,7 @@ as a statement, as in C++17 [dcl.dcl]/1 and MSL. Adjacent string literals form o
 from __future__ import annotations
 
 from .ast import StaticAssertNode
+from .refusals import CrossGLSyntaxError
 
 __all__ = [
     "mark_template_assertions",
@@ -53,7 +54,7 @@ def parse_static_assertion(parser) -> StaticAssertNode:
     if parser.current_token[0] == "COMMA":
         parser.eat("COMMA")
         if parser.current_token[0] != "STRING_LITERAL":
-            raise SyntaxError(
+            raise CrossGLSyntaxError(
                 "CrossGL static_assert takes a string literal as its message, got "
                 f"{parser.current_token[0]} {parser.current_token[1]!r}"
             )

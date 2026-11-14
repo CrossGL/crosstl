@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from .refusals import MetadataContractError
+
 # Source path -> ((mtime_ns, size, inode), sha256 of its text).
 _SOURCE_DIGESTS: dict[str, tuple[tuple[int, int, int], str]] = {}
 _SOURCE_DIGESTS_LOCK = threading.Lock()
@@ -114,24 +116,30 @@ def build_dispatch_region_program(
 def validate_dispatch_region_program(value: Any, *, target: str) -> None:
     """Reject incomplete or internally inconsistent program identity records."""
     if not isinstance(value, Mapping) or set(value) != _FIELDS:
-        raise ValueError(
+        raise MetadataContractError(
             "dispatchRegionProgram must contain exactly its identity fields"
         )
     if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
-        raise ValueError("dispatchRegionProgram schemaVersion must be 1")
+        raise MetadataContractError("dispatchRegionProgram schemaVersion must be 1")
     if value["target"] != target or target not in {"directx", "opengl"}:
-        raise ValueError("dispatchRegionProgram target must match the artifact")
+        raise MetadataContractError(
+            "dispatchRegionProgram target must match the artifact"
+        )
     entry = value["sourceEntryPoint"]
     if not isinstance(entry, str) or not entry.strip():
-        raise ValueError("dispatchRegionProgram sourceEntryPoint must be nonempty")
+        raise MetadataContractError(
+            "dispatchRegionProgram sourceEntryPoint must be nonempty"
+        )
     for key in ("intermediateHash", "implementationHash", "settingsHash", "hash"):
         if not isinstance(value[key], str) or not re.fullmatch(
             r"[0-9a-f]{64}", value[key]
         ):
-            raise ValueError(f"dispatchRegionProgram {key} must be a SHA-256 digest")
+            raise MetadataContractError(
+                f"dispatchRegionProgram {key} must be a SHA-256 digest"
+            )
     if value["hash"] != _digest(
         {key: item for key, item in value.items() if key != "hash"}
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "dispatchRegionProgram hash does not match its identity fields"
         )

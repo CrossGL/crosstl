@@ -25,6 +25,8 @@ rounded up to that alignment.
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from ..refusals import TranslationRefusal
+
 BUFFER_LAYOUT_ATTRIBUTE = "buffer_layout"
 HLSL_CBUFFER_LAYOUT = "hlsl_cbuffer"
 HLSL_STRUCTURED_LAYOUT = "hlsl_structured"
@@ -43,8 +45,10 @@ HLSL_SCALAR_SIZES = {
 }
 
 
-class HlslLayoutError(ValueError):
+class HlslLayoutError(TranslationRefusal):
     """A buffer member whose HLSL layout cannot be reproduced."""
+
+    code = "project.translate.hlsl-buffer-layout-unsupported"
 
 
 @dataclass(frozen=True)

@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import SlangRefusal
 from ..renames import renamed
 from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_values import glsl_builtin_name
@@ -811,7 +812,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
         for name in sorted(generic_names):
             if re.search(rf"\b{re.escape(name)}\b", result):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang codegen cannot emit unresolved generic parameter "
                     f"'{name}'; specialize generic declarations before Slang "
                     "generation"
@@ -1290,7 +1291,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 previous_type = seen.get(global_name)
                 if previous_type is not None:
                     if previous_type != mapped_type:
-                        raise ValueError(
+                        raise SlangRefusal(
                             "Conflicting Slang lowered struct resource member "
                             f"'{global_name}' has both {previous_type} and "
                             f"{mapped_type}"
@@ -2261,12 +2262,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             domain_entry, "domain"
         )
         if hull_domain and not domain_domain:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_evaluation stage requires a domain "
                 "attribute matching tessellation_control"
             )
         if domain_domain and not hull_domain:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage requires a domain "
                 "attribute matching tessellation_evaluation"
             )
@@ -2276,7 +2277,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         hull_domain = self.canonical_slang_tessellation_domain(hull_domain)
         domain_domain = self.canonical_slang_tessellation_domain(domain_domain)
         if hull_domain != domain_domain:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_evaluation stage domain "
                 f"'{domain_domain}' must match tessellation_control domain "
                 f"'{hull_domain}'"
@@ -2288,7 +2289,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "OutputPatch",
         )
         if len(output_patches) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage requires at most one "
                 "OutputPatch<..., N> parameter"
             )
@@ -2304,7 +2305,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         output_patch = self.format_slang_patch_shape("OutputPatch", hull_shape)
-        raise ValueError(
+        raise SlangRefusal(
             "Slang tessellation_control stage "
             f"{output_patch} must match outputcontrolpoints({output_control_points})"
         )
@@ -2315,7 +2316,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "OutputPatch",
         )
         if len(domain_output_patches) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_evaluation stage requires at most one "
                 "OutputPatch<..., N> parameter"
             )
@@ -2326,7 +2327,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         hull_type, hull_size = hull_shape
         domain_type, domain_size = domain_shape
         if hull_type and domain_type and hull_type != domain_type:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_evaluation stage "
                 f"{self.format_slang_patch_shape('OutputPatch', domain_shape)} "
                 "must match tessellation_control output "
@@ -2337,7 +2338,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and domain_size is not None
             and hull_size != domain_size
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_evaluation stage "
                 f"{self.format_slang_patch_shape('OutputPatch', domain_shape)} "
                 "must match tessellation_control output "
@@ -2488,7 +2489,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if value is None:
             return
         if value <= 0:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {stage_name} stage {attr_name} ({value}) must be positive"
             )
 
@@ -2513,13 +2514,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         allowed_attributes = allowed_by_stage.get(shader_stage, set())
         for attr_name in self.slang_stage_attribute_names(func):
             if attr_name not in allowed_attributes:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {stage_name} stage does not support {attr_name} attribute"
                 )
 
     def validate_slang_stage_attribute_uniqueness(self, func, stage_name):
         for attr_name in self.slang_stage_attribute_duplicate_names(func):
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {stage_name} stage {attr_name} attribute "
                 "must appear at most once"
             )
@@ -2537,7 +2538,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         valid_domains = {"tri", "quad", "isoline"}
         if canonical_domain not in valid_domains:
             valid_values = ", ".join(sorted(valid_domains))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {stage_name} stage domain '{domain}' must be one of: "
                 f"{valid_values}"
             )
@@ -2560,7 +2561,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage outputtopology "
                 f"'{topology}' must be one of: {valid_values}"
             )
@@ -2578,12 +2579,12 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         domain = self.canonical_slang_tessellation_domain(domain)
         if domain in {"tri", "quad"} and topology == "line":
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage domain "
                 f"'{domain}' requires outputtopology triangle_cw or triangle_ccw"
             )
         if domain == "isoline" and topology in {"triangle_cw", "triangle_ccw"}:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage domain 'isoline' requires "
                 "outputtopology line"
             )
@@ -2601,7 +2602,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         valid_topologies = {"point", "line", "triangle"}
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh stage outputtopology '{topology}' must be one of: "
                 f"{valid_values}"
             )
@@ -2624,7 +2625,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
         if partitioning not in valid_partitioning:
             valid_values = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage partitioning "
                 f"'{partitioning}' must be one of: {valid_values}"
             )
@@ -2636,14 +2637,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                 func, "outputcontrolpoints"
             )
             if not arguments:
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang tessellation_control stage requires outputcontrolpoints"
                 )
             if (
                 self.slang_stage_attribute_int_argument(func, "outputcontrolpoints")
                 is None
             ):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang tessellation_control stage outputcontrolpoints "
                     "requires an integer value"
                 )
@@ -2652,7 +2653,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if shader_stage == "domain":
             domain = self.normalized_slang_stage_attribute_argument(func, "domain")
             if not domain:
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang tessellation_evaluation stage requires a domain attribute"
                 )
 
@@ -2664,19 +2665,19 @@ class SlangCodeGen(LoweringRefusalMixin):
         if not arguments:
             return
         if len(arguments) != 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc requires "
                 "exactly one function name"
             )
 
         function_name = self.slang_stage_attribute_value_to_string(arguments[0])
         if not function_name:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc requires "
                 "a function name"
             )
         if function_name not in self.user_function_names:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' does not reference a generated function"
             )
@@ -2689,14 +2690,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         if not arguments:
             return
         if len(arguments) > 3:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {stage_name} stage numthreads requires at most three arguments"
             )
 
         for argument in arguments:
             value = self.slang_int_literal_value(argument)
             if value is not None and value <= 0:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {stage_name} stage numthreads values must be positive"
                 )
 
@@ -2790,7 +2791,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         ]
         if shader_stage != "geometry":
             if stream_parameters:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {shader_type} stage cannot declare a geometry stream "
                     "output parameter"
                 )
@@ -2808,24 +2809,24 @@ class SlangCodeGen(LoweringRefusalMixin):
             if self.is_slang_geometry_stream_parameter(parameter)
         ]
         if not stream_parameters:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
         if len(stream_parameters) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang geometry stage must declare at most one stream output parameter"
             )
 
         stream_parameter = stream_parameters[0]
         directions = self.slang_parameter_direction_qualifiers(stream_parameter)
         if directions != {"inout"}:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stream parameter '{stream_parameter.name}' "
                 "must use the inout qualifier"
             )
         if self.slang_geometry_stream_element_type(stream_parameter) is None:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stream parameter '{stream_parameter.name}' "
                 "requires an output element type"
             )
@@ -2836,13 +2837,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             if self.slang_geometry_input_primitive_qualifier(parameter) is not None
         ]
         if not input_parameters:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or "
                 "triangleadj"
             )
         if len(input_parameters) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang geometry stage must declare at most one input primitive "
                 "parameter"
             )
@@ -2856,7 +2857,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         if self.slang_parameter_array_size_expression(parameter) is None:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stage {primitive} input primitive parameter "
                 f"'{parameter.name}' must be an array with {expected_count} "
                 "element(s)"
@@ -2866,7 +2867,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if array_count is None:
             return
         if array_count != expected_count:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stage {primitive} input primitive parameter "
                 f"'{parameter.name}' must have {expected_count} element(s), "
                 f"got {array_count}"
@@ -2939,14 +2940,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         expected_arities = self.SLANG_GEOMETRY_STREAM_METHOD_ARITIES.get(member)
         if expected_arities is None:
             valid = ", ".join(sorted(self.SLANG_GEOMETRY_STREAM_METHOD_ARITIES))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stream method {member} is unsupported; "
                 f"valid methods are: {valid}"
             )
 
         if len(args) not in expected_arities:
             expected = " or ".join(str(arity) for arity in sorted(expected_arities))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stream {member} requires {expected} "
                 f"argument(s), got {len(args)}"
             )
@@ -2969,7 +2970,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if expected_base == actual_base and expected_suffix == actual_suffix:
             return
 
-        raise ValueError(
+        raise SlangRefusal(
             "Slang geometry stream Append argument type "
             f"{self.convert_type(actual_type)} must match stream element type "
             f"{self.convert_type(expected_type)}"
@@ -2982,23 +2983,23 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         shader_stage = self.slang_shader_stage_name(shader_type)
         if shader_stage != "mesh":
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} stage cannot declare a mesh payload parameter"
             )
         if len(payload_parameters) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh stage must declare at most one mesh payload parameter"
             )
 
         parameter = payload_parameters[0]
         directions = self.slang_parameter_direction_qualifiers(parameter)
         if "in" not in directions or directions & {"out", "inout"}:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh payload parameter '{parameter.name}' "
                 "must use the in qualifier"
             )
         if self.slang_parameter_user_struct_type(parameter) is None:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh payload parameter '{parameter.name}' "
                 "must use a user-defined struct type"
             )
@@ -3031,7 +3032,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                     semantic
                     and self.map_semantic(semantic, stage_name) in invalid_semantics
                 ):
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Slang patch constant functions cannot use "
                         "gl_InvocationID or SV_OutputControlPointID"
                     )
@@ -3040,7 +3041,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 if not isinstance(node, IdentifierNode):
                     continue
                 if node.name == "gl_InvocationID" and node.name not in declared_names:
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Slang patch constant functions cannot use "
                         "gl_InvocationID or SV_OutputControlPointID"
                     )
@@ -3052,7 +3053,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if node.name in declared_names:
                 continue
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation factor built-ins gl_TessLevelOuter and "
                 "gl_TessLevelInner require an explicit patch constant function "
                 "return value using SV_TessFactor and SV_InsideTessFactor"
@@ -3212,7 +3213,7 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_mesh_output_role_from_parameter(self, parameter):
         roles = self.slang_mesh_output_roles_from_parameter(parameter)
         if len(roles) > 1:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh stage parameter '{parameter.name}' "
                 "can use only one mesh role qualifier"
             )
@@ -3262,20 +3263,20 @@ class SlangCodeGen(LoweringRefusalMixin):
     def validate_slang_mesh_output_array_parameter(self, parameter, role):
         directions = self.slang_parameter_direction_qualifiers(parameter)
         if "out" not in directions or directions & {"in", "inout", "const"}:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh stage {role} parameter '{parameter.name}' "
                 "must use the out qualifier"
             )
 
         if self.slang_parameter_array_size_expression(parameter) is None:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh stage {role} parameter '{parameter.name}' "
                 "must declare a static array size"
             )
 
         array_count = self.slang_parameter_array_count(parameter)
         if array_count is not None and array_count <= 0:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh stage {role} parameter '{parameter.name}' "
                 "array size must be positive"
             )
@@ -3315,7 +3316,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         for parameter in parameters or []:
             roles = self.slang_mesh_output_roles_from_parameter(parameter)
             if len(roles) > 1:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang mesh stage parameter '{parameter.name}' "
                     "can use only one mesh role qualifier"
                 )
@@ -3327,17 +3328,17 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         for role, role_params in role_parameters.items():
             if len(role_params) > 1:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang mesh stage must declare at most one {role} output parameter"
                 )
             self.validate_slang_mesh_output_array_parameter(role_params[0], role)
 
         if "vertices" not in role_parameters:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh stage output signature must declare an out vertices array"
             )
         if "indices" not in role_parameters:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh stage output signature must declare an out indices array"
             )
 
@@ -3356,7 +3357,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 self.slang_parameter_mapped_base_and_array_suffix(index_param)
             )
             if index_base_type != expected_index_type:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang mesh stage outputtopology '{topology}' requires "
                     f"indices parameter '{index_param.name}' to use "
                     f"{expected_index_type}, got {index_base_type}"
@@ -3374,14 +3375,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                 and primitive_count is not None
                 and index_count != primitive_count
             ):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang mesh stage primitives output array size must match "
                     "the indices output array size"
                 )
 
         output_count_calls = self.slang_set_mesh_output_count_calls(func)
         if len(output_count_calls) != 1:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh stage output signature must call "
                 "SetMeshOutputCounts exactly once"
             )
@@ -3392,7 +3393,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def validate_slang_set_mesh_output_counts(self, args, role_parameters):
         if len(args) != 2:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh SetMeshOutputCounts requires exactly two arguments"
             )
 
@@ -3409,7 +3410,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and declared_counts.get("vertices") is not None
             and vertex_count > declared_counts["vertices"]
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang mesh SetMeshOutputCounts vertex count exceeds the "
                 "vertices output array size"
             )
@@ -3420,7 +3421,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 and declared_counts.get(role) is not None
                 and primitive_count > declared_counts[role]
             ):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang mesh SetMeshOutputCounts primitive count exceeds the "
                     f"{role} output array size"
                 )
@@ -3527,12 +3528,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                         continue
                     role, _name, index_expr = access
                     if index_expr is None:
-                        raise ValueError(
+                        raise SlangRefusal(
                             f"Slang mesh {role} output writes must target an "
                             "indexed output element"
                         )
                     if not output_counts_seen:
-                        raise ValueError(
+                        raise SlangRefusal(
                             "Slang mesh output writes must occur after "
                             "SetMeshOutputCounts"
                         )
@@ -3545,7 +3546,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                     continue
                 for arg in getattr(node, "arguments", getattr(node, "args", [])):
                     if self.slang_expression_mentions_mesh_output(arg, role_by_name):
-                        raise ValueError(
+                        raise SlangRefusal(
                             "Slang mesh output arrays cannot be passed to helper "
                             "calls before SetMeshOutputCounts"
                         )
@@ -3560,7 +3561,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if declared_count is None:
             return
         if index_value < 0 or index_value >= declared_count:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang mesh {role} output literal index {index_value} exceeds "
                 f"the {role} output array size"
             )
@@ -3576,14 +3577,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         if shader_stage == "mesh":
             directions = self.slang_parameter_direction_qualifiers(parameter)
             if "out" not in directions or directions & {"in", "inout", "const"}:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang mesh output parameter '{parameter.name}' "
                     "must use the out qualifier"
                 )
             return f"out {role} {declaration}"
 
         if shader_type:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} stage cannot declare mesh {role} output parameter"
             )
 
@@ -4274,20 +4275,20 @@ class SlangCodeGen(LoweringRefusalMixin):
             # declares an integer colour output for an integer attachment.
             if self.is_slang_render_target_type(type_name):
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected a scalar or vector of float, half, int or uint"
             )
         if kind in {"position", "color"}:
             if self.is_slang_float_vector_width(type_name, 4):
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected vec4-compatible type"
             )
 
         if kind == "depth" and not self.is_slang_float_scalar_type(type_name):
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected float type"
             )
@@ -4295,7 +4296,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if kind in {"coverage", "stencil_ref"} and not self.is_slang_uint_scalar_type(
             type_name
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected uint type"
             )
@@ -4307,7 +4308,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -4318,7 +4319,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if kind in {"tess_factor", "inside_tess_factor"}:
             if shader_stage == "hull" and stage_role == "patch_constant":
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
                 "valid stage is tessellation_control patch constant"
             )
@@ -4332,7 +4333,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }[kind]
         if shader_stage not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
                 f"valid stage is {allowed}"
             )
@@ -4425,7 +4426,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         ):
             return
 
-        raise ValueError(
+        raise SlangRefusal(
             f"Unsupported {semantic} stage parameter semantic for Slang codegen; "
             f"expected {expected_type} type"
         )
@@ -4458,7 +4459,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
 
             if str(semantic).lower() == "gl_samplemask":
-                raise ValueError(
+                raise SlangRefusal(
                     f"Unsupported {semantic} stage parameter semantic for Slang "
                     f"{shader_type} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -4470,7 +4471,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             if expected_type is not None:
                 previous_name = seen_system_semantics.get(mapped_upper)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise SlangRefusal(
                         f"Duplicate Slang stage parameter semantic "
                         f"{mapped_semantic} on '{previous_name}' and "
                         f"'{parameter.name}'"
@@ -4484,7 +4485,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             valid_stages = self.slang_stage_input_semantic_stages(mapped_semantic)
             if valid_stages:
                 valid = ", ".join(sorted(valid_stages))
-                raise ValueError(
+                raise SlangRefusal(
                     f"Unsupported {semantic} stage parameter semantic for Slang "
                     f"{shader_type} stage; valid stage is {valid}"
                 )
@@ -4497,7 +4498,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "inside_tess_factor",
                 "tess_factor",
             }:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Unsupported {semantic} stage parameter semantic for Slang "
                     f"{shader_type} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -4640,7 +4641,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             stage_name, local_variables
         ):
             if getattr(local_var, "initial_value", None) is not None:
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang ray stage interface variable "
                     f"'{local_var.name}' cannot have an initializer"
                 )
@@ -4672,7 +4673,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         for parameter in extra_parameters:
             if parameter.name in existing_names:
                 stage_name = shader_type or "function"
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {stage_name} stage interface variable "
                     f"'{parameter.name}' duplicates an entry parameter"
                 )
@@ -4722,7 +4723,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 getattr(patch_constant_function, "return_type", "void")
             )
             if self.convert_type(return_type_name) == "void":
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang tessellation_control stage patchconstantfunc "
                     f"'{function_name}' requires a non-void return type"
                 )
@@ -4736,7 +4737,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "InputPatch",
             )
             if len(patch_constant_input_patches) > 1:
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang tessellation_control stage patchconstantfunc "
                     f"'{function_name}' requires at most one "
                     "InputPatch<..., N> parameter"
@@ -4750,7 +4751,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                         "InputPatch", patch_shape
                     )
                     hull_type = self.format_slang_patch_shape("InputPatch", hull_shape)
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Slang tessellation_control stage patchconstantfunc "
                         f"'{function_name}' {patch_type} must match hull entry "
                         f"{hull_type}"
@@ -4769,7 +4770,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         semantics = self.slang_struct_semantics(return_struct)
         if "sv_tessfactor" not in semantics:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' must return a struct containing "
                 "SV_TessFactor"
@@ -4778,7 +4779,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         domain = self.normalized_slang_stage_attribute_argument(hull_entry, "domain")
         domain = self.canonical_slang_tessellation_domain(domain)
         if domain in {"tri", "quad"} and "sv_insidetessfactor" not in semantics:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' must return a struct containing "
                 f"SV_InsideTessFactor for {domain} domains"
@@ -4806,7 +4807,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and outer_count is not None
             and outer_count != expected_outer_count
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' must return {expected_outer_count} "
                 f"SV_TessFactor value(s) for {domain} domains"
@@ -4816,13 +4817,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             and inner_count is not None
             and inner_count != expected_inner_count
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' must return {expected_inner_count} "
                 f"SV_InsideTessFactor value(s) for {domain} domains"
             )
         if expected_inner_count is None and inner_count is not None:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' must not return SV_InsideTessFactor "
                 f"for {domain} domains"
@@ -4849,7 +4850,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             member_name = getattr(member, "name", "<anonymous>")
             member_type = self.slang_tess_factor_member_type_name(member)
             mapped_type = self.convert_type(member_type) or member_type
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage patchconstantfunc "
                 f"'{function_name}' {semantic_name} member '{member_name}' "
                 f"uses invalid type {mapped_type}; tessellation factors "
@@ -5671,7 +5672,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if used_start == start and used_end == end and used_name == name:
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 f"Conflicting Slang resource binding for '{name}': "
                 f"{self.slang_resource_range_label(register_prefix, start, end, space)} "
                 f"overlaps '{used_name}' "
@@ -5690,7 +5691,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if used_start == start and used_end == end and used_name == name:
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 f"Conflicting Slang Vulkan resource binding for '{name}': "
                 f"{self.slang_vk_binding_range_label(start, end, descriptor_set)} "
                 f"overlaps '{used_name}' "
@@ -5732,7 +5733,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and register_binding is not None
             and explicit_binding != register_binding
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Conflicting Slang resource binding metadata for "
                 f"'{name}': binding {explicit_binding} does not match "
                 f"register binding {register_binding}"
@@ -5742,7 +5743,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and register_space is not None
             and explicit_set != register_space
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 "Conflicting Slang resource set metadata for "
                 f"'{name}': set {explicit_set} does not match "
                 f"register space{register_space}"
@@ -5815,7 +5816,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if register_binding is None:
                 if descriptor_set is not None or descriptor_set_expr is not None:
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Unable to assign Slang resource binding for "
                         f"'{self.slang_resource_name(node)}' in space "
                         f"{descriptor_set_expr or descriptor_set}: "
@@ -5857,7 +5858,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if vk_binding is None:
                 if has_explicit_vk_set:
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Unable to assign Slang Vulkan resource binding for "
                         f"'{self.slang_resource_name(node)}' in set "
                         f"{descriptor_set_expr or descriptor_set}: "
@@ -6012,7 +6013,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return False
         if existing_signature == signature:
             return True
-        raise ValueError(
+        raise SlangRefusal(
             f"Duplicate Slang global declaration with incompatible definitions: {name}"
         )
 
@@ -6628,23 +6629,23 @@ class SlangCodeGen(LoweringRefusalMixin):
         shader_stage = self.slang_shader_stage_name(shader_type)
         if shader_stage == "hull":
             if stage_role == "patch_constant":
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang patch constant function returns must put semantics on "
                     "the returned struct members"
                 )
 
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang tessellation_control stage returns must put semantics on "
                 "the output control-point struct members"
             )
 
         if self.convert_type(ret_type_name) == "void":
             if shader_type:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {shader_type} stage void return cannot use return "
                     f"semantic {semantic}"
                 )
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang void function return cannot use return semantic {semantic}"
             )
 
@@ -6697,35 +6698,35 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if not gl_out_assignments:
             if self.slang_stage_uses_gl_out(body_statements):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out requires assignments to "
                     "gl_out[gl_InvocationID] or gl_out[gl_InvocationID].field"
                 )
             return None
 
         if semantic is not None:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang hull stage gl_out outputs cannot use a return semantic"
             )
         if self.contains_return_statement(body_statements):
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang hull stage gl_out outputs cannot be mixed with explicit returns"
             )
 
         for assignment, index in gl_out_assignments:
             if getattr(assignment, "operator", None) != "=":
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out outputs require simple assignment"
                 )
             if not self.is_slang_hull_output_index(index, param_list):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out writes must target "
                     "gl_out[gl_InvocationID] or the SV_OutputControlPointID parameter"
                 )
 
         for index in self.slang_hull_output_access_indices(body_statements):
             if not self.is_slang_hull_output_index(index, param_list):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out accesses must target "
                     "gl_out[gl_InvocationID] or the SV_OutputControlPointID parameter"
                 )
@@ -6739,7 +6740,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 and node.name == "gl_out"
                 and id(node) not in indexed_identifier_ids
             ):
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out must be indexed as gl_out[gl_InvocationID]"
                 )
 
@@ -6760,7 +6761,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 output_patch_param, output_type_name = output_patch_params[0]
                 removed_param_names.add(output_patch_param.name)
             else:
-                raise ValueError(
+                raise SlangRefusal(
                     "Slang hull stage gl_out requires a non-void return type or "
                     "exactly one explicit OutputPatch<..., N> parameter"
                 )
@@ -7190,7 +7191,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             return {"gl_in": patch_param.name}
 
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_stage} stage gl_in requires exactly one explicit "
             f"{patch_type}<..., N> parameter"
         )
@@ -7278,7 +7279,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             base_type not in self.user_struct_names
             and base_type not in allowed_builtin_types
         ):
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang ray {role} parameter '{parameter.name}' must use a "
                 "user-defined struct type"
             )
@@ -7296,7 +7297,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
         for role, role_params in role_parameters.items():
             if len(role_params) > 1:
-                raise ValueError(
+                raise SlangRefusal(
                     f"Slang {shader_type} stage must declare at most one "
                     f"{role} parameter"
                 )
@@ -7306,7 +7307,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                     and role in {"payload", "callable_data"}
                     and self.is_slang_stage_local_interface_parameter(role_params[0])
                 ):
-                    raise ValueError(
+                    raise SlangRefusal(
                         f"Slang {shader_type} stage cannot use {role} parameter "
                         f"'{role_params[0].name}'"
                     )
@@ -7546,7 +7547,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if self.slang_expression_is_lvalue(argument):
             return
         actual_type = f"{base_type}{array_suffix}"
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_type} {operation} {role} argument must be "
             f"an lvalue, got {actual_type}"
         )
@@ -7570,7 +7571,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if self.slang_expression_is_lvalue(operand):
             return
         actual_type = f"{base_type}{array_suffix}"
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_type} {operation} {role} argument must take the "
             f"address of an lvalue, got {actual_type}"
         )
@@ -7593,7 +7594,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
         if array_suffix or base_type != expected_type:
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {operation} {role} argument must be "
                 f"{expected_type}, got {actual_type}"
             )
@@ -7608,7 +7609,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
         if array_suffix or base_type not in {"int", "uint"}:
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {operation} {role} argument must be "
                 f"scalar int or uint, got {actual_type}"
             )
@@ -7623,7 +7624,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
         if array_suffix or base_type not in {"float", "double"}:
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {operation} {role} argument must be "
                 f"scalar floating, got {actual_type}"
             )
@@ -7642,7 +7643,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             and base_type not in allowed_builtin_types
         ):
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {operation} {role} argument must use a "
                 f"user-defined struct type, got {actual_type}"
             )
@@ -7660,7 +7661,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         expected_label = " or ".join(sorted(self.slang_callable_data_parameter_types))
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_type} CallShader callable data argument type "
             f"{base_type} must match callable data parameter type {expected_label}"
         )
@@ -7678,7 +7679,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         expected_label = " or ".join(sorted(self.slang_ray_payload_parameter_types))
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_type} TraceRay payload argument type {base_type} "
             f"must match ray payload parameter type {expected_label}"
         )
@@ -7696,7 +7697,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         expected_label = " or ".join(sorted(self.slang_hit_attribute_parameter_types))
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang {shader_type} ReportHit hit attribute argument type {base_type} "
             f"must match hit attribute parameter type {expected_label}"
         )
@@ -7818,7 +7819,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             actual_type = f"{actual_base}{actual_suffix}"
             expected_label = self.convert_type(expected_type)
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {helper_name} {role} "
                 f"argument type {actual_type} must match parameter type "
                 f"{expected_label}"
@@ -7867,7 +7868,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                     continue
                 if shader_stage not in allowed_stages[operation]:
                     valid_stages = ", ".join(sorted(allowed_stages[operation]))
-                    raise ValueError(
+                    raise SlangRefusal(
                         f"Slang {shader_type} stage cannot call {operation}; "
                         f"{operation} is only valid in: {valid_stages}"
                     )
@@ -7876,7 +7877,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                     expected = " or ".join(
                         str(count) for count in sorted(expected_counts)
                     )
-                    raise ValueError(
+                    raise SlangRefusal(
                         f"Slang {shader_type} {operation} requires {expected} "
                         f"argument(s), got {len(args)}"
                     )
@@ -8129,7 +8130,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             if self.is_slang_ray_query_receiver_type(base_type, array_suffix):
                 return
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
                 f"RayQuery, got {actual_type}"
             )
@@ -8141,13 +8142,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
         if not self.is_slang_ray_query_receiver_type(base_type, array_suffix):
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
                 f"RayQuery, got {actual_type}"
             )
         if not self.slang_expression_is_lvalue(query_expr):
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
                 f"RayQuery lvalue, got {actual_type}"
             )
@@ -8164,7 +8165,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         expected_counts = expected_arg_counts.get(operation, {0})
         if len(args) not in expected_counts:
             expected = " or ".join(str(count) for count in sorted(expected_counts))
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} RayQuery.{operation} requires {expected} "
                 f"argument(s), got {len(args)}"
             )
@@ -8504,14 +8505,14 @@ class SlangCodeGen(LoweringRefusalMixin):
             index = self.literal_int_value(getattr(target, "index", None))
             if array_name == "gl_FragData":
                 if index is None or index < 0:
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Slang fragment output gl_FragData requires a "
                         "non-negative literal render-target index"
                     )
                 return f"gl_FragColor{index}"
             if array_name == "gl_SampleMask":
                 if index != 0:
-                    raise ValueError(
+                    raise SlangRefusal(
                         "Slang fragment output gl_SampleMask requires literal "
                         "index 0"
                     )
@@ -10328,12 +10329,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         if intrinsic is None:
             return None
         if args:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang synchronization builtin '{callee}' requires 0 "
                 f"argument(s), got {len(args)}"
             )
         if not statement_context:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang synchronization builtin '{callee}' is statement-only "
                 "and cannot be used as a value"
             )
@@ -10351,13 +10352,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.validate_slang_geometry_stream_call(member, args, receiver_type)
         shader_stage = self.slang_shader_stage_name(self.current_shader_type)
         if self.current_shader_type is not None and shader_stage != "geometry":
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {self.current_shader_type} stage cannot call geometry "
                 f"stream {member}; geometry stream methods are only valid in "
                 "geometry stages"
             )
         if not statement_context:
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang geometry stream {member} is statement-only and cannot "
                 "be used as a value"
             )
@@ -10694,12 +10695,12 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         shader_stage = self.slang_shader_stage_name(shader_type)
         if operation == "SetMeshOutputCounts" and shader_stage != "mesh":
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} stage cannot call "
                 "SetMeshOutputCounts; SetMeshOutputCounts is only valid in mesh stages"
             )
         if operation == "DispatchMesh" and shader_stage != "amplification":
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} stage cannot call DispatchMesh; "
                 "DispatchMesh is only valid in amplification/task/object stages"
             )
@@ -10871,7 +10872,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             actual_type = f"{actual_base}{actual_suffix}"
             expected_label = self.convert_type(expected_type)
-            raise ValueError(
+            raise SlangRefusal(
                 f"Slang {shader_type} {helper_name} {role} "
                 f"argument type {actual_type} must match parameter type "
                 f"{expected_label}"
@@ -10890,7 +10891,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             # A task stage built alone: the mesh stage it launches is another program.
             return
         if not payload_types:
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang DispatchMesh payload argument requires a mesh stage "
                 "@mesh_payload parameter"
             )
@@ -10903,13 +10904,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         if payload_type in payload_types:
             if self.slang_expression_is_lvalue(payload_argument):
                 return
-            raise ValueError(
+            raise SlangRefusal(
                 "Slang DispatchMesh payload argument must be an lvalue, "
                 f"got {payload_type}"
             )
 
         expected_label = self.slang_dispatch_mesh_payload_type_label(payload_types)
-        raise ValueError(
+        raise SlangRefusal(
             f"Slang DispatchMesh payload argument type {payload_type} must match "
             f"mesh payload type {expected_label}"
         )

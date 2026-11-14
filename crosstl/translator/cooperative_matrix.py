@@ -4,6 +4,13 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional, Tuple
 
+from .refusals import (
+    CrossGLRefusal,
+    TranslatorArgumentError,
+    TranslatorIndexError,
+    TranslatorKeyError,
+)
+
 FragmentCoordinate = Tuple[int, int]
 LaneCoordinates = Tuple[FragmentCoordinate, ...]
 FragmentCoordinates = Tuple[LaneCoordinates, ...]
@@ -41,12 +48,12 @@ class CooperativeMatrixFragmentMapping:
 
     def __post_init__(self):
         if not isinstance(self.name, str):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "Cooperative-matrix fragment mapping name must be a string"
             )
         name = self.name.strip()
         if not name:
-            raise ValueError(
+            raise CrossGLRefusal(
                 "Cooperative-matrix fragment mapping name must be non-empty"
             )
         object.__setattr__(self, "name", name)
@@ -54,18 +61,18 @@ class CooperativeMatrixFragmentMapping:
         for field_name in ("rows", "columns", "subgroup_size"):
             value = getattr(self, field_name)
             if not _is_positive_integer(value):
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Cooperative-matrix fragment mapping {field_name} must be "
                     f"a positive integer, got {value!r}"
                 )
 
         if not isinstance(self.description, str):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "Cooperative-matrix fragment mapping description must be a string"
             )
 
         if not isinstance(self.lane_coordinates, (list, tuple)):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' lane_coordinates "
                 "must be a sequence"
             )
@@ -73,14 +80,14 @@ class CooperativeMatrixFragmentMapping:
         normalized_lanes = []
         for lane_index, lane in enumerate(self.lane_coordinates):
             if not isinstance(lane, (list, tuple)):
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"Cooperative-matrix fragment mapping '{name}' lane "
                     f"{lane_index} must be a coordinate sequence"
                 )
             normalized_lane = []
             for element_index, coordinate in enumerate(lane):
                 if not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2:
-                    raise ValueError(
+                    raise CrossGLRefusal(
                         f"Cooperative-matrix fragment mapping '{name}' lane "
                         f"{lane_index} element {element_index} must be a "
                         "(row, column) pair"
@@ -90,7 +97,7 @@ class CooperativeMatrixFragmentMapping:
                     isinstance(value, bool) or not isinstance(value, int)
                     for value in (row, column)
                 ):
-                    raise ValueError(
+                    raise CrossGLRefusal(
                         f"Cooperative-matrix fragment mapping '{name}' lane "
                         f"{lane_index} element {element_index} coordinates must "
                         "be integers"
@@ -101,20 +108,20 @@ class CooperativeMatrixFragmentMapping:
         object.__setattr__(self, "lane_coordinates", coordinates)
 
         if len(coordinates) != self.subgroup_size:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' declares "
                 f"subgroup_size={self.subgroup_size}, but provides "
                 f"{len(coordinates)} lanes"
             )
         if not coordinates or not coordinates[0]:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' must provide "
                 "at least one coordinate per lane"
             )
 
         elements_per_lane = len(coordinates[0])
         if any(len(lane) != elements_per_lane for lane in coordinates):
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' must provide the "
                 "same number of coordinates for every lane"
             )
@@ -122,7 +129,7 @@ class CooperativeMatrixFragmentMapping:
         flattened = [coordinate for lane in coordinates for coordinate in lane]
         expected_count = self.rows * self.columns
         if len(flattened) != expected_count:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' provides "
                 f"{len(flattened)} coordinates for a {self.rows}x{self.columns} "
                 f"matrix with {expected_count} elements"
@@ -138,7 +145,7 @@ class CooperativeMatrixFragmentMapping:
             }
         )
         if out_of_range:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' contains "
                 f"out-of-range coordinates: {out_of_range!r}"
             )
@@ -148,7 +155,7 @@ class CooperativeMatrixFragmentMapping:
             coordinate for coordinate, count in coordinate_counts.items() if count > 1
         )
         if duplicates:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' contains "
                 f"duplicate coordinates: {duplicates!r}"
             )
@@ -159,7 +166,7 @@ class CooperativeMatrixFragmentMapping:
         }
         missing = sorted(expected_coordinates - unique_coordinates)
         if missing:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"Cooperative-matrix fragment mapping '{name}' omits "
                 f"coordinates: {missing!r}"
             )
@@ -181,13 +188,13 @@ class CooperativeMatrixFragmentMapping:
     def coordinate(self, lane: int, element: int) -> FragmentCoordinate:
         """Return the logical coordinate owned by one lane-local element."""
         if isinstance(lane, bool) or not isinstance(lane, int):
-            raise TypeError("lane must be an integer")
+            raise TranslatorArgumentError("lane must be an integer")
         if isinstance(element, bool) or not isinstance(element, int):
-            raise TypeError("element must be an integer")
+            raise TranslatorArgumentError("element must be an integer")
         if lane < 0 or lane >= self.subgroup_size:
-            raise IndexError(f"lane index out of range: {lane}")
+            raise TranslatorIndexError(f"lane index out of range: {lane}")
         if element < 0 or element >= self.elements_per_lane:
-            raise IndexError(f"element index out of range: {element}")
+            raise TranslatorIndexError(f"element index out of range: {element}")
         return self.lane_coordinates[lane][element]
 
     def owner(self, row: int, column: int) -> Tuple[int, int]:
@@ -196,10 +203,10 @@ class CooperativeMatrixFragmentMapping:
             isinstance(value, bool) or not isinstance(value, int)
             for value in (row, column)
         ):
-            raise TypeError("row and column must be integers")
+            raise TranslatorArgumentError("row and column must be integers")
         coordinate = (row, column)
         if not (0 <= row < self.rows and 0 <= column < self.columns):
-            raise KeyError(coordinate)
+            raise TranslatorKeyError(coordinate)
         return self._owners[row * self.columns + column]
 
 
@@ -213,9 +220,11 @@ def register_cooperative_matrix_fragment_mapping(
 ) -> CooperativeMatrixFragmentMapping:
     """Register an exact mapping contract for parser and target lookup."""
     if not isinstance(mapping, CooperativeMatrixFragmentMapping):
-        raise TypeError("mapping must be a CooperativeMatrixFragmentMapping instance")
+        raise TranslatorArgumentError(
+            "mapping must be a CooperativeMatrixFragmentMapping instance"
+        )
     if not isinstance(overwrite, bool):
-        raise TypeError("overwrite must be a boolean")
+        raise TranslatorArgumentError("overwrite must be a boolean")
     key = (
         mapping.name,
         mapping.rows,
@@ -224,7 +233,7 @@ def register_cooperative_matrix_fragment_mapping(
         mapping.elements_per_lane,
     )
     if key in _FRAGMENT_MAPPINGS and not overwrite:
-        raise ValueError(
+        raise CrossGLRefusal(
             "Cooperative-matrix fragment mapping is already registered for "
             f"{mapping.name!r} with contract "
             f"{mapping.rows}x{mapping.columns}/"

@@ -33,6 +33,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
 from .metal_reference_argument_aliasing import metal_reference_argument_aliases
@@ -251,7 +252,7 @@ class MetalHlslFunctionMixin:
                     )
                     if space not in {None, "thread"}:
                         # A thread temporary cannot bind a reference in another address space.
-                        raise ValueError(
+                        raise MetalRefusal(
                             f"Metal cannot bind this argument to the {space} reference "
                             f"parameter of '{self.function_call_name(expr)}': it is not "
                             f"whole {space} storage"
@@ -274,7 +275,7 @@ class MetalHlslFunctionMixin:
                             ]
                         )
                     if not self.metal_expression_is_side_effect_free(argument):
-                        raise ValueError(
+                        raise MetalRefusal(
                             "Metal reference argument of "
                             f"'{self.function_call_name(expr)}' must be free of "
                             "side effects to be copied in and out"
@@ -291,7 +292,7 @@ class MetalHlslFunctionMixin:
         for expression in self.metal_statement_evaluated_expressions(stmt):
             visit(expression, False)
         if writebacks and isinstance(stmt, (ReturnNode, BackendReturnNode)):
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal cannot copy a reference argument back after a return "
                 "statement; assign the call result to a local first"
             )

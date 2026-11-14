@@ -808,6 +808,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 # Written in its block by generate_function_body.
                 continue
             if isinstance(node, StructNode):
+                self.refuse_struct_subscripts(node)
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
                     code += self.matrix_layout_attributes(member, 2)
@@ -1536,6 +1537,21 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
 
+    def refuse_struct_subscripts(self, node):
+        """Refuse a ``__subscript`` declaration: ``value[i, j]`` would then index a structure CrossGL cannot index."""
+        subscripts = [
+            method
+            for method in getattr(node, "methods", None) or []
+            if getattr(method, "is_subscript", False)
+        ]
+        if subscripts:
+            raise SlangImportRefused(
+                [
+                    f"the __subscript of Slang structure '{node.name}' has no CrossGL form, so an index of a "
+                    f"'{node.name}' value cannot be written"
+                ]
+            )
+
     def generate_block_struct(self, node, indent):
         """Write a structure declared in a function body as a CrossGL block-scoped structure."""
         unsupported = [
@@ -1566,17 +1582,43 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         # The semicolon keeps a following statement from reading as a declarator.
         return code + f"{pad}}};\n"
 
+    SCALAR_LITERAL_VECTOR_PREFIXES = (
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)"), "ivec"),
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)[uU]"), "uvec"),
+        (re.compile(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?"), "vec"),
+        (re.compile(r"true|false"), "bvec"),
+    )
+
+    def scalar_literal_swizzle(self, literal, member):
+        """``0.xx`` swizzles the scalar literal 0 into a two-component vector, written ``ivec2(0)`` in CrossGL.
+
+        HLSL, which Slang follows, lets a scalar take a swizzle of ``x`` or ``r`` components; CrossGL reads
+        ``0.xx`` as the float ``0.`` followed by a name.
+        """
+        if not isinstance(member, str) or not re.fullmatch(r"x{1,4}|r{1,4}", member):
+            return None
+        for pattern, prefix in self.SCALAR_LITERAL_VECTOR_PREFIXES:
+            if pattern.fullmatch(str(literal)):
+                if len(member) == 1:
+                    return str(literal)
+                return f"{prefix}{len(member)}({literal})"
+        return None
+
     def generate_statement_label(self, stmt, indent=0):
-        label = getattr(stmt, "label", None)
-        if not label:
-            return ""
-        return "    " * indent + f"{self.format_label_identifier(label)}:\n"
+        # Slang has no goto, so a label is only the target of a labeled break or continue, which
+        # generate_jump_statement refuses; a label no jump names has no effect and is not written.
+        return ""
 
     def generate_jump_statement(self, keyword, node):
         target_label = getattr(node, "target_label", None)
         if not target_label:
             return f"{keyword};"
-        return f"{keyword} {self.format_label_identifier(target_label)};"
+        raise SlangImportRefused(
+            [
+                f"'{keyword} {target_label}' leaves an enclosing labeled statement, and CrossGL has no "
+                "labeled break or continue"
+            ]
+        )
 
     def format_label_identifier(self, label):
         return self.sanitize_crossgl_identifier(str(label), set())
@@ -1668,10 +1710,18 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
 
         code = f"switch ({expression}) {{\n"
         unlabeled_statements = getattr(node, "unlabeled_statements", []) or []
-        if unlabeled_statements:
-            code += self.generate_function_body(
-                unlabeled_statements, indent + 1, is_main, deferred_scopes
+        if any(
+            isinstance(statement, VariableNode) for statement in unlabeled_statements
+        ):
+            # A declaration there is in scope in the cases while its initializer never runs; CrossGL has no
+            # statement before a switch's first label to hold it.
+            raise SlangImportRefused(
+                [
+                    "a declaration before the first case label of a switch has no CrossGL form"
+                ]
             )
+        # The other statements before the first label never run (C11 6.8.4.2/4, which Slang and HLSL follow), so
+        # no statement is written for them.
         ordered_cases = getattr(node, "ordered_cases", None)
         if ordered_cases is not None:
             for case in ordered_cases:
@@ -2288,6 +2338,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             if texel_swizzle is not None:
                 return texel_swizzle
             obj = self.generate_expression(expr.object, is_main)
+            literal_swizzle = self.scalar_literal_swizzle(obj, expr.member)
+            if literal_swizzle is not None:
+                return literal_swizzle
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
             ):

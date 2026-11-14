@@ -18946,29 +18946,34 @@ def test_lambda_call_materializes_local_mojo_functions_for_typed_parameters():
     assert "lambda(" not in generated_code
 
 
-def test_lambda_call_preserves_unsupported_mojo_lambda_shapes():
-    code = """
-    shader LambdaFallbackShader {
-        compute {
-            void main() {
-                let mapped = map(values, lambda(x, (x + 1)));
-                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
-                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
-                let qualified = map(values, lambda(const int value, value));
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "lambda_expression",
+    [
+        "lambda(x, (x + 1))",
+        "lambda(Result<i32, i32> value, { return value; })",
+        "lambda((i32, i32) pair, { return pair; })",
+        "lambda(const int value, value)",
+    ],
+)
+def test_lambda_call_refuses_unmaterializable_mojo_lambda_shapes(lambda_expression):
+    code = f"""
+    shader LambdaFallbackShader {{
+        compute {{
+            void main() {{
+                let mapped = map(values, {lambda_expression});
+            }}
+        }}
+    }}
     """
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(ast)
 
-    assert "lambda(x, (x + 1))" in generated_code
-    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
-    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
-    assert "lambda(const int value, value)" in generated_code
-    assert "_crossgl_lambda_" not in generated_code
+    assert "lambda whose parameter list or body cannot be materialized" in str(
+        refused.value
+    )
 
 
 def test_lambda_call_materializes_before_mojo_assignment_statement():
@@ -19705,7 +19710,7 @@ def test_frac_scalar_builtin_alias_lowers_to_fract_helper():
     assert "frac(" not in generated_code
 
 
-def test_saturate_integer_input_is_left_unmapped():
+def test_saturate_integer_input_clamps_to_zero_and_one():
     code = """
     shader main {
         compute {
@@ -19721,8 +19726,9 @@ def test_saturate_integer_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: Int32 = saturate(n)" in generated_code
+    assert "var x: Int32 = (n).clamp(0, 1)" in generated_code
     assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
@@ -19859,7 +19865,7 @@ def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding
     assert "saturate(" not in generated_code
 
 
-def test_saturate_integer_matrix_input_is_left_unmapped():
+def test_saturate_integer_matrix_input_is_refused():
     code = """
     shader main {
         compute {
@@ -19871,11 +19877,10 @@ def test_saturate_integer_matrix_input_is_left_unmapped():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(code)))
 
-    assert "var x: CrossGLMatrixI32C2R2 = saturate(n)" in generated_code
-    assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate of an integer matrix" in str(refused.value)
 
 
 def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
@@ -19911,7 +19916,7 @@ fn main():
     assert "[1.0, 0.0]" in result.stdout
 
 
-def test_saturate_integer_vector_input_is_left_unmapped():
+def test_saturate_integer_vector_input_clamps_each_component():
     code = """
     shader main {
         compute {
@@ -19927,9 +19932,9 @@ def test_saturate_integer_vector_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: SIMD[DType.int32, 2] = saturate(n)" in generated_code
+    assert "var x: SIMD[DType.int32, 2] = (n).clamp(0, 1)" in generated_code
     assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():

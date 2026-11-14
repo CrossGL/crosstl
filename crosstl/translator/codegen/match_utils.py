@@ -7,6 +7,7 @@ from ..ast import (
     StructPatternNode,
     WildcardPatternNode,
 )
+from ..refusals import TargetRefusal
 from .array_utils import format_c_style_array_declaration
 from .enum_utils import enum_variant_fields_for_type
 
@@ -668,7 +669,7 @@ def lower_match_pattern(generator, pattern, expression, expression_type, target_
             target_name,
         )
 
-    raise ValueError(
+    raise TargetRefusal(
         f"Unsupported match arm for {target_name} codegen; only literal, "
         "wildcard, identifier binding, and plain struct patterns are supported"
     )
@@ -693,7 +694,7 @@ def lower_identifier_pattern(
         return condition, [], {}
 
     if name == "..":
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; rest patterns "
             "are not supported"
         )
@@ -712,7 +713,7 @@ def enum_variant_reference(generator, path, expression_type, target_name):
     subject_type = base_type_name(type_name_string(generator, expression_type))
     enum_name, _variant_name = split_enum_path(path)
     if subject_type and enum_name != subject_type:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum path "
             f"{path} cannot match expression type {subject_type}"
         )
@@ -721,7 +722,7 @@ def enum_variant_reference(generator, path, expression_type, target_name):
     if path in constants:
         return constants[path]
 
-    raise ValueError(
+    raise TargetRefusal(
         f"Unsupported match arm for {target_name} codegen; enum path "
         "patterns are not supported"
     )
@@ -766,7 +767,7 @@ def lower_constructor_pattern(
             target_name,
         )
 
-    raise ValueError(
+    raise TargetRefusal(
         f"Unsupported match arm for {target_name} codegen; constructor patterns "
         "are not supported"
     )
@@ -785,7 +786,7 @@ def lower_struct_pattern(generator, pattern, expression, expression_type, target
 
     subject_type = type_name_string(generator, expression_type) or pattern_type
     if subject_type and base_type_name(subject_type) != base_type_name(pattern_type):
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; struct pattern "
             f"{pattern_type} cannot match expression type {subject_type}"
         )
@@ -823,7 +824,7 @@ def lower_enum_struct_pattern(
     enum_name, variant_name = split_enum_path(pattern_type)
     subject_type = base_type_name(type_name_string(generator, expression_type))
     if subject_type and enum_name != subject_type:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum struct "
             f"pattern {pattern_type} cannot match expression type {subject_type}"
         )
@@ -835,7 +836,7 @@ def lower_enum_struct_pattern(
         expression_type,
     )
     if variant_fields is None:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum struct "
             "patterns are not supported"
         )
@@ -852,7 +853,7 @@ def lower_enum_struct_pattern(
     for field_name, field_pattern in getattr(pattern, "field_patterns", {}).items():
         field_type = variant_fields.get(field_name)
         if field_type is None:
-            raise ValueError(
+            raise TargetRefusal(
                 f"Unsupported match arm for {target_name} codegen; enum struct "
                 f"pattern {pattern_type} has no field '{field_name}'"
             )
@@ -885,7 +886,7 @@ def lower_enum_constructor_pattern(
     enum_name, variant_name = split_enum_path(pattern_type)
     subject_type = base_type_name(type_name_string(generator, expression_type))
     if subject_type and enum_name != subject_type:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum constructor "
             f"pattern {pattern_type} cannot match expression type {subject_type}"
         )
@@ -897,7 +898,7 @@ def lower_enum_constructor_pattern(
         expression_type,
     )
     if variant_fields is None:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum constructor "
             "patterns are not supported"
         )
@@ -905,7 +906,7 @@ def lower_enum_constructor_pattern(
     field_items = list(variant_fields.items())
     arguments = getattr(pattern, "arguments", []) or []
     if len(arguments) != len(field_items):
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; enum constructor "
             f"pattern {pattern_type} expects {len(field_items)} arguments"
         )
@@ -969,7 +970,7 @@ def lower_struct_field_pattern(
             expression_type,
             target_name,
         )
-    raise ValueError(
+    raise TargetRefusal(
         f"Unsupported match arm for {target_name} codegen; struct fields may "
         "only use literal, wildcard, identifier binding, or nested struct patterns"
     )
@@ -1071,7 +1072,7 @@ def binding_declaration(generator, binding_type, name, expression):
 def require_pattern_binding_type(generator, binding_type, name, target_name):
     binding_type = type_name_string(generator, binding_type)
     if not binding_type:
-        raise ValueError(
+        raise TargetRefusal(
             f"Unsupported match arm for {target_name} codegen; cannot infer "
             f"type for binding pattern '{name}'"
         )
@@ -1172,7 +1173,7 @@ def match_expression_missing_value_assignment(
             indent,
             target_name,
         )
-    raise ValueError(
+    raise TargetRefusal(
         f"Unsupported match expression for {target_name} codegen; arms must "
         "end in a value expression"
     )

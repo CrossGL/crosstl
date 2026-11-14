@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from ..ast import IdentifierNode
 from ..ray_query_vocabulary import glsl_ray_query_constant, ray_query_type_flags
+from ..refusals import OpenGLRefusal
 
 RAY_DESC_DECLARATION = (
     "struct RayDesc {\n"
@@ -55,7 +56,7 @@ def glsl_ray_query_initialize_flags(codegen, query, flags_text: str) -> str:
     type_name = codegen.type_name_string(codegen.expression_result_type(query))
     type_flags = ray_query_type_flags(type_name) if type_name else ()
     if type_flags is None:
-        raise ValueError(
+        raise OpenGLRefusal(
             f"GLSL ray query type '{type_name}' has template flags that are not ray flags"
         )
     spelled = [glsl_ray_query_constant(flag) or flag for flag in type_flags]

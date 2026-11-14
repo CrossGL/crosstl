@@ -3,6 +3,8 @@
 import re
 from typing import List
 
+from crosstl.translator.refusals import HipSyntaxError
+
 from ..CUDA.local_memory_spaces import refuse_local_memory_space
 from .HipAst import (
     ArrayAccessNode,
@@ -59,6 +61,9 @@ class HipProgramNode(ASTNode):
 
 class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
+
+    # The typed syntax error of the source language; the OpenCL parser, which extends this one, names its own.
+    syntax_error = HipSyntaxError
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
     FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
@@ -598,7 +603,7 @@ class HipParser:
             if self.current_token
             else "at end of input"
         )
-        raise SyntaxError(f"Parse error {token_info}: {message}")
+        raise self.syntax_error(f"Parse error {token_info}: {message}")
 
     def advance(self):
         if self.pos < len(self.tokens) - 1:
@@ -755,9 +760,12 @@ class HipParser:
             "xor": "^",
             "xor_eq": "^=",
         }
-        return alternative_operators.get(
-            self.current_token.value, self.current_token.value
-        )
+        value = self.current_token.value
+        # An ISO C++ alternative token (``and``, ``not_eq``) is spelled as its operator; any other operator token
+        # is already the operator.
+        if value in alternative_operators:
+            return alternative_operators[value]
+        return value
 
     def is_declarator_name_token(self):
         return self.match(*self.DECLARATOR_NAME_TOKENS)
@@ -1271,7 +1279,7 @@ class HipParser:
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
 
-        raise SyntaxError(
+        raise self.syntax_error(
             f"Expected declaration after template prefix, got {self.current_token.type}"
         )
 
@@ -3162,12 +3170,12 @@ class HipParser:
 
         while depth > 0:
             if self.current_token is None:
-                raise SyntaxError("Unterminated decltype type")
+                raise self.syntax_error("Unterminated decltype type")
 
             token_type = self.current_token.type
             token_value = self.current_token.value
             if token_type == "EOF":
-                raise SyntaxError("Unterminated decltype type")
+                raise self.syntax_error("Unterminated decltype type")
             if token_type == "LPAREN":
                 depth += 1
                 parts.append(token_value)
@@ -3663,7 +3671,7 @@ class HipParser:
                 ordered_cases.append(case)
             elif self.match("DEFAULT"):
                 if seen_default:
-                    raise SyntaxError("duplicate default label in switch")
+                    raise self.syntax_error("duplicate default label in switch")
                 seen_default = True
                 self.advance()
                 self.consume("COLON")
@@ -4294,6 +4302,11 @@ class HipParser:
         depth = 1
 
         while depth > 0:
+            if self.current_token is None or self.current_token.type == "EOF":
+                # The input ended inside the argument list.
+                raise self.syntax_error(
+                    "Unterminated template argument list: expected '>'"
+                )
             token_type = self.current_token.type
             token_value = self.current_token.value
             if token_type == "LT" and self.is_nested_template_lt_at_pos(self.pos):
@@ -4881,7 +4894,7 @@ class HipParser:
                 continue
             self.advance()
 
-        raise SyntaxError("Unterminated lambda block body")
+        raise self.syntax_error("Unterminated lambda block body")
 
     def consume_balanced_lambda_tokens(self, open_token, close_token):
         depth = 0
@@ -4897,7 +4910,7 @@ class HipParser:
                 continue
             self.advance()
 
-        raise SyntaxError(f"Unterminated lambda {open_token}")
+        raise self.syntax_error(f"Unterminated lambda {open_token}")
 
     def format_lambda_raw_tokens(self, tokens):
         text = ""

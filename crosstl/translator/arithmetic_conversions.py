@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import FrozenSet, Optional, Tuple
 
+from .refusals import CrossGLRefusal, TranslationRefusal
+
 
 class ArithmeticScalarKind(str, Enum):
     """Scalar categories used by source arithmetic conversion rules."""
@@ -49,8 +51,10 @@ class ArithmeticConversion:
     result_type: str
 
 
-class UnrepresentableArithmeticConversion(ValueError):
+class UnrepresentableArithmeticConversion(TranslationRefusal):
     """Raised when recognized numeric operands have no faithful target form."""
+
+    code = "project.translate.arithmetic-conversion-unrepresentable"
 
     def __init__(self, reason: str, attempted_common_type: Optional[str]):
         super().__init__(reason)
@@ -266,7 +270,7 @@ def arithmetic_type_name(kind: ArithmeticScalarKind, bits: int, lanes: int = 1) 
         (ArithmeticScalarKind.FLOATING, 64): "double",
     }.get((kind, bits))
     if scalar_name is None:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Unsupported arithmetic scalar kind/width: {kind.value}/{bits}"
         )
     if lanes == 1:

@@ -5,6 +5,7 @@ import re
 from collections import OrderedDict
 from pathlib import Path
 
+from .refusals import CrossGLSyntaxError
 from .token_dispatch import alternation_dispatch
 
 TOKENS = OrderedDict(
@@ -365,15 +366,21 @@ def _safe_eval_preprocessor_expression(expression):
     try:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError as exc:
-        raise SyntaxError(f"Unsupported preprocessor expression: {expression}") from exc
+        raise CrossGLSyntaxError(
+            f"Unsupported preprocessor expression: {expression}"
+        ) from exc
 
     for node in ast.walk(tree):
         if not isinstance(node, SAFE_PREPROCESSOR_AST_NODES):
-            raise SyntaxError(f"Unsupported preprocessor expression: {expression}")
+            raise CrossGLSyntaxError(
+                f"Unsupported preprocessor expression: {expression}"
+            )
         if isinstance(node, ast.Constant) and not isinstance(
             node.value, (bool, int, float, str)
         ):
-            raise SyntaxError(f"Unsupported preprocessor expression: {expression}")
+            raise CrossGLSyntaxError(
+                f"Unsupported preprocessor expression: {expression}"
+            )
     return bool(
         eval(compile(tree, "<crosstl-preprocessor>", "eval"), {"__builtins__": {}}, {})
     )
@@ -549,10 +556,10 @@ def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=N
 
             if name == "elif":
                 if not stack:
-                    raise SyntaxError(f"#elif without #if at line {line_number}")
+                    raise CrossGLSyntaxError(f"#elif without #if at line {line_number}")
                 frame = stack[-1]
                 if frame["else_seen"]:
-                    raise SyntaxError(f"#elif after #else at line {line_number}")
+                    raise CrossGLSyntaxError(f"#elif after #else at line {line_number}")
                 if not frame["parent_active"] or frame["branch_taken"]:
                     frame["active"] = False
                 else:
@@ -563,10 +570,10 @@ def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=N
 
             if name == "else":
                 if not stack:
-                    raise SyntaxError(f"#else without #if at line {line_number}")
+                    raise CrossGLSyntaxError(f"#else without #if at line {line_number}")
                 frame = stack[-1]
                 if frame["else_seen"]:
-                    raise SyntaxError(f"duplicate #else at line {line_number}")
+                    raise CrossGLSyntaxError(f"duplicate #else at line {line_number}")
                 frame["active"] = frame["parent_active"] and not frame["branch_taken"]
                 frame["branch_taken"] = frame["branch_taken"] or frame["active"]
                 frame["else_seen"] = True
@@ -574,7 +581,9 @@ def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=N
 
             if name == "endif":
                 if not stack:
-                    raise SyntaxError(f"#endif without #if at line {line_number}")
+                    raise CrossGLSyntaxError(
+                        f"#endif without #if at line {line_number}"
+                    )
                 stack.pop()
                 continue
 
@@ -613,7 +622,7 @@ def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=N
                     continue
                 if resolved in include_stack:
                     include_chain = " -> ".join(str(path) for path in include_stack)
-                    raise SyntaxError(
+                    raise CrossGLSyntaxError(
                         f"Cyclic #include at line {line_number}: "
                         f"{include_chain} -> {resolved}"
                     )
@@ -630,7 +639,7 @@ def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=N
             output.append(line)
 
         if stack:
-            raise SyntaxError("Unterminated preprocessor conditional")
+            raise CrossGLSyntaxError("Unterminated preprocessor conditional")
         return "\n".join(output)
 
     current_file = None
@@ -917,7 +926,7 @@ class Lexer:
 
                 error_pointer = " " * (col_num - 1) + "^"
 
-                raise SyntaxError(
+                raise CrossGLSyntaxError(
                     f"Illegal character '{bad_char}' at line {line_num}, column {col_num}\n"
                     f"{line_content}\n{error_pointer}"
                 )

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from ..ast import FunctionCallNode, IdentifierNode, MemberAccessNode, RayQueryOpNode
 from ..ray_query_vocabulary import hlsl_ray_query_constant, ray_query_type_flags
+from ..refusals import DirectXRefusal
 
 RAY_DESC_HELPER = "__crossgl_make_ray_desc"
 
@@ -41,7 +42,7 @@ def hlsl_ray_query_type(type_name: str) -> str | None:
         return None
     flags = ray_query_type_flags(text)
     if flags is None:
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX RayQuery type '{type_name}' has template flags that are not ray flags"
         )
     if not flags:

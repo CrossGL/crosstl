@@ -38,6 +38,8 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import HipRefusal
+from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
 )
@@ -128,6 +130,11 @@ from .gpu_device_globals import (
     constant_in_device_memory,
     file_scope_placement,
 )
+from .gpu_subgroup_builtins import (
+    reserved_builtin_reason,
+    subgroup_builtin_expression,
+    warp_lane_index_expression,
+)
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
 from .lowering_refusals import LoweringRefusalMixin
@@ -157,6 +164,15 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .written_function_names import (
+    CUDA_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
+from .written_type_names import (
+    HIP_TYPE_NAMES,
+    refuse_written_foreign_types,
+    written_type_name,
+)
 
 HIP_WAVE_OP_ARITIES = {
     "WaveGetLaneCount": 0,
@@ -282,7 +298,7 @@ HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
 
 
 def _refuse_buffer_counter(reason):
-    raise ValueError(f"HIP buffer counter: {reason}")
+    raise HipRefusal(f"HIP buffer counter: {reason}")
 
 
 class UnsupportedHIPAstNodeError(ValueError):
@@ -355,6 +371,10 @@ class HipCodeGen(
         "SamplerState": "sampler",
         "SamplerComparisonState": "sampler",
     }
+    # The type names the program declares, and the foreign built-in type names written so far (``None`` outside
+    # a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
 
     def __init__(self):
         """Initialize HIP type maps and per-generation visitor state."""
@@ -426,6 +446,20 @@ class HipCodeGen(
             "u64": "unsigned long long",
             "int64": "long long",
             "uint64": "unsigned long long",
+            # The other sized and minimum-precision scalar spellings of the IR (hub_types): exact widths, except
+            # that a minimum-precision type may be computed at full precision (HLSL "Minimum precision").
+            "int8": "char",
+            "uint8": "unsigned char",
+            "uchar": "unsigned char",
+            "int16": "short",
+            "uint16": "unsigned short",
+            "int32": "int",
+            "uint32": "unsigned int",
+            "ulong": "unsigned long long",
+            "float16_t": "half",
+            "min16float": "float",
+            "min16int": "int",
+            "min16uint": "unsigned int",
             "f16": "half",
             "f32": "float",
             "f64": "double",
@@ -856,7 +890,19 @@ class HipCodeGen(
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
         refuse_cooperative_matrices(node, label="HIP", target="hip")
-        return self.refusals.run(self.render_program, node)
+        return self.refusals.run(self.render_checked_program, node)
+
+    def render_checked_program(self, node):
+        """Render the program and refuse each built-in type and function of another language it still names."""
+        self.program_type_names = declared_type_names(node)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(node)
+            refuse_written_foreign_types(output, self.written_foreign_type_names, "HIP")
+            refuse_written_foreign_calls(output, CUDA_CALLABLE_FUNCTION_NAMES, "HIP")
+        finally:
+            self.written_foreign_type_names = None
+        return output
 
     def render_program(self, node: ASTNode) -> str:
         """Render complete HIP source for a CrossGL AST."""
@@ -1092,7 +1138,9 @@ class HipCodeGen(
             "ray_generation": "ray_generation",
             "ray_intersection": "intersection",
             "ray_miss": "miss",
-        }.get(stage_name, stage_name)
+        }[
+            stage_name
+        ]  # only called for hip_ray_stage_names(), which this table covers
 
     def has_geometry_stage(self, ast_node, target_stage=None):
         if not stage_matches(target_stage, "geometry"):
@@ -1483,7 +1531,7 @@ class HipCodeGen(
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(f"HIP output does not support stage type(s): {stage_list}")
+            raise HipRefusal(f"HIP output does not support stage type(s): {stage_list}")
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""
@@ -1837,7 +1885,7 @@ class HipCodeGen(
                 previous_type = emitted_stage_local_variables.get(var_name)
                 if previous_type is not None:
                     if previous_type != var_type:
-                        raise ValueError(
+                        raise HipRefusal(
                             "Conflicting HIP stage-local declaration for "
                             f"'{var_name}': {previous_type} differs from {var_type}"
                         )
@@ -2482,7 +2530,10 @@ class HipCodeGen(
             "SV_StartVertexLocation": "start_vertex_location",
             "SV_VertexID": "vertex_id",
         }
-        return generic_semantics.get(semantic_name, semantic_name)
+        if semantic_name in generic_semantics:
+            return generic_semantics[semantic_name]
+        # Only stage metadata comments record the semantic; a user semantic is recorded as written.
+        return semantic_name
 
     def hip_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -2539,12 +2590,12 @@ class HipCodeGen(
         if kind in {"position", "color"}:
             if self.is_hip_float4_type(type_name):
                 return
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "expected vec4-compatible type"
             )
         if kind == "depth" and not self.is_hip_float_scalar_type(type_name):
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "expected float type"
             )
@@ -2554,7 +2605,7 @@ class HipCodeGen(
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -2567,7 +2618,7 @@ class HipCodeGen(
         }[kind]
         if stage_name not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP {stage_name} stage; "
                 f"valid stage is {allowed}"
             )
@@ -2654,7 +2705,7 @@ class HipCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise HipRefusal(
                     f"HIP compute stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2666,7 +2717,7 @@ class HipCodeGen(
                 literal_value = self.literal_int_value(argument)
                 if literal_value is not None:
                     if literal_value <= 0:
-                        raise ValueError(
+                        raise HipRefusal(
                             f"HIP compute stage {attribute_name} {axis} "
                             f"dimension ({literal_value}) must be positive"
                         )
@@ -2690,15 +2741,15 @@ class HipCodeGen(
     def hip_geometry_maxvertexcount(self, func):
         arguments = self.hip_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("HIP geometry stage requires maxvertexcount attribute")
+            raise HipRefusal("HIP geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -2708,7 +2759,7 @@ class HipCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -2717,19 +2768,19 @@ class HipCodeGen(
     def hip_tessellation_output_control_points(self, func):
         arguments = self.hip_stage_attribute_arguments(func, "outputcontrolpoints")
         if not arguments:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage requires outputcontrolpoints "
                 "attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
@@ -2753,11 +2804,11 @@ class HipCodeGen(
         value = self.hip_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"HIP {stage_name} stage requires domain attribute")
+                raise HipRefusal(f"HIP {stage_name} stage requires domain attribute")
             return None
         canonical = self.canonical_hip_tessellation_domain(value)
         if canonical is None:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage domain '{value}' must be tri, quad, "
                 "or isoline"
             )
@@ -2776,7 +2827,7 @@ class HipCodeGen(
         }
         if normalized not in valid_partitioning:
             valid = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage partitioning '{value}' must be one of: "
                 f"{valid}"
             )
@@ -2836,8 +2887,12 @@ class HipCodeGen(
     def hip_mesh_task_stage_label(self, stage_name):
         return {
             "amplification": "amplification/task",
+            "mesh": "mesh",
             "object": "object/task",
-        }.get(stage_name, stage_name)
+            "task": "task",
+        }[
+            stage_name
+        ]  # only called for hip_mesh_task_stage_names(), which this table covers
 
     def hip_mesh_task_positive_attribute(self, func, attribute_name, stage_name):
         value = self.hip_stage_attribute_value(func, attribute_name, stage_name)
@@ -2847,7 +2902,7 @@ class HipCodeGen(
             self.hip_stage_attribute_arguments(func, attribute_name)[0]
         )
         if value_int is not None and value_int <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage {attribute_name} ({value_int}) "
                 "must be positive"
             )
@@ -2859,7 +2914,7 @@ class HipCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise HipRefusal(
                     f"HIP {stage_name} stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2867,7 +2922,7 @@ class HipCodeGen(
             for axis, argument in zip("xyz", arguments):
                 value = self.literal_int_value(argument)
                 if value is not None and value <= 0:
-                    raise ValueError(
+                    raise HipRefusal(
                         f"HIP {stage_name} stage {attribute_name} {axis} "
                         f"dimension ({value}) must be positive"
                     )
@@ -2890,7 +2945,7 @@ class HipCodeGen(
         }
         topology = topology_aliases.get(normalized)
         if topology is None:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage outputtopology '{value}' must be "
                 "point, line, or triangle"
             )
@@ -3019,7 +3074,7 @@ class HipCodeGen(
 
             expected_count = expected_counts[primitive]
             if not self.hip_parameter_is_array(parameter):
-                raise ValueError(
+                raise HipRefusal(
                     "HIP geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -3029,7 +3084,7 @@ class HipCodeGen(
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -3042,7 +3097,7 @@ class HipCodeGen(
             self.hip_geometry_stream_info(self.parameter_raw_type(param))
             for param in parameters
         ):
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -3050,7 +3105,7 @@ class HipCodeGen(
         if not any(
             self.hip_geometry_input_primitive_qualifier(param) for param in parameters
         ):
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -3093,7 +3148,7 @@ class HipCodeGen(
         if semantic is None:
             return
         if self.map_type(return_type) == "void":
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} return semantic for HIP codegen; "
                 "void return type"
             )
@@ -3395,7 +3450,7 @@ class HipCodeGen(
             and actual_type in {"uint", "unsigned int", "uint2"}
         ):
             return
-        raise ValueError(
+        raise HipRefusal(
             f"Unsupported {semantic} stage parameter semantic for HIP codegen; "
             f"expected {expected_type} type"
         )
@@ -3417,14 +3472,14 @@ class HipCodeGen(
                 mapped_semantic, expected_type, allowed_stages = rule
                 if stage_name not in allowed_stages:
                     allowed = ", ".join(sorted(allowed_stages))
-                    raise ValueError(
+                    raise HipRefusal(
                         f"Unsupported {semantic} stage parameter semantic for HIP "
                         f"{stage_name} stage; valid stage is {allowed}"
                     )
                 param_name = getattr(param, "name", getattr(param, "param_name", None))
                 previous_name = seen_system_semantics.get(mapped_semantic)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise HipRefusal(
                         f"Duplicate HIP stage parameter semantic {mapped_semantic} "
                         f"on '{previous_name}' and '{param_name}'"
                     )
@@ -3436,7 +3491,7 @@ class HipCodeGen(
 
             kind = self.hip_semantic_output_kind(semantic)
             if kind in {"color", "depth"}:
-                raise ValueError(
+                raise HipRefusal(
                     f"Unsupported {semantic} stage parameter semantic for HIP "
                     f"{stage_name} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -3934,7 +3989,7 @@ class HipCodeGen(
     def emit_match_expression_return(self, match_node) -> str:
         return_type = self.type_name_string(self.current_function_return_type)
         if not return_type or return_type == "void":
-            raise ValueError(
+            raise HipRefusal(
                 "Unsupported match expression for HIP codegen; return context "
                 "requires a concrete non-void result type"
             )
@@ -4446,7 +4501,7 @@ class HipCodeGen(
             return library_call
 
         if func_name in self.synchronization_builtins and raw_args:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP synchronization builtin '{func_name}' requires 0 "
                 f"arguments; got {len(raw_args)}"
             )
@@ -4458,9 +4513,16 @@ class HipCodeGen(
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
 
         func_name = generic_narrow_vector_spelling(func_name) or func_name
-        mapped_name = wide_integer_vector_constructor(
-            func_name
-        ) or self.function_map.get(func_name, func_name)
+        mapped_name = wide_integer_vector_constructor(func_name)
+        if mapped_name is None:
+            # A name function_map does not rename is a program function or a HIP library function, spelled as
+            # it is; a built-in function of another language left in the output is refused by
+            # render_checked_program.
+            mapped_name = (
+                self.function_map[func_name]
+                if func_name in self.function_map
+                else func_name
+            )
 
         reduction_call = generate_vector_reduction_call(
             self, "HIP", func_name, raw_args, args
@@ -4590,12 +4652,20 @@ class HipCodeGen(
         return f"{target}({args_str})"
 
     def hip_math_function_name(self, func_name):
-        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
-            func_name, func_name
-        )
+        """The math lowering's name for ``func_name``: ``inverseSqrt`` and ``rsqrt`` are spellings of ``inversesqrt``.
+
+        Any other name is its own math lowering name; the math lowerings return ``None`` for a name they do not
+        handle, and the call is then refused if it names another language's built-in function.
+        """
+        if func_name in {"inverseSqrt", "rsqrt"}:
+            return "inversesqrt"
+        return func_name
 
     def normalize_hip_integer_bit_function(self, func_name):
-        return HIP_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
+        if func_name in HIP_INTEGER_BIT_FUNCTION_ALIASES:
+            return HIP_INTEGER_BIT_FUNCTION_ALIASES[func_name]
+        # Already the CrossGL spelling, or not an integer bit function; callers check the result.
+        return func_name
 
     def hip_bitcast_result_type(self, func_name, raw_args):
         wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
@@ -4794,7 +4864,7 @@ class HipCodeGen(
         if source is None:
             return None
         if raw_args:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP shader clock builtin {func_name} requires 0 arguments; "
                 f"got {len(raw_args)}"
             )
@@ -4971,7 +5041,7 @@ class HipCodeGen(
             return None
         if len(raw_args) not in expected_counts:
             expected_list = " or ".join(str(count) for count in expected_counts)
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP warp sync builtin {func_name} requires {expected_list} "
                 f"arguments, got {len(raw_args)}"
             )
@@ -5023,21 +5093,21 @@ class HipCodeGen(
         stage_name = getattr(self, "current_stage_name", None)
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError("HIP SetMeshOutputCounts is only valid in mesh stages")
+                raise HipRefusal("HIP SetMeshOutputCounts is only valid in mesh stages")
             if len(raw_args) != 2:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP SetMeshOutputCounts requires exactly two arguments"
                 )
             return f"cgl_hip_set_mesh_output_counts({', '.join(args)})"
 
         if operation == "DispatchMesh":
             if stage_name not in {"task", "object", "amplification"}:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP DispatchMesh is only valid in task, object, or "
                     "amplification stages"
                 )
             if len(raw_args) not in {3, 4}:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP DispatchMesh requires exactly three arguments, or four "
                     "with a task payload"
                 )
@@ -5080,7 +5150,8 @@ class HipCodeGen(
         elif operation == "ReportHit" and len(generated_args) == 2:
             generated_args.append("CglBuiltInTriangleIntersectionAttributes{}")
 
-        helper_name = self.function_map.get(operation, operation)
+        # function_map names a runtime helper for each of the five operations accepted above.
+        helper_name = self.function_map[operation]
         return f"{helper_name}({', '.join(generated_args)})"
 
     def visit_RayQueryOpNode(self, node: RayQueryOpNode) -> str:
@@ -5100,9 +5171,9 @@ class HipCodeGen(
     def generate_wave_operation(self, operation, raw_args, args):
         expected_count = HIP_WAVE_OP_ARITIES.get(operation)
         if expected_count is None:
-            raise ValueError(f"Unsupported HIP wave intrinsic {operation}")
+            raise HipRefusal(f"Unsupported HIP wave intrinsic {operation}")
         if len(raw_args) != expected_count:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP wave intrinsic {operation} requires {expected_count} "
                 f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
             )
@@ -5110,9 +5181,10 @@ class HipCodeGen(
         if operation == "WaveGetLaneCount":
             return "warpSize"
         if operation == "WaveGetLaneIndex":
-            return "(threadIdx.x & (warpSize - 1))"
+            # Warps are formed from linear thread IDs, so a block of more than one dimension needs all three.
+            return warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return "((threadIdx.x & (warpSize - 1)) == 0)"
+            return f"({warp_lane_index_expression()} == 0)"
 
         diagnostic = self.wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -5640,6 +5712,18 @@ class HipCodeGen(
             if value_info is not None
             else self.scalar_component_type(value_type)
         )
+        if component_type in {"int", "uint", "unsigned int"}:
+            # saturate keeps its argument's type (semantics.hub_types), so an integer clamps to 0 and 1 as the
+            # GLSL output's clamp(n, 0, 1) does.
+            integer_type = PrimitiveType(component_type)
+            return self.generate_clamp_call(
+                [
+                    raw_args[0],
+                    LiteralNode(0, integer_type),
+                    LiteralNode(1, integer_type),
+                ],
+                [args[0], "0", "1"],
+            )
         if component_type not in {"float", "double"}:
             return None
 
@@ -9189,7 +9273,9 @@ class HipCodeGen(
             for index, _ in enumerate(components)
         ]
         value_type = self.byte_address_buffer_value_type(component_count)
-        constructor = self.function_map.get(value_type, value_type)
+        constructor = self.function_map[
+            value_type
+        ]  # make_uint2, make_uint3 or make_uint4
         helper = (
             f"__device__ inline {value_type} "
             f"{helper_name}(const unsigned char* buffer, uint offset)\n"
@@ -9529,7 +9615,15 @@ class HipCodeGen(
             ray_builtin = self.hip_ray_builtin_expression(name)
             if ray_builtin is not None:
                 return ray_builtin
-            return self.builtin_map.get(name, name)
+            if name in self.builtin_map:
+                return self.builtin_map[name]
+            subgroup = subgroup_builtin_expression(name)
+            if subgroup is not None:
+                return subgroup
+            reason = reserved_builtin_reason(name, "HIP")
+            if reason is not None:
+                return self.refuse_lowering(reason, name)
+        # A program name, written as it is declared.
         return name
 
     def hip_ray_builtin_expression(self, name):
@@ -9760,8 +9854,21 @@ class HipCodeGen(
             return f"{self.map_type(type_str[4:-1])}*"
 
         canonical_type = self.canonical_resource_type(type_str)
-        mapped_type = self.type_map.get(canonical_type or type_str, type_str)
-        return self.hip_mapped_type_result(mapped_type)
+        if canonical_type is not None:
+            # Every canonical resource spelling is a type_map key.
+            return self.hip_mapped_type_result(self.type_map[canonical_type])
+        if type_str in self.type_map:
+            return self.hip_mapped_type_result(self.type_map[type_str])
+        # A program type or a HIP type is written as it is; a built-in type of another language is recorded and
+        # refused by render_checked_program if the output still names it.
+        return self.hip_mapped_type_result(
+            written_type_name(
+                type_str,
+                HIP_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
+        )
 
     def hip_geometry_stream_info(self, type_name):
         if type_name is None:
@@ -9990,7 +10097,10 @@ class HipCodeGen(
 
         canonical = self.canonical_resource_type(base_name) or base_name
         canonical = canonical.rsplit("::", 1)[-1]
-        mapped_type = self.type_map.get(canonical, canonical)
+        # Classification only: a type type_map does not rename is classified by its own spelling.
+        mapped_type = (
+            self.type_map[canonical] if canonical in self.type_map else canonical
+        )
         mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
         if mapped_base == "CglRayTracingAccelerationStructure":
             return "acceleration_structure"
@@ -10041,7 +10151,7 @@ class HipCodeGen(
             if binding <= used_end and used_start <= end:
                 if used_start == binding and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise HipRefusal(
                     "Conflicting HIP resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "

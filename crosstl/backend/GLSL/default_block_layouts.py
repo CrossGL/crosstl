@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 
+from crosstl.translator.refusals import OpenGLSyntaxError
+
 __all__ = [
     "BLOCK_INTERFACES",
     "DefaultBlockLayouts",
@@ -69,7 +71,7 @@ class DefaultBlockLayouts:
         """Record ``layout(...) <interface>;``, refusing qualifiers no default may hold."""
         invalid = [str(key) for key in layout if _group_of(str(key).lower()) is None]
         if invalid:
-            raise SyntaxError(
+            raise OpenGLSyntaxError(
                 f"layout({', '.join(invalid)}) cannot be a default {interface} block "
                 "layout: only shared, packed, std140, std430, scalar, row_major and "
                 "column_major can (GLSL 4.60 section 4.4.5)"

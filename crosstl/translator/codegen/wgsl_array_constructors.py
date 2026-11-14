@@ -26,6 +26,7 @@ from ..ast import (
     PrimitiveType,
     VectorType,
 )
+from ..refusals import WGSLRefusal
 
 __all__ = [
     "wgsl_array_constructor",
@@ -103,7 +104,7 @@ def wgsl_array_constructor(codegen, node):
     function_name, element_type = callee
     match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
     if match is None:
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target does not support array constructor {function_name}"
         )
     size = match.group(2)

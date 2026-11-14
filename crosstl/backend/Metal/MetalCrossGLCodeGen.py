@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.refusals import MetalSourceRefusal
+
 from ...translator.codegen.array_utils import (
     evaluate_literal_int_expression,
     prepend_array_dimension,
@@ -110,6 +112,7 @@ from .local_aggregate_declarators import (
     union_layout,
     unnamed_aggregate_display_name,
 )
+from .local_enums import hoist_local_enums
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .mesh_import import MetalMeshImport
@@ -1584,10 +1587,10 @@ class MetalToCrossGLConverter(
         # The host picks a Metal kernel's threadgroup size at dispatch time; this option names it.
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         if type(preserve_resource_origins) is not bool:
-            raise ValueError("preserve_resource_origins must be a boolean")
+            raise MetalSourceRefusal("preserve_resource_origins must be a boolean")
         self.preserve_resource_origins = preserve_resource_origins
         if floating_contraction_profile not in (None, "rne-gradual", "rne-flush"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "floating_contraction_profile must be 'rne-gradual', 'rne-flush', "
                 "or None"
             )
@@ -1597,32 +1600,32 @@ class MetalToCrossGLConverter(
         # subnormals are treated by the portable single-rounding lowering.
         self.floating_contraction_profile = floating_contraction_profile
         if binary32_power_accuracy_profile not in (None, "portable-finite"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_power_accuracy_profile must be 'portable-finite' or None"
             )
         self.binary32_power_accuracy_profile = binary32_power_accuracy_profile
         if binary32_power_operand_profile not in (None, "flush-subnormals"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_power_operand_profile must be 'flush-subnormals' or None"
             )
         self.binary32_power_operand_profile = binary32_power_operand_profile
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_fma_profile must be 'rne-gradual', 'rne-flush', or None"
             )
         self.binary32_fma_profile = binary32_fma_profile
         if binary32_division_profile not in (None, "rne-gradual", "rne-flush"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_division_profile must be 'rne-gradual', 'rne-flush', or None"
             )
         self.binary32_division_profile = binary32_division_profile
         if binary16_remainder_profile not in (None, "binary32-quotient"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary16_remainder_profile must be 'binary32-quotient' or None"
             )
         self.binary16_remainder_profile = binary16_remainder_profile
         if binary16_widening_profile not in (None, "canonical-nan"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary16_widening_profile must be 'canonical-nan' or None"
             )
         self.binary16_widening_profile = binary16_widening_profile
@@ -1631,7 +1634,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_comparison_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
@@ -1641,7 +1644,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_atan2_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
@@ -1651,7 +1654,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_log_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
@@ -1661,12 +1664,12 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_log2_operand_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
         if binary32_log2_accuracy_profile not in (None, "portable-finite"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_log2_accuracy_profile must be 'portable-finite' or None"
             )
         self.binary32_log2_operand_profile = binary32_log2_operand_profile
@@ -1676,7 +1679,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_sqrt_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
@@ -1686,7 +1689,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_rsqrt_profile must be 'preserve-subnormals', "
                 "'flush-subnormals', or None"
             )
@@ -1696,7 +1699,7 @@ class MetalToCrossGLConverter(
             "preserve-subnormals",
             "flush-arithmetic-subnormals",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_remainder_profile must be 'preserve-subnormals', "
                 "'flush-arithmetic-subnormals', or None"
             )
@@ -1707,28 +1710,30 @@ class MetalToCrossGLConverter(
             "rne-flush",
             "native-precise",
         ):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_additive_profile must be 'rne-gradual', 'rne-flush', "
                 "'native-precise', or None"
             )
         self.binary32_additive_profile = binary32_additive_profile
         if binary32_multiplication_profile not in (None, "rne-gradual", "rne-flush"):
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "binary32_multiplication_profile must be 'rne-gradual', 'rne-flush', or None"
             )
         self.binary32_multiplication_profile = binary32_multiplication_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
-            raise ValueError("preserve_pointer_pointee_const must be a boolean")
+            raise MetalSourceRefusal("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
         if not isinstance(resolve_standard_remove_cv_aliases, bool):
-            raise ValueError("resolve_standard_remove_cv_aliases must be a boolean")
+            raise MetalSourceRefusal(
+                "resolve_standard_remove_cv_aliases must be a boolean"
+            )
         self.resolve_standard_remove_cv_aliases = resolve_standard_remove_cv_aliases
         mapping_is_configured = cooperative_matrix_fragment_mapping is not None
         provenance_is_configured = (
             cooperative_matrix_fragment_mapping_provenance is not None
         )
         if mapping_is_configured != provenance_is_configured:
-            raise ValueError(
+            raise MetalSourceRefusal(
                 "cooperative_matrix_fragment_mapping and "
                 "cooperative_matrix_fragment_mapping_provenance must be "
                 "configured together"
@@ -1738,14 +1743,14 @@ class MetalToCrossGLConverter(
                 not isinstance(cooperative_matrix_fragment_mapping, str)
                 or not cooperative_matrix_fragment_mapping.strip()
             ):
-                raise ValueError(
+                raise MetalSourceRefusal(
                     "cooperative_matrix_fragment_mapping must be a non-empty string"
                 )
             if (
                 not isinstance(cooperative_matrix_fragment_mapping_provenance, str)
                 or not cooperative_matrix_fragment_mapping_provenance.strip()
             ):
-                raise ValueError(
+                raise MetalSourceRefusal(
                     "cooperative_matrix_fragment_mapping_provenance must be a "
                     "non-empty string"
                 )
@@ -1758,7 +1763,7 @@ class MetalToCrossGLConverter(
             if not has_cooperative_matrix_fragment_mapping(
                 cooperative_matrix_fragment_mapping
             ):
-                raise ValueError(
+                raise MetalSourceRefusal(
                     "Unknown cooperative-matrix fragment mapping profile "
                     f"'{cooperative_matrix_fragment_mapping}'"
                 )
@@ -3714,6 +3719,7 @@ class MetalToCrossGLConverter(
         )
         self.local_aggregate_reserved_names.update(self.struct_name_map.values())
         self.local_aggregate_reserved_names.update(self.wide_vector_reserved_names)
+        hoist_local_enums(ast, self.refuse_import)
         enums = getattr(ast, "enums", []) or []
         for enum in enums:
             if isinstance(enum, EnumNode):
@@ -12726,7 +12732,11 @@ class MetalToCrossGLConverter(
     def normalize_literal_string(self, value):
         if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
             value = value.replace("'", "")
-        if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
+        if re.fullmatch(
+            r"(?:(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?"
+            r"|0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+)[hH]",
+            value,
+        ):
             # A half literal keeps its type: `h * 0.5h` is half arithmetic, `h * 0.5` float (MSL section 2.1).
             return f"float16({value[:-1]})"
         if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*", value):

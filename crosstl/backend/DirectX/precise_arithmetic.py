@@ -17,6 +17,8 @@ helpers that evaluate the DXC lowering one operation at a time.
 
 import re
 
+from crosstl.translator.refusals import TranslationRefusal
+
 from .DirectxAst import (
     BinaryOpNode,
     FunctionCallNode,
@@ -99,8 +101,10 @@ DOT_PRODUCT_USERS = frozenset(
 )
 
 
-class HLSLPreciseArithmeticError(ValueError):
+class HLSLPreciseArithmeticError(TranslationRefusal):
     """An intrinsic cannot be evaluated without contraction."""
+
+    code = "project.translate.directx-precise-arithmetic-unsupported"
 
 
 class HLSLPreciseArithmeticMixin:

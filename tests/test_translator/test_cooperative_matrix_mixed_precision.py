@@ -25,7 +25,7 @@ def _result_type(parameters, expression):
         }}
     }}
     """
-    ast = Parser(Lexer(code).tokens, strict_function_bodies=True).parse()
+    ast = Parser(Lexer(code).tokens).parse()
     return ast.functions[0].body.statements[0].initial_value.result_type
 
 

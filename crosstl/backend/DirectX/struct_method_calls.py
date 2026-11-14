@@ -7,6 +7,8 @@ members visible inside the method body, rewrite member calls into calls of the
 lowered function, and report which call arguments a callee writes.
 """
 
+from crosstl.translator.refusals import DirectXSourceRefusal
+
 from ..common_ast import FunctionNode, MemberAccessNode, VariableNode
 from .struct_methods import RECEIVER_PARAMETER
 from .struct_templates import struct_template_owner, struct_template_receiver_type
@@ -178,7 +180,7 @@ class HLSLStructMethodCallMixin:
                     return None
                 if not method.static:
                     if current.static:
-                        raise ValueError(
+                        raise DirectXSourceRefusal(
                             f"Static member function {current.qualified_name} "
                             f"calls instance member function {method.qualified_name}"
                         )
