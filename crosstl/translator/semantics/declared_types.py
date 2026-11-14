@@ -24,6 +24,8 @@ the template (``using complex_T = vec<scalar_T, 2>;``) have no CrossGL declarati
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
@@ -39,6 +41,10 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# ``id(program) -> (program, dead function ids)`` inside :func:`shared_dead_functions`, ``None`` outside it.
+_DEAD_FUNCTIONS: ContextVar[dict | None] = ContextVar(
+    "crosstl_shared_dead_functions", default=None
+)
 _BOOLEAN_LITERALS = frozenset({"true", "false"})
 # The sizes of an array type argument, ``[2]`` in ``pick<foo[2]>``.
 _ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
@@ -75,22 +81,40 @@ class UndeclaredTypeError(TranslationDiagnostic):
         )
 
 
-def _children(node):
+_CHILD_FIELD_EXCLUSIONS = frozenset({"parent", "annotations", "source_location"})
+
+
+def _child_list(node):
+    """A new list of ``node``'s children, type nodes included and repeated aliases not removed."""
+    children = []
+    append = children.append
+    kinds = A.FIELD_KINDS
+    node_type = A.ASTNode
     for field, value in vars(node).items():
-        if field in ("parent", "annotations", "source_location"):
+        if field in _CHILD_FIELD_EXCLUSIONS:
             continue
-        if isinstance(value, A.StageMap):
-            yield from value.values()
-        elif isinstance(value, A.ASTNode):
-            yield value
-        elif isinstance(value, (list, tuple)):
+        kind = kinds.get(type(value))
+        if kind is None:
+            kind = A.field_kind(value)
+        if kind == A.FIELD_LEAF or kind == A.FIELD_SET:
+            continue
+        if kind == A.FIELD_NODE:
+            append(value)
+        elif kind == A.FIELD_STAGES:
+            children.extend(value.values())
+        elif kind == A.FIELD_LIST or kind == A.FIELD_TUPLE:
             for item in value:
-                if isinstance(item, A.ASTNode):
-                    yield item
-        elif isinstance(value, dict):
+                if isinstance(item, node_type):
+                    append(item)
+        else:
             for item in value.values():
-                if isinstance(item, A.ASTNode):
-                    yield item
+                if isinstance(item, node_type):
+                    append(item)
+    return children
+
+
+def _children(node):
+    return iter(_child_list(node))
 
 
 def _nodes(program, skip=frozenset()):
@@ -100,13 +124,17 @@ def _nodes(program, skip=frozenset()):
     """
     seen = set(skip)
     stack = [program]
+    pop = stack.pop
     while stack:
-        node = stack.pop()
-        if id(node) in seen:
+        node = pop()
+        node_id = id(node)
+        if node_id in seen:
             continue
-        seen.add(id(node))
+        seen.add(node_id)
         yield node
-        stack.extend(reversed(list(_children(node))))
+        children = _child_list(node)
+        children.reverse()
+        stack.extend(children)
 
 
 def _short(name):
@@ -120,21 +148,26 @@ def _is_value_argument(node, argument):
     return node.name in FEEDBACK_TEXTURE_TYPES and is_sampler_feedback_kind(argument)
 
 
+def _add_declared_type_name(node, names):
+    """Add the type name ``node`` declares, if any, to ``names``."""
+    name = getattr(node, "name", None)
+    if not isinstance(name, str) or not name:
+        return
+    if isinstance(
+        node, (A.StructNode, A.EnumNode, A.GenericParameterNode, A.BufferNode)
+    ):
+        names.update((name, _short(name)))
+    elif isinstance(node, A.GenericType):
+        names.add(name)
+    elif isinstance(node, A.VariableNode) and getattr(node, "is_type_alias", False):
+        names.update((name, _short(name)))
+
+
 def declared_type_names(program) -> frozenset:
     """The type names ``program`` declares: structures, constant blocks, enumerations, aliases, generic parameters."""
     names = set()
     for node in _nodes(program):
-        name = getattr(node, "name", None)
-        if not isinstance(name, str) or not name:
-            continue
-        if isinstance(
-            node, (A.StructNode, A.EnumNode, A.GenericParameterNode, A.BufferNode)
-        ):
-            names.update((name, _short(name)))
-        elif isinstance(node, A.GenericType):
-            names.add(name)
-        elif isinstance(node, A.VariableNode) and getattr(node, "is_type_alias", False):
-            names.update((name, _short(name)))
+        _add_declared_type_name(node, names)
     return frozenset(names)
 
 
@@ -160,7 +193,34 @@ def _dead_functions(program):
 
     A function is live when it is a stage's entry point, or when a live function, a stage or a module-level
     declaration names it. A program without a stage entry is a library, so every function is checked.
+    Inside :func:`shared_dead_functions` the answer is computed once per program.
     """
+    cache = _DEAD_FUNCTIONS.get()
+    if cache is None:
+        return _find_dead_functions(program)
+    entry = cache.get(id(program))
+    if entry is None or entry[0] is not program:
+        entry = (program, frozenset(_find_dead_functions(program)))
+        cache[id(program)] = entry
+    return set(entry[1])
+
+
+@contextmanager
+def shared_dead_functions():
+    """Compute :func:`_dead_functions` once per program for the passes run inside this block.
+
+    Only passes that leave every function, its body and the stage entries unchanged may run inside it: the refusal
+    passes that read the program and record what they find.
+    """
+    token = _DEAD_FUNCTIONS.set({})
+    try:
+        yield
+    finally:
+        _DEAD_FUNCTIONS.reset(token)
+
+
+def _find_dead_functions(program):
+    """:func:`_dead_functions`, computed."""
     helpers = {}
     for functions in _function_lists(program):
         for function in functions:
@@ -254,19 +314,45 @@ def _generic_function_names(program):
     }
 
 
+def _is_declared_value(node):
+    return (
+        isinstance(node, (A.ConstantNode, A.VariableNode, A.ParameterNode))
+        and isinstance(node.name, str)
+        and not getattr(node, "is_type_alias", False)
+    )
+
+
 def _declared_value_names(program):
     """The names ``program`` declares as values: constants, variables and parameters.
 
     A generic call may pass one as an explicit argument, as in ``scaled<float, K>(x)`` for ``const int K``, which WGSL
     output substitutes into the specialization. Such a name is declared, so it is not an undeclared type.
     """
-    return frozenset(
-        node.name
-        for node in _nodes(program)
-        if isinstance(node, (A.ConstantNode, A.VariableNode, A.ParameterNode))
-        and isinstance(node.name, str)
-        and not getattr(node, "is_type_alias", False)
-    )
+    return frozenset(node.name for node in _nodes(program) if _is_declared_value(node))
+
+
+def _type_use_context(program):
+    """What :func:`undeclared_type_uses` reads from the whole program, gathered in one walk.
+
+    It is the declared type names (:func:`declared_type_names`); the ids of trait bounds (``generic<T: Numeric +
+    Copy>``), which constrain a parameter and are not types any generator emits; the ids of the template arguments
+    that are values, such as ``RayQuery<RAY_FLAG_FORCE_OPAQUE>``'s ray flags, which the generators check themselves,
+    and a feedback texture's sampler feedback kind; and the declared value names (:func:`_declared_value_names`).
+    """
+    names, bounds, values, value_names = set(), set(), set(), set()
+    for node in _nodes(program):
+        _add_declared_type_name(node, names)
+        if isinstance(node, A.GenericParameterNode):
+            bounds.update(id(bound) for bound in node.constraints)
+        if isinstance(node, A.NamedType):
+            values.update(
+                id(argument)
+                for argument in node.generic_args
+                if _is_value_argument(node, argument)
+            )
+        if _is_declared_value(node):
+            value_names.add(node.name)
+    return frozenset(names), bounds, values, frozenset(value_names)
 
 
 def _call_type_argument_names(call, generic_functions):
@@ -311,29 +397,13 @@ def undeclared_type_uses(program, target=None):
     name keeps its unresolved parameter types, for example). For a ``target`` in :data:`INSTANTIATING_TARGETS`, the
     generic structures no live code names are not read either, because those generators never emit them.
     """
-    declared = declared_type_names(program)
-    # Trait bounds (``generic<T: Numeric + Copy>``) constrain a parameter; they are not types any generator emits.
-    bounds = {
-        id(bound)
-        for node in _nodes(program)
-        if isinstance(node, A.GenericParameterNode)
-        for bound in node.constraints
-    }
-    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags. A feedback
-    # texture's argument is a value only when it is a sampler feedback kind; any other name is still read as a type.
-    values = {
-        id(argument)
-        for node in _nodes(program)
-        if isinstance(node, A.NamedType)
-        for argument in node.generic_args
-        if _is_value_argument(node, argument)
-    }
+    declared, bounds, values, declared_values = _type_use_context(program)
     uses = []
     skip = _dead_functions(program) | bounds | values
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     generic_functions = _generic_function_names(program)
-    value_names = _declared_value_names(program) if generic_functions else frozenset()
+    value_names = declared_values if generic_functions else frozenset()
     for node in _nodes(program, skip):
         if isinstance(node, A.FunctionCallNode):
             uses.extend(
