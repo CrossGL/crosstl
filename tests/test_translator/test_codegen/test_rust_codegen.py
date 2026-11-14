@@ -25374,7 +25374,9 @@ def test_rust_mesh_task_stages_validate_metadata_and_intrinsics():
         }
     }
     """
-    with pytest.raises(ValueError, match="numthreads requires at most three"):
+    with pytest.raises(
+        ValueError, match="numthreads takes one, two or three dimensions, got 4"
+    ):
         generate_code(parse_code(tokenize_code(bad_numthreads_arity)))
 
     bad_stage_context = """
