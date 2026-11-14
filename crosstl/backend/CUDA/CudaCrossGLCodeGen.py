@@ -40,8 +40,8 @@ class CudaToCrossGLConverter:
     """Serialize CUDA backend AST nodes back into CrossGL source."""
 
     CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
-        "CUDA_CHECK",
         "CHECK_CUDA",
+        "CUDA_CHECK",
         "checkCuda",
         "checkCudaErrors",
         "gpuErrchk",
