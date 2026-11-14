@@ -1,0 +1,1 @@
+CrossGL input reports a typed `SyntaxError` instead of raising `TypeError` when a range expression appears in a type-argument list, while keeping single-index and value-position ranges intact, and the Mojo importer now rejects malformed `..` dots in generic and type arguments (#4502).

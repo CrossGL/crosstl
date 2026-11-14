@@ -25,6 +25,30 @@ class MojoParser:
     }
     BINDING_NAME_TOKENS = IDENTIFIER_NAME_TOKENS | {"BOOL_LITERAL"}
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
+    TYPE_DOT_RECEIVER_TOKENS = (
+        IDENTIFIER_NAME_TOKENS
+        | TYPE_START_TOKENS
+        | {
+            "BOOL_LITERAL",
+            "NUMBER",
+            "STRING_LITERAL",
+            "RBRACKET",
+            "RPAREN",
+            "RBRACE",
+        }
+    )
+    ELLIPSIS_TRAILING_OPERAND_TOKENS = (
+        IDENTIFIER_NAME_TOKENS
+        | TYPE_START_TOKENS
+        | {
+            "BOOL_LITERAL",
+            "NUMBER",
+            "STRING_LITERAL",
+            "LPAREN",
+            "LBRACKET",
+            "LBRACE",
+        }
+    )
     FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
     ASSIGNMENT_OPERATOR_TOKENS = {
         "EQUALS",
@@ -494,6 +518,7 @@ class MojoParser:
 
         tokens = []
         depth = 0
+        previous_token_type = None
 
         while True:
             if self.current_token[0] == "EOF":
@@ -507,6 +532,17 @@ class MojoParser:
                 self.eat(token_type)
                 continue
 
+            if token_type == "DOT":
+                dot_text, previous_token_type = self.consume_type_text_dot(
+                    previous_token_type
+                )
+                if dot_text == "...":
+                    tokens.append(("IDENTIFIER", "..."))
+                else:
+                    tokens.append(("DOT", "."))
+                    tokens.append((previous_token_type, dot_text[1:]))
+                continue
+
             if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
                 depth += 1
             elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
@@ -515,6 +551,7 @@ class MojoParser:
                 depth -= 1
 
             tokens.append((token_type, token_value))
+            previous_token_type = token_type
             self.eat(token_type)
 
         if not tokens:
@@ -1061,6 +1098,7 @@ class MojoParser:
     def parse_unparenthesized_where_clause(self):
         parts = []
         depth = 0
+        previous_token_type = None
 
         while True:
             if self.current_token[0] == "EOF":
@@ -1074,6 +1112,18 @@ class MojoParser:
             if token_type == "COLON" and depth == 0:
                 break
 
+            if token_type == "DOT":
+                dot_text, previous_token_type = self.consume_type_text_dot(
+                    previous_token_type
+                )
+                if dot_text == "...":
+                    parts.append("...")
+                elif parts:
+                    parts[-1] = f"{parts[-1]}{dot_text}"
+                else:
+                    parts.append(dot_text)
+                continue
+
             if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
                 depth += 1
             elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
@@ -1082,6 +1132,7 @@ class MojoParser:
                 depth -= 1
 
             parts.append(str(token_value))
+            previous_token_type = token_type
             self.eat(token_type)
 
         if not parts:
@@ -3134,21 +3185,36 @@ class MojoParser:
             return next_type not in {"MINUS", "LBRACKET", "LPAREN", "LBRACE"}
         return False
 
+    def consume_type_text_dot(self, previous_token_type):
+        if self.is_ellipsis_expression() and self.peek_token(3)[0] != "DOT":
+            if previous_token_type in self.TYPE_DOT_RECEIVER_TOKENS:
+                raise MojoSyntaxError(
+                    "Unexpected ellipsis '...' after type or value operand"
+                )
+            self.eat("DOT")
+            self.eat("DOT")
+            self.eat("DOT")
+            next_type = self.peek_non_layout_token(0)[0]
+            if next_type in self.ELLIPSIS_TRAILING_OPERAND_TOKENS:
+                raise MojoSyntaxError(
+                    f"Expected ',' or closing delimiter after '...', got {next_type}"
+                )
+            return "...", "ELLIPSIS"
+
+        if previous_token_type not in self.TYPE_DOT_RECEIVER_TOKENS:
+            raise MojoSyntaxError("Expected IDENTIFIER before dot, got DOT")
+        self.eat("DOT")
+        member_token_type = self.current_token[0]
+        member = self.parse_dotted_name("IDENTIFIER after dot")
+        return f".{member}", member_token_type
+
     def skip_bracketed_suffix(self):
-        self.eat("LBRACKET")
-        depth = 1
-        while depth > 0:
-            if self.current_token[0] == "EOF":
-                raise MojoSyntaxError("Unterminated bracketed suffix")
-            if self.current_token[0] == "LBRACKET":
-                depth += 1
-            elif self.current_token[0] == "RBRACKET":
-                depth -= 1
-            self.eat(self.current_token[0])
+        self.parse_generic_type_suffix()
 
     def parse_generic_type_suffix(self):
         suffix = "["
         depth = 1
+        previous_token_type = "LBRACKET"
         self.eat("LBRACKET")
 
         while depth > 0:
@@ -3159,12 +3225,15 @@ class MojoParser:
             if token_type == "LBRACKET":
                 suffix += "["
                 depth += 1
+                previous_token_type = token_type
                 self.eat("LBRACKET")
             elif token_type == "RBRACKET":
                 suffix += "]"
                 depth -= 1
+                previous_token_type = token_type
                 self.eat("RBRACKET")
             elif token_type == "COMMA":
+                previous_token_type = token_type
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RBRACKET":
@@ -3175,11 +3244,20 @@ class MojoParser:
                 self.eat("DEDENT")
             elif token_type in {"IF", "ELSE"}:
                 suffix = suffix.rstrip() + f" {token_value} "
+                previous_token_type = token_type
                 self.eat(token_type)
             elif token_type == "NEWLINE":
                 self.eat(token_type)
+            elif token_type == "DOT":
+                dot_text, previous_token_type = self.consume_type_text_dot(
+                    previous_token_type
+                )
+                suffix += dot_text
             else:
+                if previous_token_type == "NUMBER" and token_type == "NUMBER":
+                    raise MojoSyntaxError("Unexpected NUMBER after numeric literal")
                 suffix += token_value
+                previous_token_type = token_type
                 self.eat(token_type)
 
         return suffix
@@ -3187,6 +3265,7 @@ class MojoParser:
     def parse_parenthesized_type_suffix(self):
         suffix = "("
         depth = 1
+        previous_token_type = "LPAREN"
         self.eat("LPAREN")
 
         while depth > 0:
@@ -3197,12 +3276,15 @@ class MojoParser:
             if token_type == "LPAREN":
                 suffix += "("
                 depth += 1
+                previous_token_type = token_type
                 self.eat("LPAREN")
             elif token_type == "RPAREN":
                 suffix += ")"
                 depth -= 1
+                previous_token_type = token_type
                 self.eat("RPAREN")
             elif token_type == "COMMA":
+                previous_token_type = token_type
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RPAREN":
@@ -3213,8 +3295,16 @@ class MojoParser:
                 self.eat("DEDENT")
             elif token_type == "NEWLINE":
                 self.eat(token_type)
+            elif token_type == "DOT":
+                dot_text, previous_token_type = self.consume_type_text_dot(
+                    previous_token_type
+                )
+                suffix += dot_text
             else:
+                if previous_token_type == "NUMBER" and token_type == "NUMBER":
+                    raise MojoSyntaxError("Unexpected NUMBER after numeric literal")
                 suffix += token_value
+                previous_token_type = token_type
                 self.eat(token_type)
 
         return suffix
@@ -3222,6 +3312,7 @@ class MojoParser:
     def parse_braced_type_suffix(self):
         suffix = "{"
         depth = 1
+        previous_token_type = "LBRACE"
         self.eat("LBRACE")
 
         while depth > 0:
@@ -3232,12 +3323,15 @@ class MojoParser:
             if token_type == "LBRACE":
                 suffix += "{"
                 depth += 1
+                previous_token_type = token_type
                 self.eat("LBRACE")
             elif token_type == "RBRACE":
                 suffix += "}"
                 depth -= 1
+                previous_token_type = token_type
                 self.eat("RBRACE")
             elif token_type == "COMMA":
+                previous_token_type = token_type
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RBRACE":
@@ -3248,8 +3342,16 @@ class MojoParser:
                 self.eat("DEDENT")
             elif token_type == "NEWLINE":
                 self.eat(token_type)
+            elif token_type == "DOT":
+                dot_text, previous_token_type = self.consume_type_text_dot(
+                    previous_token_type
+                )
+                suffix += dot_text
             else:
+                if previous_token_type == "NUMBER" and token_type == "NUMBER":
+                    raise MojoSyntaxError("Unexpected NUMBER after numeric literal")
                 suffix += token_value
+                previous_token_type = token_type
                 self.eat(token_type)
 
         return suffix

@@ -1840,6 +1840,11 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
+        if isinstance(mojo_type, str) and self.has_malformed_type_dots(mojo_type):
+            return self.refuse_import(
+                f"malformed Mojo type '{mojo_type}': '..' is not a valid Mojo type argument",
+                placeholder="int",
+            )
         if isinstance(mojo_type, str) and mojo_type.startswith("*"):
             mojo_type = mojo_type[1:].lstrip()
         mojo_type = self.strip_reference_type(mojo_type)
@@ -1857,6 +1862,31 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         if matrix_type:
             return matrix_type
         return self.normalize_type_expression_operators(mojo_type)
+
+    def has_malformed_type_dots(self, text):
+        quote = None
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char == ".":
+                run_end = index + 1
+                while run_end < len(text) and text[run_end] == ".":
+                    run_end += 1
+                run_length = run_end - index
+                if run_length not in {1, 3}:
+                    return True
+                index = run_end
+                continue
+            index += 1
+        return False
 
     def map_mojo_gpu_builtin_name(self, name):
         if self.current_function_is_mojo_gpu_kernel:

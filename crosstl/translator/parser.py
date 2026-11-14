@@ -29,7 +29,6 @@ from .ast import (
     EnumNode,
     EnumVariantNode,
     ExecutionModel,
-    ExpressionNode,
     ExpressionStatementNode,
     ForInNode,
     ForNode,
@@ -3787,7 +3786,9 @@ class Parser:
         args = []
 
         while self.current_token[0] != "RBRACKET":
-            args.append(self.parse_square_generic_argument())
+            arg = self.parse_square_generic_argument()
+            self.format_type_argument(arg)
+            args.append(arg)
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -3885,6 +3886,8 @@ class Parser:
             "GREATER_EQUAL",
             "EQUAL",
             "NOT_EQUAL",
+            "RANGE",
+            "RANGE_INCLUSIVE",
         }
         opener_to_closer = {
             "LPAREN": "RPAREN",
@@ -3962,7 +3965,9 @@ class Parser:
         self.eat_type_greater_than()
         return params
 
-    def parse_generic_arguments(self, reject_logical_at_top_level=False):
+    def parse_generic_arguments(
+        self, reject_logical_at_top_level=False, validate_arguments=True
+    ):
         """Parse generic type arguments after ``<``."""
         self.eat("LESS_THAN")
         args = []
@@ -3971,11 +3976,12 @@ class Parser:
             if self.current_token[0] == "EOF":
                 raise CrossGLSyntaxError("Unterminated generic argument list")
 
-            args.append(
-                self.parse_generic_argument(
-                    reject_logical_at_top_level=reject_logical_at_top_level
-                )
+            arg = self.parse_generic_argument(
+                reject_logical_at_top_level=reject_logical_at_top_level
             )
+            if validate_arguments:
+                self.format_type_argument(arg)
+            args.append(arg)
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -4262,10 +4268,17 @@ class Parser:
             return f"{left} {type_node.operator} {right}"
         if isinstance(type_node, FunctionCallNode):
             function = self.format_type_argument(type_node.function)
+            generic_suffix = ""
+            if getattr(type_node, "generic_args", None):
+                generic_args = ", ".join(
+                    self.format_type_argument(argument)
+                    for argument in type_node.generic_args
+                )
+                generic_suffix = f"<{generic_args}>"
             args = ", ".join(
                 self.format_type_argument(argument) for argument in type_node.arguments
             )
-            return f"{function}({args})"
+            return f"{function}{generic_suffix}({args})"
         if isinstance(type_node, TernaryOpNode):
             condition = self.format_type_argument(type_node.condition)
             true_expr = self.format_type_argument(type_node.true_expr)
@@ -4279,9 +4292,14 @@ class Parser:
                 else f"{type_node.operator}{operand}"
             )
         if isinstance(type_node, MemberAccessNode):
-            return f"{self.format_expression_path(type_node.object_expr)}.{type_node.member}"
+            return (
+                f"{self.format_type_argument(type_node.object_expr)}.{type_node.member}"
+            )
         if isinstance(type_node, PointerType):
             return f"{self.format_type_argument(type_node.pointee_type)}*"
+        if isinstance(type_node, ReferenceType):
+            suffix = "&mut" if type_node.is_mutable else "&"
+            return f"{self.format_type_argument(type_node.referenced_type)}{suffix}"
         if isinstance(type_node, FunctionType):
             params = ", ".join(
                 self.format_type_argument(param_type)
@@ -4326,8 +4344,8 @@ class Parser:
                 type_node = type_node.element_type
             return self.format_type_argument(type_node) + "".join(suffixes)
         if hasattr(type_node, "name"):
-            if type_node.name is None and isinstance(type_node, ExpressionNode):
-                # An expression with no spelling here (a range, for one) names no type or value argument.
+            if type_node.name is None:
+                # An expression or node with no spelling here (a range, for one) names no type or value argument.
                 raise CrossGLSyntaxError(
                     f"A {type(type_node).__name__} cannot be a type argument"
                 )
@@ -4349,6 +4367,10 @@ class Parser:
             if element_type == "bool":
                 return f"bvec{type_node.size}"
             return f"{element_type}{type_node.size}"
+        if isinstance(type_node, ASTNode):
+            raise CrossGLSyntaxError(
+                f"A {type(type_node).__name__} cannot be a type argument"
+            )
         return str(type_node)
 
     def parse_attributes(self):
@@ -5787,7 +5809,7 @@ class Parser:
         token_mark = self.mark_token_edits()
         try:
             generic_args = self.parse_generic_arguments(
-                reject_logical_at_top_level=True
+                reject_logical_at_top_level=True, validate_arguments=False
             )
             if self.current_token[0] == "LBRACE":
                 # ``vec<T, 2>{x, y}``: a braced constructor of a generic type, as MSL and HLSL write one. A
@@ -5820,7 +5842,7 @@ class Parser:
         token_mark = self.mark_token_edits()
         try:
             generic_args = self.parse_generic_arguments(
-                reject_logical_at_top_level=True
+                reject_logical_at_top_level=True, validate_arguments=False
             )
             return self.current_token[0] == "LPAREN" and (
                 self.generic_member_arguments_are_unambiguous(generic_args)
@@ -5848,7 +5870,7 @@ class Parser:
             return expression.name
         if isinstance(expression, MemberAccessNode):
             return f"{self.format_expression_path(expression.object_expr)}.{expression.member}"
-        return str(expression)
+        return self.format_type_argument(expression)
 
     def parse_struct_constructor_expression(self, type_name):
         self.eat("LBRACE")

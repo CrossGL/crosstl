@@ -3,6 +3,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 from crosstl.backend.import_refusals import MojoImportRefused
 from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
@@ -10,6 +11,7 @@ from crosstl.backend.Mojo.MojoParser import MojoParser
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.refusals import MojoSyntaxError
 
 
 def generate_code(ast_node):
@@ -4356,6 +4358,37 @@ def test_constant_buffer_codegen_from_colon_body():
         assert "vec4 tint @ binding(3);" in generated_code
     except SyntaxError:
         pytest.fail("Constant buffer parsing or code generation not implemented.")
+
+
+def test_mojo_importer_rejects_range_in_simd_dtype_arguments(tmp_path):
+    source = tmp_path / "bad_simd.mojo"
+    source.write_text(
+        "fn main():\n    var v = SIMD[DType..float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+    )
+
+    with pytest.raises(
+        MojoSyntaxError,
+        match="Expected IDENTIFIER after dot, got DOT",
+    ) as syntax_exc:
+        crosstl.translate(str(source), backend="cgl", format_output=False)
+    assert (
+        syntax_exc.value.project_diagnostic_code
+        == "project.translate.mojo-syntax-error"
+    )
+
+    # Direct AST mutation bypassing MojoParser is also refused fail-closed in codegen.
+    direct_ast = parse_code(
+        tokenize_code(
+            "fn main():\n    var v = SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+        )
+    )
+    direct_ast.functions[0].body[0].value.type_name = "SIMD[DType..float32, 4]"
+    with pytest.raises(MojoImportRefused, match="malformed Mojo type") as import_exc:
+        generate_code(direct_ast)
+    assert (
+        import_exc.value.project_diagnostic_code
+        == "project.translate.mojo-import-unsupported"
+    )
 
 
 if __name__ == "__main__":
