@@ -1459,7 +1459,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def generate_required_rust_mesh_helpers(self):
         if not self.required_mesh_helpers:
             return ""
-        code = "// CrossGL mesh/task placeholders\n"
+        code = "// CrossGL mesh/task placeholders
         if "set_mesh_output_counts" in self.required_mesh_helpers:
             code += (
                 "pub fn _crossgl_set_mesh_output_counts("
