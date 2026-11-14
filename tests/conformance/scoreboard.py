@@ -91,7 +91,9 @@ def counts(scoreboard):
     touch unrelated cells would always conflict on it.
     """
     return dict(
-        sorted(Counter(cell["outcome"] for cell in scoreboard["cells"].values()).items())
+        sorted(
+            Counter(cell["outcome"] for cell in scoreboard["cells"].values()).items()
+        )
     )
 
 
