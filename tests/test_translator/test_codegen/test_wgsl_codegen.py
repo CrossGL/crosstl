@@ -3311,6 +3311,96 @@ def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
     )
 
 
+def test_wgsl_codegen_shadow_texture_with_explicit_comparison_sampler_uses_compare_samples():
+    shader = """
+    shader WGSLExplicitShadowSampler {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float sampled = texture(t, s, coord);
+                float lod = textureLod(t, s, coord, 0.0);
+                float offset = textureOffset(t, s, coord, ivec2(1, 1));
+                return vec4(sampled + lod + offset);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "texture_depth_2d" in generated
+    assert "sampler_comparison" in generated
+    assert "textureSampleCompare(t, s, coord.xy, coord.z)" in generated
+    assert "textureSampleCompareLevel(t, s, coord.xy, coord.z)" in generated
+    assert "textureSampleCompare(t, s, coord.xy, coord.z, vec2<i32>(1, 1))" in generated
+
+
+def test_wgsl_codegen_shadow_texture_explicit_comparison_sampler_in_compute_uses_level():
+    shader = """
+    shader WGSLExplicitShadowCompute {
+        sampler2DShadow t;
+        comparison_sampler s;
+        compute {
+            void main() {
+                vec3 p = vec3(0.5, 0.5, 0.5);
+                float v = texture(t, s, p);
+                float w = textureLod(t, s, p, 0.0);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "textureSampleCompareLevel(t, s, p.xy, p.z)" in generated
+    assert "textureSampleCompare(" not in generated
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_cube_shadow_typed():
+    shader = """
+    shader WGSLExplicitCubeShadow {
+        samplerCubeShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec3 d @ TEXCOORD0) @ gl_FragColor {
+                float v = texture(t, s, vec4(d, 0.5));
+                return vec4(v);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"texture\(\) on t: samplerCubeShadow lookups take a vec4 coordinate",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_nonzero_lod_typed():
+    shader = """
+    shader WGSLExplicitShadowNonzeroLod {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float v = textureLod(t, s, coord, 1.0);
+                return vec4(v);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureLod\(\) on t: textureSampleCompareLevel samples mip level 0",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
 def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture():
     shader = """
     shader WGSLExplicitComparisonSamplerTexture {

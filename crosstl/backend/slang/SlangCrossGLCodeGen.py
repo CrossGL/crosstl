@@ -692,6 +692,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_RenderTargetArrayIndex": "gl_Layer",
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
             "SV_ClipDistance": "gl_ClipDistance",
+            "SV_PointSize": "gl_PointSize",
             "SV_CullDistance": "gl_CullDistance",
             # Compute shader
             "SV_GroupID": "gl_WorkGroupID",

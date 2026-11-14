@@ -20,6 +20,42 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+@pytest.mark.parametrize("semantic", ["SV_PointSize", "sv_pointsize"])
+@pytest.mark.parametrize(
+    "backend,builtin",
+    [
+        ("cgl", "@ gl_PointSize"),
+        ("opengl", "gl_PointSize"),
+        ("metal", "[[point_size]]"),
+    ],
+)
+def test_point_size_import_survives_cross_target_translation(
+    tmp_path, semantic, backend, builtin
+):
+    source = tmp_path / "point_size.slang"
+    source.write_text(
+        f"""
+        struct VertexInput {{ float4 position : POSITION; }};
+        struct VertexOutput {{
+            float4 position : SV_Position;
+            float size : {semantic};
+        }};
+        [shader("vertex")]
+        VertexOutput main(VertexInput input) {{
+            VertexOutput output;
+            output.position = input.position;
+            output.size = 2.0;
+            return output;
+        }}
+        """,
+        encoding="utf-8",
+    )
+    output = translate(str(source), backend=backend)
+    assert builtin in output
+    assert "SV_PointSize" not in output
+    assert "sv_pointsize" not in output
+
+
 def tokenize_code(code: str) -> List:
     lexer = SlangLexer(code)
     return lexer.tokenize()
