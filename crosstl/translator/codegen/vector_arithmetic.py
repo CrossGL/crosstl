@@ -100,6 +100,8 @@ INTEGER_SCALARS = {"int", "uint", "unsigned int"}
 NUMERIC_SCALARS = FLOAT_SCALARS | INTEGER_SCALARS
 # GLSL geometric built-ins that neither CUDA nor HIP declares, with their arity.
 REFLECTION_BUILTIN_ARITIES = {"reflect": 2, "refract": 3, "faceforward": 3}
+# Component-wise on vectors (GLSL 4.60 section 8.3); CUDA and HIP declare them for scalars only.
+FLOAT_CLASSIFICATION_FUNCTIONS = frozenset({"isnan", "isinf"})
 
 
 class VectorArithmeticMixin:
@@ -263,6 +265,11 @@ class VectorArithmeticMixin:
                     self.expression_result_type(raw_args[1])
                     if len(raw_args) > 1
                     else None
+                )
+            classified = self.float_classification_vector_info(func_name, raw_args)
+            if classified is not None:
+                return self.vector_type_for_components(
+                    "bool", len(classified["components"])
                 )
             if func_name in self.scalar_float_math_functions() and raw_args:
                 return self.expression_result_type(raw_args[0])
@@ -2263,6 +2270,10 @@ class VectorArithmeticMixin:
         signatures = function_map.get(func_name)
         if func_name == "pow":
             return self.generate_vector_pow_call(raw_args, args)
+        if func_name in FLOAT_CLASSIFICATION_FUNCTIONS:
+            return self.generate_vector_float_classification_call(
+                func_name, raw_args, args
+            )
         if signatures is None or len(raw_args) != len(args) or len(raw_args) != 1:
             return None
 
@@ -2315,6 +2326,55 @@ class VectorArithmeticMixin:
         )
         self.helper_functions[helper_name] = helper
         return helper_name
+
+    def float_classification_vector_info(self, func_name, raw_args):
+        """Vector info of the floating vector argument of ``isnan``/``isinf``, else ``None``."""
+        if (
+            func_name not in FLOAT_CLASSIFICATION_FUNCTIONS
+            or len(raw_args or []) != 1
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+        vector_info = self.math_vector_type_info(
+            self.expression_result_type(raw_args[0])
+        )
+        if vector_info is None or vector_info["component_type"] not in {
+            "float",
+            "double",
+            "half",
+        }:
+            return None
+        return vector_info
+
+    def generate_vector_float_classification_call(self, func_name, raw_args, args):
+        """Lower ``isnan``/``isinf`` of a vector to the ``uchar``N the generators use for ``bvecN``."""
+        vector_info = self.float_classification_vector_info(func_name, raw_args)
+        if vector_info is None or len(args) != 1:
+            return None
+        result_info = self.vector_type_info(
+            self.vector_type_for_components("bool", len(vector_info["components"]))
+        )
+        if result_info is None:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_{func_name}"
+        if helper_name not in self.helper_functions:
+            components = []
+            for component in vector_info["components"]:
+                value = f"value.{component}"
+                if vector_info["component_type"] == "half":
+                    # __half has no isnan/isinf overload in every toolkit; widening keeps NaN and infinity.
+                    value = f"__half2float({value})"
+                components.append(f"{func_name}({value})")
+            self.helper_functions[helper_name] = (
+                f"__device__ inline {result_info['type']} {helper_name}"
+                f"({vector_type} value)\n"
+                "{\n"
+                f"    return {result_info['constructor']}({', '.join(components)});\n"
+                "}"
+            )
+        return f"{helper_name}({args[0]})"
 
     def generate_vector_pow_call(self, raw_args, args):
         """Lower vector pow(base, exponent) component-wise."""
