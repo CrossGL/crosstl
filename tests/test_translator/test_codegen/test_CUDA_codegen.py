@@ -20985,3 +20985,34 @@ def test_fixed_width_integers_include_cstdint(tmp_path):
     assert "uint16_t" in cuda_code
     assert "uint8_t" in cuda_code
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_cbuffer_vector_member_arithmetic_uses_vector_helpers(tmp_path):
+    source_code = """
+    shader P {
+        buffer float* outp;
+        cbuffer Params {
+            vec2 offset;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec2 a = vec2(outp[i], 1.0);
+                vec2 b = a + a;
+                vec2 r = offset + offset;
+                vec2 s = offset * 2.0;
+                outp[i] = b.x + r.x + s.y;
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    cuda_code = CudaCodeGen().generate(ast)
+
+    assert "__constant__ float2 offset;" in cuda_code
+    assert "float2 r = cgl_float2_add(offset, offset);" in cuda_code
+    assert "(offset + offset)" not in cuda_code
+    assert "(offset * 2.0" not in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)
