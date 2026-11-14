@@ -17,6 +17,7 @@ from ..templates.bindings import CROSSGL as BINDINGS
 from ..templates.blocks import CROSSGL as BLOCKS_CROSSGL
 from ..templates.booleans import CROSSGL as BOOLEANS_CROSSGL
 from ..templates.columns import CROSSGL as COLUMNS_CROSSGL
+from ..templates.components import CROSSGL as COMPONENTS
 from ..templates.draws import CROSSGL as DRAWS
 from ..templates.edges import FAMILY as EDGES
 from ..templates.elements import CROSSGL as ELEMENTS_CROSSGL
@@ -286,6 +287,7 @@ CONSTRUCTS: dict[str, Template] = {
     **RAYS,
     **BINDINGS,
     **INTERLOCKS,
+    **COMPONENTS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

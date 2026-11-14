@@ -332,4 +332,7 @@ TYPES = (
     c("type", "vector-truncation", "OpCompositeExtract", "OpConvertSToF"),
     c("type", "matrix-resize", "OpTypeMatrix", "OpCompositeConstruct"),
     c("type", "bool-vector-conversion", "OpINotEqual", "OpSelect"),
+    # OpenCL C's .lo, .hi, .even and .odd, and its .sN component indices.
+    c("type", "vector-halves", "OpVectorShuffle", "OpCompositeExtract"),
+    c("type", "numeric-components", "OpVectorShuffle", "OpCompositeExtract"),
 )
