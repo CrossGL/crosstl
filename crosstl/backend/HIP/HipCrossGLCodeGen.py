@@ -714,6 +714,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         """
         forward_declared = set()
         completed = set()
+        # Records whose body is being walked: a record is incomplete until its own closing brace too.
+        open_bodies = set()
         words_to_skip = {
             "const",
             "volatile",
@@ -735,7 +737,9 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 for word in re.split(r"[\s\[]", vtype.split("[", 1)[0])
                 if word and word not in words_to_skip
             ]
-            if len(words) == 1 and words[0] in forward_declared - completed:
+            if len(words) != 1:
+                return None
+            if words[0] in open_bodies or words[0] in forward_declared - completed:
                 return words[0]
             return None
 
@@ -760,13 +764,21 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     if name and name not in completed:
                         forward_declared.add(name)
                     return
+                opened = bool(name) and name not in open_bodies
+                if opened:
+                    open_bodies.add(name)
                 for member in current.members or []:
                     visit(member, name or owner)
+                if opened:
+                    open_bodies.discard(name)
                 if name:
                     completed.add(name)
                 return
             if isinstance(current, FunctionNode):
                 owner = current.name or owner
+                # A method body sees its record complete.
+                enclosing = set(open_bodies)
+                open_bodies.clear()
                 if current.body is not None:
                     for param in current.params or []:
                         if isinstance(param, dict):
@@ -774,6 +786,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                             if record is not None:
                                 refuse(record, param.get("name"), owner)
                 visit(current.body, owner)
+                open_bodies.update(enclosing)
                 return
             if isinstance(current, VariableNode):
                 record = incomplete_record(current.vtype)

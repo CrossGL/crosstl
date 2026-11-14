@@ -19979,6 +19979,12 @@ __global__ void probe(float* outp) {
             "Never",
             "'n' in 'use'",
         ),
+        (
+            "struct Node { struct Node n; float k; };\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Node",
+            "'n' in 'Node'",
+        ),
     ],
 )
 def test_hip_record_without_a_body_is_refused_when_used_by_value(
@@ -20005,6 +20011,8 @@ def test_hip_record_without_a_body_is_refused_when_used_by_value(
         "__global__ void probe(float* outp, struct Never* p) { outp[0] = 1.0f; }\n",
         "struct Never;\n__device__ float use(struct Never n);\n"
         "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+        "struct Node { struct Node* next; float k; };\n"
+        "__global__ void probe(float* outp) { Node n; n.k = 1.0f; outp[0] = n.k; }\n",
     ],
 )
 def test_hip_record_without_a_body_stays_accepted_behind_a_pointer_or_once_completed(

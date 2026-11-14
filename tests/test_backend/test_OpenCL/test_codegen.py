@@ -1790,6 +1790,12 @@ __kernel void probe(__global float* outp) {
             "'n' in 'Outer'",
         ),
         (
+            "struct Node { struct Node n; float k; };\n"
+            "__kernel void probe(__global float* outp) { outp[0] = 1.0f; }\n",
+            "Node",
+            "'n' in 'Node'",
+        ),
+        (
             "struct Never;\nfloat use(struct Never n) { return 1.0f; }\n"
             "__kernel void probe(__global float* outp) { outp[0] = 1.0f; }\n",
             "Never",
@@ -1831,6 +1837,17 @@ __kernel void probe(__global float* outp) {
 """)
 
     assert "struct Outer {" in crossgl
+
+
+def test_opencl_record_may_point_to_itself():
+    crossgl = generate_crossgl("""
+struct Node { struct Node* next; float k; };
+__kernel void probe(__global float* outp) {
+    struct Node n; n.k = 3.0f; outp[get_global_id(0)] = n.k;
+}
+""")
+
+    assert "struct Node {" in crossgl
 
 
 def test_opencl_function_local_struct_keyword_names_the_earlier_record():
