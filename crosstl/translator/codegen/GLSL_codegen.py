@@ -36986,7 +36986,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
-            return generated
+            return self.glsl_matrix_scalar_expected_conversion(
+                expr, generated, expected_type
+            )
         actual_type = self.glsl_source_expression_type(expr)
         actual = self.glsl_value_type_info(actual_type)
         if actual is None:
@@ -37089,6 +37091,34 @@ complex64_t crossgl_complex64_mod_assign(
             )
         return converted
 
+    def glsl_matrix_scalar_expected_conversion(self, expr, generated, expected_type):
+        """Wrap a scalar for a matrix expected type (``mat4(1.0)``).
+
+        ``glsl_value_type_info`` covers scalars and vectors only, so a matrix
+        expected type otherwise falls through unwrapped: a declaration such as
+        ``mat4 a[3] = mat4[3](1.0);`` kept the scalar as the first element,
+        which glslang rejects. A scalar splat is the matrix constructor's
+        one-argument form (GLSL 4.60 section 5.4.3), so wrap it the same way
+        the vector path wraps ``vec3(1.0)``. Anything that is not a numeric
+        scalar -- a vector, a matrix value, a bool -- is left exactly as it
+        was.
+        """
+        try:
+            mapped = self.map_type(expected_type)
+        except OpenGLTemplateTypeError:
+            return generated
+        if self.glsl_matrix_dimensions(mapped) is None:
+            return generated
+        if self.glsl_is_explicit_type_constructor_expression(generated, mapped):
+            return generated
+        actual_type = self.glsl_source_expression_type(expr)
+        actual = self.glsl_value_type_info(actual_type)
+        if actual is None or actual["width"] != 1:
+            return generated
+        if actual["family"] not in {"float", "int", "uint"}:
+            return generated
+        return f"{mapped}({generated})"
+
     def glsl_outer_array_type(self, type_name):
         base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
         if not array_suffix:
@@ -37124,7 +37154,13 @@ complex64_t crossgl_complex64_mod_assign(
         with more arguments than elements is refused, since that section allows
         no extra argument. A constructor that has exactly enough arguments, or
         an extent that is unsized or not a compile-time integer at any level,
-        is left exactly as it was.
+        is left exactly as it was. The given arguments are also rendered
+        against the element type, so a scalar becomes the element type's
+        constructor -- ``vec3[2](1.0, 2.0)`` becomes
+        ``vec3[2](vec3(1.0), vec3(2.0))`` and ``mat2[2](1.0, 2.0)`` becomes
+        ``mat2[2](mat2(1.0), mat2(2.0))`` -- exactly as a declaration
+        initializer does; an argument that already has the element type is
+        left exactly as it was.
         """
         if func_name is None:
             func_name = self.glsl_array_of_arrays_constructor_name(
@@ -37157,14 +37193,40 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="element-count-mismatch",
                 source_location=getattr(expr, "source_location", None),
             )
-        if extent <= 0 or len(call_args) >= extent:
+        if extent <= 0:
             return call_args
-        padded = list(call_args)
+        wrapped = [
+            self.glsl_array_constructor_element_argument(arg, element_type)
+            for arg in call_args
+        ]
+        if len(wrapped) >= extent:
+            return wrapped
+        padded = list(wrapped)
         padded.extend(
             self.glsl_value_initialized_expression(expr, element_type)
             for _ in range(extent - len(padded))
         )
         return padded
+
+    def glsl_array_constructor_element_argument(self, arg, element_type):
+        """Render one given array-constructor argument as its element type.
+
+        An assignment or a call argument keeps the call spelling, so unlike a
+        declaration initializer its arguments get no expected element type;
+        a scalar stays a scalar (``vec3[2](1.0, 2.0)``), which glslang
+        rejects. Render each argument against the element type so a scalar
+        becomes ``vec3(1.0)`` or ``mat4(1.0)``, exactly as a declaration
+        initializer does. Scalar, struct and array elements need no
+        conversion and keep the argument exactly as written.
+        """
+        if isinstance(arg, str):
+            return arg
+        if not (
+            self.is_vector_value_type(element_type)
+            or self.is_matrix_value_type(element_type)
+        ):
+            return arg
+        return self.generate_expression_with_expected(arg, element_type)
 
     @staticmethod
     def glsl_array_of_arrays_constructor_name(callee):

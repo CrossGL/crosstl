@@ -237,6 +237,62 @@ def test_glsl_short_array_constructors_zero_fill_after_the_given_elements(tmp_pa
     _validate_glsl(tmp_path, code, "comp")
 
 
+SCALAR_ARRAY_CONSTRUCTOR_ELEMENTS_CGL = """
+shader Probe {
+    buffer float* outp;
+    float total(vec3 v[2]) { return v[0].x + v[1].y; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = outp[i];
+            mat4 a[3] = mat4[3](1.0);
+            mat2 b[2] = mat2[2](1.0, 2.0);
+            vec3 w[2] = vec3[2](1.0, 2.0);
+            mat3 z[2] = mat3[2](0.0);
+            vec3 v[2];
+            v = vec3[2](1.0, 2.0);
+            mat3 m[2];
+            m = mat3[2](0.0);
+            vec3 u[2];
+            u = vec3[2](1.0);
+            vec3 y[2];
+            y = vec3[2](x, 2.0);
+            outp[i] = a[0][0][0] + b[1][0][0] + v[1].x + w[0].x + z[0][0][0]
+                + m[0][0][0] + u[0].x + y[1].y + total(vec3[2](1.0, 2.0));
+        }
+    }
+}
+"""
+
+
+def test_glsl_wraps_scalars_as_array_constructor_elements(tmp_path):
+    """A scalar is not a matrix or vector element (GLSL 4.60 section 5.4.4).
+
+    A declaration already converts a scalar to a vector element, and a
+    literal zero to a zero matrix, but a scalar stayed a scalar as a matrix
+    element of a declaration and as any element outside one (#3636):
+    ``mat4[3](1.0)``, ``mat2[2](1.0, 2.0)`` and ``v = vec3[2](1.0, 2.0)``
+    all kept the scalar, which glslang rejects. Wrap each scalar as the
+    element type's constructor, in a declaration and wherever the call
+    spelling is kept -- assignments and call arguments alike.
+    """
+    code = _translate(tmp_path, SCALAR_ARRAY_CONSTRUCTOR_ELEMENTS_CGL, ".cgl", "opengl")
+
+    assert "mat4 a[3] = mat4[3](mat4(1.0), mat4(0.0), mat4(0.0));" in code
+    assert "mat2 b[2] = mat2[2](mat2(1.0), mat2(2.0));" in code
+    assert "vec3 w[2] = vec3[2](vec3(1.0), vec3(2.0));" in code
+    assert "mat3 z[2] = mat3[2](mat3(0.0), mat3(0.0));" in code
+    assert "v = vec3[2](vec3(1.0), vec3(2.0));" in code
+    assert "m = mat3[2](mat3(0.0), mat3(0.0));" in code
+    assert "u = vec3[2](vec3(1.0), vec3(0.0));" in code
+    assert "y = vec3[2](vec3(x), vec3(2.0));" in code
+    assert "total(vec3[2](vec3(1.0), vec3(2.0)))" in code
+    assert "mat4[3](1.0," not in code
+    assert "vec3[2](1.0, 2.0)" not in code
+    _validate_glsl(tmp_path, code, "comp")
+
+
 SHORT_ARRAY_OF_ARRAYS_CONSTRUCTOR_CGL = """
 shader Probe {
     buffer float* outp;
