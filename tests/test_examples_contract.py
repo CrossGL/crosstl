@@ -9,6 +9,7 @@ import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.translator.diagnostics import TranslationDiagnostic
+from tests.stage_entry_helpers import translate_each_entry
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ROOT = ROOT / "examples"
@@ -201,11 +202,14 @@ def test_vulkan_example_outputs_validate_with_spirv_tools(tmp_path, relative_pat
 
 @pytest.mark.parametrize("relative_path,backend", FULL_BACKEND_EXAMPLE_CASES)
 def test_portable_examples_translate_to_all_registered_backends(relative_path, backend):
-    generated = crosstl.translate(
-        str(_example_path(relative_path)), backend=backend, format_output=False
+    # GLSL holds one compute entry per unit, so an example with two kernels is translated per kernel there.
+    artifacts = translate_each_entry(
+        _example_path(relative_path), backend, format_output=False
     )
 
-    _assert_generated_output_is_usable(generated)
+    assert artifacts
+    for generated in artifacts.values():
+        _assert_generated_output_is_usable(generated)
 
 
 @pytest.mark.parametrize("relative_path,backend", WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)

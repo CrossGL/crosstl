@@ -37,18 +37,25 @@ def translate_job(job, translate):
 
 
 def _translate_job(job, translate, started, cpu_started):
+    options = {
+        "include_paths": job.get("includeDirs") or None,
+        "defines": job.get("defines") or None,
+    }
+    options = {name: value for name, value in options.items() if value}
     try:
-        options = {
-            "include_paths": job.get("includeDirs") or None,
-            "defines": job.get("defines") or None,
-        }
-        code = translate(
-            job["source"],
-            backend=job["backend"],
-            format_output=False,
-            source_backend=job["sourceBackend"],
-            **{name: value for name, value in options.items() if value},
-        )
+        try:
+            code = translate(
+                job["source"],
+                backend=job["backend"],
+                format_output=False,
+                source_backend=job["sourceBackend"],
+                **options,
+            )
+        except Exception as error:  # noqa: BLE001 - classified below, never raised
+            stage_entries = getattr(error, "stage_entries", None)
+            if not stage_entries:
+                raise
+            return _translate_entries(job, stage_entries, options, started, cpu_started)
         seconds = time.perf_counter() - started
         code = code or ""
         Path(job["artifact"]).parent.mkdir(parents=True, exist_ok=True)
@@ -60,27 +67,65 @@ def _translate_job(job, translate, started, cpu_started):
             "markers": markers(code),
         }
     except RecursionError as error:
-        return {
-            "status": "translator-error",
-            "exception": type(error).__name__,
-            "message": str(error)[-1000:],
-            "seconds": time.perf_counter() - started,
-            "cpuSeconds": time.process_time() - cpu_started,
-        }
+        return _failure(error, "translator-error", None, started, cpu_started)
     except (
         Exception
     ) as error:  # noqa: BLE001 - every translator failure is classified, never raised
         # Only a stable diagnostic code makes a failure a typed refusal; anything else is a translator error.
         code = getattr(error, "project_diagnostic_code", None)
         typed = isinstance(code, str) and bool(code)
-        return {
-            "status": "refused" if typed else "translator-error",
-            "diagnosticCode": code if typed else None,
-            "exception": type(error).__name__,
-            "message": str(error)[-1000:],
-            "seconds": time.perf_counter() - started,
-            "cpuSeconds": time.process_time() - cpu_started,
-        }
+        status = "refused" if typed else "translator-error"
+        return _failure(error, status, code if typed else None, started, cpu_started)
+
+
+def _failure(error, status, code, started, cpu_started):
+    return {
+        "status": status,
+        "diagnosticCode": code,
+        "exception": type(error).__name__,
+        "message": str(error)[-1000:],
+        "seconds": time.perf_counter() - started,
+        "cpuSeconds": time.process_time() - cpu_started,
+    }
+
+
+def entry_artifact(artifact, index, entry):
+    """Where entry ``index`` of a unit that the target translates one entry at a time is written."""
+    path = Path(artifact)
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", entry)
+    return str(path.with_name(f"{path.stem}.{index}.{safe}{path.suffix}"))
+
+
+def _translate_entries(job, stage_entries, options, started, cpu_started):
+    """Translate each entry to its own artifact, for a target whose compilation unit holds one entry per stage
+    (GLSL). The cell is translated only when every entry is; an entry's failure is the cell's.
+    """
+    from crosstl import translate_entries
+
+    names = [name for _stage, name in stage_entries]
+    artifacts = translate_entries(
+        job["source"],
+        job["backend"],
+        names,
+        format_output=False,
+        source_backend=job["sourceBackend"],
+        **options,
+    )
+    seconds = time.perf_counter() - started
+    entries, total = [], 0
+    for index, (stage, name) in enumerate(stage_entries):
+        path = entry_artifact(job["artifact"], index, name)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(artifacts[name] or "", encoding="utf-8")
+        total += markers(artifacts[name] or "")
+        entries.append({"entry": name, "stage": stage, "artifact": path})
+    return {
+        "status": "translated",
+        "seconds": seconds,
+        "cpuSeconds": time.process_time() - cpu_started,
+        "markers": total,
+        "entryArtifacts": entries,
+    }
 
 
 def main():

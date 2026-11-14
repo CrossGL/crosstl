@@ -99,6 +99,7 @@ from crosstl.project.dispatch_planning import (
     DispatchArtifactPlanError,
     plan_dispatch_artifacts,
 )
+from crosstl.project.glsl_entry_split import host_sizes_unit, per_entry_split
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -10403,10 +10404,17 @@ class _ProjectTranslationCheckpointRun:
 def _regular_project_translation_jobs(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
+    target: str | None = None,
 ) -> Iterator[_ProjectArtifactTranslationJob]:
-    entry_points: tuple[str | None, ...] = _resolved_entry_points_for_unit(
-        config, unit
-    ) or (None,)
+    entry_points: tuple[str | None, ...] = (
+        _resolved_entry_points_for_unit(config, unit)
+        or (
+            per_entry_split(unit, target)
+            if target is not None and not host_sizes_unit(config, unit)
+            else ()
+        )
+        or (None,)
+    )
     for variant, defines in _variant_jobs(config):
         for entry_point in entry_points:
             yield _ProjectArtifactTranslationJob(
@@ -10545,7 +10553,7 @@ def _project_translation_jobs_for_target(
 ) -> Iterator[_ProjectArtifactTranslationJob]:
     artifacts = dispatch_artifacts.get(unit.relative_path, ())
     if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
-        return _regular_project_translation_jobs(config, unit)
+        return _regular_project_translation_jobs(config, unit, target)
     return _dispatch_project_translation_jobs(config, unit.relative_path, artifacts)
 
 

@@ -60,6 +60,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
     UnsupportedMetalFeatureError,
@@ -4177,9 +4178,11 @@ def test_translate_metal_constant_buffer_member_access_qualifies_glsl_uniform_bl
         assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
+def test_codegen_mlx_multi_entry_opengl_keeps_each_entry_bindings():
     # Reduced from MLX-generated multi-entry Metal kernels where unrelated entry
-    # parameters reuse names and Metal buffer indices across kernels.
+    # parameters reuse names and Metal buffer indices across kernels. A GLSL unit
+    # holds one compute entry, so each kernel is its own artifact and keeps its
+    # own Metal buffer indices as bindings instead of sharing one binding space.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -4210,21 +4213,34 @@ def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
     }
     """
     crossgl = convert(code)
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-
-    buffer_bindings = [
-        int(binding)
-        for binding in re.findall(r"layout\(std430, binding = (\d+)\)", glsl)
+    with pytest.raises(OpenGLRepeatedStageEntryError) as refusal:
+        GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert [name for _stage, name in refusal.value.stage_entries] == [
+        "scaled_dot_product_attention",
+        "quantized",
+        "fence",
     ]
-    assert len(buffer_bindings) == len(set(buffer_bindings))
-    assert {0, 1, 2, 4, 8, 9, 11, 13}.issubset(buffer_bindings)
 
-    assert "layout(std430, binding = 3) buffer timestampBuffer" in glsl
-    assert "layout(std430, binding = 5) readonly buffer w_qBuffer" in glsl
-    assert "scaled_dot_product_attention_bmask[0]" not in glsl
-    assert "quantized_bmask[0]" in glsl
-    assert "quantized_out_[tid]" in glsl
-    assert "quantized_x_shape[0]" in glsl
+    expected = {
+        "scaled_dot_product_attention": [
+            (1, "out_Buffer"),
+            (11, "bmaskBuffer"),
+            (8, "x_shapeBuffer"),
+        ],
+        "quantized": [
+            (2, "out_Buffer"),
+            (13, "bmaskBuffer"),
+            (0, "input_Buffer"),
+            (4, "raders_b_qBuffer"),
+            (9, "x_shapeBuffer"),
+        ],
+        "fence": [(0, "timestampBuffer"), (4, "w_qBuffer")],
+    }
+    for entry, bindings in expected.items():
+        glsl = GLSLCodeGen().generate_entry(parse_crossgl(crossgl), entry)
+        found = re.findall(r"layout\(std430, binding = (\d+)\)[^\n]*buffer (\w+)", glsl)
+        assert [(int(binding), name) for binding, name in found] == bindings
+        assert glsl.count("void main()") == 1
 
 
 def test_codegen_pointer_return_buffer_selector_reparses_from_compiler_fixture():

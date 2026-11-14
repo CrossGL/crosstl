@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import crosstl
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 
 EXAMPLES_ROOT = Path(__file__).resolve().parent
 EXAMPLES_BY_CATEGORY = {
@@ -195,6 +196,25 @@ def scheduled_cases():
                 yield category, Path(example).stem, backend
 
 
+def translate_example(source, backend, output_file):
+    """Translate ``source`` to ``output_file`` and return the files written.
+
+    A GLSL compilation unit holds one entry point per stage (GLSL 4.60 section 6.1), so GLSL refuses an example
+    with two compute kernels as a whole. Each kernel is then written to its own file, ``<name>.<entry><ext>``.
+    """
+    try:
+        crosstl.translate(str(source), backend=backend, save_shader=str(output_file))
+        return [output_file]
+    except OpenGLRepeatedStageEntryError as refusal:
+        entries = [entry for _stage, entry in refusal.stage_entries]
+    written = []
+    for entry, code in crosstl.translate_entries(str(source), backend, entries).items():
+        entry_file = output_file.with_name(f"{source.stem}.{entry}{BACKENDS[backend]}")
+        entry_file.write_text(code, encoding="utf-8")
+        written.append(entry_file)
+    return written
+
+
 def run_case(category, name, backend, output_root):
     """Return None when the case behaves as expected, else the reason it failed."""
     source = EXAMPLES_ROOT / category / f"{name}.cgl"
@@ -202,12 +222,16 @@ def run_case(category, name, backend, output_root):
     output_file.parent.mkdir(parents=True, exist_ok=True)
     rejected = (category, name, backend) in EXPECTED_REJECTIONS
     try:
-        crosstl.translate(str(source), backend=backend, save_shader=str(output_file))
+        written = translate_example(source, backend, output_file)
     except Exception as exc:
         return None if rejected else f"{type(exc).__name__}: {exc}"
     if rejected:
         return "translates now; delete its EXPECTED_REJECTIONS entry"
-    return validate_generated_output(output_file)
+    for path in written:
+        error = validate_generated_output(path)
+        if error:
+            return error
+    return None
 
 
 def main(argv=None):

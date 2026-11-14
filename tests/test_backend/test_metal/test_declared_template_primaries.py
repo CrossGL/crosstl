@@ -16,6 +16,7 @@ import pytest
 
 import crosstl
 from crosstl.backend.Metal.external_functions import MetalExternalFunctionError
+from tests.stage_entry_helpers import joined_entries
 
 PREFIX = "#include <metal_stdlib>\nusing namespace metal;\n"
 
@@ -51,9 +52,7 @@ template [[host_name("k_f32")]] kernel void k<float>(device float*, uint);
 def _translate(tmp_path, source, backend):
     path = tmp_path / "kernel.metal"
     path.write_text(PREFIX + source)
-    return crosstl.translate(
-        str(path), backend=backend, format_output=False, source_backend="metal"
-    )
+    return joined_entries(path, backend, format_output=False, source_backend="metal")
 
 
 def _assert_metal_compiles(tmp_path, generated):
@@ -85,6 +84,26 @@ def test_calls_of_a_declared_primary_run_the_specializations(tmp_path, backend):
     # The nested call inside the float4 specialization deduces float.
     assert "ramp_u3cfloat_u3e(CrossGLMetalVectorIndex_vec4_get(x, 0))" in code
     assert "ramp_u3cfloat4_u3e(x)" in code
+    if backend == "metal":
+        _assert_metal_compiles(tmp_path, code)
+
+
+@pytest.mark.parametrize("backend", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize(
+    "entry, specialization",
+    [("k_f32", "ramp_u3cfloat_u3e"), ("k_f32_4", "ramp_u3cfloat4_u3e")],
+)
+def test_an_entry_scoped_translation_keeps_the_specializations_it_calls(
+    tmp_path, backend, entry, specialization
+):
+    # The entry calls the primary, which only resolves to a specialization when the generic is instantiated, so
+    # entry scoping must keep each specialization of a primary it reaches.
+    path = tmp_path / "kernel.metal"
+    path.write_text(PREFIX + DECLARED_PRIMARY)
+    code = crosstl.translate(
+        str(path), backend=backend, format_output=False, entry_point=entry
+    )
+    assert f"{specialization}(" in code
     if backend == "metal":
         _assert_metal_compiles(tmp_path, code)
 

@@ -12,7 +12,6 @@ import subprocess
 
 import pytest
 
-import crosstl
 from crosstl.backend.Metal.class_argument_precedence import (
     class_identity_template_outranks,
 )
@@ -22,6 +21,7 @@ from crosstl.backend.Metal.simd_group_template_overloads import (
     only_simd_group_overloads,
     overloads_simd_group_function,
 )
+from tests.stage_entry_helpers import joined_entries
 
 PAIRS = """
 #include <metal_stdlib>
@@ -75,9 +75,7 @@ def _source(extra="", result="best.val"):
 def _translate(tmp_path, code, backend):
     source = tmp_path / "pairs.metal"
     source.write_text(code)
-    return crosstl.translate(
-        str(source), backend=backend, source_backend="metal", format_output=False
-    )
+    return joined_entries(source, backend, source_backend="metal", format_output=False)
 
 
 def test_crossgl_calls_the_template_instance_and_the_library_for_members(tmp_path):
