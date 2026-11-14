@@ -5281,10 +5281,11 @@ class HLSLCodeGen(
                 storage_qualifiers = {
                     str(value) for value in getattr(node, "qualifiers", []) or []
                 }
-                if (
-                    not storage_qualifiers
-                    or {"private", "thread", "static"} & storage_qualifiers
-                ) and not qualifier.startswith("static"):
+                if {
+                    "private",
+                    "thread",
+                    "static",
+                } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:

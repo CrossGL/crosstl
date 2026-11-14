@@ -5055,7 +5055,7 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         constant = bool(qualifiers & {"const", "constant"})
-        private = not qualifiers or bool(qualifiers & {"private", "static", "thread"})
+        private = bool(qualifiers & {"private", "static", "thread"})
         if not (constant or private) or qualifiers & {
             "uniform",
             "groupshared",
