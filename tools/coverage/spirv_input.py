@@ -9,7 +9,9 @@ assembly.
 
 A construct GLSL cannot spell, such as a hull shader's spacing, winding or point mode, which GLSL declares only on the
 evaluation shader, or a generic function, is probed with the SPIR-V DXC compiles its HLSL probe to: the SPIR-V an HLSL
-project would hand to CrossTL. DXC keeps the resources the probe declares, as the execution harness has it do.
+project would hand to CrossTL. DXC keeps the resources the probe declares, as the execution harness has it do. A
+construct neither language spells, such as a pointer local or pointer arithmetic, is probed with the SPIR-V slangc
+compiles its Slang probe to (:data:`FALLBACKS`).
 
 The NaN-aware instructions and the ones they are renamed from agree on every input but NaN, and the inputs of
 :mod:`.execution` hold none, so a SPIR-V translation of one must also call it, or test an operand for NaN with
@@ -35,6 +37,9 @@ from .model import Feature, Param, Signature, Type
 
 # The language whose probe, compiled by DXC, stands in for a construct GLSL has no spelling for.
 FALLBACK = "hlsl"
+# The languages whose probes stand in for such a construct, in order: slangc compiles the Slang probe of one that HLSL
+# cannot spell either.
+FALLBACKS = (FALLBACK, "slang")
 _STAND_INS = {"NMin": "FMin", "NMax": "FMax", "NClamp": "FClamp"}
 _VEC3, _IVEC3 = Type("float", (3,)), Type("int", (3,))
 # Each struct form, with its GLSL call and the GLSL signature the pointer form's probe uses.
@@ -114,14 +119,12 @@ def _pointer_form(assembly: str, instruction: str) -> str:
 
 
 def source_language(feature: Feature) -> str:
-    """The language whose probe of ``feature`` is compiled to its SPIR-V input probe: GLSL, or HLSL for a construct
-    GLSL has no spelling for (:data:`FALLBACK`)."""
-    if (
-        constructs.is_construct(feature)
-        and not constructs.spells(feature.name, "glsl")
-        and constructs.spells(feature.name, FALLBACK)
-    ):
-        return FALLBACK
+    """The language whose probe of ``feature`` is compiled to its SPIR-V input probe: GLSL, or for a construct GLSL
+    has no spelling for, the first of :data:`FALLBACKS` that has one."""
+    if constructs.is_construct(feature) and not constructs.spells(feature.name, "glsl"):
+        for language in FALLBACKS:
+            if constructs.spells(feature.name, language):
+                return language
     return "glsl"
 
 
@@ -129,14 +132,16 @@ def _lowered(feature: Feature, language: str) -> tuple[str, probes.Probe]:
     """The disassembled SPIR-V of ``feature``'s probe in ``language``, and the probe; raises :class:`ProbeError`
     when the reference compiler rejects it."""
     probe = probes.build(feature, language)
-    # DXC drops the resources a shader never reads unless told to keep them, as the execution harness has it do.
+    # DXC and slangc drop the resources a shader never reads unless told to keep them, as the execution harness has
+    # them do. slangc's debug instructions are no part of the SPIR-V a project ships.
     assembly, log = lowering.lower(
         language,
         probe.source,
         probe.entry,
         feature.stage,
         raw_ids=False,
-        keep_bindings=language == FALLBACK,
+        keep_bindings=language in FALLBACKS,
+        debug=False,
     )
     if not assembly:
         compiler = "glslang" if language == "glsl" else validators.TOOLS[language]
@@ -151,9 +156,11 @@ def _lowered(feature: Feature, language: str) -> tuple[str, probes.Probe]:
 def build(feature: Feature) -> probes.Probe:
     """The SPIR-V input probe of ``feature``; raises :class:`ProbeError` when there is none."""
     language = source_language(feature)
-    if language == FALLBACK:
+    if language in FALLBACKS:
         if not lowering.can_lower(language):
-            raise ProbeError("dxc or spirv-dis is not installed")
+            raise ProbeError(
+                f"{validators.TOOLS[language]} or spirv-dis is not installed"
+            )
         assembly, probe = _lowered(
             dataclasses.replace(feature, language=language), language
         )

@@ -1386,7 +1386,8 @@ class TestHipCodeGen:
         assert codegen.convert_hip_builtin_function("atanf") == "atan"
         assert codegen.convert_hip_builtin_function("rsqrtf") == "inversesqrt"
         assert codegen.convert_hip_builtin_function("rsqrt") == "inversesqrt"
-        assert codegen.convert_hip_builtin_function("roundf") == "round"
+        # C round rounds halfway cases away from zero; CrossGL round leaves them to the target.
+        assert codegen.convert_hip_builtin_function("roundf") == "__cgl_round_away"
         assert codegen.convert_hip_builtin_function("truncf") == "trunc"
         assert codegen.convert_hip_builtin_function("exp2f") == "exp2"
         assert codegen.convert_hip_builtin_function("log2f") == "log2"
@@ -2236,7 +2237,7 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "out[0] = inversesqrt(x);" in result
-        assert "out[1] = round(x);" in result
+        assert "out[1] = __cgl_round_away(x);" in result
         assert "out[2] = trunc(x);" in result
         assert "out[3] = exp2(x);" in result
         assert "out[4] = log2(x);" in result
@@ -19873,3 +19874,180 @@ class TestHipCodeGen:
         )
         assert validation.returncode == 0, validation.stdout + validation.stderr
         assert spirv_path.stat().st_size > 0
+
+
+STRUCT_KEYWORD_MEMBER_HIP = """
+struct Inner { float x; float y; };
+struct Outer { struct Inner inner; int k; };
+__global__ void probe(float* outp) {
+    Outer o;
+    o.inner.x = 1.0f; o.inner.y = 2.0f; o.k = 3;
+    outp[threadIdx.x] = o.inner.y + (float)o.k;
+}
+"""
+
+
+def test_hip_struct_keyword_member_names_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(STRUCT_KEYWORD_MEMBER_HIP, encoding="utf-8")
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "    Inner inner;" in crossgl
+
+
+def test_hip_struct_keyword_member_declarators_share_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Inner { float x; };
+struct Outer { struct Inner a; struct Inner b, c; struct Inner* p; };
+__global__ void probe(float* outp) {
+    Outer o; o.a.x = 1.0f; o.b.x = 2.0f; o.c.x = 3.0f;
+    outp[threadIdx.x] = o.a.x + o.b.x + o.c.x;
+}
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    for member in ("Inner a;", "Inner b;", "Inner c;", "ptr<Inner> p;"):
+        assert member in crossgl
+
+
+def test_hip_struct_keyword_member_reaches_every_target(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(STRUCT_KEYWORD_MEMBER_HIP, encoding="utf-8")
+
+    metal = translate(str(source), backend="metal", save_shader=None)
+    directx = translate(str(source), backend="directx", save_shader=None)
+    vulkan = translate(str(source), backend="vulkan", save_shader=None)
+
+    for text in (metal, directx):
+        assert len(re.findall(r"struct Inner\s*\{", text)) == 1
+        assert "Inner inner;" in text
+    assert len(re.findall(r'OpName %\S+ "Inner"', vulkan)) == 1
+    assert re.search(r'OpMemberName %\S+ 0 "inner"', vulkan)
+
+
+def test_hip_function_local_struct_keyword_names_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Inner { float x; };
+__global__ void probe(float* outp) {
+    struct Inner a;
+    a.x = 2.0f;
+    outp[threadIdx.x] = a.x;
+}
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+    metal = translate(str(source), backend="metal", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "var a: Inner;" in crossgl
+    assert "probe_Inner" not in crossgl
+    assert "probe_Inner" not in metal
+    assert "Inner a;" in metal
+
+
+@pytest.mark.parametrize(
+    "source_text, record, declared",
+    [
+        (
+            "struct Never;\nstruct Outer { struct Never n; float k; };\n"
+            "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+            "Never",
+            "'n' in 'Outer'",
+        ),
+        (
+            "union Never;\n"
+            "__global__ void probe(float* outp) { union Never v; outp[0] = 1.0f; }\n",
+            "Never",
+            "'v' in 'probe'",
+        ),
+        (
+            "struct Never;\nstruct Never g;\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'g'",
+        ),
+        (
+            "struct Later;\nstruct Outer { struct Later n; float k; };\n"
+            "struct Later { float x; };\n"
+            "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+            "Later",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Never;\n"
+            "__device__ float use(struct Never n) { return 1.0f; }\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'n' in 'use'",
+        ),
+        (
+            "struct Node { struct Node n; float k; };\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Node",
+            "'n' in 'Node'",
+        ),
+    ],
+)
+def test_hip_record_without_a_body_is_refused_when_used_by_value(
+    tmp_path, source_text, record, declared
+):
+    source = tmp_path / "probe.hip"
+    source.write_text(source_text, encoding="utf-8")
+
+    with pytest.raises(HipRecordSemanticError) as raised:
+        translate(str(source), backend="cgl", save_shader=None)
+
+    assert raised.value.record_name == record
+    assert declared in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "struct Never;\nstruct Outer { struct Never* n; float k; };\n"
+        "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+        "struct Later;\nstruct Later { float x; };\nstruct Outer { struct Later n; float k; };\n"
+        "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+        "struct Never;\n"
+        "__global__ void probe(float* outp, struct Never* p) { outp[0] = 1.0f; }\n",
+        "struct Never;\n__device__ float use(struct Never n);\n"
+        "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+        "struct Node { struct Node* next; float k; };\n"
+        "__global__ void probe(float* outp) { Node n; n.k = 1.0f; outp[0] = n.k; }\n",
+    ],
+)
+def test_hip_record_without_a_body_stays_accepted_behind_a_pointer_or_once_completed(
+    tmp_path, source_text
+):
+    source = tmp_path / "probe.hip"
+    source.write_text(source_text, encoding="utf-8")
+
+    assert translate(str(source), backend="cgl", save_shader=None)
+
+
+def test_hip_record_with_a_body_and_declarators_is_still_declared(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Both { float a; } both;
+__global__ void probe(float* outp) { both.a = 4.0f; outp[threadIdx.x] = both.a; }
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert "struct Both {" in crossgl
+    assert "var both: Both;" in crossgl

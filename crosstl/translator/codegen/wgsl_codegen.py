@@ -75,6 +75,7 @@ from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
@@ -946,6 +947,7 @@ class WGSLCodeGen(
 
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
+        refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
         target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.

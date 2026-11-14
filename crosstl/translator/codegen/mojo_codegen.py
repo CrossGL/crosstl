@@ -103,6 +103,7 @@ from .mojo_exact_lookups import (
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
@@ -1532,6 +1533,7 @@ class MojoCodeGen:
     def render_program(self, ast):
         """Render complete Mojo-like shader source for a CrossGL AST."""
         refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
+        refuse_precise_evaluation(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
         self.struct_types = {}

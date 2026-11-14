@@ -57,9 +57,6 @@ SPIRV_COMPILERS = {
             "-stage",
             "{stage}",
             "-O0",
-            # slangc removes unused locals even at -O0; with debug information it keeps them, so the baseline
-            # probe keeps the argument reads the call's probe has. Debug instructions never join an id.
-            "-g2",
             "-o",
             "probe.spv",
         ),
@@ -68,6 +65,10 @@ SPIRV_COMPILERS = {
     # rust-gpu names the module after the crate, which is named after the file.
     "rust": ("rust-gpu", ("{source}", "--out-dir", ".")),
 }
+# slangc removes unused locals even at -O0; with debug information it keeps them, so the baseline probe keeps the
+# argument reads the call's probe has. Debug instructions never join an id. A SPIR-V input probe is lowered without
+# it, as a project ships its SPIR-V.
+DEBUG_INFO = {"slang": ("-g2",)}
 # The flags that make a compiler keep the resources a shader declares but never reads, so its SPIR-V keeps the
 # bindings the source gives them. glslang and naga keep them without one.
 KEEP_BINDINGS = {"hlsl": ("-fspv-preserve-bindings",), "slang": ("-preserve-params",)}
@@ -101,13 +102,15 @@ def lower(
     raw_ids: bool = True,
     keep_bindings: bool = False,
     auto_locations: bool = False,
+    debug: bool = True,
 ) -> tuple[str, str]:
     """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
 
     ``raw_ids`` numbers every id instead of naming it after its debug name, so assemblies compare by instruction.
-    ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`), and ``auto_locations``
-    numbers the stage inputs and outputs that have no location (:data:`AUTO_LOCATIONS`). GLSL is lowered with the
-    Vulkan names of its vertex and instance index (:func:`vulkan_glsl`). Call only when :func:`can_lower` is true.
+    ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`), ``auto_locations``
+    numbers the stage inputs and outputs that have no location (:data:`AUTO_LOCATIONS`), and ``debug`` adds the
+    compiler's debug information (:data:`DEBUG_INFO`). GLSL is lowered with the Vulkan names of its vertex and
+    instance index (:func:`vulkan_glsl`). Call only when :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
     name = "probe" + (
@@ -131,6 +134,8 @@ def lower(
             filled += KEEP_BINDINGS.get(language, ())
         if auto_locations:
             filled += AUTO_LOCATIONS.get(language, ())
+        if debug:
+            filled += DEBUG_INFO.get(language, ())
         compiler = (
             rustgpu.command(rustgpu.target(stage))
             if tool == "rust-gpu"

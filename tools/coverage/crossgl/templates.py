@@ -59,6 +59,7 @@ from ..templates.meshes import CROSSGL as MESHES
 from ..templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from ..templates.packing import CROSSGL as PACKING_CROSSGL
 from ..templates.pipeline import CROSSGL as PIPELINE
+from ..templates.pointers import CROSSGL as POINTERS
 from ..templates.portability import FAMILY as PORTABILITY
 from ..templates.portability import (
     GLSL_ARRAY,
@@ -288,6 +289,7 @@ CONSTRUCTS: dict[str, Template] = {
     **BINDINGS,
     **INTERLOCKS,
     **COMPONENTS,
+    **POINTERS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

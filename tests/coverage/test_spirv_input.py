@@ -342,6 +342,30 @@ def test_a_construct_glsl_cannot_spell_is_probed_in_hlsl():
     assert spirv_input.source_language(FABS) == "glsl"
 
 
+def test_a_construct_neither_glsl_nor_hlsl_spells_is_probed_in_slang():
+    pointer = Feature(
+        "spirv", "type", "pointer-local", None, group="OpAccessChain OpStore"
+    )
+    assert spirv_input.source_language(pointer) == "slang"
+
+
+@pytest.mark.skipif(
+    not (lowering.can_lower("slang") and validators.available("spirv")),
+    reason="slangc or SPIRV-Tools is missing",
+)
+def test_the_slang_fallback_moves_storage_buffer_pointers():
+    # slangc writes Slang's pointer arithmetic as OpPtrAccessChain on storage-buffer pointers, which SPIR-V 1.5 and
+    # VariablePointersStorageBuffer allow in Vulkan's logical addressing.
+    probe = spirv_input.build(
+        Feature("spirv", "type", "pointer-arithmetic", None, group="OpPtrAccessChain")
+    )
+    assert "OpCapability VariablePointersStorageBuffer" in probe.source
+    assert "OpPtrAccessChain %_ptr_StorageBuffer_float" in probe.source
+    # The probe is the SPIR-V a Slang project ships, without the debug information the IR row's lowering keeps.
+    assert "NonSemantic.Shader.DebugInfo" not in probe.source
+    assert validators.validate("spirv", probe.source).accepted
+
+
 def test_the_hlsl_fallback_needs_dxc(monkeypatch):
     monkeypatch.setattr(lowering, "can_lower", lambda language: language != "hlsl")
     with pytest.raises(ProbeError, match="dxc or spirv-dis is not installed"):

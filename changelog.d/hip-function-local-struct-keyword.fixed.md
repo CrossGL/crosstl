@@ -1,0 +1,1 @@
+HIP and OpenCL C input read a function-local `struct Inner a;` as a use of the earlier `Inner`. It used to produce an empty `probe_Inner` record, so the `a.x` that followed did not compile in Metal output (#4469).

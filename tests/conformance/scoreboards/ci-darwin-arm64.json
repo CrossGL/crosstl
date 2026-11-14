@@ -80,6 +80,16 @@
       "outcome": "preserved",
       "sourceSHA256": "bbd547874d56e35a8cce6684124a5cfd4df65fdb4fb2f5e80cd3b4d21cc9e46a"
     },
+    "c_round_half|opencl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "40e1d459cc4a03fc766945e749bb7048380a9584e9338486afbef0f5ed615ce6"
+    },
+    "c_round_half|opencl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "40e1d459cc4a03fc766945e749bb7048380a9584e9338486afbef0f5ed615ce6"
+    },
     "c_shift_mask|opencl|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "147c72e3c2326770da008feb0b9159faaa38e2f6d89dcaf76d2d5f4cdffedd8c",
       "outcome": "preserved",
@@ -1349,6 +1359,26 @@
       "inputSHA256": "69f01aa85cbf57f34016eac04bb894fd7f4acf79655fcb6f47938155b412847f",
       "outcome": "preserved",
       "sourceSHA256": "7729b653747a014cbe357586247530a855fd9549ce94aba82d2b0bcb4718213b"
+    },
+    "u_rintf_half|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "0a827b06dafbe86be4140c47652f1c9e9bfd5ee73724b96f6358ff7bf4788a6f"
+    },
+    "u_rintf_half|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "0a827b06dafbe86be4140c47652f1c9e9bfd5ee73724b96f6358ff7bf4788a6f"
+    },
+    "u_roundf_half|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "402a7bde42a92afa1719bbff4e7774c8cb9d945d089bed0ab5d6cfc753abe479"
+    },
+    "u_roundf_half|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "e02503f6b18d8417742143f9e003d7615644ea1f3686e17f69a78d6469b24dda",
+      "outcome": "preserved",
+      "sourceSHA256": "402a7bde42a92afa1719bbff4e7774c8cb9d945d089bed0ab5d6cfc753abe479"
     },
     "u_sinf|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
