@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fp-quantized-qmv-fast-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "sourceSha256": "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425",
+    "headers": {
+      "mlx/backend/metal/kernels/fp_quantized.h": "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f",
+      "mlx/backend/metal/kernels/fp4.h": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/quantized_utils.h": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a"
+    },
+    "hostSource": {
+      "path": "mlx/backend/metal/quantized.cpp",
+      "sha256": "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_1",
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_0",
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qmv_fast_float_gs_16_b_4",
+    "nvfp4_gather_qmv_fast_float_gs_16_b_4_hgs",
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_1",
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_0",
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qmv_fast_float_gs_32_b_8",
+    "mxfp8_gather_qmv_fast_float_gs_32_b_8_hgs",
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_1",
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_0",
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qmv_fast_float_gs_32_b_4",
+    "mxfp4_gather_qmv_fast_float_gs_32_b_4_hgs",
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_1",
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_1_hgs",
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_0",
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_0_hgs",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_1",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_0",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qmv_fast_bfloat16_t_gs_16_b_4",
+    "nvfp4_gather_qmv_fast_bfloat16_t_gs_16_b_4_hgs",
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_1",
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_0",
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qmv_fast_bfloat16_t_gs_32_b_8",
+    "mxfp8_gather_qmv_fast_bfloat16_t_gs_32_b_8_hgs",
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_1",
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_0",
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qmv_fast_bfloat16_t_gs_32_b_4",
+    "mxfp4_gather_qmv_fast_bfloat16_t_gs_32_b_4_hgs",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_1",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_1_hgs",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_0",
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_0_hgs",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_1",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_0",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qmv_fast_float16_t_gs_16_b_4",
+    "nvfp4_gather_qmv_fast_float16_t_gs_16_b_4_hgs",
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_1",
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_0",
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qmv_fast_float16_t_gs_32_b_8",
+    "mxfp8_gather_qmv_fast_float16_t_gs_32_b_8_hgs",
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_1",
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_0",
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qmv_fast_float16_t_gs_32_b_4",
+    "mxfp4_gather_qmv_fast_float16_t_gs_32_b_4_hgs",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_1",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_1_hgs",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_0",
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_0_hgs"
+  ],
+  "artifacts": {
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_1": {"metal": "6805afe0225d28034f615681716496efd45265a99ea76653b5332ea0758195e9:12146", "opengl": "a5e8cd448eca1e97b52db0288cf74b8790a75eb9b5145632f4565786f858608a:20309", "directx": "d856218a9c327ec48687e263ccc8c6a86bb049c122039022d2244f09a3c500e6:22602"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_1_hgs": {"metal": "a389e737e5cdd7540be9cfed1a2157aca75f0f251422d56afa79268a36852227:12409", "opengl": "10b9d819495ee65ca85bae1a0745eba7280f45b63b2706f4e9daa2c16faaad66:23472", "directx": "93ae60dcafcb8097a59f4901cf554611eb21322d5f767a89c1e9a7c6c8686036:25779"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_0": {"metal": "e6da0c1698a5759010591051530cead052f5564701903e581327137d724958ae:12146", "opengl": "841aa5bbad07429811cd8c711b01a55458f7ea23bac60d52cc1952474ff16c88:16506", "directx": "5278cd9462bdfe7a67ef2226326d930b96bca9a943e28e3daa6e46825de055bb:22124"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_batch_0_hgs": {"metal": "7915684ae50bd828a96d4a1cc69d085d60b63733eaacc0b4b54e62b58866fee7:12409", "opengl": "046cccf54744047ac066199eb0ae21f72e5b548614a79151b7e02688f6988cae:19669", "directx": "3b0d6388ec51f2accd28f5d16de35e974b2e8e0f2bf5395f6685493b8d26204d:25285"},
+    "nvfp4_gather_qmv_fast_float_gs_16_b_4": {"metal": "5cd5c59f001651bbebb80692d600610b58b41cc8e25ee5d88f1bedf6fed795ab:14560", "opengl": "3d0c51700c6abdea9e86cc29e04464cebd01dca7ebecbc3afd1cac9e0fa38aae:24813", "directx": "d5a236a11570e6d5a4addbb9a6d0c0db9949c07e087358163ed98bb81eefe21e:26101"},
+    "nvfp4_gather_qmv_fast_float_gs_16_b_4_hgs": {"metal": "bdf659c0a8a7aadccec06b295cfb8c65b75cfceb3caa376c63c82bab71806bd9:14922", "opengl": "dce88e3a9688b4ab50451cbe3a2a33bcfe82642d79a8655ed30182fa69893b02:28060", "directx": "03a90a78de2d26041491175fe719cd382d61ea674b6e5ddd1e7f4bf5f937d95e:29371"},
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_1": {"metal": "3106388a5cdc8ffd292cdd4171ff5f8370a2edc7f5ba59aba289abf47c1b79c1:11578", "opengl": "aa41dcea790d12c806e892f31d50e727a751c42ef43354853b3b09beb911d098:19083", "directx": "09a0718e49dabcc6d68bfba77060c0e6c55b7af7362ae0f230a0867f20951e70:21447"},
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_1_hgs": {"metal": "4c514f25e275a774a3729f42e986c3be8a4c529dc589c7383a126727a5a34b7d:11841", "opengl": "55ef425207b35a357e3e082927660f70686cd980a61c6d8b36f73536105876ce:22246", "directx": "91198b92eae0dd0805d1a758c69dbba271777e20dcc560140de2b6018229e6db:24624"},
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_0": {"metal": "0c05b49d95637819ab797e054c45a998ebb6fc929b0be5ca2e68661db72cab7e:11578", "opengl": "4ab31b1169626671d68241737165ca85af1fcee0894924551e9fe38da15077bc:15280", "directx": "0eb92677830c1588a66e477bb82591000ac366409f880b6604feaa07056fbe39:20969"},
+    "mxfp8_qmv_fast_float_gs_32_b_8_batch_0_hgs": {"metal": "b25358cc99bb67f3f1459abc6306044ceb4840ecfbbff2c7720b3197a8565749:11841", "opengl": "d66b85d0ee25825ef97c044be6a65a1f8ff65f3d458bb3e10196e042f83061e8:18443", "directx": "a2565737d13be791a7b3b309af4e18d5c0483f55ba8e020549adab0b33079b83:24130"},
+    "mxfp8_gather_qmv_fast_float_gs_32_b_8": {"metal": "9e202deb222b4efa67155df8c2bb9e42a732011b52c37a7f0b9fe5935f68eb77:13992", "opengl": "e2998cf0f48f6ded671cdb5a2c752da122b60f16007a213ef8f4c0417b4cccec:23587", "directx": "7428a204c984ba4de1988974e36074e168f2849d5159bcef21c402d94a82296e:24946"},
+    "mxfp8_gather_qmv_fast_float_gs_32_b_8_hgs": {"metal": "e4bd9dcce5684f18e507df8aa991c21c15494e78c2c311fcfe6b530d283f14ef:14354", "opengl": "d63526581572cbd1619715852bff6f2fbee32a0e59b46f0c21460a58482d9cc2:26834", "directx": "263b2f12df06196c695f52c434684f0a806f8637b97ebbe289971a4765d51d64:28216"},
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_1": {"metal": "bd849692961405d2f80b9e00a5907d5fce8edf5d2241aa2fa4e0ccde2601b078:11831", "opengl": "44147163a1c2220d71092a8fee5d18ee654d3041d7002beb1dfeeeff08ed1e9b:19896", "directx": "87d8b857cabd11e8cc5e1c54254ab5c8a0076282c0591964a0625e51d9f9b951:22137"},
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_1_hgs": {"metal": "e1ad7593873a33eb0a23ae4a23d9c86d16e7e02eef63a2678ef808c662b8e2b8:12094", "opengl": "b98d5d607fca7e0530dad9c2f1d9a03591103fc2943654b689644ace645027ba:23059", "directx": "6b8df79e38f1ee1eabe8a24b416a24eb61668d1a9861781a15476491f47b0e71:25314"},
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_0": {"metal": "594f498319d101d1d46d1a0fda624066ec16454649129ae3c785f510ee1bb377:11831", "opengl": "54d6f721bf5b8d1dae1d9a809bdc378d90bb2b387746d5cf3e54d761e36f74a6:16093", "directx": "466f8f0e202e9173eba0c5694380111a2e36c966e1b232aca03e7a04b24d511b:21659"},
+    "mxfp4_qmv_fast_float_gs_32_b_4_batch_0_hgs": {"metal": "77187a32b03d90be0cea62fda890315c5908a8e3fb7951a02d645c09e186e440:12094", "opengl": "81325f5ff3554761445d780ff3047d35ba9ba9e9a18a8658021912d3c17e5d32:19256", "directx": "becf743637d6fe1ac81d949ca7c3b56bfb8073e608f4bb695eb4fdb220608ffb:24820"},
+    "mxfp4_gather_qmv_fast_float_gs_32_b_4": {"metal": "21748a3abde8906e1e46ea0f44441c73fa3507e17d0888b8799480811e2880cb:14245", "opengl": "5943d4d234d8f5370b64ee469fa798d05ebc4d008942d95b73f264142ad163c2:24400", "directx": "07fb3163ce3d63c2b7835547eb1328102a3995eff7cb69549be26ff4e743ab4f:25636"},
+    "mxfp4_gather_qmv_fast_float_gs_32_b_4_hgs": {"metal": "4b7e89151b7a478f6af449d4932eccf4f94bed3d6a0b951c0ae930cf20dd2256:14607", "opengl": "46eb6af8846d4723a25e836a9d0eeacd73be539e6e2d3eb225faada80eb0268b:27647", "directx": "72679accb74cdcaa0bef9df85017669d4c0d143cc29487b96a9be841eb37b14f:28906"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_1": {"metal": "a5da68b2226374f41dcc4eecc709fab11e5506fc86ccafd9ce0feef852f0428c:12262", "opengl": "8c94bd411994535dc7e1a268fb58e399b6c8a2701ceef19345f4341212af53fd:20387", "directx": "c14632f75c7c556787794f1398748a4345594b249ec0a2c9e1f34d7152d7585e:22710"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_1_hgs": {"metal": "cb5cf79b13ed755b558570cbf256b00486ffbcbcedf0c054bead7c68eb351773:12525", "opengl": "a37fa43b8ce78cc78f15ed24ff7bdbe0128d0dac963fc8ebad7d16a9c5ac760e:23550", "directx": "7d1396c49b9a3dde69ec1753df11f0916e6cf5c08f56c2dfe5d678a8b5330590:25887"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_0": {"metal": "9e8cf3f2690d7aa52c786fbdc20cebe4cc42243fbab79da21237cbbb682e6466:12262", "opengl": "11a7b053669263a304c09302eb1555a4f535dbfb21ac90ec0369f63e2c21ba54:16584", "directx": "6e65521c026aa7a3bac663d2e26f657eb84f04716749fac0402593a465e66e20:22216"},
+    "nvfp4_qmv_fast_float_gs_16_b_4_r_2_batch_0_hgs": {"metal": "3a96624e7451b00f3fcb9b7217ab7860f0b97e5551f4c47db981dfb9fa11fe82:12525", "opengl": "6d3a8d9ef460c8ddbc4a9ca79326d8847611abea30e786295dc31e135f525aba:19747", "directx": "cc6f2506f1e0fa3839d6cb312b652a9fa5eea4aa5c2774e0fda56089d6a16af3:25377"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_1": {"metal": "c449034f7d548e6258b4f327b1cc6c0fd2c33dce7cbc8e5fe21b97fa08b1c94b:12329", "opengl": "085b992c85738f173e16f9e027a8dbc5bd9f1f363653fc5bfe3ab7d4b2e80712:20798", "directx": "f5029acf72959060f3cd5f73ff7042dd7c09411ca546f2ea614d3c393e336696:23524"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_1_hgs": {"metal": "d4f6a98813dca12fb9b9f9c9337da44f0c6363a82a542edab1793621cd5433d7:12592", "opengl": "bc557b8be1b504ec28d4d1c204e6bdba059f58f66a8c6bc9485e4670f10ec4a2:23961", "directx": "508c1aca3343770c0a35e2ab35512cbc0b1afcaef65b6bbe232e40b1227dbd95:26701"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_0": {"metal": "23302a99b8d74d83fdf076d4ba1e2569d5362b282b3664fa4c65af6980db759a:12329", "opengl": "a53dd037f51cced5d41320f8642d2df6b651e25fed8d44a334e29af83f7d89c9:16980", "directx": "9824199f320eef12b7104995997c1a2b3baab24822aacec9556fd5640136e83c:23021"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_batch_0_hgs": {"metal": "b293d0f2fa0e48347688fd7c81dd8e3b630d805b1b6815010d0fd9e2f1951e6a:12592", "opengl": "c6b9f5e58b74fb593e27ba410d5ebd4cbf6daa65fc578be3f0dbdf29e86b7283:20143", "directx": "992b7b08979e7c92e7f866fc0eaa511de3d8df7dc95a105c32973a230b71886f:26182"},
+    "nvfp4_gather_qmv_fast_bfloat16_t_gs_16_b_4": {"metal": "fa6c18c9b867134966ea8a9d8fc5d32b1100ec45ca83dfb420718cfb0aa3ba02:14803", "opengl": "de036a841c65089031120d6e68238d881d1d1e490afd3a00507fa05efa65aebf:25342", "directx": "6dd6809a6a1f03cb1e470f656aeb6d365c69896055112b6338d3945ac0f49ef6:27073"},
+    "nvfp4_gather_qmv_fast_bfloat16_t_gs_16_b_4_hgs": {"metal": "78bbc6696673dc7ce73578b9ca62fb4a458c181d374e058d8135b7cdf2fd118b:15165", "opengl": "f3bed12cba61a9357e958d66591ab4466239b1d60df9a11b1a8d3d9571f3903f:28589", "directx": "c97b2deb5a42b80cdba3d00fdebf9f809203bdb28088eb686026ae9f4615092e:30343"},
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_1": {"metal": "22815e70779dba354de4ba15e7216e3e162d62c7d3c590ea3b38840a91b4f6a4:11761", "opengl": "66c2475a780ff7adda3ee701e8b011d942e027db3c0f8baa4925c1d2d0e4ed36:19572", "directx": "564e0af3fe0f51109898a2689fa454d188bf7aaac481f1321d4d8e9efe40137d:22369"},
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_1_hgs": {"metal": "4a493558ba0321a81dacb10588655eafe3fdc84bf6d8a1a83e193f1181caaa23:12024", "opengl": "2c6f2c1407b048b0392c4da429138c4a58d5ac57db90d8692259375144ca87eb:22735", "directx": "0bf8593efb4e99fbf38ad139b56630da991cec9731719b9acdcd759e16cf3ab6:25546"},
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_0": {"metal": "05b465db7eeb62512467e56d5b9475aa23a13071f93dc464b7c849860e49eea7:11761", "opengl": "cdd30fdacfbc0a4a46e3d13ab81f1cc7a48d9a73f48e35bcceabb9dfd602649c:15754", "directx": "ab572e11cb58e3afa008e58481cd802f2d62191137a3e20bf7d600286e25659d:21866"},
+    "mxfp8_qmv_fast_bfloat16_t_gs_32_b_8_batch_0_hgs": {"metal": "30ffc2b834e9683c7ba890da16296d7dd65bc7c8af9e0f21991204243b17229b:12024", "opengl": "53617ef8b5c094e2efcbd84e568f0bfbb85a413317dde3bfcda2832915138bc2:18917", "directx": "08e04a3bc3f0f9337d82d535995e74cac69a358d5986799f022ebf2b71975d6a:25027"},
+    "mxfp8_gather_qmv_fast_bfloat16_t_gs_32_b_8": {"metal": "724859d3803f3c665fd4dbccd41180a0102616be6fc462b56c35fd9840c22226:14235", "opengl": "c0d601811aaa0c5038b7654848b1050b1191258dc65f06837623418471a4a0fa:24116", "directx": "7a4bb1f832b7f030b179fd486dfee4aaa5734003b192c26271ec20106419e14a:25918"},
+    "mxfp8_gather_qmv_fast_bfloat16_t_gs_32_b_8_hgs": {"metal": "c6c98c61579cf8cf1cec219b48fe85b82d7de455aebfd5027c996759af897446:14597", "opengl": "8137238dd861652917b02c486ab4288d0631988a36f5ea28f5b5b5db9aea7e26:27363", "directx": "fe648cc216c2dcb3fc9f5a61663366fa86e2cbda5c7fa5011ed0678569e9be5b:29188"},
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_1": {"metal": "30bd73c21414b882ff6c92dd23ceb8c65abf09dcdedbd32263b5f75f83ce6962:12014", "opengl": "6eaa763d96b0b3825bb4f63c0bfec76bec2664bd1b4189f6fba94ceb9a8d1af3:20385", "directx": "b972902eefdc6ef2eca9cbe21625449168d30fc47b218ce3b2cb96c6fe8e790b:23059"},
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_1_hgs": {"metal": "65b080c56c5555db190463a0d6dad0fdb02d31ad743c0b400449b945fe994b1f:12277", "opengl": "ecc6acd99a55f8efbbe22451e174961980ad04c6b07355430dd78e4588751135:23548", "directx": "a6916f822cf3c5459d4b86a3aa959f81a1664acc68006e7d6e20300478f9fa1d:26236"},
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_0": {"metal": "9539e7c3b91873b2f1abe386b1ce09d1d981c2033c88a2246554f85c3c35e1d6:12014", "opengl": "c81d0b699752eb7114731880f85dc02b264aa67df05db2bd5ca65a8efa05f087:16567", "directx": "d483cbedad073c6e3405c8149e7b825ac513e5fd00df0c901ef85a6dc62e7399:22556"},
+    "mxfp4_qmv_fast_bfloat16_t_gs_32_b_4_batch_0_hgs": {"metal": "524d50e136e83e776817a2384cd7e8c01a5887b1f922e2a087fe383fe2f1b610:12277", "opengl": "708f105ffa9fe702bf6f8ffe04cd3a9d5f57cd12be25c44c95ad12f640694b4c:19730", "directx": "ae9de9e9b43a0c879ad0cd1d4c7d5be497e1c3e1bd7721dded41149eb8d89efe:25717"},
+    "mxfp4_gather_qmv_fast_bfloat16_t_gs_32_b_4": {"metal": "377a205316b6a9d38dc4f821d9b2180ca47c25f9fa1dd66f112f58d42a1b0636:14488", "opengl": "56be510831ac1109382b0f4f358db576d5d615d2fc21bdaf49b2cb9ae1af86d4:24929", "directx": "2be478fbf1460e76f96b095fa25f213b7b469eb037d07d27f579611431511807:26608"},
+    "mxfp4_gather_qmv_fast_bfloat16_t_gs_32_b_4_hgs": {"metal": "05172a8e67baa464918529e0b9cb454feae4f2759a22b96d0aa6fe94580e2835:14850", "opengl": "cbac5b585cb72734fd0c3bdb621466f795aaf8630b8b7681d88c79e172796ead:28176", "directx": "504ca9a80a478328b1961bb0e7572dbd9528f7600a2d4b87b42758e57297d5f8:29878"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_1": {"metal": "bdbaf98ca257cd59f81b2e0d6c0f836b8f0411c68ab7f4128fdf7ecf99fed160:12445", "opengl": "b3f649c786e8369d7d416581b60f1da6f7e68a1bf6467032e6db53f5540a0841:20876", "directx": "9ed6b5593321adbf0c650955b145a24a796fa9921cd7989c3e651ea85fa1ff80:23632"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_1_hgs": {"metal": "099770fb464925a31d68563e147375acc534fff848825c672da198edab74d130:12708", "opengl": "8b18326c299d5ce89a1ce7df25cf8ed7ebe1414c61d01b8042acae5954bd6477:24039", "directx": "562f7e8892df27100e57d0c1c075bf2fc4d0ecd143a5488f77786cccaceba092:26809"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_0": {"metal": "97a68b13daf998c244661585414631071e19655f3317a8de4a4b1485cd974915:12445", "opengl": "de25e79712502b1966186fa2f5a2b230d6977ed8ecc980ff1155fd7a3b08dcfa:17058", "directx": "7f3b24d9b67d9ffe4b1a1ef7f1bb2684ecd3e1913381fca14672286f4f46810f:23113"},
+    "nvfp4_qmv_fast_bfloat16_t_gs_16_b_4_r_2_batch_0_hgs": {"metal": "451e6777b933915261ea0cf99f7f39624f3d4f894fd7705ccf5aa58a0d489e9d:12708", "opengl": "b577c97b97c38363d38c490299eacb5976eea7a0fc97cc747b6378bf450a1823:20221", "directx": "1bb407051a445e9a9ab35ab2cad0b0f9e46c632d1f0e460f3f27a3d7f3f94b6e:26274"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_1": {"metal": "1fa7fe8cbe0bc02a59a3b33ca48416d824dd5edec3777243b1f8d971b39d211b:12278", "opengl": "5e2b5ac765ac204f5f30ba352a652ace14394155e2361b0dab17f82cd3956fb7:20454", "directx": "4429821756c8465fbdd812e8b8df292de4eb915ba632a465e6b998ddf93d9154:23088"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_1_hgs": {"metal": "0d97ba985aaafe6a9dcc95d074098932d8489dc21a9564312d04cec556d50409:12541", "opengl": "6bf41c374c6d495226864650c6c9dc699be71df86ec912a4fbdd57a39b79b7fb:23617", "directx": "6896f1f4b644601476ab5935ccb31c11d5091b50154203ec58204fde3ae7165a:26265"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_0": {"metal": "65b39953715c1331e1833046ac9e53794dd61524a89036b08052eb4c48407f11:12278", "opengl": "17c33cef84d596c44e0c667bdaeec93bd40f3bab6232964847974feb230e474e:16639", "directx": "34d71513e0310f30deb970116452de37ec2f58805d3121d855779219c80d7f5f:22590"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_batch_0_hgs": {"metal": "60b22332723014bf0eb4571a43334176c5d64a2778cce3ff222b81c933a99db9:12541", "opengl": "ab5af4e343fb13ba86cc8eea0f5a2a64ac4861578c58bc6707c97a3bde218502:19802", "directx": "13feb4aa1852de62578c6b3dfa8030011a57c6dbd5f43e2ad052b1bf6e554e99:25751"},
+    "nvfp4_gather_qmv_fast_float16_t_gs_16_b_4": {"metal": "8d343214fc1e2ed9eb9d60a0d261f07b1520efbde97810aae4152254088d2dda:14740", "opengl": "7951a0a215ad7fb2a007dfe29715a77a2cbd9ac956b014e9daa924a9d12ef897:24990", "directx": "e810c86fbfce0adc6dc34c0ff51f51bbfa60a30e25b446ea44dadce822c29031:26627"},
+    "nvfp4_gather_qmv_fast_float16_t_gs_16_b_4_hgs": {"metal": "3ffb9b3c64851ba15a4057c15cde920f3f03a43fe7f7f5b34d2467ce10c8d6e3:15102", "opengl": "d7738ede101def9d628ee4dd69600f822a82ba687abd48c711336ad6b404d7d5:28237", "directx": "96caac58352615d452ca055c5301fcf16cfc4a38b75c25cedabd0973b2f97bbd:29897"},
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_1": {"metal": "3abef57892ca2eee350be66481d6b216472dfed22612511005792f754e1d023d:11710", "opengl": "e303e5b33cdb14f4758830208fd9e442c9976b14b90ea7e6c6b49259df5345ca:19228", "directx": "44aa49ef6acace267ebb1609401c10e56a77969c02c295565079a83d5c251d9d:21933"},
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_1_hgs": {"metal": "e476813e5567ab252fbba3e2285d898bedd73dce28aba4617cb710d3a5fe7143:11973", "opengl": "e2075266d0d532cec84370a4922c697e53a129e7db0f418812d76e102c61143b:22391", "directx": "8386f101570c0de5b5b24c59df23c0823913e3ea47a45a4ee5b47b3ed3a5b3db:25110"},
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_0": {"metal": "1806a7c9395227f89a5f98b7b210077f03901650506bd9db6d2ef7c7ec6c95a2:11710", "opengl": "7ab3d7dc3a7d68f467162fd207b078f54de29a82270850bffa2a5718cc248ac6:15413", "directx": "5992feeff90d2ce5a26b800d41d128ed42db654d91aef26cf415dc25d7c8737a:21435"},
+    "mxfp8_qmv_fast_float16_t_gs_32_b_8_batch_0_hgs": {"metal": "67e9848d623717e89e4c306a183bd9e962b96d367ae33c72964f6a916ec13181:11973", "opengl": "be31c4a6fa4e01601a1e3d3a2525e804a52dafd6e92e71f993f07c9a719aaf40:18576", "directx": "22acddf69075e7054252f3dd78823c2e68ac9c72b30d7551cbc07d75917529b0:24596"},
+    "mxfp8_gather_qmv_fast_float16_t_gs_32_b_8": {"metal": "9f0b422161da5241c2419e412ea3501e6c515861c390279f9ec0cf865fc5c5b0:14172", "opengl": "24b39179fc696d5dbcf01ea34725bb1f1a59a3fef78142b46bbdeddbcd3f78ec:23764", "directx": "7cc2658a8d9a2303716b241427f756cc568d85d9193158bd3a73737d0b1a3d73:25472"},
+    "mxfp8_gather_qmv_fast_float16_t_gs_32_b_8_hgs": {"metal": "ac43c355e40466fbba26ca15e84ce9a17a7eb61cdb85b169e828479dc326fa17:14534", "opengl": "32981119df7c433e80a141283cc2e031c13fd2b991e041a3f4559f8d50c40a36:27011", "directx": "63f77e3867d259a020f793f9b84f6809700602bd9348cb70975b1f0d5ed538f7:28742"},
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_1": {"metal": "33b17dbe8169662ad7f9e62eb761fc85dcaf7262cc4420eb22c47d2624d64491:11963", "opengl": "ab3c5fa95ea4d10f893891f9d2913e75ccbbbee3c95913e80072555d9c656a2c:20041", "directx": "cd3c1ea322b5f743a4fa6a731d9c6310f2117a77e7fa7e9ade443b4cf04afce9:22623"},
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_1_hgs": {"metal": "382d8bff061b0355b64098ce3bdfae2192939a983b16ec1f9159fb57547f6359:12226", "opengl": "69f016f4a41714724f6af0b71ddc2f6c9d1f5bff8f73fb8b5e3fda9150c15f76:23204", "directx": "6ef2401af3588c95dba9a455f7508a89e5d1679541f2f89cc001f95a4c218f2a:25800"},
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_0": {"metal": "ca224b1722f1f0d7601bdcfad06ba47c801e70a54de806b1f82e1c6007b2f391:11963", "opengl": "df6d7388791ee9037fcd3190c9135bac89a79a9fb861c3daec50b75da907bfd7:16226", "directx": "4276a033c3ba29930510233ae158f6d613497aeac45fe3a462307acf64cf8ce3:22125"},
+    "mxfp4_qmv_fast_float16_t_gs_32_b_4_batch_0_hgs": {"metal": "a4bec15797d873213c07e0e1ec945b7cc1409b8a87db39b5c0605320e460e8cf:12226", "opengl": "7da6cc197296c400cc93993ea9dc91d85c1a5e4f0744934f098c6f5d04afff92:19389", "directx": "90efb010d72a4cf89f0ce99b142a5bc5debe39451827319a811050b57b2104b8:25286"},
+    "mxfp4_gather_qmv_fast_float16_t_gs_32_b_4": {"metal": "8b78f072dd1db44dda79a51615594ba33dbcea4935e3041679b6af3c568fec51:14425", "opengl": "ed0bb6743006a7d134d3ff72cb2e5d435d5555b1b86be173260e5ebfe9b4df4c:24577", "directx": "426ec33951fd051a9e2521fa9fcceda79dd447c081309a2aba625831796d4a06:26162"},
+    "mxfp4_gather_qmv_fast_float16_t_gs_32_b_4_hgs": {"metal": "c555618fb53d091b860831055b93d61511dd685edc28a9d9096f7b76a58bf860:14787", "opengl": "333aec344bef20fa3e1faf584fe39e9ce14c2c6e6af341bf77a5f994136fed8f:27824", "directx": "a36416297245f8631aa46c9d04706d7029e9444b1d8ff0fec44f3adc0ff5514c:29432"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_1": {"metal": "426b299959f01dfecfb34abc380caf934fb33507617d7a64d72ec77a99b97bdb:12394", "opengl": "6543ea888dbc887d9870e0004cc476ef4a3e3dbac6cbd898f228b88b0a7193ce:20532", "directx": "1b6ac9b2525d35188ca9d6c03f83d27b468bf50685e52e0775bcd085b3e28e48:23196"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_1_hgs": {"metal": "f377de62851592e04a48be1ab157240e1b5cc0e3e9e60edc3fe48cf22c8bccf2:12657", "opengl": "e9095bd2f0ef6c3bbaa6c01b110166d13a44b179e5acdaf8dda6cce8eb2e1d55:23695", "directx": "270b2b067110c9f07102608bcaa337b5ed252b1ec1a60f863d50238d54c9c774:26373"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_0": {"metal": "0b459ae5e32ca3d5096ec53ccd4bba524503c5eadfff02d188db011b28aef45b:12394", "opengl": "b1c7a0c82e3dc9b979d11c39030612a7cb29b96acd9555df247ec54f4fde4884:16717", "directx": "f236ef0f518c35646dd8700d1ce18fb26b09c3b834d06a1649eb42277e23bbee:22682"},
+    "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_0_hgs": {"metal": "166c127602a064bf2311e08852b3e9d8fc604b9986d01556b0ba6fb281e92a94:12657", "opengl": "cd9ed239628a5d9bdaf9cea8b1c0ec1f4e98f764b4dfe6c4b68920b53da822fc:19880", "directx": "9aef1a9011b273186f811fe3b8d9cfb15386fb132bbe2618454ed79c9c7f6fc1:25843"}
+  },
+  "validationContract": {
+    "model": "fp_qmv_fast_impl lane by lane after adjust_matrix_offsets: every block through load_vector and qdot over two packs per lane, Dequantize's E2M1 and E4M3 decoding, dequantize_scale's E4M3 and E8M0 scales, simd_sum, the global scale and lane 0's static_cast stores, against direct dequantized dot products",
+    "packing": "least-significant-bit-first code stream per weight row",
+    "comparison": "exact words",
+    "workgroupSize": [
+      32,
+      2,
+      1
+    ],
+    "grid": "(M, N / (2 * results_per_simdgroup), B)",
+    "k": "blocks * 64 * pack_factor, a multiple of qmv_fast_k_alignment",
+    "m": "1 without a global scale outside gather, which dispatch_qmv otherwise sends to qmv_wide",
+    "narrowTile": "quantized.cpp picks the _r_2 entries for nvfp4 when N >= 4096 on generation-17 's' devices; fp_qmv_fast_impl has no branch on N, so they run the cases' N over the same (M, N / 4, B) grid",
+    "cases": {
+      "batch_0": {
+        "single": {
+          "M": 1,
+          "N": 8,
+          "blocks": 1
+        },
+        "deep": {
+          "M": 2,
+          "N": 16,
+          "blocks": 3
+        }
+      },
+      "batch_1": {
+        "stacked": {
+          "M": 1,
+          "N": 8,
+          "blocks": 2
+        },
+        "broadcast": {
+          "M": 2,
+          "N": 8,
+          "blocks": 1
+        },
+        "shared": {
+          "M": 1,
+          "N": 16,
+          "blocks": 1
+        }
+      },
+      "gather": {
+        "experts": {
+          "M": 1,
+          "N": 8,
+          "blocks": 2
+        },
+        "broadcast": {
+          "M": 2,
+          "N": 8,
+          "blocks": 1
+        }
+      }
+    },
+    "inputs": "x in quarters of [-1, 1]; every E2M1 code; E4M3 codes of either sign with exponent fields 0 to 9; nvfp4 scales E4M3 with exponent fields 5 to 8, mx scales E8M0 bytes 124 to 128",
+    "globalScales": {
+      "qmv": {
+        "single": 3000.0,
+        "deep": 10752.0,
+        "stacked": 3000.0,
+        "broadcast": 5376.0,
+        "shared": 1344.0
+      },
+      "gatherPerExpert": [
+        3000.0,
+        10752.0,
+        5376.0,
+        1344.0
+      ]
+    },
+    "exactness": "every product is a multiple of 2^-f whose magnitudes sum below 2^(24 - f); only the global scale's product and static_cast<T> round, to nearest even",
+    "guards": {
+      "count": 8,
+      "sentinel": -3.25
+    },
+    "softwareSubgroups": {
+      "width": 32,
+      "directxShuffleOutOfRange": "self"
+    },
+    "globalScaleDivisionProfile": "rne-flush",
+    "openglIndexRangeAssertions": {
+      "batch_0": {
+        "expressions": [],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "batch_1": {
+        "expressions": [
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]",
+          "idx.x",
+          "idx.y"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "gather": {
+        "expressions": [
+          "tid.z * lhs_strides[0]",
+          "tid.z * rhs_strides[0]",
+          "idx.x",
+          "idx.y",
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      }
+    },
+    "unbatchedUpstreamBuffers": 7,
+    "metalUpstreamComparison": "unchanged fp_quantized.metal, word for word"
+  },
+  "scope": {
+    "instantiatedEntryCount": 518,
+    "coveredEntryCount": 66,
+    "quantizeGateEntryCount": 36,
+    "qmvGateEntryCount": 54,
+    "qvmGateEntryCount": 54,
+    "qmvQuadGateEntryCount": 36,
+    "qmvWideGateEntryCount": 72,
+    "qvmSplitKGateEntryCount": 18,
+    "qmmTGateEntryCount": 38,
+    "qmmNGateEntryCount": 36,
+    "excludedEntries": {
+      "kernels": [
+        "fp_gather_qmm_n",
+        "fp_qmm_t_splitk",
+        "fp_gather_qmm_t",
+        "fp_gather_qmm_rhs"
+      ],
+      "count": 108,
+      "reason": "the other matrix-matrix kernels are not gated yet"
+    },
+    "runtimeCoveredEntryCount": 66,
+    "artifactCountByTarget": 66,
+    "dispatchCountByTarget": 156,
+    "checkedElementCountByTarget": 6432,
+    "ciShardCount": 2,
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

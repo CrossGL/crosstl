@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fp-quantized-qvm-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "sourceSha256": "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425",
+    "headers": {
+      "mlx/backend/metal/kernels/fp_quantized.h": "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f",
+      "mlx/backend/metal/kernels/fp4.h": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/quantized_utils.h": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a"
+    },
+    "hostSource": {
+      "path": "mlx/backend/metal/quantized.cpp",
+      "sha256": "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "nvfp4_qvm_float_gs_16_b_4_batch_1",
+    "nvfp4_qvm_float_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qvm_float_gs_16_b_4_batch_0",
+    "nvfp4_qvm_float_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qvm_float_gs_16_b_4",
+    "nvfp4_gather_qvm_float_gs_16_b_4_hgs",
+    "mxfp8_qvm_float_gs_32_b_8_batch_1",
+    "mxfp8_qvm_float_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qvm_float_gs_32_b_8_batch_0",
+    "mxfp8_qvm_float_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qvm_float_gs_32_b_8",
+    "mxfp8_gather_qvm_float_gs_32_b_8_hgs",
+    "mxfp4_qvm_float_gs_32_b_4_batch_1",
+    "mxfp4_qvm_float_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qvm_float_gs_32_b_4_batch_0",
+    "mxfp4_qvm_float_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qvm_float_gs_32_b_4",
+    "mxfp4_gather_qvm_float_gs_32_b_4_hgs",
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_1",
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_0",
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qvm_bfloat16_t_gs_16_b_4",
+    "nvfp4_gather_qvm_bfloat16_t_gs_16_b_4_hgs",
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_1",
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_0",
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qvm_bfloat16_t_gs_32_b_8",
+    "mxfp8_gather_qvm_bfloat16_t_gs_32_b_8_hgs",
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_1",
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_0",
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qvm_bfloat16_t_gs_32_b_4",
+    "mxfp4_gather_qvm_bfloat16_t_gs_32_b_4_hgs",
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_1",
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_0",
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_0_hgs",
+    "nvfp4_gather_qvm_float16_t_gs_16_b_4",
+    "nvfp4_gather_qvm_float16_t_gs_16_b_4_hgs",
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_1",
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_0",
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp8_gather_qvm_float16_t_gs_32_b_8",
+    "mxfp8_gather_qvm_float16_t_gs_32_b_8_hgs",
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_1",
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_0",
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_0_hgs",
+    "mxfp4_gather_qvm_float16_t_gs_32_b_4",
+    "mxfp4_gather_qvm_float16_t_gs_32_b_4_hgs"
+  ],
+  "artifacts": {
+    "nvfp4_qvm_float_gs_16_b_4_batch_1": {"metal": "f2000da9a346b6d10ce5109dcd3cec13b3ec967ef62bb773d8c3edee39fd747a:12578", "opengl": "1bd93f9ff4903f2be3e6cfa307a3ddfcbd853279cd03fc1abf9230bc7f45b0b3:20598", "directx": "f67562d97129b272c60470c23ba3080287caf0e59ce26315f9815c02eeeee60f:23466"},
+    "nvfp4_qvm_float_gs_16_b_4_batch_1_hgs": {"metal": "a7e53f815585f2ddbef27e88ace51167c649d9e4df145b77a39d87b1c9c6e265:12836", "opengl": "f89ff0b11dbf29af508b56811d7128ae55a160bbc8d87ff80c4ca072f4ac2509:23766", "directx": "b8b3348b67fc6e4db166299ee7a176d0e4d812ad23976cc33be471c991f23ec2:26657"},
+    "nvfp4_qvm_float_gs_16_b_4_batch_0": {"metal": "76817b48ee9d1c932239712770851cd1b2c4cece6136af714ae04bfe73438daf:12578", "opengl": "690838ca972d9618dfdad988262874f4259c20ea703ffa4decd1357379c25821:16795", "directx": "6b30aa38fbdcb191939bc9b4493ceef7da6de58d12faa6307e0d4b60049ce20b:23008"},
+    "nvfp4_qvm_float_gs_16_b_4_batch_0_hgs": {"metal": "457bcbb65416ba1f31924e846626409d22a1b10422404e77384f66e4818d99d8:12836", "opengl": "2b7213ae826e018009133dfdf523bc5b54fdb33d5d44e1db826cac55169b00a9:19963", "directx": "b69c67ddac586ef4a1144e929efad0b33f84c4467dab4087540cd21bb6454e5e:26183"},
+    "nvfp4_gather_qvm_float_gs_16_b_4": {"metal": "61aa6fdae818205994ad6a0a938ddb6080879c9f30e284c9375a7eadf9503262:14936", "opengl": "0988b75f06f071cd113c81c50055fbe5d270f7a7d7d902f63b78822f9a717c1b:25068", "directx": "6b7ea98aebf9c7c32f069a347ff5ee1f8f477ca8a20accb8b1d0e9e26463fbb5:26920"},
+    "nvfp4_gather_qvm_float_gs_16_b_4_hgs": {"metal": "313a4b81979d5e315a1a1d746f16be026849ae2a6523ca11d674e6f5061813d7:15293", "opengl": "04856f7ebbf2b1652b5f94be0e9cc2d42206eea59d415c9e0a78bae30b8840e5:28320", "directx": "a03a1612dbb1493c4e48afc726d20514c5223a5a3026aee8a25ec619f9c3616a:30204"},
+    "mxfp8_qvm_float_gs_32_b_8_batch_1": {"metal": "3d344d890a666302834b9be609fa5140886846cee0b05d75f87ee092277ff5f1:12251", "opengl": "c06c641cb66ed74b6fb00859cdbf3eb93f943e6d738b45cd89194283c6bde8c6:20623", "directx": "36a40c37c4f85d9b5c0ac0e48fb5b96605a598d9957c77328d106b72dce75db0:23956"},
+    "mxfp8_qvm_float_gs_32_b_8_batch_1_hgs": {"metal": "e1029267f4e7330a4aebdcc5851e3f675c96e203674b56e67942c9f91a07a526:12509", "opengl": "95425300d045af448a90a85ac79deab433eb258b0517e5bbb988e9a80d9d1a79:23791", "directx": "1eb808959e25526de1efc3c960a6dbe2f208cd5d7936c4ad30e6aec6e68352dc:27147"},
+    "mxfp8_qvm_float_gs_32_b_8_batch_0": {"metal": "1e7603f9000bd3352db3b3e5c7e9bdca2b7387f2be2a0bba116501f7c7233007:12251", "opengl": "2ca3d10a33a218c6c6925b987c7397bd23ae180aa96c973e46f010be5c59526d:16820", "directx": "998a91af3a254adb1881a4c0c9f265cc16874ade03dc6c0e5fc233b9426739c1:23498"},
+    "mxfp8_qvm_float_gs_32_b_8_batch_0_hgs": {"metal": "0fa1c4a49597fdd886b89fd9a7341fa2ae64926e8ec1e354d7af677874b860e9:12509", "opengl": "339a0870c027cf754f0b89ba79f50221f414a20123e0f657d22b185322172d4f:19988", "directx": "f42a6e403a39a8e6c662314852c797018bf92125bd81895ad8dd3ffec1856ef1:26673"},
+    "mxfp8_gather_qvm_float_gs_32_b_8": {"metal": "0fa874d672f4429d6a743dbae33bd691e54f930f8f02f11858ccb9511e579784:14609", "opengl": "938a684eae9f96cf9bd298adde676e77a4a9d0887874ba96a148096cda61e0cc:25093", "directx": "389ff2e08b68a8caeeabd4caeef50153f06acd84424633100ecad0b16e11c55c:27410"},
+    "mxfp8_gather_qvm_float_gs_32_b_8_hgs": {"metal": "a166cfcd133ca85f0cce3685a1ec736f289f35ecf00c2579a5b906455bfa6746:14966", "opengl": "e9ac553db18bcbdd097b25ac02c03e149a3e4b24363ead17ec2396cd20ce3fe2:28345", "directx": "ae38f65adcb3d9936aca41d6ffb618abedcfb0885906efb8a6a7924a4217a16d:30694"},
+    "mxfp4_qvm_float_gs_32_b_4_batch_1": {"metal": "4799609914efdc8f13d6e1db2a0249d97d3bda666fa6eb355285107a684b2577:12263", "opengl": "cbbb6482754cc3694d0dd802f5ce18fc14431c65331a66708ea7f501dc355324:20415", "directx": "1cf432e12faa5dfc670238c9c104c7d937e32ebfb3792b8d57c30e756f401ca7:23511"},
+    "mxfp4_qvm_float_gs_32_b_4_batch_1_hgs": {"metal": "20ea0bff714a223ea694f66ff21a4aa8962bd899f00728e29f3b68a0adccca68:12521", "opengl": "9479e97b88048199472b4c11b9b1fd227cf575b7f9071dd9e218849927ad9a4f:23583", "directx": "4b662793161c72c75257e5fccada996b7c5095aada6d901fa17f4cd829c90d85:26702"},
+    "mxfp4_qvm_float_gs_32_b_4_batch_0": {"metal": "867502c34c33865b0ce54363cf085379ab0cd79035a73f4503062ce8a1d24aee:12263", "opengl": "8665075ee27500ffd75ea75fe79fb6f8e8b2006a8c2f0fb2bf5c9894bbab9290:16612", "directx": "95e77c7b480dcd7eeda356b1edd0cbb69b1b226d4098b295df1b6f1e9d7da7fc:23053"},
+    "mxfp4_qvm_float_gs_32_b_4_batch_0_hgs": {"metal": "a8ddc13260d8b14bc5403b55ce0a09f625c004aabb003b624940b72e97cb678f:12521", "opengl": "dbcd399d760f541710ef5af0a30ea4fe544cf1bcd0566188f5539a22a3c78604:19780", "directx": "1609458112c860bc454ceb794d726cb2458eea84a0d1e14a72ce492c39fea10e:26228"},
+    "mxfp4_gather_qvm_float_gs_32_b_4": {"metal": "bd29d8a0ea0450113c28353465e1e03053ab159351738b8c944aa3fa9440eafb:14621", "opengl": "bc90c6d3abc570ed464fae54fa5020f7127cd33bfe1bb2e737c781112610ba48:24885", "directx": "22f94492e1cef4c74bfddf977ed36e9bf8f534c807a83ad8a86f583f9f92d2c8:26965"},
+    "mxfp4_gather_qvm_float_gs_32_b_4_hgs": {"metal": "8fdf219088b92ed4475b53a07e5b940f9fbf4d21c40e4aca835dd65d11c35152:14978", "opengl": "39dc5b016642fa9868c530a852fe8ee43c117c4f427dbaa37b730be25e7793c4:28137", "directx": "a6887b2666ba3a2896e04c88acd2a7ed834e408398a799d7d628a8db7ea8deee:30249"},
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_1": {"metal": "258927c94453d55d01944df40ad3b842681da9d6dc21be649f4f356d4d234a9f:12775", "opengl": "5d92fc42152af950b4345ed1eb5378e14957ce42aa6b81326fa821f8aa8c9127:21107", "directx": "859747de1db06d5d76b7c5ac2f320f2dcf8548c917407a57f15ff9357791cf8d:24452"},
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_1_hgs": {"metal": "c9a8c4f0e2cd6c23b568bb358fb19adf973b407230a2840e79a635b2ee9be518:13033", "opengl": "8f519dffdb4390845e80e01a4941175a27acb5f1894498dc3717a1da08f8c47e:24275", "directx": "3317ef78542c2f17d7c7b165018a5fca11caad9c94b1fb46bb873d4b29581fb3:27643"},
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_0": {"metal": "fe3dd9c0bbbd08d6fd4c709680deeece866f4004a9e1bed887d1480650863adf:12775", "opengl": "b21cb350c2e9449c25a0e0ea7aecc95638222b7c136669219195d2d972f014aa:17289", "directx": "8fef541605e8773c2d63aefb7891cf7e0934f53ef2107905cb24141491acd99e:23969"},
+    "nvfp4_qvm_bfloat16_t_gs_16_b_4_batch_0_hgs": {"metal": "1a213156c1ba928c0e31f595e6f4d55c135f9b3e372a6927b8b72dc1a49d638b:13033", "opengl": "454f3f776de0478d4397c208e57df413f811f84cb9082e354eeb20356c71bfc1:20457", "directx": "7f1523fb263c0ecda15a8bb6216781416723993b475ec7e01c173ada8fb2b00d:27144"},
+    "nvfp4_gather_qvm_bfloat16_t_gs_16_b_4": {"metal": "b8378bc287a7f7bb702f9e855050afe2165abb97b70ea7bb09f77824eb62fe96:15193", "opengl": "8cf63c2f7a2fab51856ca47de0ee3980d747229f887cf0254073991ee811ce1c:25617", "directx": "23d64eab6cf60c8e248e215fdbc7cafa8f486c180ae0ff3246c63ce2a6f01658:27956"},
+    "nvfp4_gather_qvm_bfloat16_t_gs_16_b_4_hgs": {"metal": "615ecffaf49253aff5f89f08188a8cbe378228dc9616469dcf8b59cefa3a8cfd:15550", "opengl": "1a3a94810e8956dc4917b71b98a7eb6cb2554c852bca639a46d3afd0497eab77:28869", "directx": "812c3ee5c73feb1a45dbbcb0dd22cf6b9f4eed933c89181d815c6ea5b337e9cf:31240"},
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_1": {"metal": "0b661eae8272ae12f63ca2a2188fc81029a8a9249bab571b416e697f3b80afdc:12448", "opengl": "a96ee3bf0547cb3f6126b60728b7ab13924722466504740bf089d97dd7967129:21132", "directx": "b303693e4a201461761e3c2cc467b2462e5ee7104ca48fa4f43ae4b344a20957:24942"},
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_1_hgs": {"metal": "cf48ccf1743e901806eb8f5696318a1b111261182bff849c117c81b314797853:12706", "opengl": "288b3557b647ae791eb37f89890d750287cc6fb17817056241f4a04c13c57a6f:24300", "directx": "3db03020e6e52c1b7e8b812551196015ec49d9cac449802d760a55b5de13feae:28133"},
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_0": {"metal": "f13acbbb9e08bdd7a90d5c47c37d4f1ab8cf6f082a38d7ea18e07b5d89a639f5:12448", "opengl": "d617be34dac5387697e6c0def5f693ad76d38d32e91a42df0a9d68f878176f89:17314", "directx": "01909b3046e1d22e2ced6a482a19dd0aa67ede5d3ad6616da0eb95ecd910b404:24459"},
+    "mxfp8_qvm_bfloat16_t_gs_32_b_8_batch_0_hgs": {"metal": "f08f27a6cb512ea1441ffac13ae006cc102049e2223128433f3e18b8fd88bd25:12706", "opengl": "3dd7c747dd0a87e58042f7ac08c33f281cc2b38a0dae4667715f2ae7ec15514a:20482", "directx": "400d5d8fcf5b2ef9e3323611f6641bf35aa10742129063244dd8a22531f5cedc:27634"},
+    "mxfp8_gather_qvm_bfloat16_t_gs_32_b_8": {"metal": "f8fd732fbc6b8853833e5594980bc25843c4b09fa62a53c01772c05f903d64d5:14866", "opengl": "cab9d900a240f11ee0a4607dfdfea9faf16c81358e1456198d75180bb847c96d:25642", "directx": "a3968afdb712c6fda3a4226f95dc0015e3d2eb7f72c3d2b81dd01bd132bf86b4:28446"},
+    "mxfp8_gather_qvm_bfloat16_t_gs_32_b_8_hgs": {"metal": "0be06541ad0049d3e7bb83b5008f895a89a6840d2ba34174474ed9c11e8d9a07:15223", "opengl": "d0540b13e7b7ff045a796a1f81744879085cb7f45ca124b4fc9ff9e0f554ec81:28894", "directx": "86584a1f90367a8349d6ac18919ce1b60d94760b9c5b40cf97b65b73d39ca9fa:31730"},
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_1": {"metal": "a002fcedf2eff793482ac311db4f7774365501aaf79ffe14d7185a1511d3c6c2:12460", "opengl": "bdb139a1f579aea65f51ca8c5b19b764cd2b790938bea89e8ad5db783e3c65c6:20924", "directx": "a358d451bae83829e44966d40fb341ed54861084488896ff6c90201a18127979:24497"},
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_1_hgs": {"metal": "3b837de99fdd1779e607253a51c3a6f24d52af10e188d03a9e0243b1d07cb13c:12718", "opengl": "6e009ccb09ba3908197e868d5175d3319d0155b51a58440e132439968314c003:24092", "directx": "a76a4e605944e685b6fcf6255fd2e5d10a1ef3cddf97b18007d30281e6dd0120:27688"},
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_0": {"metal": "ee030198b9100cc61ca1b122cec9ece9495444e2cbefd28c6f74ab2bccf1c08b:12460", "opengl": "d601262e512f003d977d20cbe2073e0146109ec968e99e895c66f779a3e81a62:17106", "directx": "a2841a9f533ba1eb753b721699dac55093d365e91e7a208f45e504669351c83c:24014"},
+    "mxfp4_qvm_bfloat16_t_gs_32_b_4_batch_0_hgs": {"metal": "dbb7cff8cc259023a07e32408060ac03841a78547d24b2609fea0a62f1cf1c0f:12718", "opengl": "6fe3f12f823e54793f1019d1701bef8edf6e3a4bfa6e89ef5035471159e0130b:20274", "directx": "e3763f52c720a032b5298ca4be2f48e808e51c5501c3e85772988f2df60258c0:27189"},
+    "mxfp4_gather_qvm_bfloat16_t_gs_32_b_4": {"metal": "02705c8a307456d8b18e69eee31de9f1c1e9b178b36aaaa7ea18642e411b8586:14878", "opengl": "9947ffeae8c20727db26f6dc438839443781de4abab66df1215b1482b0a259c3:25434", "directx": "7ec764a8133e10bee6c32564240b768c5be40ef5214046c524fafe90048d8d00:28001"},
+    "mxfp4_gather_qvm_bfloat16_t_gs_32_b_4_hgs": {"metal": "12fc3bffe089d8afbd197f564444a31fffc2f130c28770b26fc33cbeaad82a43:15235", "opengl": "bf0b08e1dd9a33f734e548e81822e39b76bf1c227f2382a99d75653aab5ccef6:28686", "directx": "a4547822371e98ac74bdc98793aca257e3e51f2d6e15d0b2296c1c75236602f5:31285"},
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_1": {"metal": "ade42d8d574b19274cbd0854b666c0e8a49fe0ecf2d5cd7d44e2a8f8ddd5e074:12723", "opengl": "9616b9d7abb300cfc8ea7c36dc8ee9779a7a01a00d0edfaf621766cb0ad9ac26:20759", "directx": "fb629d5675d2d4470f3ad610239d23a3d651d1ef5c6584da820e613707af0965:24058"},
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_1_hgs": {"metal": "d1125f4882250d993314b4df195c6db4b953bd08a962e9a355e3c427d9f79236:12981", "opengl": "84b8b27a5a1cf2b71dcc32a85bbf7025a2a10a53391f632263de0f3bdb70b352:23927", "directx": "4f1723761d0aeb2612ebf985774ad6227ffa2da022cf578ec663ef4ef245aefa:27249"},
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_0": {"metal": "89e70cf8d8c86a33018259b97201683e4a39c8b52d70cc12e6dc7e8aa7256ca3:12723", "opengl": "40b25d9e25669fddae75669b5ed693e5e54fb2f8f67880d887b56d2ee3590895:16944", "directx": "3b8435ac7b836387f6b804d41f11199029cbbc2d6da22e1c2b507c205d31cee5:23580"},
+    "nvfp4_qvm_float16_t_gs_16_b_4_batch_0_hgs": {"metal": "cc6107499ad5e871a097fda36c75e0ed9b54424e93e33f98929561260b0fca69:12981", "opengl": "b89cfdc48ef5d1a2e81dd498a10e5648d41dc650c0c75bb0ae54de36939c2941:20112", "directx": "731de6e0412284b37b02a7275b0593d11f32e0e12bb744ab50590badf7cbafb4:26755"},
+    "nvfp4_gather_qvm_float16_t_gs_16_b_4": {"metal": "a32c50fd86ba7e85c2ab91e48c9849d4b347f35cde2938c3fd53effcba923215:15129", "opengl": "9c0cbf7cabc69aec95e1760d2e3a13350aec878b691e6352b3c9e707d3752507:25261", "directx": "afef4ac10a218e56abdf9b530b86fb7b35d3f2f248bf16ce574d557a7b8adb50:27552"},
+    "nvfp4_gather_qvm_float16_t_gs_16_b_4_hgs": {"metal": "a0c365c1d41065b3c85ee08e631d7148bcd9def6bf178ba21e232da56520d26c:15486", "opengl": "835e7c1c77181479a33a986f369e636398dd6a814849237c52b04042864b4645:28513", "directx": "00d2303f1f82910a9f6874123bb0d9c0d61cdd68eadedbddc6753bb01e32e886:30836"},
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_1": {"metal": "2056195502e2f664c7e986d89ea4f3ca10248de6439cafc4382955fe38d7a7b1:12396", "opengl": "33eb95b6210a0b0e9792440a3cf1ae884bd589257b207ebd2245ca83f7054cb3:20784", "directx": "5762fa675fbb79bb2b3c87f890902f7c2519493fde7f2bf25ab778d8be6e2387:24548"},
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_1_hgs": {"metal": "5eb5d7b85df20232b4fab44f92585d96f837cde3c686ea258726fcc68e8a6d1f:12654", "opengl": "bbc0887b7d4db35a826556220ab07b737f7d6883f8caa7e9f158aaf184d7a4e2:23952", "directx": "ca8e6e2de93c9ebbef07762a6c5e4e561ce3898d8a58026d2de5ef6ae6fc2be2:27739"},
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_0": {"metal": "67905a2ebcb5fae58b705320d3a6d1515cb4dfaaa64cc45a8a8eccbe150a51b3:12396", "opengl": "0d95ed79f08f92ba5684f58eb3df3f97fad4e2c6831b1d4680f16d1d6a842037:16969", "directx": "4f49fba6ae62b3f6f6681f901b788eb087b79d103eded384417cbe0a1aa4114f:24070"},
+    "mxfp8_qvm_float16_t_gs_32_b_8_batch_0_hgs": {"metal": "7b9e4d1087fe82a3053d0cd33ac24fd05ba250a6dec5aa053a3037f57bc04d3e:12654", "opengl": "4951e1aaa47408774fae95fb63c18ba902d4d4a8388e72ade8a22635c56ded23:20137", "directx": "6edd1c0d1b89b4df7bac4bef6f4281f39e1dac8171a6510b505dca2d8d547c31:27245"},
+    "mxfp8_gather_qvm_float16_t_gs_32_b_8": {"metal": "12d196d250f96fccabe1befe04c5b722d9eaa7c0c124bf4a96a3c1b56a4fc552:14802", "opengl": "ef8f4771aa4be3424a8d2669fa7ad3fcbd944dab961181d1b03eb5af8361501f:25286", "directx": "ed8ab41166c043ec06ab8892484a39f5f54e8b9fe3d88a21818c4fa657363c54:28042"},
+    "mxfp8_gather_qvm_float16_t_gs_32_b_8_hgs": {"metal": "13b2a6bc1726093895c46d74e49038d791aaaed8cf5533d9831dc9acf2f082b4:15159", "opengl": "f7ac6ea7b2c4a1d306f875a8491af8f48dd9226336c882a92dda6a479efecb7b:28538", "directx": "2632b4931824db4515d554be534789cba0700eef4c93ebc2aae71b3883602943:31326"},
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_1": {"metal": "f173bd686bec9d272160e47fae265533a6c043dbe5a39cae7f64b7bff3afbc22:12408", "opengl": "b901c71dacf31f1d633198204e1473db91d2d7c00773a0a9fcb080ee525ab724:20576", "directx": "778dd16ac82ec2209a2b9b9a3e70858556bfa4a8c57f5c8c6cb7b5d9c925dd87:24103"},
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_1_hgs": {"metal": "0a4f677114ec6e381db6048771a87d6b379862e212ea72a0d3745d52d49b34ae:12666", "opengl": "6fb78c49617f09abbd1765874c52458f0a06e89dbba66e18ca9ab1182819fc94:23744", "directx": "bdfa4a281a6a88d4ab9b6c3bdc86a7c0c439faebce8be59a60a47119a5065bae:27294"},
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_0": {"metal": "b2b69f23e8e87948226da97b24e6c55488f170a78ca5ce34fc0d789d007f4660:12408", "opengl": "c03adaad2aa3ffa6b63fbd525227dfba5a05228c7e85439cd68a898c15851ea6:16761", "directx": "d6eec544441d93812a90b9c938769bcdd790f5c1af3f7d19f835fa3bdb03798a:23625"},
+    "mxfp4_qvm_float16_t_gs_32_b_4_batch_0_hgs": {"metal": "4f1ec6ee011f8e3a27cbe37c811702a7b9c56f478de11fcd5f55c5b85278a91f:12666", "opengl": "aa7c91b1291b06f3e928ddf1925bea442c85f5e7854162434c124047dbc0b44f:19929", "directx": "20a19050a5be383b5f7955b16aa1a4678ab12957d99ba7db62fe961a7bd745bc:26800"},
+    "mxfp4_gather_qvm_float16_t_gs_32_b_4": {"metal": "26d3e077f92941298958c567f03707a9926f069ae0b654ca6043948b9ab6f8be:14814", "opengl": "7ea4376aff02fb477f62cad41a772130b097923ef72742dede47dc019cbc610e:25078", "directx": "e5841b66834c6e1f2116071b5e2bf4dbd73e61426dd05882f714c625d1b24754:27597"},
+    "mxfp4_gather_qvm_float16_t_gs_32_b_4_hgs": {"metal": "2890d08e51ea4dc14f74ad72cf8cebbd62473a506a4b51c031761aecd51b6faf:15171", "opengl": "6a2ed71a3e16a146bb2f6bb148541effaaa86c8f4bf57fa8239d44d47d7738b6:28330", "directx": "20d36d55b25843bd1352739574aaf7d5fb939b0627b505591d2f69584d3ebe69:30881"}
+  },
+  "validationContract": {
+    "model": "fp_qvm_impl lane by lane after adjust_matrix_offsets: whole blocks and the last pass through the vec_w byte view and qouter, Dequantize's E2M1 and E4M3 decoding, dequantize_scale's E4M3 and E8M0 scales, the zeroed lanes past K, the early return, simd_sum, the global scale and lane 0's static_cast stores, against direct dequantized dot products",
+    "packing": "least-significant-bit-first code stream per weight row",
+    "weights": "K rows of N codes, quantized along N",
+    "comparison": "exact words",
+    "workgroupSize": [
+      32,
+      2,
+      1
+    ],
+    "grid": "(M, ceil(N / (2 * group_size)), B)",
+    "n": "groups * group_size",
+    "cases": {
+      "batch_0": {
+        "tail": {
+          "M": 1,
+          "groups": 1,
+          "K": 13
+        },
+        "blocks": {
+          "M": 3,
+          "groups": 2,
+          "K": 64
+        },
+        "ragged": {
+          "M": 2,
+          "groups": 3,
+          "K": 73
+        }
+      },
+      "batch_1": {
+        "stacked": {
+          "M": 1,
+          "groups": 1,
+          "K": 45
+        },
+        "broadcast": {
+          "M": 2,
+          "groups": 2,
+          "K": 32
+        },
+        "shared": {
+          "M": 1,
+          "groups": 3,
+          "K": 71
+        }
+      },
+      "gather": {
+        "experts": {
+          "M": 1,
+          "groups": 2,
+          "K": 50
+        },
+        "broadcast": {
+          "M": 2,
+          "groups": 3,
+          "K": 64
+        }
+      }
+    },
+    "mxfp8ShortK": "K + 32 for a K below one block: the lanes past K would decode a vec_w they never loaded",
+    "inputs": "x in quarters of [-1, 1]; every E2M1 code; E4M3 codes of either sign with exponent fields 0 to 9; nvfp4 scales E4M3 with exponent fields 5 to 8, mx scales E8M0 bytes 124 to 128",
+    "globalScales": {
+      "qvm": {
+        "tail": 3000.0,
+        "blocks": 10752.0,
+        "ragged": 3000.0,
+        "stacked": 5376.0,
+        "broadcast": 3000.0,
+        "shared": 10752.0
+      },
+      "gatherPerExpert": [
+        3000.0,
+        10752.0,
+        5376.0,
+        1344.0
+      ]
+    },
+    "hostGlobalScale": "QuantizedMatmul passes qvm none, so _hgs fp_qvm entries bind it at buffer 2 as qvm does; gather_qvm passes GatherQMM's",
+    "exactness": "every product is a multiple of 2^-f whose magnitudes sum below 2^(24 - f); only the global scale's product and static_cast<T> round, to nearest even",
+    "guards": {
+      "count": 8,
+      "sentinel": -3.25
+    },
+    "softwareSubgroups": {
+      "width": 32,
+      "directxShuffleOutOfRange": "self"
+    },
+    "globalScaleDivisionProfile": "rne-flush",
+    "openglIndexRangeAssertions": {
+      "batch_0": {
+        "expressions": [],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "batch_1": {
+        "expressions": [
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]",
+          "idx.x",
+          "idx.y"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "gather": {
+        "expressions": [
+          "tid.z * lhs_strides[0]",
+          "tid.z * rhs_strides[0]",
+          "idx.x",
+          "idx.y",
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      }
+    },
+    "unbatchedUpstreamBuffers": 7,
+    "metalUpstreamComparison": "unchanged fp_quantized.metal, word for word"
+  },
+  "scope": {
+    "instantiatedEntryCount": 518,
+    "coveredEntryCount": 54,
+    "quantizeGateEntryCount": 36,
+    "qmvGateEntryCount": 54,
+    "qmvFastGateEntryCount": 66,
+    "qmvQuadGateEntryCount": 36,
+    "qmvWideGateEntryCount": 72,
+    "qvmSplitKGateEntryCount": 18,
+    "qmmTGateEntryCount": 38,
+    "qmmNGateEntryCount": 36,
+    "excludedEntries": {
+      "kernels": [
+        "fp_gather_qmm_n",
+        "fp_qmm_t_splitk",
+        "fp_gather_qmm_t",
+        "fp_gather_qmm_rhs"
+      ],
+      "count": 108,
+      "reason": "the other matrix-matrix kernels are not gated yet"
+    },
+    "runtimeCoveredEntryCount": 54,
+    "artifactCountByTarget": 54,
+    "dispatchCountByTarget": 144,
+    "checkedElementCountByTarget": 35712,
+    "ciShardCount": 2,
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

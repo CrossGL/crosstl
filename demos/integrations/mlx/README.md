@@ -1923,9 +1923,269 @@ including signed zeros and subnormals, with E4M3 scales of either sign or E8M0
 scales from 2^-5 to 2^7. Every word is compared exactly, eight trailing guards
 per output must keep their values and inputs must be unchanged; Metal also runs
 the unchanged upstream kernels, which must produce the same words. The
-matrix-vector and matrix-matrix kernels are outside this gate. This covers
-36/17,832 entries; it does not run the upstream MLX test suite or redirect the
+matrix-vector, vector-matrix and matrix-matrix kernels are outside this gate.
+This covers 36/17,832 entries; it does not run the upstream MLX test suite or redirect the
 MLX host runtime.
+
+`contracts/fp_quantized_qmv.current-tree.translation.json` pins a further 54
+entries of `fp_quantized.metal` and their 162 artifacts: `fp_qmv` with and
+without batching and `fp_gather_qmv`, each with and without a global scale
+(`_hgs`), for the three element types in `nvfp4`, `mxfp8` and `mxfp4`. Their
+`simd_sum` lowers to 32-lane software subgroups on OpenGL and DirectX, the
+global-scale entries select `binary32_division_profile = "rne-flush"` for
+`g / 2688`, and OpenGL is given 5 batched and 7 gather index-range
+preconditions, each reached by some case and shown by the model to name an
+element inside its buffer. Required CI executes 162 dispatches and 6,408
+checked elements per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs, following
+`quantized.cpp`'s `qmv` and `gather_qmv`: `(32, 2, 1)` threadgroups over a
+`(M, ceil(N / 8), B)` grid, with `K` grown by a group until the host picks
+`fp_qmv` over `fp_qmv_fast` and `qmv_quad`. Without a global scale
+`dispatch_qmv` sends two or more vectors to `qmv_wide`, so those entries run
+one vector. Unbatched entries reach the guarded rows, the early return, the
+moved-back last tile, whole tiles and whole-block and partial lane tails;
+batched and gather entries reach both branches of each
+`adjust_matrix_offsets` overload, and gather's global scale is read per
+expert. Inputs are quarters in [-1, 1], every E2M1 code and E4M3 codes of
+either sign from subnormal to 15, with E4M3 scales from 1/4 to 3.75 for
+`nvfp4` and E8M0 scales from 1/8 to 2 for `mx`: every product is a multiple
+of 2^-f whose magnitudes sum below 2^(24 - f), so only the global scale's
+product and `static_cast<T>` round. A lane-level model of `fp_qmv_impl` must
+reach direct dequantized dot products, and mutated models that give lanes the
+wrong scale, reverse codes, ignore the row, batch or expert offsets, drop the
+tail, the code sign or the global scale are rejected. Every target must match
+the model word for word and leave the guards untouched; on Metal the
+translation must also match the unchanged upstream kernel. The other
+matrix-vector, vector-matrix and matrix-matrix kernels are outside this gate.
+This covers 54/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmv_fast.current-tree.translation.json` pins a further
+66 entries of `fp_quantized.metal` and their 198 artifacts: `fp_qmv_fast` with
+and without batching and `fp_gather_qmv_fast`, each with and without a global
+scale, for the three element types in `nvfp4`, `mxfp8` and `mxfp4`, and the
+twelve `nvfp4` `fp_qmv_fast` entries with two-row (`_r_2`) tiles. They share
+the `fp_qmv` gate's target options, index-range preconditions, inputs and
+exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 156 dispatches and 6,432 checked elements per
+target on Metal, Mesa EGL and Direct3D 12 WARP. Each case is a product
+`quantized.cpp` sends to the fast kernel: `N` a multiple of 8 and `K` of
+`qmv_fast_k_alignment`, one vector without a global scale outside gather,
+`(32, 2, 1)` threadgroups over a `(M, N / 8, B)` grid, or `(M, N / 4, B)` for
+`_r_2`. The host picks `_r_2` for `nvfp4` only when `N >= 4096` on
+generation-17 `s` devices; `fp_qmv_fast_impl` has no branch on `N`, so the gate
+runs those entries at the cases' `N`. Cases take one and three blocks, one and
+several row tiles, one and two vectors, and both branches of each
+`adjust_matrix_offsets` overload. A lane-level model of `fp_qmv_fast_impl`
+must reach direct dequantized dot products and store every output once, and
+mutated models that give lanes the wrong scale or pack stride, reverse codes,
+ignore the row, batch or expert offsets, stop a block early, or drop the code
+sign or the global scale are rejected. Every target must match the model word
+for word and leave the guards untouched; on Metal the translation must also
+match the unchanged upstream kernel. This covers 66/17,832 entries; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qvm.current-tree.translation.json` pins a further 54
+entries of `fp_quantized.metal` and their 162 artifacts: `fp_qvm` with and
+without batching and `fp_gather_qvm`, each with and without a global scale,
+for the three element types in `nvfp4`, `mxfp8` and `mxfp4`. They share the
+`fp_qmv` gate's target options, index-range preconditions, inputs and
+exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 144 dispatches and 35,712 checked elements per
+target on Metal, Mesa EGL and Direct3D 12 WARP. Each case is a product
+`quantized.cpp` sends to `qvm` or `gather_qvm`: weights of `K` rows of `N`
+codes quantized along `N`, `M` below 4, `K` below 1024 outside gather and
+fewer than 16 gather batches, and `(32, 2, 1)` threadgroups over a
+`(M, ceil(N / (2 * group_size)), B)` grid. `QuantizedMatmul` passes `qvm` no
+global scale, so the `_hgs` `fp_qvm` entries run with the global scale `qvm`
+binds at buffer 2 when it has one; `gather_qvm` passes `GatherQMM`'s, one per
+expert. `fp_qvm_impl` gives each simdgroup one group of columns and each lane
+one input row per block of 32. Cases reach whole blocks, whole blocks before a
+partial last pass, the second simdgroup's early return and both branches of
+each `adjust_matrix_offsets` overload, and unbatched E2M1 entries a `K` below
+one block. `mxfp8` cases keep `K` at least one block, because there the lanes
+past `K` would decode a `vec_w` they never loaded, and an E4M3 pattern may be
+NaN. A lane-level model of `fp_qvm_impl` must reach direct dequantized dot
+products and store every column once, and mutated models that reverse codes,
+ignore the column offset, the lane's row or the batch or expert offsets, give
+every column the first group's scale, keep the first block's scales, drop the
+last pass, or drop the code sign or the global scale are rejected. Every
+target must match the model word for word and leave the guards untouched; on
+Metal the translation must also match the unchanged upstream kernel.
+`fp_quantized_scope.py` records which gate covers which kernels. This
+covers 54/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmv_quad.current-tree.translation.json` pins a further
+36 entries of `fp_quantized.metal` and their 108 artifacts: `fp_qmv_quad` with
+`D` of 64 and 128, with and without batching, for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. `dispatch_qmv` sends a product whose `K` is 64
+or 128 and whose width is a power of two, without a global scale, to
+`qmv_quad`; 4 and 8 bits are both powers of two and every group size divides
+both widths, so the host can dispatch all 36. They share the `fp_qmv` gate's
+target options, index-range preconditions, inputs and exactness argument, and
+run in the same `fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs: 108
+dispatches and 10,782 checked elements per target, over `(32, 1, 1)`
+threadgroups and an `(M, ceil(N / 64), B)` grid. `fp_qmv_quad_impl` gives each
+of a simdgroup's eight quads eight output rows, eight apart, and each lane a
+quarter of `K`, in two steps for `nvfp4` at `D` 128 and one otherwise; DirectX
+and OpenGL lower `quad_sum` to a software reduction over four consecutive
+invocations. Cases reach whole tiles, partial last tiles and quads with no row
+at all, and both branches of the batched `adjust_matrix_offsets` overload. A
+row past `N` skips its `qdot` and store but still loads its scales, so the
+cases pad the scales through the last tile, before the guards, and the model
+shows those bytes never reach an output. A lane-level model must reach direct
+dequantized dot products and store every row once, and mutated models that
+reverse each pack's codes, ignore the quad's row offset, the row step or the
+batch offsets, give every lane its row's first scale, keep a lane's first
+scale for its second step, store lane 0's partial sum instead of the
+`quad_sum`, or drop the code sign are rejected. Every target must match the
+model word for word and leave the guards untouched; on Metal the translation
+must also match the unchanged upstream kernel. This covers 36/17,832 entries;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmv_wide.current-tree.translation.json` pins a further
+72 entries of `fp_quantized.metal` and their 216 artifacts: `fp_qmv_wide` with
+tiles of 2, 3, 4 and 5 input vectors and sixteen lanes per output row, with
+and without batching, for the three element types in `nvfp4`, `mxfp8` and
+`mxfp4`. Without a global scale, `dispatch_qmv` sends two to
+`vector_limit - 1` vectors whose `K` is not 64 or 128 to `qmv_wide`, on every
+device for the fp modes, and `qmv_wide` picks the tile from `M`. The entries
+share the `fp_qmv` gate's target options, index-range preconditions, inputs
+and exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 180 dispatches and 14,040 checked elements per
+target, over `(32, 2, 1)` threadgroups and a
+`(ceil(M / vecs_per_tg), ceil(N / 4), B)` grid. Each of a row's sixteen lanes
+dequantizes every sixteenth quant group once to float4 lanes and dots it
+against every vector of the tile; a `simd_shuffle_down` ladder over 8, 4, 2
+and 1 lanes reduces the row, which DirectX and OpenGL lower to 32-lane
+software subgroups. Rows past `N` and vectors past `M` read row `N - 1` and
+vector `M - 1` and are never stored, so nothing reads past the used rows.
+Unbatched cases run one tile against seventeen groups per row, so lane 0 of
+each row takes two, and the most rows `qmv_wide` gives the tile below the
+vector limit, with a partial last row tile, a simdgroup wholly past `N`,
+idle lanes and, for tiles of 4 and 5, a partial last vector tile; batched
+cases reach both branches of `adjust_matrix_offsets`. A lane-level model
+must reach direct dequantized dot products and store every output once, and
+mutated models that reverse each float4's codes, drop the code sign, give
+every group its row's first scale, give each lane only its first group,
+stream the tile's first vector for every vector, ignore each lane's row,
+sum all 32 lanes, store the clamped rows or vectors, or ignore the batch
+offsets are rejected. Every target must match the model word for word and
+leave the guards untouched; on Metal the translation must also match the
+unchanged upstream kernel. This covers 72/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qvm_split_k.current-tree.translation.json` pins a
+further 18 entries of `fp_quantized.metal` and their 54 artifacts:
+`fp_qvm_split_k` with `split_k` 8 and 32 for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. `QuantizedMatmul` sends fewer than four vectors
+with `K` of 1,024 or more against weights that are not transposed to
+`qvm_split_k`, which splits `K` into `split_k` parts of
+`split_D = ceil(K / split_k)` rows, the last of
+`final_block_size = K - (split_k - 1) * split_D`, adds a `split_k` batch
+dimension to the activation, weight and scale views, and writes each part's
+partial products to an intermediate that a reduction sums. The fp modes have
+no biases, so the host binds the kernel's fourteen buffers in declaration
+order. The entries share the `fp_qmv` gate's target options, index-range
+preconditions, inputs and exactness argument, and run in the same
+`fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs, over `(32, 2, 1)`
+threadgroups and an `(M, ceil(N / (2 * group_size)), B * split_k)` grid. The
+kernel runs `fp_qvm_impl` without a global scale, with the part's size as
+`in_vec_size` and the whole `K` as the activation row stride, so the `fp_qvm`
+gate's lane-level model replays it part by part. Cases bind the host's own
+views and reach parts of whole blocks, of blocks and a last pass, and a final
+part of another size, with one or two rows, stacked and broadcast weights and
+a second simdgroup past `N`. E2M1 entries also run parts below one block,
+where the lanes past the part decode a record they never loaded, times zeros;
+an E4M3 pattern may be NaN, so `mxfp8` entries skip those cases, and the host
+never sends such parts, since `K` of 1,024 or more gives every part at least
+121 rows. `quantized.cpp` picks `split_k` 32 only above `K = 8,192`; those
+entries run the same formulas at smaller `K`, which the kernel cannot tell
+apart. A lane-level model must reach direct dequantized partial products and
+store every output once, and mutated models that give every part the final part's size, step activation
+rows by the part's size instead of `K`, or carry any of the `fp_qvm` gate's
+defects that apply without a global scale are rejected. Every target must
+match the model word for word and leave the guards untouched; on Metal the
+translation must also match the unchanged upstream kernel. This covers
+18/17,832 entries; it does not run the upstream MLX test suite or redirect the
+MLX host runtime.
+
+`contracts/fp_quantized_qmm_t.current-tree.translation.json` pins a further 38
+entries of `fp_quantized.metal` and their 114 artifacts: `fp_qmm_t` with
+aligned and unaligned `N`, with and without batching, for the three element
+types in `nvfp4`, `mxfp8` and `mxfp4`, and the two unbatched `nvfp4`
+`bfloat16_t` entries with a global scale (`_hgs`). With `M` at or above the
+vector limit, `QuantizedMatmul` sends batches to `qmm` and single matrices to
+`qmm_splitk`, which falls back to `qmm` when `K` leaves no split;
+`DualQuantizedMatmul` sends bfloat16 activations against 2-D `nvfp4` weights
+with global scales and `K % 32 == 0` to `qmm` with the weights' global scale;
+on devices without NAX kernels `qmm` dispatches `fp_qmm_t` over `(32, 2, 2)`
+threadgroups and a `(ceil(N / 32), ceil(M / 32), B)` grid. The entries run in
+the `fp-quantized-qmm-0` and `fp-quantized-qmm-1` legs with the `affine_qmm_t`
+gate's software subgroups, cooperative-matrix lowering, loader and index-range
+assertions, the `rne-flush` division profile for the global scale's
+`g / 2688`, and the `fp_qmv` gate's inputs. Per block of 32 codes the fp
+`QuantizedBlockLoader` gives each thread one scale for its eight codes, so an
+`nvfp4` block spans two groups, and steps the scales by `32 / group_size`.
+Groups of 16 leave an odd number of groups a partial block of 16 codes, which
+`fp_qmm_t_impl` loads as a `num_k` tail: the activations past `K` are zero,
+while the weight loader bounds only rows, so the threads past `K` dequantize
+the next row's first bytes and scale, or the guards after the last row,
+whose E2M1 codes and E4M3 scales are finite. The `nvfp4` cases end in a tail
+alone, after one block and after two. Unbatched `mx` products take one block,
+where `qmm_splitk` finds no split, and a three-block case standing for the
+host's `K = 32p`, `p` a prime above `512 / tiles`. A global scale folds
+`inv_scale_enc` into each group scale and rounds every dequantized weight to
+`bfloat16_t`; its cases use `g = 3000`, which rounds, and `10752`. A
+tile-level model replays both loaders, the tail and `BlockMMA`'s float32
+fragment products, must reach direct dot products of the dequantized weights
+and store every output once, and records the tail's reads past each row apart
+from the in-row ones. Mutated models that reverse a byte's codes, drop the
+sign bit, give every thread its row's first group, keep the first block's
+scales or activations, ignore a tile offset, transpose the weight tile, store
+whole tiles, ignore the batch offsets, drop the tail or keep its activations
+past `K`, or drop or move the global scale to the sums are rejected. Every
+target must match the model word for word and leave the guards untouched; on
+Metal the translation must also match the unchanged upstream kernel. This
+covers 38/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmm_n.current-tree.translation.json` pins a further 36
+entries of `fp_quantized.metal` and their 108 artifacts: `fp_qmm_n` with and
+without batching, each with its `_hgs` twin, for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. Without transposition the vector limit is 4
+and there is no split-K route, so for `M >= 4` `QuantizedMatmul` calls `qmm`,
+which has no NAX kernel for the fp modes without transposition and
+dispatches `fp_qmm_n` over `(32, 2, 2)` threadgroups and a
+`(ceil(N / 32), ceil(M / 32), B)` grid. `fp_qmm_n` passes `fp_qmm_n_impl` no
+global scale, so an `_hgs` twin computes what its plain entry does, and `qmm`
+takes a global scale only with transposed weights, so the host dispatches
+only the plain entries. The entries run in the `fp-quantized-qmm-0` and
+`fp-quantized-qmm-1` legs beside `fp_qmm_t`, with its options and the
+`fp_qvm` gate's inputs. Per block of 32 reduction rows a four-element
+`BlockLoader` copies the activations and the row-reducing fp
+`QuantizedBlockLoader` dequantizes 32 weight rows, one scale per thread's
+eight codes, rounding each weight to the element type; a `K` that is not a
+multiple of 32 ends in a pass over the remaining rows. Groups of 16 let `N`
+end in a tile of 16 columns, whose weight loads bound only rows: the threads
+past `N` dequantize the next row's first bytes and scale, or the guards after
+the last row, into columns `store_result_safe` never writes. The cases reach
+whole and partial row tiles, whole blocks and a last pass of `K`, and, for
+`nvfp4`, whole and partial column tiles, with and without batching. A
+tile-level model replays both loaders, the last pass and `BlockMMA`'s
+float32 fragment products, must reach direct dot products of the dequantized
+weights and store every output once, and records the reads past `N` apart
+from the in-row ones. Mutated models that reverse a byte's codes, drop the
+sign bit, give every thread its row's first group, ignore the column tile's
+group offset, keep the first block's scales or activations, step the scales
+one group per block, drop or unmask the last pass, ignore a tile offset,
+transpose the weight tile, store whole tiles or ignore the batch offsets are
+rejected. Every target must match the model word for word and leave the
+guards untouched; on Metal the translation must also match the unchanged
+upstream kernel. The other matrix-matrix kernels are not gated yet. This
+covers 36/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with

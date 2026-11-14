@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fp-quantized-qvm-split-k-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "sourceSha256": "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425",
+    "headers": {
+      "mlx/backend/metal/kernels/fp_quantized.h": "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f",
+      "mlx/backend/metal/kernels/fp4.h": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/quantized_utils.h": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a"
+    },
+    "hostSource": {
+      "path": "mlx/backend/metal/quantized.cpp",
+      "sha256": "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "nvfp4_qvm_split_k_float_gs_16_b_4_spk_8",
+    "nvfp4_qvm_split_k_float_gs_16_b_4_spk_32",
+    "mxfp8_qvm_split_k_float_gs_32_b_8_spk_8",
+    "mxfp8_qvm_split_k_float_gs_32_b_8_spk_32",
+    "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8",
+    "mxfp4_qvm_split_k_float_gs_32_b_4_spk_32",
+    "nvfp4_qvm_split_k_bfloat16_t_gs_16_b_4_spk_8",
+    "nvfp4_qvm_split_k_bfloat16_t_gs_16_b_4_spk_32",
+    "mxfp8_qvm_split_k_bfloat16_t_gs_32_b_8_spk_8",
+    "mxfp8_qvm_split_k_bfloat16_t_gs_32_b_8_spk_32",
+    "mxfp4_qvm_split_k_bfloat16_t_gs_32_b_4_spk_8",
+    "mxfp4_qvm_split_k_bfloat16_t_gs_32_b_4_spk_32",
+    "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_8",
+    "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_32",
+    "mxfp8_qvm_split_k_float16_t_gs_32_b_8_spk_8",
+    "mxfp8_qvm_split_k_float16_t_gs_32_b_8_spk_32",
+    "mxfp4_qvm_split_k_float16_t_gs_32_b_4_spk_8",
+    "mxfp4_qvm_split_k_float16_t_gs_32_b_4_spk_32"
+  ],
+  "artifacts": {
+    "nvfp4_qvm_split_k_float_gs_16_b_4_spk_8": {"metal": "2c01239bb972a80c385c49553d18d58857e3ad57f8a65e43c830823045869a68:12883", "opengl": "b637777306acdeff9bdc899c9f242ce562cc62ad5b99fc7c99ab4c77560e9ce5:20900", "directx": "c0637349f02603510964de6e0115a2d4567e8911070fb26e865ea98af0711d5b:23893"},
+    "nvfp4_qvm_split_k_float_gs_16_b_4_spk_32": {"metal": "c1842bcc408feeea24579eff4f8cc970125fa6fce0195c81f4689ed3a5cc1c7f:12915", "opengl": "887f7d37778659c99948ddd63d57c5bcd6dc10b26260ec2196c99a2f9801acf3:20927", "directx": "999d4dfd283e14b95e7b0deaa4c448d9c9b78e1175d183f0a5a81195ad20d017:23934"},
+    "mxfp8_qvm_split_k_float_gs_32_b_8_spk_8": {"metal": "261c91b6a5221f906cbe19220309fc16812fd9f038e7dd41a40b7d05c0c3bee1:12556", "opengl": "03c6c8e57315b28a331f37ab0b751b040974d03933d3d092264b74acee9c601d:20925", "directx": "65b75668cca31c0206b1a98ed0887eefed7c3d7510735ee7243d6d43db48befa:24383"},
+    "mxfp8_qvm_split_k_float_gs_32_b_8_spk_32": {"metal": "975f72e507a1750faf20f80110a1231b16edfe8f0e3f745eb42a3c2c3d5054ad:12588", "opengl": "a149374fb32a335e5f64c0488598819dda3d7266f320b186e564185add1ef825:20952", "directx": "ba04fae54834782e54b209020a330e8dd68010c24196035859defa3c0cbd1e7b:24424"},
+    "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8": {"metal": "f510635f1e7f21574f5587a627e507c23bd75767c0f85107b5a72a37160f4d52:12568", "opengl": "e033b3680741ff5bd4e7aa72c62c185353121a762cd9cc0f9171ce568991a4b4:20717", "directx": "8e8b6509b2c17d7a08412f77ad8e793a465c6f8c621d629a895b12dbf94ac06c:23938"},
+    "mxfp4_qvm_split_k_float_gs_32_b_4_spk_32": {"metal": "271333d16d174f064f4adf37745069130b5adb614ea505a9403e0457aacdd9f4:12600", "opengl": "7d6d29fe23646454fe896f09964ed9d6daabad5b900b71e574ab0ebacf12f2f9:20744", "directx": "10ebcdb0a933bd6fd8e5f44ed93a7f34f919a6101b30f3f74873295efc401b96:23979"},
+    "nvfp4_qvm_split_k_bfloat16_t_gs_16_b_4_spk_8": {"metal": "a49595831e41ce1686b0fa2fb9be22732c72e502ace49d2d877679d76e5256c0:13080", "opengl": "8437fba3e48fc881ac2c272157425d53469b502bd1a5cd2340db18464717a293:21419", "directx": "af4474054737682e2aed0f753d2e73fd19eaf8a2216d0d8b0a71024fdc0d0f40:24904"},
+    "nvfp4_qvm_split_k_bfloat16_t_gs_16_b_4_spk_32": {"metal": "1a52b3b2e9faa704ae599c6bff9eaf7d7d033f3e7193a02130058021ca12c629:13112", "opengl": "1ab4fd0a26c717c6dfe04d87595ab17de7d36a8f9e83ae7f2457540bd369d901:21446", "directx": "6ee283d439a805c87847d1a82e220d482c85db870fc18f5e54c9a2c3d70af058:24945"},
+    "mxfp8_qvm_split_k_bfloat16_t_gs_32_b_8_spk_8": {"metal": "188911c70369f3eda02cfc183570f52f10238aee2f894833d87a1ceca1d9aa4b:12753", "opengl": "2995a191db646f09993efde344a5306c141db8f59fc641bd59d28200197d7eef:21444", "directx": "61d11de57aa730946d14f201793a9e2d402243d7aef36742d190ec4a13e7403c:25394"},
+    "mxfp8_qvm_split_k_bfloat16_t_gs_32_b_8_spk_32": {"metal": "7db6adc49c7e5562ea44570c9adbdde39e11b0dcc52e9f56fef3cf8497b76408:12785", "opengl": "8644615eeb309083e0a4f5108a54494c4a86e49d9a54b1e82ee0e62ede03bd89:21471", "directx": "85a8ec5b750ff2bfaf3ea44064ae6afcf3efb5fdeaff81b2e9ebcfac8dbea1b7:25435"},
+    "mxfp4_qvm_split_k_bfloat16_t_gs_32_b_4_spk_8": {"metal": "9df5a5c7b7ae1434bb57824fa1eafb84c8109d5d9bd48183daf4ababc1496e6c:12765", "opengl": "2ca554a371c87dfadbcd8d2edbf2b4a9e4840868379a3cb966e7c764d0931f20:21236", "directx": "ee4fd1d960a86c39822a765f2f1991ce79611f98a4accfb2ee70411ee006c40d:24949"},
+    "mxfp4_qvm_split_k_bfloat16_t_gs_32_b_4_spk_32": {"metal": "cb9b330cded606a7b3157916410dfc95cfebd64ba6dc724706e5448a5343f54c:12797", "opengl": "2b5ff64f360dfeb45b6d72b6ce92184bae34f09dde7f9a0f30f9e81c3309e901:21263", "directx": "cc2c2b90e6273eec8315a1d986f3e16fe3c37ba063314b40a6f607dedea33d22:24990"},
+    "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_8": {"metal": "8198bf7b891635608db986f9064068bc993c4b6a240e3893adca2c40fcfa4229:13028", "opengl": "fcbddace87fde759d6b1ea32d6d9a5c64ffcef478160e13b19202dd26a90a34e:21069", "directx": "80074fa53092a3506678f8443cef8640b9a8285a67d0727a0c3931120c715b79:24505"},
+    "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_32": {"metal": "cec62d97f31531fe750c4590162bfc32cc4a5e0e2465db3cd3e2eaca0cbb96f2:13060", "opengl": "c6a8b1dd9fe5f8b895244c7de78bdae0b0620156858bb8119aed91aee9b597b3:21096", "directx": "d6c44aa971a2897a0c7ef855bdbc46cd9121001e356f0ad3d98e9194fef155cb:24546"},
+    "mxfp8_qvm_split_k_float16_t_gs_32_b_8_spk_8": {"metal": "438b4995001c110eb89724e81c9064dcbd58b2d36925089a957c397d262df57a:12701", "opengl": "7e1a85543202d52088458ea40dc858af36a8ce5250d57731a9e6fe36972339d4:21094", "directx": "7889b9b095141d0e53bcae1b5cbe61c10c0981682eac20dfb19c492f96addbc3:24995"},
+    "mxfp8_qvm_split_k_float16_t_gs_32_b_8_spk_32": {"metal": "d29ea4e4fde64a34ad2fe9a2d5b4df92342a0e01798661132fde94a03cb099e7:12733", "opengl": "6300ed1dbb9d428e54312257faf25d1664c63b4ed9a7dd9cd965caaecd6b7159:21121", "directx": "f91486561aa0e0008324095d89325767501251121050d15f7849f5f357b9b62e:25036"},
+    "mxfp4_qvm_split_k_float16_t_gs_32_b_4_spk_8": {"metal": "c2295ffe70618f04492dad3c30c9723cefe137a683eb5d9fd87babc9476d0cb5:12713", "opengl": "d7890eef11283bb0d01a5c62fa88240eac57e2c875d19f2780026a1d69e741d5:20886", "directx": "0bb7dc2949e187db8549385290b9e31ac44968c0c3df341606030a1c95358407:24550"},
+    "mxfp4_qvm_split_k_float16_t_gs_32_b_4_spk_32": {"metal": "77bc8ef8489252a85a9f933c0e1a64be71038601503e1f5fab03f7eca3ea20ea:12745", "opengl": "ffcf51d5dd73c09bc75a16eda03b7146adad31de2893bd8e3b6ac366933fb569:20913", "directx": "676d5316c864c8b45967cb2f569441df448e15a729380463140f62ebf06aed7b:24591"}
+  },
+  "validationContract": {
+    "model": "fp_qvm_impl lane by lane on each tid.z's part after adjust_matrix_offsets over the split views: split_D rows, or final_block_size for the last part, with K as the row stride and no global scale, against direct dequantized partial dot products",
+    "packing": "least-significant-bit-first code stream per weight row",
+    "weights": "K rows of N codes, quantized along N",
+    "split": "split_D = ceil(K / split_k), final_block_size = K - (split_k - 1) * split_D; quantized.cpp's views add a split_k batch dimension",
+    "hostBuffers": "the fp modes have no biases, so quantized.cpp binds the kernel's fourteen buffers in declaration order",
+    "comparison": "exact words",
+    "workgroupSize": [
+      32,
+      2,
+      1
+    ],
+    "grid": "(M, ceil(N / (2 * group_size)), B * split_k)",
+    "n": "groups * group_size",
+    "cases": {
+      "8": {
+        "tail": {
+          "M": 1,
+          "groups": 1,
+          "K": 100,
+          "layout": "unbatched",
+          "splitD": 13,
+          "finalBlockSize": 9
+        },
+        "whole": {
+          "M": 1,
+          "groups": 2,
+          "K": 256,
+          "layout": "unbatched",
+          "splitD": 32,
+          "finalBlockSize": 32
+        },
+        "stacked": {
+          "M": 1,
+          "groups": 1,
+          "K": 300,
+          "layout": "stacked",
+          "splitD": 38,
+          "finalBlockSize": 34
+        },
+        "broadcast": {
+          "M": 2,
+          "groups": 2,
+          "K": 264,
+          "layout": "broadcast",
+          "splitD": 33,
+          "finalBlockSize": 33
+        },
+        "ragged": {
+          "M": 2,
+          "groups": 3,
+          "K": 277,
+          "layout": "unbatched",
+          "splitD": 35,
+          "finalBlockSize": 32
+        },
+        "routed": {
+          "M": 1,
+          "groups": 1,
+          "K": 1100,
+          "layout": "unbatched",
+          "splitD": 138,
+          "finalBlockSize": 134
+        }
+      },
+      "32": {
+        "tail-32": {
+          "M": 2,
+          "groups": 3,
+          "K": 95,
+          "layout": "unbatched",
+          "splitD": 3,
+          "finalBlockSize": 2
+        },
+        "whole-32": {
+          "M": 1,
+          "groups": 1,
+          "K": 1024,
+          "layout": "unbatched",
+          "splitD": 32,
+          "finalBlockSize": 32
+        },
+        "ragged-32": {
+          "M": 2,
+          "groups": 1,
+          "K": 1055,
+          "layout": "unbatched",
+          "splitD": 33,
+          "finalBlockSize": 32
+        },
+        "stacked-32": {
+          "M": 1,
+          "groups": 3,
+          "K": 1056,
+          "layout": "stacked",
+          "splitD": 33,
+          "finalBlockSize": 33
+        },
+        "broadcast-32": {
+          "M": 1,
+          "groups": 2,
+          "K": 1088,
+          "layout": "broadcast",
+          "splitD": 34,
+          "finalBlockSize": 34
+        }
+      }
+    },
+    "e2m1OnlyCases": [
+      "tail",
+      "tail-32"
+    ],
+    "shortParts": "parts below one block run only on E2M1 entries: the lanes past the part would decode a vec_w they never loaded, and K >= 1024 gives every part the host sends at least 121 rows",
+    "inputs": "x in quarters of [-1, 1]; every E2M1 code; E4M3 codes of either sign with exponent fields 0 to 9; nvfp4 scales E4M3 with exponent fields 5 to 8, mx scales E8M0 bytes 124 to 128",
+    "exactness": "every product is a multiple of 2^-f whose magnitudes sum below 2^(24 - f); only the global scale's product and static_cast<T> round, to nearest even",
+    "guards": {
+      "count": 8,
+      "sentinel": -3.25
+    },
+    "softwareSubgroups": {
+      "width": 32,
+      "directxShuffleOutOfRange": "self"
+    },
+    "openglIndexRangeAssertions": {
+      "batch_0": {
+        "expressions": [],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "batch_1": {
+        "expressions": [
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]",
+          "idx.x",
+          "idx.y"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      },
+      "gather": {
+        "expressions": [
+          "tid.z * lhs_strides[0]",
+          "tid.z * rhs_strides[0]",
+          "idx.x",
+          "idx.y",
+          "x_idx * x_strides[0]",
+          "w_idx * w_strides[0]",
+          "w_idx * s_strides[0]"
+        ],
+        "minimum": 0,
+        "maximum": 1048575
+      }
+    },
+    "metalUpstreamComparison": "unchanged fp_quantized.metal, word for word"
+  },
+  "scope": {
+    "instantiatedEntryCount": 518,
+    "coveredEntryCount": 18,
+    "quantizeGateEntryCount": 36,
+    "qmvGateEntryCount": 54,
+    "qmvFastGateEntryCount": 66,
+    "qvmGateEntryCount": 54,
+    "qmvQuadGateEntryCount": 36,
+    "qmvWideGateEntryCount": 72,
+    "qmmTGateEntryCount": 38,
+    "qmmNGateEntryCount": 36,
+    "excludedEntries": {
+      "kernels": [
+        "fp_gather_qmm_n",
+        "fp_qmm_t_splitk",
+        "fp_gather_qmm_t",
+        "fp_gather_qmm_rhs"
+      ],
+      "count": 108,
+      "reason": "the other matrix-matrix kernels are not gated yet"
+    },
+    "runtimeCoveredEntryCount": 18,
+    "artifactCountByTarget": 18,
+    "dispatchCountByTarget": 93,
+    "checkedElementCountByTarget": 211944,
+    "ciShardCount": 2,
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

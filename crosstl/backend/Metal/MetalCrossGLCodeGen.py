@@ -2368,9 +2368,22 @@ class MetalToCrossGLConverter(
         if name == "this":
             return getattr(function, "constructor_owner", None)
         member_types = getattr(function, "constructor_member_types", {}) or {}
-        if name not in member_types or self.constructor_identifier_is_shadowed(name):
+        if not isinstance(name, str) or self.constructor_identifier_is_shadowed(name):
             return None
-        return member_types[name]
+        if name in member_types:
+            return member_types[name]
+        # An unqualified static constant of the owner, as the constructor's
+        # initializers and body see it; render_constructor_member_identifier
+        # resolves its value the same way.
+        owner = getattr(function, "constructor_owner", None)
+        member = (
+            self.struct_static_constant_members.get((self.map_struct_name(owner), name))
+            if owner
+            else None
+        )
+        if member is None or not getattr(member, "vtype", None):
+            return None
+        return self.normalized_metal_type(self.resolve_type_alias(member.vtype))
 
     def render_constructor_member_identifier(self, name):
         function = self.current_function

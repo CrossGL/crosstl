@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fp-quantized-qmm-n-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "sourceSha256": "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425",
+    "headers": {
+      "mlx/backend/metal/kernels/fp_quantized.h": "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f",
+      "mlx/backend/metal/kernels/fp4.h": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/quantized_utils.h": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a",
+      "mlx/backend/metal/kernels/steel/gemm/gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
+      "mlx/backend/metal/kernels/steel/gemm/loader.h": "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e",
+      "mlx/backend/metal/kernels/steel/gemm/mma.h": "9b37709de40c3acaa5411875e52c8d26e6de093261741f671fbdab9c39a852b7",
+      "mlx/backend/metal/kernels/steel/gemm/transforms.h": "73487e29beab5af9478bc931c49b5e8d66937c2fa2651499867f47ac5529afc2"
+    },
+    "hostSource": {
+      "path": "mlx/backend/metal/quantized.cpp",
+      "sha256": "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_1",
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_0",
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_0_hgs",
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_1",
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_0",
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_0_hgs",
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_1",
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_0",
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_0_hgs",
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_1",
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_0",
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_0_hgs",
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_1",
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_0",
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_1",
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_0",
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_0_hgs",
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_1",
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_1_hgs",
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_0",
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_0_hgs",
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_1",
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_1_hgs",
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_0",
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_0_hgs",
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_1",
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_1_hgs",
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_0",
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_0_hgs"
+  ],
+  "artifacts": {
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_1": {"metal": "12f9fd27605ee5422961ca9d4be467a823c580807f90852a0dd3a3c8c990c0c7:43478", "opengl": "d2dcba35759e2928a735902db451f24f6801ce474e7930f87f295b7b2c69bd94:236557", "directx": "cebd55f13990ddcb25ee475977929f1a41bc68c5bfd567a215513a2728342593:135983"},
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_1_hgs": {"metal": "e61f5a63eae2186d10b8ceded94575754f460f7fa0cb2121dc8c68c93127be3e:43598", "opengl": "28b53403a28f445ccd34563b8965d07280e3b80af5443528cedd4ff3dbc7c682:236657", "directx": "76e9b7c71f85155db54cd15cc644a6d34d56b457c1acddbe1d0aacdefa237310:136131"},
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_0": {"metal": "d70ca0523535c18d0daed4ac21848604e6977f10b459d5c272a839023d5ba8a2:43478", "opengl": "c9ade578a2af367bb0bf1ccbcca962775881fd0f2a985881d4c97b6ce85b1948:210442", "directx": "9fe4dc724921567c2ba010df767606db06adc74be67e666f34ff564dff3df972:135338"},
+    "nvfp4_qmm_n_float_gs_16_b_4_batch_0_hgs": {"metal": "27def5affa4875cb66839b1c4f86a4e0f84fa9cfec8cf15454c3a4ab8f3930e3:43598", "opengl": "d2338db3f6fcc1b0d4660c91f4d79604a5a65389a288d3547a864a8ce62b57e0:210542", "directx": "cac10f263124c056515965447cb209db4cf3129c14e1c081b4f4986f42b967ef:135470"},
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_1": {"metal": "66a4b910fd183fd6361b74d48194fc316c79521b3aeac4b89721bc6e40ad1a7b:43107", "opengl": "e4fa7ad427cca285edd6e4104798e41b13e456e9f6f83e10bd9db0ca5edf4c53:231781", "directx": "7eb77fcd7bbfa8e51f015ee23507ea80cabcdcf6644a5fc9ccf180759b6eff82:134130"},
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_1_hgs": {"metal": "c06315d49993a94ab373432b3d20b16308e8ca348fd516ad76976dec40d682a8:43227", "opengl": "8a38d2d748046a3d22f1b2d78d821fbec617df2fdb30090eb0a2dd2b47d102a8:231881", "directx": "a00ca8353fc5062b660be2cfeda7d7232dbcf7eb90cb16d1661f2404c77da855:134278"},
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_0": {"metal": "7cd39922dc9be624d339ed51de1c77bb232532c6eca2e0736607f0d01bc5d88b:43107", "opengl": "c12a2a3dc33fd22c440eec8260f05039b0ca2e2b7c4789ba11215e2a57863f65:205666", "directx": "25cc84775e397ea5c695303376a3f3bb199c7d63dd8d28d1a9491393a5f7c33c:133485"},
+    "mxfp8_qmm_n_float_gs_32_b_8_batch_0_hgs": {"metal": "52bdc8cc368271a8959947f3281c70b2de13db6ebeb225415eeb29dc3beb905c:43227", "opengl": "63e1b2fc9959557013386cb52f36555ad4884ecd318cc3cc1223a79c04f5ac32:205766", "directx": "c5a6aad2241707c150eb17fcea019f2b9286bc37958555ff00952908cbf6b59d:133617"},
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_1": {"metal": "c9ec69d32df76837a106857f56ef14c6779d11454b9276961e666b0c07b86513:43099", "opengl": "c030a50e2d79fbaecd3e23ef9a83ef9049102406801fdd6f349e61b00a2537a3:234357", "directx": "07479ecc9c7dada597afe45d6d491b3ec00b015798ada26104712e9860cc8373:134504"},
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_1_hgs": {"metal": "12c1c16b2310be8d65bc6a1605b69ab24a79b768a3291d7879a379dec6a360db:43219", "opengl": "1468e16d42a4f6362120f1e50e8675e2867a7c0bab6d27a4c23bcef87477cdd8:234457", "directx": "d93db4fa8c1d3888a7e1bce2d881301203a6e7bcb8e6df731d2767f141d8fb62:134652"},
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_0": {"metal": "621ef37f231aad8fb3be45ecf03e6f377cf42cb6d8efd996b187002dc5acf786:43099", "opengl": "54c34d13ee854e92687ec391107e3fddefad2d654126cae1e2cec8a31b2e5663:208242", "directx": "de70eaaa067c1b6040d9917eed1f039051056820207508f7940beb84af9da2ba:133859"},
+    "mxfp4_qmm_n_float_gs_32_b_4_batch_0_hgs": {"metal": "5c58de810aa7e4414d79772d7fdebbb385af94d07fa013fc77d3bf588c8c5ec7:43219", "opengl": "8c7f16b9e067ded519920e63ce8535c4d6a7fbe6e7423981f56bb60c7d02df16:208342", "directx": "d7df6757f7ca0c865574e52e98ae8fa2a8cf1218c2461456af95a6a1f5a77434:133991"},
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_1": {"metal": "b5d0a529180a83e81da6da7002002f838d9a67dd304b5f87ccb0551db41fa5b5:44427", "opengl": "08c0d96c1400d8d288b0540e0f27cc19331f3c86c825ebddd5cc8b0b6905fe91:238552", "directx": "15eeddb7cea2b817ce434458f0f72029349af6e4486af0c1275ad0b5b2824d7c:139911"},
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_1_hgs": {"metal": "0c74df21ffab6ca22fa24b603c8dfb8140f10555472c9bfd39ae8f494e231313:44547", "opengl": "8960326ee5aa2575eda6b2d898a9c2e4249eeeb5ea35e6e08f16de13d4a27f08:238652", "directx": "3dc35e972a3255a2e0fa60a31d5bbee0ac1275e7c1372a83c628598879d556b4:140059"},
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_0": {"metal": "fa0d73ce9b4b6b5dd98089559955e21fdad8ed4b7b277b71abb88c09b5969c9e:44427", "opengl": "0ef195cdcce9b2d16e646851876a33f3aa1870ae9dea7b26da39850f49ab04e1:212410", "directx": "fd975ee0ed491982f412a5bfaa748ebfe38ecb8e436075ab411c6bf33ba819b0:139241"},
+    "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_0_hgs": {"metal": "64ebf5d6748150799c5b867e4bfbc09f186460bea04569d2788232777149970c:44547", "opengl": "8b4932e48893540e82abc73b1b6ef4272fe7f37888f9ce39054bdec9a02cb56f:212510", "directx": "c671d0db32c9460a5d271df2474983a14986df73ff2ab6c60e980a7b0aff275d:139373"},
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_1": {"metal": "1c82ab95d3ebcede2c8278bb9edde671655f52e51d8035ce1c77252b13588d21:44055", "opengl": "3eefa2fb264561ea42160ce9d859420884c3c7266c79ae3fcfa5a32517fd1188:233738", "directx": "8db550d798f3f42ecb1a4133528ceca8da377a1b37657f68d5ff078c5d802348:138012"},
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_1_hgs": {"metal": "642c19d82e0e31674086024291b9b5cc0963ff1a31b640c173d6c94cf4a77a8c:44175", "opengl": "9801541d964bbc70daa4df4250bf6f52c121607c1abcec5b5a5600cb39de47c4:233838", "directx": "1b94e9525c1312f7f3eb66bc38baffc423de762895bd2d4d159168a016f2e604:138160"},
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_0": {"metal": "29815ca374c592338c0c7db942941c2fea336a408e8205c16ad9e57e1bb746d5:44055", "opengl": "0f5c8ec8ebf0a697cb697aa792a381cecf4e1a7d1aa84052d5fecc9908340b9b:207596", "directx": "8650b8c3ed355e420663ba8b175abf3f057bc0a694aefd1841c4e0c4f21a23ea:137342"},
+    "mxfp8_qmm_n_bfloat16_t_gs_32_b_8_batch_0_hgs": {"metal": "240370a7412dd1be7ea30af4c4328555e8c07f6aa828571f27edf7a943835757:44175", "opengl": "db7dc9757bbaf85681122fa1dd160a08879625d3abad041773128a70bf0e9275:207696", "directx": "9143f0576a0a1a8b713c2a3141ca1841e5be1db3499f2cc681a46c688e0b2f20:137474"},
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_1": {"metal": "8488c770e545abfdfb639df708041a67e4064ed0454f11217865b4ee0fe5944e:44048", "opengl": "b6d78ab448f5aafc9fc7447ef8436af376b2d3aeb10bc16404873bebc41fe1d4:236352", "directx": "af94ab536cc5e4657e2d8b8055366d91583d1eba26e29cf1afe50b2d2fb4ac28:138420"},
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_1_hgs": {"metal": "d25b824a41502511560d192bb3545d283f0740307d31aae421073287fc6f9269:44168", "opengl": "eb435b15f0796b7085db86cd0c5d3fe62965858fb1c35db5087b0552b9553395:236452", "directx": "aaac63bb58767570492529458c624a74a4e08cda27a6750564561e40aeae1c27:138568"},
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_0": {"metal": "e66afe7a20c56c619aaba98507337ea96748b5eb90a6378908e178e616cbfed2:44048", "opengl": "f9a0cf3046a51e51ba7e7919994e67c884d1c5c3cddb4693bebb7db5343dd23a:210210", "directx": "c2865780f7a51799f78172b9b01bab87f59ccf27c3b240120400f5af3943025a:137750"},
+    "mxfp4_qmm_n_bfloat16_t_gs_32_b_4_batch_0_hgs": {"metal": "8c98583e40ec056f0ad53765b89e8e676d79ba4d043a4712ff09518069b5305b:44168", "opengl": "2579a85762ef2e2e80b758722fd5205e0a437a7e272b633f9a0508e0c4f5da5a:210310", "directx": "3409ca1a289356f80b45be26f924687dc79f5dfcf0d99c8ce4de590a04da7df9:137882"},
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_1": {"metal": "187686f78ca72337c17eddf31e44a3bbeeba5894546d4994b4e8603247429d44:44120", "opengl": "9cb8d719272e545a39c43e28befde238d1024d2d6040c6ac06df685c84d8ee12:237851", "directx": "5751739333e018770a22b0a7e45043044ecf67c25eea5c8e9b6a73534d549f67:138563"},
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_1_hgs": {"metal": "e33f415b150183239b4979d6bb8bf2bb72c3019b18a1b628142a3e32ddc906e1:44240", "opengl": "8893d5dec387d61fcc3d78348644c0684dae72b2e061bca1234bb14fcf45b207:237951", "directx": "987d62336a8e5bf29c447017c3bc79eb591b57d37a59e123e0c51daffa82205c:138711"},
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_0": {"metal": "b9524ced709c5249118c8908d94a930818d42b04505705cf5521bcbe696d328c:44120", "opengl": "171b190e651d066126c08fb9ecde3ed9ae2971eaba3e8e7d4454d13b234608ab:211716", "directx": "eff7fbc7551c6319dffdf55721c4d91d9e6dc73539642c39c8b433198fc85e0a:137898"},
+    "nvfp4_qmm_n_float16_t_gs_16_b_4_batch_0_hgs": {"metal": "dbc56b53157c1d08c6bb6f06164e97446509db207c526c73b74c9d11e33777f5:44240", "opengl": "241eeabae9a62adcc3147aac1da044346aa222f3235d2db27127d8741f506aa0:211816", "directx": "63bb5663d2e7eb554e5f777d0dc93b7611c167374d9554e82aea503560072527:138030"},
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_1": {"metal": "164cae3bd7619ba8cea5af425795c4c0f27b9893da0e197a2facfb70f00720ab:43750", "opengl": "2e1d4cd52ed025f35134636299cdeee8301981530dfbad3e019c5a5d8f7eb68a:233044", "directx": "580af859790d9b7844a956c6099b131e8b71171bf11bbae2364998bcb82a6e48:136673"},
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_1_hgs": {"metal": "792de7b9ae2a8521c442aaee8c6d6a997b29c01ed047c073140773452540cbb8:43870", "opengl": "a9ed4856c3a4b97531507279b7f88c17c6798b784f5a770af58b3c4d85b8b9c3:233144", "directx": "f05c035f143cb95c6e5c302064e1601d602f33050839f10ee960c43af768f611:136821"},
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_0": {"metal": "878cb5f9d67735f2f50abdfc165dc30c21b678e93545ee83eafdcbdefb2da942:43750", "opengl": "1b6a4535a36e5c60487e6487e65431791e3cb4f3d4fd5c66630f0e57e791fc98:206909", "directx": "98202d83c1b3259f3c0c058563b7e05d9fe73d22463d4059ee6873752a9ee02a:136008"},
+    "mxfp8_qmm_n_float16_t_gs_32_b_8_batch_0_hgs": {"metal": "e51e4f1c9d3bc128cdad13d65ddd4135dd6d620b9c8cb9ea4ff89c327d819651:43870", "opengl": "eb665ed1d279c1d06131e6a4cff4ed16eb62fa5b08e6724a7ddc121169e22154:207009", "directx": "ffa0b44f42e3381856a55909e5f46f54e7c5a1f662ce1dab7d3fddf39bed7174:136140"},
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_1": {"metal": "4aa12791346b48009d84b842e94bc3216cdec56e0980012b3c10ba70bf06432f:43741", "opengl": "63f220f71b5781c3dfc3173ace4e867595fba6b80ab97d8d693ad7b233ae6097:235651", "directx": "2fc99bb404bdcd06dd85f19c0798eb1be83e6906c31f910f6933745673f42df1:137072"},
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_1_hgs": {"metal": "750cb7d80a5c70ac310b9f8613aea49898fc2ceae90437b83274f486360c49a0:43861", "opengl": "44ddfdc88e518af21415f3d5b454c2c3bb1b4a23d07c2ed1ae263b22b6a3881c:235751", "directx": "03277e8b9ad7b718423daedaad30ce81cf6ccff47e987f19775acee6bcd8cc4c:137220"},
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_0": {"metal": "8a4dbf5adf09ef9650c574f8f34c4301e8a16d98c5cbb5222d6babfab6f71c3a:43741", "opengl": "0c6ac2899b17e07be8f519ad5ff0c5f54677653e534c7f6b3d3a07f22b4b9046:209516", "directx": "d3ef791c8eb56f8e0d62f6dfea7522909ca0dfb15c1499a56a3c6d6e87d51f44:136407"},
+    "mxfp4_qmm_n_float16_t_gs_32_b_4_batch_0_hgs": {"metal": "759515caa28e45b877b18d7b562f8863e6d696c932f20baaab0caf1432fd247f:43861", "opengl": "a77b63a62e0e79d20c12580af897c4de88acc4dfb0bd92d4515801c6290a248a:209616", "directx": "36dd4d8bc6cfddbd88b0ca893a72129c0d28c106ad14802d9eab5236be3bba35:136539"}
+  },
+  "validationContract": {
+    "model": "fp_qmm_n_impl tile by tile after adjust_matrix_offsets: the four-element BlockLoader and the row-reducing fp QuantizedBlockLoader with their safe loads and the last partial block of K, one scale per thread's eight codes stepped a block of rows at a time, the partial column tiles of groups of 16, BlockMMA's float32 fragment products and the whole or safe stores, against direct dot products of the dequantized weights",
+    "packing": "least-significant-bit-first code stream per weight row",
+    "weights": "K rows of N codes, quantized along N",
+    "comparison": "exact words",
+    "workgroupSize": [
+      32,
+      2,
+      2
+    ],
+    "grid": "(ceil(N / 32), ceil(M / 32), B)",
+    "tile": {
+      "BM": 32,
+      "BN": 32,
+      "BK": 32,
+      "WM": 2,
+      "WN": 2
+    },
+    "xLoaderReads": 4,
+    "routing": "untransposed weights with M at or above the vector limit of 4; batch_1 for B > 1; the fp modes have no NAX kernel without transposition, so on every device; qmm takes a global scale only with transposed weights, so the host dispatches no _hgs twin, which passes fp_qmm_n_impl no global scale either",
+    "cases": {
+      "batch_0": {
+        "tiles": {
+          "M": 40,
+          "mxN": 64,
+          "nvfp4N": 48,
+          "K": 64,
+          "layout": "unbatched"
+        },
+        "ragged": {
+          "M": 36,
+          "mxN": 64,
+          "nvfp4N": 80,
+          "K": 45,
+          "layout": "unbatched"
+        },
+        "short": {
+          "M": 4,
+          "mxN": 128,
+          "nvfp4N": 16,
+          "K": 13,
+          "layout": "unbatched"
+        }
+      },
+      "batch_1": {
+        "stacked": {
+          "M": 33,
+          "mxN": 64,
+          "nvfp4N": 48,
+          "K": 40,
+          "layout": "stacked"
+        },
+        "broadcast": {
+          "M": 8,
+          "mxN": 64,
+          "nvfp4N": 48,
+          "K": 32,
+          "layout": "broadcast"
+        },
+        "shared": {
+          "M": 32,
+          "mxN": 64,
+          "nvfp4N": 48,
+          "K": 64,
+          "layout": "shared"
+        }
+      }
+    },
+    "partialN": "groups of 16 let N end in a tile of 16 columns; its weight loads bound rows only, so the threads past N dequantize the next row's first bytes and scale, or the guards, into columns store_result_safe never writes",
+    "inputs": "x in quarters of [-1, 1]; every E2M1 code; E4M3 codes of either sign with exponent fields 0 to 9; nvfp4 scales E4M3 with exponent fields 5 to 8, mx scales E8M0 bytes 124 to 128",
+    "exactness": "every product is a multiple of 2^-f whose magnitudes sum below 2^(24 - f); every dequantized weight is exact in T, so only static_cast<T> rounds, to nearest even",
+    "guards": {
+      "count": 8,
+      "sentinel": -3.25
+    },
+    "softwareSubgroups": {
+      "width": 32,
+      "directxShuffleOutOfRange": "self"
+    },
+    "cooperativeMatrices": "DirectX and OpenGL lower simdgroup_matrix to software fragments with BaseMMAFrag::get_coord's tile_4x4_row_pair lane mapping",
+    "workgroupAccessAssertions": "the activation BlockLoader's dst stays within the slots load_unsafe writes",
+    "openglIndexRangeAssertions": "buffer element, weight and scale byte and int64 stride indices fit GLSL's 32-bit indices; tile indices stay within the BM x BK slots",
+    "metadataPreconditions": {
+      "K": [
+        0,
+        2147483584
+      ]
+    },
+    "unbatchedUpstreamBuffers": 7,
+    "metalUpstreamComparison": "unchanged fp_quantized.metal, word for word"
+  },
+  "scope": {
+    "instantiatedEntryCount": 518,
+    "coveredEntryCount": 36,
+    "quantizeGateEntryCount": 36,
+    "qmvGateEntryCount": 54,
+    "qmvFastGateEntryCount": 66,
+    "qvmGateEntryCount": 54,
+    "qmvQuadGateEntryCount": 36,
+    "qmvWideGateEntryCount": 72,
+    "qvmSplitKGateEntryCount": 18,
+    "qmmTGateEntryCount": 38,
+    "excludedEntries": {
+      "kernels": [
+        "fp_gather_qmm_n",
+        "fp_qmm_t_splitk",
+        "fp_gather_qmm_t",
+        "fp_gather_qmm_rhs"
+      ],
+      "count": 108,
+      "reason": "the other matrix-matrix kernels are not gated yet"
+    },
+    "runtimeCoveredEntryCount": 36,
+    "artifactCountByTarget": 36,
+    "dispatchCountByTarget": 108,
+    "checkedElementCountByTarget": 299424,
+    "ciShardCount": 2,
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}
