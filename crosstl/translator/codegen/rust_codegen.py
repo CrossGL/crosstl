@@ -1467,13 +1467,6 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 "    let _ = (vertices, primitives);\n"
                 "}\n\n"
             )
-        if "dispatch_mesh" in self.required_mesh_helpers:
-            code += (
-                "pub fn _crossgl_dispatch_mesh_without_payload("
-                "x: u32, y: u32, z: u32) {
-                "    let _ = (x, y, z);
-                "}
-            )
         return code
 
     def rust_stage_attribute_arguments(self, func, attribute_name):
