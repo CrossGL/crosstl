@@ -4165,6 +4165,18 @@ class WGSLCodeGen(
             boolean_mix = self.generate_boolean_mix_call(node)
             if boolean_mix is not None:
                 return boolean_mix
+        if (
+            function_name == "select"
+            and len(node.arguments) == 3
+            and not self.is_user_function_name(function_name)
+        ):
+            # A matrix `select` has no WGSL expression form; as a ternary it
+            # is lowered to if/else by lower_composite_ternary where that
+            # applies, and refused anywhere else rather than written as a
+            # `select` that naga rejects.
+            matrix_select = self.matrix_select_ternary(node)
+            if matrix_select is not None:
+                return self.generate_expression(matrix_select)
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)

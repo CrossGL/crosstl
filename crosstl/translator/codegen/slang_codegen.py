@@ -9192,6 +9192,18 @@ class SlangCodeGen(LoweringRefusalMixin):
                 }
         return None
 
+    def generate_slang_matrix_select_call(self, args):
+        """``select`` on matrix operands as a ternary (slangc has no matrix ``select`` overload)."""
+        if len(args) != 3:
+            return None
+        condition_type = self.expression_result_type(args[2])
+        if condition_type is None or self.convert_type(condition_type) != "bool":
+            return None
+        for arg in args[:2]:
+            if self.matrix_value_info(self.expression_result_type(arg)) is None:
+                return None
+        return self.generate_expression(TernaryOpNode(args[2], args[1], args[0]))
+
     def generate_bool_mix_call(self, args):
         if len(args) != 3:
             return None
@@ -10147,6 +10159,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if callee == "select" and callee not in self.user_function_names:
+                matrix_select = self.generate_slang_matrix_select_call(node.args)
+                if matrix_select is not None:
+                    return matrix_select
             if (
                 callee == "mod"
                 and len(node.args) == 2

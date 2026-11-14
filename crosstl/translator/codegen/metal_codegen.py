@@ -12497,6 +12497,21 @@ class MetalCodeGen(
             )
         return template.format(value=self.generate_expression(args[0]))
 
+    def generate_metal_matrix_select_call(self, func_name, args):
+        """``select`` on matrix operands as a ternary (Metal has no matrix ``select`` overload)."""
+        if (
+            func_name != "select"
+            or len(args or ()) != 3
+            or func_name in self.user_function_names
+        ):
+            return None
+        if self.expression_result_type(args[2]) != "bool":
+            return None
+        for arg in args[:2]:
+            if self.metal_matrix_dimensions(self.expression_result_type(arg)) is None:
+                return None
+        return self.generate_expression(TernaryOpNode(args[2], args[1], args[0]))
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
@@ -12912,6 +12927,9 @@ class MetalCodeGen(
             )
             if boolean_mix is not None:
                 return metal_boolean_mix(self, expr.args, boolean_mix)
+            matrix_select = self.generate_metal_matrix_select_call(func_name, expr.args)
+            if matrix_select is not None:
+                return matrix_select
             exponent_call = metal_exponent_call(self, func_name, expr.args)
             if exponent_call is not None:
                 return exponent_call
