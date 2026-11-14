@@ -9,6 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host import elementwise_evidence
 from demos.integrations.mlx.portable_host.gather_evidence import audit_native_execution
 from demos.integrations.mlx.portable_host.packages import BFLOAT_ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
@@ -298,17 +299,19 @@ def verify(args):
             records[mode] = json.loads((output / mode / "results.json").read_text())
             validate_results(records[mode], native=mode == "native")
         count = validate_results(records["native"], native=True)
-        observed = set()
-        number = 0
         with (output / "native/trace.jsonl").open() as stream:
-            for number, line in enumerate(stream, 1):
-                event = json.loads(line)
-                audit_event(
-                    event, event_packages(event, host), output, target=host.target
-                )
-                observed.add(event["entry"])
+            trace = [json.loads(line) for line in stream]
+        # Scalar-operand kernels (sv_, vs_) no family installs run from the
+        # lazy cache; their audit derives each package again from the pinned
+        # source and checks the native modules the dispatch retained.
+        lazy = elementwise_evidence.audit_lazy_events(
+            trace, args.mlx_root, args.packages, host.target, set(host.descriptors)
+        )
+        for event in elementwise_evidence.remaining(trace, lazy):
+            audit_event(event, event_packages(event, host), output, target=host.target)
+        observed = {event["entry"] for event in trace}
         if (
-            number != count
+            len(trace) != count
             or not {
                 "all_reduce_maxbfloat16",
                 "all_reduce_maxfloat32",

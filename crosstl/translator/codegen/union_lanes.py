@@ -97,7 +97,15 @@ class LaneHelpers:
                 " + ((floatBitsToUint(selected) >> 16u) & 1u)) >> 16u))"
             )
         if self.dialect == "glsl":
-            return f"(packHalf2x16(vec2(selected, 0.0)) & {mask})"
+            # packHalf2x16 need not keep a NaN's payload (Mesa stores 0x7fff), so
+            # a NaN keeps its sign and its payload's high bits and stays quiet,
+            # as the bfloat16 lanes do.
+            return (
+                "((floatBitsToUint(selected) & 0x7fffffffu) > 0x7f800000u"
+                " ? (((floatBitsToUint(selected) >> 16u) & 0x8000u) | 0x7e00u"
+                " | ((floatBitsToUint(selected) >> 13u) & 0x3ffu))"
+                f" : (packHalf2x16(vec2(selected, 0.0)) & {mask}))"
+            )
         if mapped == "float":
             return f"(f32tof16(selected) & {mask})"
         return "uint(asuint16(selected))"
@@ -118,7 +126,13 @@ class LaneHelpers:
         if element in INTEGER_ELEMENTS:
             return value if mapped == "uint" else f"{mapped}({value})"
         if self.dialect == "glsl":
-            return f"unpackHalf2x16({value}).x"
+            # Nor need unpackHalf2x16 keep it: a NaN widens bit for bit.
+            return (
+                f"((({value}) & 0x7fffu) > 0x7c00u"
+                f" ? uintBitsToFloat(((({value}) & 0x8000u) << 16u) | 0x7f800000u"
+                f" | ((({value}) & 0x3ffu) << 13u))"
+                f" : unpackHalf2x16({value}).x)"
+            )
         if mapped == "float":
             return f"f16tof32({value})"
         return f"asfloat16(uint16_t({value}))"

@@ -78,6 +78,45 @@ def words(key, count):
     return result
 
 
+# Counter pairs per NumPy pass of ``words_array``; bounds its temporaries.
+WORD_PAIR_CHUNK = 1 << 20
+_ROTATIONS = ((13, 15, 26, 6), (17, 29, 16, 24))
+
+
+def words_array(np, keys, count):
+    """``words(key, count)`` for every row of ``keys``, as a ``(K, count)`` array.
+
+    The same Threefry2x32 rounds as ``random_audit.threefry`` run over uint32
+    arrays, whose arithmetic wraps modulo 2**32, for at most
+    ``WORD_PAIR_CHUNK`` counter pairs at a time.
+    """
+    keys = np.asarray(keys, dtype=np.uint32).reshape(-1, 2)
+    result = np.empty((keys.shape[0], count), dtype=np.uint32)
+    width = (count + 1) // 2
+    schedule = (keys[:, 0], keys[:, 1], keys[:, 0] ^ keys[:, 1] ^ np.uint32(0x1BD11BDA))
+    total = keys.shape[0] * width
+    for start in range(0, total, WORD_PAIR_CHUNK):
+        row, pair = np.divmod(
+            np.arange(start, min(start + WORD_PAIR_CHUNK, total), dtype=np.int64), width
+        )
+        high = pair + width
+        # An odd count's last pair has no high word, and its counter is zero.
+        kept = high < count
+        x = pair.astype(np.uint32) + schedule[0][row]
+        y = np.where(kept, high, 0).astype(np.uint32) + schedule[1][row]
+        for step in range(5):
+            for rotation in _ROTATIONS[step % 2]:
+                x += y
+                y = (y << np.uint32(rotation)) | (y >> np.uint32(32 - rotation))
+                y ^= x
+            x += schedule[(step + 1) % 3][row]
+            y += schedule[(step + 2) % 3][row]
+            y += np.uint32(step + 1)
+        result[row, pair] = x
+        result[row[kept], high[kept]] = y[kept]
+    return result
+
+
 def expected(np, case):
     count = case["count"]
     if case["kind"] == "split":

@@ -8,7 +8,10 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import padding_workloads
+from demos.integrations.mlx.portable_host import (
+    elementwise_evidence,
+    padding_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import load_index
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -56,22 +59,27 @@ def worker(args):
             output / "dispatch.jsonl",
             integer64=args.integer64,
             reductions=args.reductions,
+            # The upstream tests also reach scalar-operand kernels (sv_, vs_)
+            # no prebuilt family installs, which the native path translates
+            # from the pinned source. The negative controls keep no source,
+            # so each still finds its package missing.
+            mlx_root=args.mlx_root if args.worker == "native" else None,
         )
         if args.worker in {"missing", "missing-wide"}:
             dtype = "int64" if args.worker == "missing-wide" else "uint32"
             host.descriptors.pop(f"ggn2_dynamic_copy{dtype}{dtype}")
         host.install()
     if args.worker in NEGATIVE_CHECKS:
-        count = 65536 if args.worker.endswith("-limit") else 3
+        count = 3
         dtype = (
             "int16"
             if args.worker.endswith("-int16")
             else ("int64" if args.worker == "missing-wide" else "int32")
         )
         operand = mx.array(np.arange(count, dtype=dtype))
-        if args.worker == "update-limit":
-            # Slice updates accept larger storage than padding; exceed it with
-            # a broadcast view rather than a dense allocation.
+        if args.worker.endswith("-limit"):
+            # Padding and slice updates share the storage capacity; exceed it
+            # with a broadcast view rather than a dense allocation.
             operand = mx.broadcast_to(operand[:1], (MAX_STORAGE_ELEMENTS + 1,))
         value = mx.array(np.asarray(1, dtype=dtype))
         try:
@@ -228,8 +236,19 @@ def verify(args):
         raise ValueError("Padding trace count differs")
     padding_workloads.validate(results["cpu"], [], native=False)
     padding_workloads.validate(results["native"], trace[:count], native=True)
-    verify_native_identity(trace, target)
-    checked = 0
+    installed = {
+        entry
+        for _, index, variants in packages
+        if not variants
+        for entry in index["descriptors"]
+    }
+    # Lazy dispatches run on the native runtime directly; their audit checks
+    # the native modules the parity adapter's identity steps cover otherwise.
+    lazy = elementwise_evidence.audit_lazy_events(
+        trace, args.mlx_root, args.packages, target, installed
+    )
+    verify_native_identity(elementwise_evidence.remaining(trace, lazy), target)
+    checked = len(lazy)
     for directory, index, variants in packages:
         events = [
             event

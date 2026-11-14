@@ -11,75 +11,26 @@ import hashlib
 import math
 
 from crosstl.project import build_native_loader_dispatch_request
-from crosstl.project.runtime_value_encoding import (
-    BFLOAT16_BITS,
-    FLOAT16_BITS,
-    FLOAT32_BITS,
-)
-from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
 from demos.integrations.mlx.portable_host.divmod_packages import KERNELS, signature
+from demos.integrations.mlx.portable_host.element_storage import (
+    CTYPES,
+    GUARD_COUNT,
+    GUARDS,
+    packet,
+    reflected_layout_matches,
+    supplied_buffers,
+    unpack,
+)
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 ENTRY_PREFIXES = tuple(f"{kernel}_DivMod" for kernel in KERNELS)
 # Each output element and input span stays below the OpenGL signed index bound.
 MAX_ELEMENTS = 1 << 20
-GUARD_COUNT = 32
-CTYPES = {
-    "float16": ctypes.c_uint16,
-    "bfloat16": ctypes.c_uint16,
-    "float32": ctypes.c_uint32,
-    "uint8": ctypes.c_uint8,
-    "uint16": ctypes.c_uint16,
-    "uint32": ctypes.c_uint32,
-    "uint64": ctypes.c_uint64,
-    "int8": ctypes.c_int8,
-    "int16": ctypes.c_int16,
-    "int32": ctypes.c_int32,
-    "int64": ctypes.c_int64,
-}
 METADATA_CTYPES = {
     "uint32": ctypes.c_uint32,
     "int32": ctypes.c_int32,
     "int64": ctypes.c_int64,
-}
-# Narrow integers widen to 32-bit storage words where the target lacks them.
-WIDENED = {
-    "metal": {},
-    "directx": {"uint8": "uint32", "int8": "int32"},
-    "opengl": {
-        "uint8": "uint32",
-        "uint16": "uint32",
-        "int8": "int32",
-        "int16": "int32",
-    },
-}
-PHYSICAL_SIZES = {
-    "bool": 1,
-    "uint8": 1,
-    "int8": 1,
-    "float16": 2,
-    "bfloat16": 2,
-    "uint16": 2,
-    "int16": 2,
-    "float32": 4,
-    "uint32": 4,
-    "int32": 4,
-    "uint64": 8,
-    "int64": 8,
-}
-GUARDS = {
-    "float16": 0x3555,
-    "bfloat16": 0x3EAB,
-    "float32": 0x6A15BEEF,
-    "uint8": 0xA5,
-    "uint16": 0xA5A5,
-    "uint32": 0x6A15BEEF,
-    "uint64": 0x6A15BEEF6A15BEEF,
-    "int8": -91,
-    "int16": 0x3555,
-    "int32": 0x6A15BEEF,
-    "int64": -0x6A15BEEF,
 }
 
 
@@ -232,91 +183,6 @@ def check_integer_operands(dtype, pairs):
             )
 
 
-def packet(dtype, target, words):
-    if dtype == "float32":
-        return {
-            "dtype": "float32",
-            "shape": [len(words)],
-            "encoding": FLOAT32_BITS,
-            "values": list(words),
-        }
-    if dtype == "float16":
-        if target == "opengl":
-            words, encoding, physical = (
-                half_storage.pack(words, target),
-                FLOAT32_BITS,
-                "float32",
-            )
-        else:
-            words, encoding, physical = (
-                half_storage.pack(words, target),
-                FLOAT16_BITS,
-                "float16",
-            )
-        return {
-            "dtype": physical,
-            "shape": [len(words)],
-            "encoding": encoding,
-            "values": words,
-        }
-    if dtype == "bfloat16":
-        words = bfloat_storage.pack(words, target)
-        if target == "directx":
-            return {"dtype": "uint16", "shape": [len(words)], "values": words}
-        encoding = BFLOAT16_BITS if target == "metal" else FLOAT32_BITS
-        physical = "bfloat16" if target == "metal" else "float32"
-        return {
-            "dtype": physical,
-            "shape": [len(words)],
-            "encoding": encoding,
-            "values": words,
-        }
-    return {
-        "dtype": WIDENED[target].get(dtype, dtype),
-        "shape": [len(words)],
-        "values": [int(word) for word in words],
-    }
-
-
-def unpack(dtype, target, words):
-    if dtype == "float16":
-        return half_storage.unpack(words, target)
-    if dtype == "bfloat16":
-        return bfloat_storage.unpack(words, target)
-    ctype = CTYPES[dtype]
-    if any(type(word) is not int or ctype(word).value != word for word in words):
-        raise ValueError("Native DivMod returned invalid scalar storage")
-    return list(words)
-
-
-def reflected_layout_matches(scalar, value):
-    """The reflected element type must carry the packet's exact storage."""
-    storage = scalar.get("storageEncoding")
-    if storage is not None:
-        return (
-            value["dtype"] == "float16"
-            and scalar["elementType"] == "uint16"
-            and scalar["elementStrideBytes"] == 2
-            and storage == {"encoding": FLOAT16_BITS, "logicalElementType": "float16"}
-        )
-    return scalar["elementType"] == value["dtype"] and scalar[
-        "elementStrideBytes"
-    ] == PHYSICAL_SIZES.get(value["dtype"])
-
-
-def supplied_buffers(buffers, count):
-    supplied = {}
-    for index in range(count):
-        buffer = buffers[index]
-        if not buffer.name or not buffer.dtype:
-            raise ValueError("DivMod buffer identity is missing")
-        name = buffer.name.decode("ascii")
-        if name in supplied:
-            raise ValueError("DivMod buffer names must be unique")
-        supplied[name] = buffer
-    return supplied
-
-
 def dispatch(host, entry, buffers, count, threads, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -325,7 +191,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise ValueError(
             "DivMod dispatch requires complete buffers, pinned sources and launch geometry"
         )
-    supplied = supplied_buffers(buffers, count)
+    supplied = supplied_buffers(buffers, count, "DivMod")
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
     logical = {name: buffer_values(supplied[name], CTYPES[dtype]) for name in "ab"}

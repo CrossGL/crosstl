@@ -39,7 +39,7 @@ def encode(words, logical, physical):
     elif logical == "float16" and physical in {"float16", "float32"}:
         encoding = FLOAT16_BITS if physical == "float16" else FLOAT32_BITS
         if physical == "float32":
-            words = [half_storage.widen(word) for word in words]
+            words = half_storage.widen_all(words)
     elif logical == "bfloat16" and physical in {"bfloat16", "float32"}:
         encoding = BFLOAT16_BITS if physical == "bfloat16" else FLOAT32_BITS
         if physical == "float32":
@@ -59,7 +59,7 @@ def decode(value, logical, physical):
     if not isinstance(words, list):
         raise RuntimeError("Native quantization readback words are missing")
     if logical == "float16" and physical == "float32":
-        words = [half_storage.narrow(word) for word in words]
+        words = half_storage.narrow_all(words)
     elif logical == "bfloat16" and physical == "float32":
         if any(
             type(word) is not int or not 0 <= word <= 0xFFFFFFFF or word & 0xFFFF

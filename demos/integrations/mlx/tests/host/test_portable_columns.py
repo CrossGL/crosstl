@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    column_long_layout,
     column_reduction_layout,
     column_small_layout,
     column_workloads,
@@ -73,7 +74,9 @@ def test_column_package_family_covers_both_modes_and_every_template():
     assert reduction_packages.FAMILY_WIDTHS["column"] == (256,)
     assert {case["entry"] for case in column_workloads.cases()} == set(
         reduction_packages.COLUMN_ENTRIES
-    ) | set(column_small_layout.SMALL_COLUMN_ENTRIES)
+    ) | set(column_small_layout.SMALL_COLUMN_ENTRIES) | set(
+        column_workloads.LONG_COLUMN_ENTRIES
+    )
 
 
 @pytest.mark.parametrize(
@@ -136,7 +139,7 @@ def test_column_rejection_messages_match_the_host_backend():
         assert f"CrossTL {message}" in source
 
 
-@pytest.mark.parametrize("mode", ["allocation", "long", "limit"])
+@pytest.mark.parametrize("mode", ["allocation", "limit"])
 @pytest.mark.parametrize("fault", [None, "message", "dispatch", "accepted"])
 def test_column_rejection_requires_the_expected_error_before_dispatch(mode, fault):
     import numpy as np
@@ -391,6 +394,14 @@ def column_evidence():
                 size = [lanes, rows, 1]
                 blocks = -(-stride // 4)
                 count = [-(-blocks // lanes), expected.size // stride, 1]
+            if stage == 0 and case["entry"] in column_long_layout.LONG_COLUMN_ENTRIES:
+                total = logical.size // expected.size
+                size = [*column_long_layout.geometry(stride, total), 1]
+                count = [
+                    expected.size // stride,
+                    1,
+                    column_long_layout.outer_blocks(total),
+                ]
             trace.append(
                 dict(
                     entry=(
@@ -484,9 +495,11 @@ def test_partition_sums_validate_their_16_bit_passes(two_pass, dtype):
     entry, buffers, count, execution, _ = _buffers(two_pass)
     entry = entry.replace("float32", dtype)
     assert reduction_packages.PARTITION_SUM_ENTRIES[entry] == dtype
-    # The column workloads reduce MLX arrays, whose 16-bit sums stay refused.
+    # The default column family keeps its base types; 16-bit floats are the
+    # column-half family, which includes the partition sums.
     assert entry not in reduction_packages.COLUMN_ENTRIES
     assert entry in reduction_packages.ENTRY_GROUPS["column"]
+    assert reduction_packages.HALF_COLUMN_ENTRIES[entry] == dtype
     for name in ("in", "out"):
         old = buffers[name]
         buffers[name] = runtime.Buffer(
@@ -510,4 +523,20 @@ def test_column_packages_translate_partition_sums_only_on_request():
         "column": reduction_packages.COLUMN_ENTRIES
     }
     source = Path(runtime.__file__).read_text(encoding="utf-8")
-    assert "entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES" in source
+    assert "entry in COLUMN_ENTRIES or entry in HALF_COLUMN_ENTRIES" in source
+
+
+def test_column_half_family_holds_every_16_bit_looped_and_two_pass_entry():
+    expected = {
+        f"col_reduce_{mode}_{rank}_32_32_reduce_{operation}{dtype}": dtype
+        for mode in ("looped", "2pass")
+        for rank in (1, 2, 5)
+        for operation in ("sum", "prod", "min", "max")
+        for dtype in ("float16", "bfloat16")
+    }
+    assert reduction_packages.HALF_COLUMN_ENTRIES == expected
+    assert reduction_packages.ENTRY_GROUPS["column-half"] == expected
+    assert set(reduction_packages.PARTITION_SUM_ENTRIES) < set(expected)
+    assert not set(expected) & set(reduction_packages.COLUMN_ENTRIES)
+    assert reduction_packages.FAMILY_WIDTHS["column-half"] == (256,)
+    assert "column-half" not in reduction_packages.ON_DEMAND_FAMILIES

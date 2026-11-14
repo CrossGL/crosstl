@@ -46,16 +46,36 @@ INIT_SOURCE = (
     "instantiate_init_reduce(sum, uint32, uint32_t, Sum)\n"
     "instantiate_init_reduce(prod, uint32, uint32_t, Prod)\n"
 )
+# instantiate_sum_prod and instantiate_min_max keep 16-bit floats as their
+# own accumulator, so every pass rounds in the element type.
+HALF_FLOAT_ENTRIES = {
+    f"all_reduce_{operation}{dtype}": dtype
+    for operation in ("sum", "prod", "min", "max")
+    for dtype in ("float16", "bfloat16")
+}
+ROW_PREFIXES = (
+    "row_reduce_simple_",
+    "row_reduce_looped_1_reduce_",
+    "row_reduce_looped_2_reduce_",
+    "row_reduce_looped_5_reduce_",
+)
 ROW_ENTRIES = {
     prefix + entry.removeprefix("all_reduce_"): dtype
-    for prefix in (
-        "row_reduce_simple_",
-        "row_reduce_looped_1_reduce_",
-        "row_reduce_looped_2_reduce_",
-        "row_reduce_looped_5_reduce_",
-    )
+    for prefix in ROW_PREFIXES
     for entry, dtype in ENTRIES.items()
 }
+# Translated on demand only, so the static row shards keep their inventory.
+HALF_ROW_ENTRIES = {
+    prefix + entry.removeprefix("all_reduce_"): dtype
+    for prefix in ROW_PREFIXES
+    for entry, dtype in HALF_FLOAT_ENTRIES.items()
+}
+ALL_ROW_ENTRIES = {**ROW_ENTRIES, **HALF_ROW_ENTRIES}
+# The largest input span, logical size or output a row launch binds: the
+# column passes' bound, far below the INT32_MAX at which reduce.cpp selects its
+# 64-bit index kernels. Static GLSL row packages assert their rebased indexes
+# inside it.
+ROW_MAX_ELEMENTS = 2**28 - 1
 COLUMN_ENTRIES = {
     f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
         "all_reduce_"
@@ -75,17 +95,29 @@ PARTITION_SUM_ENTRIES = {
     for mode in ("looped", "2pass")
     for dtype in ("float16", "bfloat16")
 }
+# Every 16-bit float looped and two-pass column instantiation; the split-K
+# partition sums are its one-axis sums.
+HALF_COLUMN_ENTRIES = {
+    f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
+        "all_reduce_"
+    ): dtype
+    for mode in ("looped", "2pass")
+    for dimension in (1, 2, 5)
+    for entry, dtype in HALF_FLOAT_ENTRIES.items()
+}
 ENTRY_GROUPS = {
     "all": ENTRIES,
     "bfloat": BFLOAT_ENTRIES,
     "half": HALF_ENTRIES,
     "row": ROW_ENTRIES,
+    "row-half": HALF_ROW_ENTRIES,
     "column": {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES},
+    "column-half": HALF_COLUMN_ENTRIES,
     "init": INIT_ENTRIES,
 }
 DEFAULT_ENTRIES = {"column": COLUMN_ENTRIES}
 # Families whose whole-array or row entries the on-demand cache translates.
-ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row"})
+ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row", "row-half"})
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
 FAMILY_WIDTHS = {
@@ -93,7 +125,9 @@ FAMILY_WIDTHS = {
     "bfloat": WIDTHS,
     "half": WIDTHS,
     "row": ROW_WIDTHS,
+    "row-half": ROW_WIDTHS,
     "column": (256,),
+    "column-half": (256,),
     "init": (1,),
 }
 
@@ -270,16 +304,17 @@ def build_packages(
         if family == "row" and target == "opengl":
             # row_reduction_layout.validate_metadata requires rows >= 32,
             # input_count == rows * row_size and
-            # input_count + 4 * group_width <= 131071 before dispatch. Every
-            # row_reduce_simple thread clamps out_idx to [0, rows - 4], so the
-            # rebased bases in_ + out_idx * row_size, inputs[] and
-            # out_ + out_idx stay below that bound, every inputs[j][i] read is
-            # below input_count and every out[i] write is below rows.
+            # input_count + 4 * group_width <= ROW_MAX_ELEMENTS before
+            # dispatch. Every row_reduce_simple thread clamps out_idx to
+            # [0, rows - 4], so the rebased bases in_ + out_idx * row_size,
+            # inputs[] and out_ + out_idx stay below that bound, every
+            # inputs[j][i] read is below input_count and every out[i] write
+            # is below rows.
             options += "".join(
                 "[[project.index_range_assertions]]\n"
                 f'source = "{SOURCE}"\n'
                 f'expression = "{expression}"\n'
-                "minimum = 0\nmaximum = 131071\n"
+                f"minimum = 0\nmaximum = {ROW_MAX_ELEMENTS}\n"
                 for expression in (
                     "inputs_offsets[(i - 1)] + reduction_size",
                     "in_ + out_idx * int64(reduction_size)",
