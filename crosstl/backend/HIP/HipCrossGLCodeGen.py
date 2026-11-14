@@ -46,7 +46,8 @@ from .HipAst import (
 class HipRecordSemanticError(ValueError):
 _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
-    """Raised when used C++ record semantics cannot survive CrossGL lowering."""
+
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
     project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
     missing_capabilities = ("hip.record-lifecycle-layout-lowering",)

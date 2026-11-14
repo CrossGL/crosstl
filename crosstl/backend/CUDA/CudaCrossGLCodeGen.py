@@ -36,9 +36,10 @@ from .reference_parameters import ReferenceParameters
 class CudaToCrossGLConverter:
 _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
-    """Serialize CUDA backend AST nodes back into CrossGL source."""
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
-    CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
+
+    """Serialize CUDA backend AST nodes back into CrossGL source."""
         "CHECK_CUDA",
         "CUDA_CHECK",
         "checkCuda",
@@ -6924,7 +6925,6 @@ _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
         if scoped_type is not None:
             return scoped_type
         if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
-        if cuda_type in _CROSSGL_ALL_KEYWORDS and cuda_type in self.cuda_record_names:
             # A struct/enum/alias named after any CrossGL keyword is declared under
             # its renamed name. Value identifiers (locals, params) use the narrower
             # CROSSGL_RESERVED_IDENTIFIERS checked via sanitize_identifier_name.
@@ -6934,7 +6934,9 @@ _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
             return self.sanitize_identifier_name(cuda_type)
         return cuda_type
         normalized_type = str(cuda_type)
-        prefix = "::cuda::std::"
+
+    def unqualified_leading_cuda_std_type_name(self, cuda_type):
+        normalized_type = str(cuda_type)
         if normalized_type.startswith(prefix):
             return normalized_type[len(prefix) :]
         return None
