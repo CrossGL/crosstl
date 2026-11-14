@@ -504,6 +504,22 @@ def test_cache_paths_have_no_parent_directory_segments():
             assert ".." not in entry.split("/"), (name, entry)
 
 
+def test_upstream_source_caches_fall_back_to_an_older_cache():
+    # A change to tools/coverage/upstream.py changes every key at once. Without a
+    # fallback, every Coverage job downloads every pinned source from the same host,
+    # and one rate-limited download fails a required check (#4535).
+    keys = []
+    for name, step in _steps():
+        cache = step.get("with") or {}
+        key = str(cache.get("key", ""))
+        if not key.startswith("coverage-upstream-"):
+            continue
+        prefix = key.split("${{ hashFiles(")[0]
+        assert cache.get("restore-keys") == prefix, (name, key)
+        keys.append(key)
+    assert len(keys) == 3
+
+
 def _local_action_text(name):
     path = ACTIONS_DIR / name / "action.yml"
     return path.read_text(encoding="utf-8")
