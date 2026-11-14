@@ -3,6 +3,7 @@
 from tools.coverage import probes
 from tools.coverage.features import mojo
 from tools.coverage.model import (
+    VOID,
     Param,
     Signature,
     Type,
@@ -220,3 +221,194 @@ def test_mojo_writes_bit_and_math_functions_crossgl_lacks_as_expressions():
     )
     # gcd needs a loop, so its probe still calls Mojo's name.
     assert features["gcd"].crossgl == "gcd"
+
+
+# Excerpts of MAX 26.7.0's max/gpu/primitives/warp.mojo, max/gpu/sync/__init__.mojo and max/gpu/sync/sync.mojo.
+MAX_WARP = """
+from max.gpu.globals import WARP_SIZE
+
+
+def _shuffle[dtype: DType](val: Scalar[dtype]) -> Scalar[dtype]:
+    return val
+
+
+def shuffle_down[
+    dtype: DType, simd_width: SIMDLength, //
+](val: SIMD[dtype, simd_width], offset: UInt32) -> SIMD[dtype, simd_width]:
+    return val
+
+
+def shuffle_down[
+    dtype: DType, simd_width: SIMDLength, //
+](mask: UInt, val: SIMD[dtype, simd_width], offset: UInt32) -> SIMD[
+    dtype, simd_width
+]:
+    return val
+
+
+def lane_group_reduce[
+    val_type: DType,
+    simd_width: SIMDLength,
+    //,
+    shuffle: def[dtype: DType, simd_width: SIMDLength](
+        val: SIMD[dtype, simd_width], offset: UInt32
+    ) thin -> SIMD[dtype, simd_width],
+    func: def[dtype: DType, width: SIMDLength](
+        SIMD[dtype, width], SIMD[dtype, width]
+    ) capturing -> SIMD[dtype, width],
+    num_lanes: Int,
+](val: SIMD[val_type, simd_width]) -> SIMD[val_type, simd_width]:
+    return val
+
+
+def lane_group_sum[
+    val_type: DType,
+    simd_width: SIMDLength,
+    //,
+    num_lanes: Int,
+    stride: Int = 1,
+](val: SIMD[val_type, simd_width]) -> SIMD[val_type, simd_width]:
+    return val
+
+
+def sum(val: SIMD) -> Scalar[val.dtype]:
+    return val[0]
+
+
+def max(val: SIMD) -> Scalar[val.dtype]:
+    return val[0]
+
+
+def vote[ret_type: DType](val: Bool) -> Scalar[ret_type]:
+    comptime if is_nvidia_gpu():
+        comptime assert ret_type == .uint32, "Unsupported return type"
+        return 0
+    return 0
+
+
+def match_any[
+    dtype: DType,
+    //,
+    mask_type: DType = (DType.uint32 if WARP_SIZE <= 32 else DType.uint64),
+](value: Scalar[dtype]) -> Scalar[mask_type]:
+    return 0
+"""
+
+MAX_SYNC_INIT = """
+from .semaphore import NamedBarrierSemaphore, Semaphore
+from .sync import (
+    AMDScheduleBarrierMask,
+    barrier,
+    named_barrier,
+    syncwarp,
+)
+"""
+
+MAX_SYNC = """
+def named_barrier[
+    num_threads: Int32,
+    id: Int32 = 0,  # the barrier's id
+]():
+    pass
+
+
+def barrier():
+    pass
+
+
+def syncwarp(mask: Int = -1):
+    pass
+"""
+
+
+def _gpu_features():
+    return by_name(
+        mojo.parse(
+            MOJO_MATH_INIT,
+            MOJO_MATH,
+            MOJO_NUMERICS,
+            MOJO_BIT_INIT,
+            MOJO_BIT,
+            warp=MAX_WARP,
+            sync_init=MAX_SYNC_INIT,
+            sync=MAX_SYNC,
+        )
+    )
+
+
+def test_mojo_reads_max_gpu_warp_and_sync_functions():
+    features = _gpu_features()
+    warp = {name for name, f in features.items() if f.group == "warp"}
+    sync = {name for name, f in features.items() if f.group == "sync"}
+    # warp's public API is its definitions without a leading underscore; its sum and max are named through the
+    # module, so they stay apart from the std.math functions of the same names.
+    assert warp == {
+        "warp.shuffle_down",
+        "warp.lane_group_reduce",
+        "warp.lane_group_sum",
+        "warp.sum",
+        "warp.max",
+        "warp.vote",
+        "warp.match_any",
+    }
+    # max.gpu.sync's functions are those its __init__.mojo imports from the sync module; types are not functions.
+    assert sync == {"barrier", "named_barrier", "syncwarp"}
+    assert {f.extension for f in features.values() if f.group == "warp"} == {mojo.WARP}
+    assert features["barrier"].extension == "max.gpu.sync.barrier"
+    # The first overload is probed: the one without a lane mask.
+    assert features["warp.shuffle_down"].signature == Signature(
+        Type("float"), (Param(Type("float")), Param(Type("uint")))
+    )
+    assert features["warp.shuffle_down"].crossgl == "subgroupShuffleDown"
+    assert features["syncwarp"].signature == Signature(VOID, ())
+    assert features["syncwarp"].crossgl == "subgroupBarrier"
+
+
+def test_mojo_probes_warp_reductions_over_the_whole_warp():
+    features = _gpu_features()
+    lane_group = features["warp.lane_group_sum"]
+    assert lane_group.spelling == "warp.lane_group_sum[num_lanes=warp.WARP_SIZE]"
+    assert lane_group.crossgl == "subgroupAdd"
+    # Scalar[val.dtype] is the element type of the argument val.
+    assert features["warp.sum"].signature == Signature(
+        Type("float"), (Param(Type("float")),)
+    )
+    assert features["warp.max"].crossgl == "subgroupMax"
+    # A reduction over a function the kernel passes has no probe and no CrossGL operation.
+    reduce = features["warp.lane_group_reduce"]
+    assert reduce.signature is None
+    assert reduce.crossgl == ""
+    assert (
+        reduce.note == "no CrossGL warp reduction applies a function the kernel passes"
+    )
+    # A comment in a parameter list is not part of a parameter's kind.
+    assert features["named_barrier"].note == (
+        "no probe value for the parameter num_threads: Int32"
+    )
+
+
+def test_mojo_names_the_mask_type_of_votes_and_matches():
+    features = _gpu_features()
+    # vote's ret_type is required and asserted to be uint32 for NVIDIA.
+    vote = features["warp.vote"]
+    assert vote.spelling == "warp.vote[ret_type=DType.uint32]"
+    assert vote.signature == Signature(Type("uint"), (Param(Type("bool")),))
+    assert vote.crossgl == "subgroupBallot({0}).x"
+    # match_any's mask type defaults to an expression a host compile cannot fold, so the probe names its first type.
+    match = features["warp.match_any"]
+    assert match.spelling == "warp.match_any[mask_type=DType.uint32]"
+    assert match.signature.result == Type("uint")
+
+
+def test_mojo_probes_import_the_gpu_module_they_call():
+    features = _gpu_features()
+    source = probes.build(features["warp.shuffle_down"], "mojo").source
+    assert "from max.gpu.primitives import warp\n" in source
+    assert "warp.shuffle_down(" in source
+    source = probes.build(features["barrier"], "mojo").source
+    assert "from max.gpu.sync import barrier\n" in source
+    assert "    barrier()\n" in source
+    # The CrossGL probe calls CrossGL's operation and imports nothing.
+    crossgl = probes.build(features["warp.shuffle_down"], "crossgl").source
+    assert "subgroupShuffleDown(" in crossgl
+    assert "import" not in crossgl

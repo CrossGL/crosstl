@@ -39,7 +39,7 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 | CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h`, `__clang_cuda_device_functions.h` and `__clang_cuda_intrinsics.h`, the last read as a compile for the architecture nvcc validates the probes for |
 | HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h`, `amd_device_functions.h` and `amd_warp_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
-| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
+| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export, and, at the same tag, the warp functions of MAX's `max.gpu.primitives.warp` and the synchronization functions `max.gpu.sync` exports |
 | OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, plus the `as_type` operators and `printf` of `opencl-c-base.h`, the pipe, device-side enqueue and address-space built-ins of `Builtins.def` and the `vec_step` operator of `TokenKinds.def`, at the release of the clang that validates the probes; vendor extensions are left out |
 | Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules of the release that validates the probes; the `num_traits::Float` trait and glam's `Vec3` methods, at the versions its lock file resolves |
 

@@ -67,6 +67,9 @@ def _mojo(offline: bool) -> list[Feature]:
         fetch("mojo-bit-exports", offline=offline),
         fetch("mojo-bit", offline=offline),
         _glsl_names(offline),
+        warp=fetch("mojo-gpu-warp", offline=offline),
+        sync_init=fetch("mojo-gpu-sync-exports", offline=offline),
+        sync=fetch("mojo-gpu-sync", offline=offline),
     )
 
 

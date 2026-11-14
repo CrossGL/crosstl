@@ -1,8 +1,10 @@
-"""Mojo standard library functions: the public API of ``std.math`` and ``std.bit``.
+"""Mojo functions: the public API of ``std.math`` and ``std.bit``, and of MAX's GPU warp and synchronization modules.
 
 A package's public API is what its ``__init__.mojo`` imports from its modules, so the list is the lower-case names
-those files export (the capitalised ones are traits). ``std.math`` also exports the floating-point predicates of
-``std.utils.numerics``. Each name is probed with its first module-level definition. Mojo functions are generic over a
+those files export (the capitalised ones are traits and types). ``std.math`` also exports the floating-point predicates
+of ``std.utils.numerics``. ``max.gpu.primitives.warp`` is a module no package re-exports, so its public API is every
+module-level definition whose name does not start with an underscore; ``max.gpu.sync`` exports its barriers from its
+``sync`` module. Each name is probed with its first module-level definition. Mojo functions are generic over a
 ``DType`` and a SIMD width; a probe calls them on scalars, ``Float32`` unless the definition requires an integral
 type, as all of ``std.bit`` does. A compile-time parameter no argument fixes is written into the call, as in
 ``nan[dtype=DType.float32]()``.
@@ -44,8 +46,24 @@ _CONVENTIONS = frozenset({"mut", "read", "var", "ref", "owned"})
 _LITERALS = {"Int": "1", "SIMDLength": "1", "Bool": "True"}
 # Operations CrossGL has no spelling for, with the reason.
 UNSPELLED = {
-    "divmod": "no CrossGL function returns a quotient and a remainder together"
+    "divmod": "no CrossGL function returns a quotient and a remainder together",
+    "warp.match_all": (
+        "CrossGL's lane match over the whole warp is CUDA's __match_all_sync, which also returns whether the lanes "
+        "agree through a pointer"
+    ),
+    "warp.reduce": "no CrossGL warp reduction applies a function the kernel passes",
+    "warp.lane_group_reduce": (
+        "no CrossGL warp reduction applies a function the kernel passes"
+    ),
 }
+# MAX's GPU modules, as a probe imports them (:meth:`..kernels.Mojo.enable`). A warp function is called through its
+# module, as ``warp.sum``, because warp's sum, max and min have the names of built-in and std.math functions; a
+# synchronization function is imported by name.
+WARP = "max.gpu.primitives.warp"
+SYNC = "max.gpu.sync"
+# A lane-group reduction is probed over the whole warp, where it is the warp reduction CrossGL has. Over fewer lanes
+# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does.
+_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE"}
 
 Definition = tuple[str, str, str, str]
 
@@ -120,9 +138,15 @@ def definitions(text: str) -> dict[str, Definition]:
 
 
 def mojo_type(
-    spelling: str, element: str, generics: set[str], arguments: dict[str, Type]
+    spelling: str,
+    element: str,
+    generics: set[str],
+    arguments: dict[str, Type],
+    resolved: dict[str, str] | None = None,
 ) -> Type:
-    """The probe type of a Mojo type spelling; ``element`` is the scalar a generic ``DType`` or type stands for."""
+    """The probe type of a Mojo type spelling; ``element`` is the scalar a generic ``DType`` or type stands for, and
+    ``resolved`` the scalar of each ``DType`` parameter the definition pins to one (:func:`_pinned`).
+    """
     spelling = re.sub(r"\s*([\[\]])\s*", r"\1", re.sub(r"\s+", " ", spelling)).strip()
     referenced = re.fullmatch(r"type_of\((\w+)\)", spelling)
     if referenced and referenced.group(1) in arguments:
@@ -137,6 +161,12 @@ def mojo_type(
     simd = re.fullmatch(r"(?:SIMD|Scalar)(?:\[(.*)\])?", spelling)
     if simd:
         dtype = _split(simd.group(1) or "")[:1]
+        # ``Scalar[val.dtype]``: the element type of the argument ``val``.
+        argument = re.fullmatch(r"(\w+)\.dtype", dtype[0]) if dtype else None
+        if argument and argument.group(1) in arguments:
+            return Type(arguments[argument.group(1)].scalar)
+        if dtype and dtype[0] in (resolved or {}):
+            return Type(resolved[dtype[0]])
         if not dtype or dtype[0] in generics:
             return Type(element)
         bare = dtype[0].removeprefix("DType").lstrip(".")
@@ -169,12 +199,17 @@ def _pair(
 _ASSERT = re.compile(r"comptime assert\s*(\([^\"]*?\)|[^,\n]*)")
 
 
-def _element(body: str, default: str) -> str:
-    """The scalar a definition's ``where`` clause or ``comptime assert`` requires; a ``comptime if`` on the type
-    only selects an implementation, so it does not count."""
-    constraints = " ".join(
+def _constraints(body: str) -> str:
+    """A definition's ``where`` clause and ``comptime assert`` conditions; a ``comptime if`` on a type only selects
+    an implementation, so it does not count."""
+    return " ".join(
         [body.split(":\n", 1)[0], *(m.group(1) for m in _ASSERT.finditer(body))]
     )
+
+
+def _element(body: str, default: str) -> str:
+    """The scalar a definition's constraints require."""
+    constraints = _constraints(body)
     if re.search(r"\bis_floating_point\(\)", constraints):
         return "float"
     if re.search(r"\bis_integral\(\)", constraints):
@@ -182,13 +217,28 @@ def _element(body: str, default: str) -> str:
     return default
 
 
-def _parameters(text: str) -> list[tuple[str, str, bool]]:
-    """``(name, kind, required)`` per compile-time parameter.
+_DTYPE_NAMED = re.compile(rf"(?:\bDType)?\.({'|'.join(_DTYPES)})\b")
+
+
+def _pinned(parameter: str, default: str, body: str) -> str | None:
+    """The scalar of a ``DType`` parameter that only the result names, when the definition pins it: the first DType
+    its default names, as ``DType.uint32 if WARP_SIZE <= 32 else DType.uint64``, or a constraint compares it with,
+    as ``ret_type == .uint32``."""
+    compared = re.findall(rf"\b{parameter}\s*(?:==|in)\s*([^,]*)", _constraints(body))
+    for text in (default, *compared):
+        named = _DTYPE_NAMED.search(text)
+        if named:
+            return _DTYPES[named.group(1)]
+    return None
+
+
+def _parameters(text: str) -> list[tuple[str, str, bool, str]]:
+    """``(name, kind, required, default)`` per compile-time parameter.
 
     Parameters before ``//`` are inferred from the arguments, and a parameter with a default needs no value, so
     neither is required.
     """
-    parts = _split(text)
+    parts = _split(re.sub(r"#[^\n]*", "", text))
     inferred = "//" in parts
     result = []
     for part in parts:
@@ -200,19 +250,31 @@ def _parameters(text: str) -> list[tuple[str, str, bool]]:
         name, _, rest = part.partition(":")
         kind, _, default = rest.partition("=")
         result.append(
-            (name.strip(), kind.strip(), not inferred and not default.strip())
+            (
+                name.strip(),
+                kind.strip(),
+                not inferred and not default.strip(),
+                default.strip(),
+            )
         )
     return result
 
 
 def signature(
-    name: str, definition: Definition, default: str
+    name: str,
+    definition: Definition,
+    default: str,
+    literals: dict[str, str] | None = None,
 ) -> tuple[Signature | None, str, str]:
-    """``(signature, spelling, note)`` of one definition; ``spelling`` is set when the call names parameters."""
+    """``(signature, spelling, note)`` of one definition; ``spelling`` is set when the call names parameters.
+
+    ``literals`` gives the value of a compile-time parameter by name, where the probe passes another value than
+    :data:`_LITERALS` gives for the parameter's kind.
+    """
     parameters, arguments, result, body = definition
     element = _element(body, default)
     declared = _parameters(parameters)
-    generics = {n for n, kind, _ in declared if kind not in _LITERALS}
+    generics = {n for n, kind, _, _ in declared if kind not in _LITERALS}
     params: list[Param] = []
     by_name: dict[str, Type] = {}
     passed: list[str] = []
@@ -234,17 +296,34 @@ def signature(
         elif not default_value.strip():
             params.append(Param(mapped, "inout" if convention == "mut" else "in"))
             passed.append(kind)
+    # A DType parameter no passed argument's type mentions and the definition pins to one type, which the call names.
+    pinned = {
+        parameter: scalar
+        for parameter, kind, _, value in declared
+        if kind == "DType" and not re.search(rf"\b{parameter}\b", " ".join(passed))
+        for scalar in [_pinned(parameter, value, body)]
+        if scalar
+    }
     if result_type is None:
-        result_type = mojo_type(result, element, generics, by_name) if result else VOID
+        result_type = (
+            mojo_type(result, element, generics, by_name, pinned) if result else VOID
+        )
     # A parameter no passed argument's type mentions cannot be inferred, so the call names it.
     fixed = []
-    for parameter, kind, required in declared:
+    for parameter, kind, required, _ in declared:
+        if parameter in pinned:
+            fixed.append(f"{parameter}=DType.{_DTYPE_OF[pinned[parameter]]}")
+            continue
         if not required or re.search(rf"\b{parameter}\b", " ".join(passed)):
             continue
         if kind == "DType":
             fixed.append(f"{parameter}=DType.{_DTYPE_OF[element]}")
         elif kind in _LITERALS:
-            fixed.append(f"{parameter}={_LITERALS[kind]}")
+            fixed.append(
+                f"{parameter}={(literals or {}).get(parameter, _LITERALS[kind])}"
+            )
+        elif kind.startswith("def"):
+            return None, "", f"no probe passes a function as the parameter {parameter}"
         else:
             return None, "", f"no probe value for the parameter {parameter}: {kind}"
     spelling = f"{name}[{', '.join(fixed)}]" if fixed else ""
@@ -258,28 +337,46 @@ def parse(
     bit_init: str,
     bit: str,
     glsl_names: set[str] | frozenset[str] = frozenset(),
+    *,
+    warp: str = "",
+    sync_init: str = "",
+    sync: str = "",
 ) -> list[Feature]:
+    """The feature list; ``warp``, ``sync_init`` and ``sync`` are MAX's ``max/gpu/primitives/warp.mojo``,
+    ``max/gpu/sync/__init__.mojo`` and ``max/gpu/sync/sync.mojo``."""
     modules = [
         ("math", math, exports(math_init, ".math"), "float"),
         ("math", numerics, exports(math_init, "std.utils.numerics"), "float"),
         ("bit", bit, exports(bit_init, ".bit"), "int"),
+        ("warp", warp, public(warp), "float"),
+        ("sync", sync, exports(sync_init, ".sync"), "float"),
     ]
     features = []
     for group, text, names, default in modules:
         defined = definitions(text)
-        for name in names:
+        for exported in names:
+            name, extension, literals = exported, "", None
+            if group == "warp":
+                name, extension, literals = f"warp.{exported}", WARP, _WARP_LITERALS
+            elif group == "sync":
+                extension = f"{SYNC}.{exported}"
             found, spelling, note = (
                 None,
                 "",
                 "no definition in the module it is exported from",
             )
-            if name in defined:
-                found, spelling, note = signature(name, defined[name], default)
+            if exported in defined:
+                found, spelling, note = signature(
+                    name, defined[exported], default, literals
+                )
             crossgl, counterpart = spellings.spelling("mojo", name, glsl_names), None
             if name in spellings.COUNTERPARTS["mojo"]:
                 crossgl, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
             if name in UNSPELLED:
                 crossgl, note = "", UNSPELLED[name]
+            elif crossgl == name and "." in name:
+                # A module-qualified name is no CrossGL spelling.
+                crossgl, note = "", note or "no CrossGL operation is listed for it"
             features.append(
                 Feature(
                     "mojo",
@@ -291,6 +388,16 @@ def parse(
                     note=note,
                     spelling=spelling,
                     counterpart=counterpart,
+                    extension=extension,
                 )
             )
     return sorted(features, key=lambda f: (f.group, f.name))
+
+
+def public(text: str) -> list[str]:
+    """The names of a module's module-level definitions that do not start with an underscore, in file order."""
+    names = []
+    for name in _DEFINITION.findall(text):
+        if not name.startswith("_") and name not in names:
+            names.append(name)
+    return names

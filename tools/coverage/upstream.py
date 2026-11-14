@@ -118,6 +118,28 @@ SOURCES = {
         "0cabf5f5474056e435ac69082c42556ed049e8130c94f6a33e91e81cc7b8d5e8",
         "Mojo 1.2.0 std.bit public API",
     ),
+    # MAX's GPU package at the same tag, as max-mojo-libs 26.7.0 installs it.
+    "mojo-gpu-sync": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/sync/sync.mojo",
+        "54a2271e7cae969490fd3fa49f46c64fbd5a7a44c0d069ece7765dd861f46686",
+        "MAX 26.7.0 max.gpu synchronization functions",
+    ),
+    "mojo-gpu-sync-exports": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/sync/__init__.mojo",
+        "708174965f4d43d3958b44477ead7952702d692cb161d751c8ce5c00533d476e",
+        "MAX 26.7.0 max.gpu.sync public API",
+    ),
+    "mojo-gpu-warp": Source(
+        "modular/modular",
+        "527d069ee11a41ac5320af1f9402db0a66b2b868",
+        "max/mojo/max/gpu/primitives/warp.mojo",
+        "9d8c07709bf313a81b11ec4568d0aa6ef4a5168853b690379690e359ec79791f",
+        "MAX 26.7.0 max.gpu.primitives.warp functions",
+    ),
     "mojo-math": Source(
         "modular/modular",
         "527d069ee11a41ac5320af1f9402db0a66b2b868",

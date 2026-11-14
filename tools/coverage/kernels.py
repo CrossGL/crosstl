@@ -152,6 +152,12 @@ class Mojo(Dialect):
     def statement(self, expression: str) -> str:
         return expression
 
+    def enable(self, extension: str) -> list[str]:
+        # A Mojo feature's extension is what the probe imports: the module ``warp`` for max.gpu.primitives.warp, or
+        # the function ``barrier`` for max.gpu.sync.barrier.
+        package, _, name = extension.rpartition(".")
+        return [f"from {package} import {name}"]
+
     def active(self, body: list[str], skipped: int) -> list[str]:
         return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]
 

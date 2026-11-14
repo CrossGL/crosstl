@@ -578,6 +578,28 @@ OTHER_NAMES = {
         "recip": "rcp",
         "inf": "(INFINITY)",
         "iota": "(0.0)",
+        # MAX's warp functions (max/gpu/primitives/warp.mojo), which a probe calls through their module, are
+        # GL_KHR_shader_subgroup's. shuffle_idx reads the lane it names, and prefix_sum is inclusive unless asked to
+        # be exclusive. A lane-group reduction over the whole warp, as the probe makes it, is the warp reduction.
+        # broadcast copies lane 0's value, and vote returns the 32-bit ballot of a 32-lane warp, the first component
+        # of CrossGL's. match_any is CUDA's __match_any_sync over the full warp (match.any.sync.b32 with the mask
+        # 0xFFFFFFFF). max.gpu.sync's syncwarp waits for the warp's lanes and orders their memory accesses, as
+        # subgroupBarrier does.
+        "warp.shuffle_idx": "subgroupShuffle",
+        "warp.shuffle_up": "subgroupShuffleUp",
+        "warp.shuffle_down": "subgroupShuffleDown",
+        "warp.shuffle_xor": "subgroupShuffleXor",
+        "warp.sum": "subgroupAdd",
+        "warp.max": "subgroupMax",
+        "warp.min": "subgroupMin",
+        "warp.lane_group_sum": "subgroupAdd",
+        "warp.lane_group_max": "subgroupMax",
+        "warp.lane_group_min": "subgroupMin",
+        "warp.prefix_sum": "subgroupInclusiveAdd",
+        "warp.broadcast": "subgroupBroadcast({0}, 0u)",
+        "warp.vote": "subgroupBallot({0}).x",
+        "warp.match_any": "__match_any_sync(4294967295u, {0})",
+        "syncwarp": "subgroupBarrier",
         "mulwide": "(uint64({0}) * uint64({1}))",
         "align_down": (
             "(({0} / {1} - ({0} != {0} / {1} * {1} && ({0} < 0) != ({1} < 0) ? 1 : 0)) * {1})"
