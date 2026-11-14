@@ -117,6 +117,8 @@ def _rust(offline: bool) -> list[Feature]:
     features += spirv_std.images(fetch("rust-image", offline=offline))
     features += spirv_std.byte_buffers(fetch("rust-byte-buffer", offline=offline))
     features += ray_query.parse(fetch("rust-ray-query", offline=offline))
+    features += spirv_std.runtime_arrays(fetch("rust-runtime-array", offline=offline))
+    features += spirv_std.debug_printf(fetch("rust-macros", offline=offline))
     features += glam.parse(
         {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
         glsl_names,
