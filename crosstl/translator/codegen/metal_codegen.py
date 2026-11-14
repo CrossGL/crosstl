@@ -3,6 +3,7 @@
 import ast as py_ast
 import re
 from copy import deepcopy
+from functools import cached_property
 from hashlib import sha1
 
 from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
@@ -110,7 +111,6 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
-from .ast_value_walk import iter_ast_values
 from .barrier_peephole import merge_adjacent_metal_barriers
 from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
 from .boolean_mix import boolean_mix_selector, metal_boolean_mix
@@ -461,6 +461,11 @@ from .metal_reference_argument_returns import generate_return_writeback_statemen
 from .metal_reference_call_results import generate_call_result_statement
 from .metal_reference_sequenced_calls import generate_conditional_call_statement
 from .metal_refusals import metal_refusals
+from .metal_render_walks import (
+    MetalRenderWalks,
+    names_identifier_class,
+    names_resource_reference_class,
+)
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
     collect_metal_signed_builtin_members,
@@ -663,6 +668,8 @@ class MetalCodeGen(
     # written so far (``None`` outside a rendering); see :func:`written_type_name`.
     program_type_names = frozenset()
     written_foreign_type_names = None
+    # The body walks a render records once and replays; see :mod:`.metal_render_walks`.
+    metal_render_walks = cached_property(lambda self: MetalRenderWalks())
 
     BINARY_PRECEDENCE = {
         "||": 1,
@@ -2094,9 +2101,9 @@ class MetalCodeGen(
             if id(function) in visited:
                 continue
             visited.add(id(function))
-            for node in self.iter_ast_nodes(getattr(function, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
+            for node in self.metal_render_walks.body_nodes_of_type(
+                function, FunctionCallNode
+            ):
                 name = self.function_call_name(node)
                 if not name or name in reachable_names:
                     continue
@@ -2146,7 +2153,8 @@ class MetalCodeGen(
         self.refusals.record(reason)
         return fallback
 
-    def render_program(self, ast, target_stage=None):
+    def rewrite_rendered_program(self, ast, target_stage):
+        """The program ``render_program`` renders, with the Metal rewrites applied, and its stage."""
         target_stage = requested_stage_name(target_stage)
         ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
         ast = lower_constant_buffer_resources(
@@ -2171,6 +2179,16 @@ class MetalCodeGen(
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
         ast = offset_metal_draw_base_indices(ast, self)
+        return ast, target_stage
+
+    def render_program(self, ast, target_stage=None):
+        with self.metal_render_walks.suspended():
+            ast, target_stage = self.rewrite_rendered_program(ast, target_stage)
+        with self.metal_render_walks.replaying():
+            return self.render_rewritten_program(ast, target_stage)
+
+    def render_rewritten_program(self, ast, target_stage):
+        """Render ``ast`` once its rewrites are done; generation only reads the AST from here on."""
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (
@@ -6946,12 +6964,13 @@ class MetalCodeGen(
             "gl_LaunchSizeEXT",
         }
         used_names = set()
-        for node in self.iter_ast_nodes(body):
-            if hasattr(node, "__class__") and "Identifier" in str(node.__class__):
-                name = getattr(node, "name", "")
-                base_name = name.split(".", 1)[0]
-                if base_name in builtin_names:
-                    used_names.add(base_name)
+        for node in self.metal_render_walks.nodes_with_class(
+            body, names_identifier_class
+        ):
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
         return used_names
 
     def used_wave_stage_builtin_operations(self, body):
@@ -7303,9 +7322,7 @@ class MetalCodeGen(
             *self.METAL_DERIVATIVE_FUNCTION_ALIASES.values(),
             "fwidth",
         }
-        for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
-            if not isinstance(node, FunctionCallNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, FunctionCallNode):
             name = self.function_call_name(node)
             if name in derivative_names and name not in self.user_function_names:
                 return name
@@ -7375,9 +7392,7 @@ class MetalCodeGen(
         """The user overloads that the calls in ``func`` can select, in a deterministic order."""
         selected = []
         seen = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, FunctionCallNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, FunctionCallNode):
             name = self.function_call_name(node)
             if name not in self.user_function_names or name == getattr(
                 func, "name", None
@@ -9296,9 +9311,9 @@ class MetalCodeGen(
 
     def metal_native_width_local_array_declaration_ids(self, func):
         declarations = {}
-        for current in self.iter_ast_nodes(getattr(func, "body", None)):
-            if not isinstance(current, (VariableNode, BackendVariableNode)):
-                continue
+        for current in self.metal_render_walks.body_nodes_of_type(
+            func, (VariableNode, BackendVariableNode)
+        ):
             name = getattr(current, "name", None)
             declared_type = self.local_variable_declared_type(current)
             base_type, array_suffix = split_array_type_suffix(
@@ -9311,9 +9326,9 @@ class MetalCodeGen(
             return set()
 
         required = set()
-        for current in self.iter_ast_nodes(getattr(func, "body", None)):
-            if not isinstance(current, FunctionCallNode):
-                continue
+        for current in self.metal_render_walks.body_nodes_of_type(
+            func, FunctionCallNode
+        ):
             function_name = self.function_call_name(current)
             arguments = list(
                 getattr(current, "arguments", getattr(current, "args", [])) or []
@@ -9806,11 +9821,12 @@ class MetalCodeGen(
             for variable in stage_local_variables or []
             if getattr(variable, "name", None)
         }
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, (VariableNode, BackendVariableNode)):
-                name = getattr(node, "name", None)
-                if name:
-                    names.add(name)
+        for node in self.metal_render_walks.body_nodes_of_type(
+            func, (VariableNode, BackendVariableNode)
+        ):
+            name = getattr(node, "name", None)
+            if name:
+                names.add(name)
         return names
 
     def metal_variable_name(self, node):
@@ -16686,9 +16702,7 @@ class MetalCodeGen(
         reserved_names.add(self.current_metal_mesh_output_parameter)
         reserved_names.update(self.metal_function_local_variable_names(func))
 
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, AssignmentNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, AssignmentNode):
             target = getattr(node, "target", getattr(node, "left", None))
             target_info = self.metal_mesh_output_assignment_target(target)
             if target_info is None or target_info["member"] is None:
@@ -17329,9 +17343,9 @@ class MetalCodeGen(
         if not isinstance(return_type, str) or "[" not in return_type:
             return frozenset()
         names = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", None)):
-            if not isinstance(node, (ReturnNode, BackendReturnNode)):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(
+            func, (ReturnNode, BackendReturnNode)
+        ):
             value = getattr(node, "value", None)
             if isinstance(value, (IdentifierNode, VariableNode)) and isinstance(
                 getattr(value, "name", None), str
@@ -20159,11 +20173,12 @@ class MetalCodeGen(
             ):
                 return True
 
-        for func in functions:
-            for node in self.iter_ast_nodes(getattr(func, "body", [])):
-                if isinstance(node, (RayTracingOpNode, RayQueryOpNode)):
-                    return True
-        return False
+        return any(
+            self.metal_render_walks.body_nodes_of_type(
+                func, (RayTracingOpNode, RayQueryOpNode)
+            )
+            for func in functions
+        )
 
     def metal_mesh_stage_attribute(self, shader_type, func, execution_config=None):
         stage_keyword = "mesh" if shader_type == "mesh" else "object"
@@ -21485,9 +21500,7 @@ class MetalCodeGen(
     def metal_dispatch_mesh_payload_argument_type(self, func):
         declared_types = self.metal_function_declared_value_types(func)
         payload_types = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, MeshOpNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, MeshOpNode):
             arguments = self.normalized_metal_intrinsic_args(node.arguments)
             if node.operation != "DispatchMesh" or len(arguments) != 4:
                 continue
@@ -21551,9 +21564,7 @@ class MetalCodeGen(
             name = self.metal_variable_name(node)
             if name and raw_type is not None:
                 declared_types[name] = self.type_name_string(raw_type)
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, VariableNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
             name = getattr(node, "name", None)
             if not name:
                 continue
@@ -21564,8 +21575,8 @@ class MetalCodeGen(
 
     def metal_function_local_variable_names(self, func):
         names = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 names.add(node.name)
         return names
 
@@ -21587,8 +21598,8 @@ class MetalCodeGen(
             name = getattr(variable, "name", None)
             if name:
                 ordered_names.append(name)
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 ordered_names.append(node.name)
 
         used_names = set(reserved_names) | set(ordered_names)
@@ -21636,8 +21647,8 @@ class MetalCodeGen(
         )
 
     def function_contains_mesh_op(self, func, operation, argument_counts=None):
-        for node in self.iter_ast_nodes(getattr(func, "body", None)):
-            if not isinstance(node, MeshOpNode) or node.operation != operation:
+        for node in self.metal_render_walks.body_nodes_of_type(func, MeshOpNode):
+            if node.operation != operation:
                 continue
             arguments = self.normalized_metal_intrinsic_args(node.arguments)
             if argument_counts is not None and len(arguments) not in argument_counts:
@@ -21903,9 +21914,9 @@ class MetalCodeGen(
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
-            for node in self.iter_ast_nodes(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
+            for node in self.metal_render_walks.body_nodes_of_type(
+                func, FunctionCallNode
+            ):
                 if self.function_call_name(node) != "buffer_dimensions":
                     continue
                 args = self.function_call_arguments(node)
@@ -21924,9 +21935,9 @@ class MetalCodeGen(
                     continue
                 current_dependencies = dependencies.setdefault(func_name, set())
                 before = set(current_dependencies)
-                for node in self.iter_ast_nodes(getattr(func, "body", [])):
-                    if not isinstance(node, FunctionCallNode):
-                        continue
+                for node in self.metal_render_walks.body_nodes_of_type(
+                    func, FunctionCallNode
+                ):
                     called_name = self.function_call_name(node)
                     if called_name not in self.user_function_names:
                         continue
@@ -21966,13 +21977,13 @@ class MetalCodeGen(
                 for param in getattr(func, "parameters", getattr(func, "params", []))
                 if getattr(param, "name", None)
             }
-            for node in self.iter_ast_nodes(getattr(func, "body", [])):
-                if isinstance(node, VariableNode) and getattr(node, "name", None):
+            for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+                if getattr(node, "name", None):
                     local_names.add(node.name)
 
-            for node in self.iter_ast_nodes(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
+            for node in self.metal_render_walks.body_nodes_of_type(
+                func, FunctionCallNode
+            ):
                 func_name = self.function_call_name(node)
                 args = self.function_call_arguments(node)
                 if func_name == "buffer_dimensions" and args:
@@ -22163,8 +22174,8 @@ class MetalCodeGen(
             for param in getattr(func, "parameters", getattr(func, "params", []))
             if getattr(param, "name", None)
         }
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 local_names.add(node.name)
 
         member_to_cbuffer = {}
@@ -22178,9 +22189,9 @@ class MetalCodeGen(
                     member_to_cbuffer[member_name] = cbuffer_name
 
         dependencies = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not (hasattr(node, "__class__") and "Identifier" in str(node.__class__)):
-                continue
+        for node in self.metal_render_walks.body_nodes_with_class(
+            func, names_identifier_class
+        ):
             name = getattr(node, "name", None)
             if not name or name in local_names:
                 continue
@@ -22191,9 +22202,7 @@ class MetalCodeGen(
 
     def called_user_function_names(self, func):
         called_names = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, FunctionCallNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, FunctionCallNode):
             func_name = self.function_call_name(node)
             if not func_name:
                 continue
@@ -22288,14 +22297,14 @@ class MetalCodeGen(
             for param in getattr(func, "parameters", getattr(func, "params", []))
             if getattr(param, "name", None)
         }
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 local_names.add(node.name)
 
         dependencies = set()
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not (hasattr(node, "__class__") and "Identifier" in str(node.__class__)):
-                continue
+        for node in self.metal_render_walks.body_nodes_with_class(
+            func, names_identifier_class
+        ):
             name = getattr(node, "name", None)
             if name and name in stage_parameters and name not in local_names:
                 dependencies.add(name)
@@ -22372,8 +22381,8 @@ class MetalCodeGen(
         if "output" in parameter_names:
             return False
         local_names = set(parameter_names)
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 local_names.add(node.name)
         if "output" in local_names:
             return False
@@ -22433,8 +22442,8 @@ class MetalCodeGen(
             for param in getattr(func, "parameters", getattr(func, "params", []))
             if getattr(param, "name", None)
         }
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode) and getattr(node, "name", None):
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            if getattr(node, "name", None):
                 local_names.add(node.name)
 
         texture_names = self.global_texture_names()
@@ -22457,8 +22466,10 @@ class MetalCodeGen(
         )
         dependencies = set()
 
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if hasattr(node, "__class__") and "Identifier" in str(node.__class__):
+        for node in self.metal_render_walks.body_nodes_with_class(
+            func, names_resource_reference_class
+        ):
+            if names_identifier_class(node.__class__):
                 name = getattr(node, "name", None)
                 if (
                     name
@@ -22519,9 +22530,7 @@ class MetalCodeGen(
             ):
                 aliases[param_name] = self.map_resource_type_with_format(param_type)
 
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, VariableNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
             name = getattr(node, "name", None)
             if not name:
                 continue
@@ -22586,9 +22595,7 @@ class MetalCodeGen(
 
     def local_texture_alias_sources(self, func, texture_names):
         aliases = {}
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if not isinstance(node, VariableNode):
-                continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
             name = getattr(node, "name", None)
             initial_value = getattr(node, "initial_value", None)
             source_name = self.expression_name(initial_value)
@@ -23194,7 +23201,7 @@ class MetalCodeGen(
         return names
 
     def iter_ast_nodes(self, node):
-        return iter_ast_values(node)
+        return self.metal_render_walks.walk(node)
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
@@ -23208,21 +23215,20 @@ class MetalCodeGen(
     def visible_literal_int_constants(self, func):
         visible_constants = self.initial_literal_int_constants(func)
 
-        for node in self.iter_ast_nodes(getattr(func, "body", [])):
-            if isinstance(node, VariableNode):
-                name = getattr(node, "name", None)
-                if not name:
-                    continue
+        for node in self.metal_render_walks.body_nodes_of_type(func, VariableNode):
+            name = getattr(node, "name", None)
+            if not name:
+                continue
 
-                visible_constants.pop(name, None)
-                if "const" not in getattr(node, "qualifiers", []):
-                    continue
+            visible_constants.pop(name, None)
+            if "const" not in getattr(node, "qualifiers", []):
+                continue
 
-                value = self.literal_int_value(
-                    getattr(node, "initial_value", None), visible_constants
-                )
-                if value is not None:
-                    visible_constants[name] = value
+            value = self.literal_int_value(
+                getattr(node, "initial_value", None), visible_constants
+            )
+            if value is not None:
+                visible_constants[name] = value
 
         return visible_constants
 
