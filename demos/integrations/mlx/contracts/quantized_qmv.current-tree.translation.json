@@ -2253,13 +2253,11 @@
     "qmmTSplitKGateEntryCount": 108,
     "gatherQmmGateEntryCount": 162,
     "qmvQuadGateEntryCount": 216,
+    "gatherQmmRhsGateEntryCount": 108,
     "excludedEntries": {
-      "kernels": [
-        "affine_gather_qmm_rhs_nt",
-        "affine_gather_qmm_rhs_nn"
-      ],
-      "count": 108,
-      "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet"
+      "kernels": [],
+      "count": 0,
+      "reason": "every quantized.metal kernel is gated"
     },
     "runtimeCoveredEntryCount": 162,
     "artifactCountByTarget": 162,

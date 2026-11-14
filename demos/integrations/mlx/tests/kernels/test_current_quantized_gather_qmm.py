@@ -56,6 +56,11 @@ from demos.integrations.mlx.tests.kernels.current_gate import (
     require_pinned_checkout,
 )
 from demos.integrations.mlx.tests.kernels.quantized_qmm_t_model import BK, BM, BN
+from demos.integrations.mlx.tests.kernels.quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -94,27 +99,13 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     CASES as QMV_FAST_CASES,
 )
-from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import DTYPES
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
-    ENTRIES as QMV_FAST_ENTRIES,
-)
-from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
-    EXCLUDED_KERNELS,
+    DTYPES,
     EXPERT_LHS,
     EXPERT_RHS,
     GATHER_PARAMETERS,
-    GATHER_QMM_ENTRY_COUNT,
     GROUP_SIZES,
     GUARD_COUNT,
-    QMM_N_ENTRY_COUNT,
-    QMM_T_ENTRY_COUNT,
-    QMM_T_SPLITK_ENTRY_COUNT,
-    QMV_QUAD_ENTRY_COUNT,
-    QMV_UNALIGNED_ENTRY_COUNT,
-    QMV_WIDE_ENTRY_COUNT,
-    QUANTIZE_ENTRY_COUNT,
-    QVM_ENTRY_COUNT,
-    QVM_SPLIT_K_ENTRY_COUNT,
     _f32,
     _request,
     _translate,
@@ -446,37 +437,10 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMV_QUAD_ENTRY_COUNT
-    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvFastGateEntryCount": len(QMV_FAST_ENTRIES),
-        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
-        "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
-        "qvmGateEntryCount": QVM_ENTRY_COUNT,
-        "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
-        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
-        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
-        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
-        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - covered,
-            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
-        },
+        **shared_scope("gatherQmm"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
@@ -529,7 +493,7 @@ def test_current_mlx_quantized_gather_qmm_contract_is_exact():
 def test_quantized_gather_qmm_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "quantized_gather_qmm.current-tree.translation.json" in readme
-    assert len(ENTRIES) == 162 == len(set(ENTRIES)) == GATHER_QMM_ENTRY_COUNT
+    assert len(ENTRIES) == 162 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["gatherQmm"]
     assert Counter((info["kernel"], info["aligned"]) for info in INFO.values()) == {
         ("affine_gather_qmm_n", True): 54,
         ("affine_gather_qmm_t", True): 54,
@@ -544,21 +508,7 @@ def test_quantized_gather_qmm_entries_follow_mlx_instantiation():
     assert not set(KERNELS.values()) & set(EXCLUDED_KERNELS)
     assert set(CASES) == set(QMV_FAST_CASES["gather"])
     assert set(T_SHAPES) == set(N_SHAPES) == set(CASES)
-    assert (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMV_QUAD_ENTRY_COUNT
-        + 108
-        == UNIT_ENTRY_COUNT
-    )
+    assert sum(GATE_ENTRY_COUNTS.values()) == UNIT_ENTRY_COUNT
 
 
 def test_quantized_gather_qmm_shards_partition_the_entries(monkeypatch):

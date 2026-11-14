@@ -430,8 +430,20 @@ def _adjust(info, storage, z, mutation, records):
     return (x_base, *bases, expert, z * scalar("out_vec_size") * rows)
 
 
-def translate_entry(root, work, target, config, record, workgroup=WORKGROUP):
-    """Translate one entry and check it against its pinned artifact."""
+def translate_entry(
+    root,
+    work,
+    target,
+    config,
+    record,
+    workgroup=WORKGROUP,
+    source_sha256=SOURCE_SHA256,
+):
+    """Translate one entry and check it against its pinned artifact.
+
+    ``source_sha256`` is the pinned hash of the translated source file;
+    it defaults to ``fp_quantized.metal``.
+    """
     translation = translate_project(
         config,
         format_output=False,
@@ -446,7 +458,7 @@ def translate_entry(root, work, target, config, record, workgroup=WORKGROUP):
     assert report["summary"]["translatedCount"] == 1
     assert report["summary"]["failedCount"] == 0
     (artifact,) = report["artifacts"]
-    assert artifact["sourceHash"] == {"algorithm": "sha256", "value": SOURCE_SHA256}
+    assert artifact["sourceHash"] == {"algorithm": "sha256", "value": source_sha256}
     check_generated_artifact(
         artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
     )

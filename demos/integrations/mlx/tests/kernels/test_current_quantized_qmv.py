@@ -43,6 +43,11 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.kernels.quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -104,33 +109,6 @@ KERNELS = {
     "batch_1": "affine_qmv_fast",
     "batch_0": "affine_qmv_fast",
 }
-# The 108 quantize and dequantize entries have their own gate,
-# test_current_quantized.py, the 162 affine_qmv and affine_gather_qmv entries
-# theirs, test_current_quantized_qmv_unaligned.py, the 432 affine_qmv_wide
-# entries theirs, test_current_quantized_qmv_wide.py, the 162 affine_qvm
-# and affine_gather_qvm entries theirs, test_current_quantized_qvm.py, the 108
-# affine_qvm_split_k entries theirs, test_current_quantized_qvm_split_k.py,
-# the 216 affine_qmm_t and 108 affine_qmm_n entries theirs,
-# test_current_quantized_qmm_t.py and test_current_quantized_qmm_n.py, the 108
-# affine_qmm_t_splitk entries theirs, test_current_quantized_qmm_t_splitk.py,
-# the 162 affine_gather_qmm_t and affine_gather_qmm_n entries theirs,
-# test_current_quantized_gather_qmm.py, and the 216 affine_qmv_quad entries
-# theirs, test_current_quantized_qmv_quad.py.
-QUANTIZE_ENTRY_COUNT = 108
-QMV_UNALIGNED_ENTRY_COUNT = 162
-QMV_WIDE_ENTRY_COUNT = 432
-QVM_ENTRY_COUNT = 162
-QVM_SPLIT_K_ENTRY_COUNT = 108
-QMM_T_ENTRY_COUNT = 216
-QMM_N_ENTRY_COUNT = 108
-QMM_T_SPLITK_ENTRY_COUNT = 108
-GATHER_QMM_ENTRY_COUNT = 162
-QMV_QUAD_ENTRY_COUNT = 216
-# Kernels of quantized.metal no gate covers yet.
-EXCLUDED_KERNELS = (
-    "affine_gather_qmm_rhs_nt",
-    "affine_gather_qmm_rhs_nn",
-)
 
 SIMD_SIZE = 32
 # qmv's and gather_qmv's group_dims (bk, 2, 1); each simdgroup produces
@@ -1039,37 +1017,10 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = (
-        QUANTIZE_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
-        "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
-        "qvmGateEntryCount": QVM_ENTRY_COUNT,
-        "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
-        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
-        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
-        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
-        "gatherQmmGateEntryCount": GATHER_QMM_ENTRY_COUNT,
-        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - covered,
-            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
-        },
+        **shared_scope("qmvFast"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
@@ -1123,7 +1074,7 @@ def test_current_mlx_quantized_qmv_contract_is_exact():
 def test_quantized_qmv_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "quantized_qmv.current-tree.translation.json" in readme
-    assert len(ENTRIES) == 162 == len(set(ENTRIES))
+    assert len(ENTRIES) == 162 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["qmvFast"]
     assert Counter(info["variant"] for info in INFO.values()) == {
         "gather": 54,
         "batch_1": 54,
@@ -1137,21 +1088,7 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
     )
     assert ENTRIES[-1] == "affine_qmv_fast_bfloat16_t_gs_32_b_8_batch_0"
     assert not set(KERNELS.values()) & set(EXCLUDED_KERNELS)
-    assert (
-        QUANTIZE_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-        + 108
-        == UNIT_ENTRY_COUNT
-    )
+    assert sum(GATE_ENTRY_COUNTS.values()) == UNIT_ENTRY_COUNT
 
 
 def test_quantized_qmv_shards_partition_the_entries(monkeypatch):

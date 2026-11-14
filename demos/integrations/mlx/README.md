@@ -2623,12 +2623,32 @@ and Metal also runs the unchanged upstream kernels, which must produce the
 same words. This covers 216/17,832 entries; it does not run the upstream MLX
 test suite or redirect the MLX host runtime.
 
-The quantized gates now cover 1,944 of the 2,052 `quantized.metal` entries.
-The 108 `affine_gather_qmm_rhs_nt` and `affine_gather_qmm_rhs_nn` entries are
-not covered. Like `gather_mm_rhs`, they derive each row tile from `offsets`
-with subgroup scans and return early on their reduction, which DirectX and
-OpenGL can lower only once reductions of values equal in every subgroup count
-as workgroup-uniform (#2546).
+`contracts/quantized_gather_qmm_rhs.current-tree.translation.json` pins the
+last 108 entries of `quantized.metal`, so every one of its 2,052 entries is
+now gated: `affine_gather_qmm_rhs_nt` and `affine_gather_qmm_rhs_nn` for the
+three element types, group sizes 128, 64 and 32 and 2, 3, 4, 5, 6 and 8 bits.
+`GatherQMM` routes a product here under the same conditions as the fp kernel,
+and `gather_qmm_rhs` binds the biases in the global scale's slot. Group sizes
+of 32 or more align the quantized dimension, so each entry is translated
+once per value of the other function constant: 216 translations per target,
+keyed by MLX's `hash_name`, with `offsets` immutable and `num_groups` bounded
+as for the fp kernel. The cases are the fp gate's `experts` and `chunks`
+row layouts; `nt` reaches the partial-column branches and `nn` the partial
+block of `K`, and no weight loader thread reads past its row. The inputs are
+the `qmv_fast` gate's, which keep every dequantized weight exact in the
+element type and every float32 partial sum exact, so only the final
+`static_cast<T>` rounds. `tests/kernels/affine_gather_qmm_rhs_model.py`
+reuses the fp model's schedule, activation loader, products and stores with
+the affine `QuantizedBlockLoader` and must reach direct dot products of the
+dequantized weights, storing every output once and keeping every weight read
+inside its row; mutated models that drop the bias, keep or over-step the
+scales, misread packs, columns or the transposition, drop the partial block or
+misplace row tiles are rejected. The units run in the
+`quantized-gather-qmm-rhs-0` to `-6` legs. Every target must match the model
+word for word and leave the guards untouched; on Metal the translation must
+also match the unchanged upstream kernel run with the same function
+constants. This covers 108/17,832 entries; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

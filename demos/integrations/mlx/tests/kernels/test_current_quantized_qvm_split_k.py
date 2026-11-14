@@ -43,6 +43,11 @@ from demos.integrations.mlx.tests.kernels.current_gate import (
     parse_pin,
     require_pinned_checkout,
 )
+from demos.integrations.mlx.tests.kernels.quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -69,24 +74,13 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     ENTRIES as QMV_FAST_ENTRIES,
 )
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
-    EXCLUDED_KERNELS,
-    GATHER_QMM_ENTRY_COUNT,
     GROUP_SIZES,
     GUARD_COUNT,
     INDEX_BOUND,
     NUM_SIMDGROUPS,
     OPENGL_INDEX_RANGE_ASSERTIONS,
-    QMM_N_ENTRY_COUNT,
-    QMM_T_ENTRY_COUNT,
-    QMM_T_SPLITK_ENTRY_COUNT,
     QMV_HEADERS,
     QMV_PARAMETERS,
-    QMV_QUAD_ENTRY_COUNT,
-    QMV_UNALIGNED_ENTRY_COUNT,
-    QMV_WIDE_ENTRY_COUNT,
-    QUANTIZE_ENTRY_COUNT,
-    QVM_ENTRY_COUNT,
-    QVM_SPLIT_K_ENTRY_COUNT,
     SCALAR_TYPES,
     SENTINEL,
     SIMD_SIZE,
@@ -467,37 +461,10 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvFastGateEntryCount": len(QMV_FAST_ENTRIES),
-        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
-        "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
-        "qvmGateEntryCount": QVM_ENTRY_COUNT,
-        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
-        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
-        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
-        "gatherQmmGateEntryCount": GATHER_QMM_ENTRY_COUNT,
-        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - covered,
-            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
-        },
+        **shared_scope("qvmSplitK"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
@@ -550,7 +517,7 @@ def test_current_mlx_quantized_qvm_split_k_contract_is_exact():
 def test_quantized_qvm_split_k_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "quantized_qvm_split_k.current-tree.translation.json" in readme
-    assert len(ENTRIES) == 108 == len(set(ENTRIES)) == QVM_SPLIT_K_ENTRY_COUNT
+    assert len(ENTRIES) == 108 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["qvmSplitK"]
     assert Counter(info["splitK"] for info in INFO.values()) == {8: 54, 32: 54}
     assert ENTRIES[:2] == (
         "affine_qvm_split_k_float_gs_128_b_2_spk_8",
@@ -560,21 +527,7 @@ def test_quantized_qvm_split_k_entries_follow_mlx_instantiation():
     assert KERNEL not in EXCLUDED_KERNELS
     assert not set(ENTRIES) & (set(QMV_FAST_ENTRIES) | set(QVM_ENTRIES))
     assert set(SHAPES) == set(LAYOUTS) == {c for cases in CASES.values() for c in cases}
-    assert (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + QMV_WIDE_ENTRY_COUNT
-        + QVM_ENTRY_COUNT
-        + len(ENTRIES)
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-        + 108
-        == UNIT_ENTRY_COUNT
-    )
+    assert sum(GATE_ENTRY_COUNTS.values()) == UNIT_ENTRY_COUNT
 
 
 def test_quantized_qvm_split_k_shards_partition_the_entries(monkeypatch):
