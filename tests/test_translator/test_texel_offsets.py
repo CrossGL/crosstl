@@ -463,6 +463,25 @@ def test_spirv_negated_non_constant_offset_is_refused(tmp_path):
     """A negated non-constant offset (-k where k is uniform) must still raise SpirvLoweringRefused."""
     from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 
-    body = "sum += textureOffset(colorMap, uv, ivec2(-k, 0));"
+    with pytest.raises(SpirvLoweringRefused, match=SPIRV_REFUSAL):
     with pytest.raises((Exception, SpirvLoweringRefused), match=SPIRV_REFUSAL):
+
+
+def test_spirv_negated_scalar_non_constant_1d_offset_is_refused(tmp_path):
+    """A negated non-constant 1D scalar offset (-k where k is uniform) must still raise SpirvLoweringRefused."""
+    from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+
+    source = """
+shader Probe {
+    sampler1D line;
+    fragment {
+        uniform int k;
+        vec4 main(float u @ TEXCOORD0) @ gl_FragColor {
+            return textureOffset(line, u, -k);
+        }
+    }
+}
+"""
+    with pytest.raises(SpirvLoweringRefused, match=SPIRV_REFUSAL):
+        _translate(tmp_path, source, "vulkan")
         _translate(tmp_path, _fragment(body), "vulkan")
