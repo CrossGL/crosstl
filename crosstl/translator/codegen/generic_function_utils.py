@@ -718,7 +718,7 @@ def _call_argument_type_accepts_expected(generator, expected_type, actual_type):
 def _generic_function_candidate_call_match(
     generator, func, func_name, args, explicit_types=None
 ):
-    generic_params = generic_function_parameters(func)  # collect
+    generic_params = generic_function_parameters(func)
     if not generic_params:
         return None
 

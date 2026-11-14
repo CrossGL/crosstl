@@ -270,4 +270,31 @@ def test_struct_type_as_leading_argument_single_overload(tmp_path, backend):
     assert re.search(r"sel_Foo\w*\(\s*f\s*\)", code) is not None
     # None of the generated targets should ever emit ``sel_Foo_overload1(Foo, ...``
     # or similar, where a struct type name appears as a call argument.
+
+
+ONLY_TWO_PARAM_OVERLOAD = """
+shader P {
+    buffer float* outp;
+    struct Foo { float v; };
+    T sel<T>(T a, T b) { return b; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            Foo f;
+            f.v = outp[i];
+            Foo g = sel(Foo, f);
+            outp[i] = g.v;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_arg_refused_when_no_matching_overload(tmp_path, backend):
+    """sel(Foo, f) is refused when only sel<T>(T a, T b) exists (no one-parameter overload)."""
+    with pytest.raises(Exception, match="sel") as error:
+        translate(tmp_path, ONLY_TWO_PARAM_OVERLOAD, backend)
+    assert "generic" in str(error.value).lower() or "infer" in str(error.value).lower() or "template" in str(error.value).lower()
     assert "overload1" not in code
