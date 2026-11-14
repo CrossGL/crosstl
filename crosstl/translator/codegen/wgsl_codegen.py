@@ -4706,6 +4706,11 @@ class WGSLCodeGen(
             "smoothstep",
         }
     )
+    # Built-ins whose scalar GLSL overloads are floating-point only. Integer
+    # arguments are implicitly converted to f32 for these calls.
+    FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS = frozenset(
+        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp"}
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -5042,6 +5047,12 @@ class WGSLCodeGen(
             if vector_type is not None:
                 return vector_type
             scalar_names = [self.scalar_type_name(t) for t in argument_types]
+            if any(s is None for s in scalar_names):
+                return None
+            if function_name in self.FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS:
+                return "f32"
+            if function_name == "mix" and "bool" not in scalar_names:
+                return "f32"
             for target in ("f32", "u32", "i32"):
                 for t, s in zip(argument_types, scalar_names):
                     if s == target:
