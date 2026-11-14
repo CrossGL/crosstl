@@ -1452,8 +1452,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if operation == "DispatchMesh":
             self.required_mesh_helpers.add("dispatch_mesh")
             if len(args) == 4:
-                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args)}) }}"
-            return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
+                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args[:3])}, &mut {args[3]}) }}"
+            return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
         raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
 
     def generate_required_rust_mesh_helpers(self):
