@@ -44,6 +44,8 @@ from .HipAst import (
 
 
 class HipRecordSemanticError(ValueError):
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
+
     """Raised when used C++ record semantics cannot survive CrossGL lowering."""
 
     project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
@@ -356,9 +358,10 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    # ``let``, ``match`` and ``var`` are CrossGL value-identifier keywords.
+    # Only these narrow names are rejected by the CrossGL parser as identifiers.
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
-    CROSSGL_RESERVED_IDENTIFIERS = frozenset(CROSSGL_KEYWORDS)
+    CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
         "*": "mul",
@@ -10496,13 +10499,13 @@ class HipToCrossGLConverter:
 
         if self.is_decltype_type_name(hip_type):
             return "auto"
-            return self.sanitize_identifier_name(hip_type)
         if hip_type in _CROSSGL_ALL_KEYWORDS and hip_type in self.record_definitions:
             # A struct/enum/alias whose name is any CrossGL keyword is declared under
             # its sanitized name.  Value identifiers use the narrower
             # CROSSGL_RESERVED_IDENTIFIERS, so only record names need the full set.
             return self.sanitize_crossgl_type_identifier(hip_type)
-            # A struct named after a CrossGL keyword is declared under its renamed name.
+        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A type spelling that is a CrossGL reserved value-identifier keyword.
             return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)
 
