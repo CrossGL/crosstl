@@ -2532,7 +2532,7 @@ class _VulkanDispatchContext:
 
 
 def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
-        return
+    if handle is None:
         return
     destroy = getattr(vk, name, None)
     if not callable(destroy):
@@ -2540,6 +2540,7 @@ def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
     if owner is None:
         destroy(handle, None)
     else:
+        destroy(owner, handle, None)
 
 
 # SPIR-V module version helpers (used by _create_shader_module to enforce
@@ -2592,7 +2593,6 @@ def _validate_vulkan_spirv_module_version(code: bytes, api_version: int) -> None
             "vulkanApiVersion": f"{vk_maj}.{vk_min}",
         },
     )
-        destroy(owner, handle, None)
 
 
 def _first_vulkan_handle(handles: Any) -> Any:
