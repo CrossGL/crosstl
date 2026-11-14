@@ -78,6 +78,19 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
+def test_stage_with_helpers_but_no_entry_is_rejected():
+    source = """
+    shader MissingEntry {
+        vertex {
+            void helper() {}
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLSyntaxError, match="has no main or @stage_entry"):
+        parse_code(tokenize_code(source))
+
+
 @pytest.mark.parametrize("space", ["threadgroup", "thread", "device", "constant"])
 @pytest.mark.parametrize("readonly", [False, True])
 @pytest.mark.parametrize("wrapper", ["{}", "shader main {{ {} }}"])

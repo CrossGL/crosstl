@@ -1384,9 +1384,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
 
     def should_preserve_slang_stage_entry_name(self, func, function_qualifier):
-        return bool(
-            function_qualifier == "compute" and getattr(func, "name", None) != "main"
-        )
+        return bool(function_qualifier and getattr(func, "name", None) != "main")
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
         names = {
