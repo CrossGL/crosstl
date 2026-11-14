@@ -1035,6 +1035,38 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
         groups.add(expected)
 
 
+def test_current_tree_parity_jobs_share_one_target_mapping():
+    """Every current-tree parity step inherits the jobs' one environment, so
+    each runner proves exactly its own target and no step chooses another."""
+    from tests.ci_helpers import (
+        CURRENT_PARITY_JOBS,
+        CURRENT_PARITY_TARGET,
+        current_parity_env,
+    )
+
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    env = current_parity_env(workflow)
+    for line in (
+        f"CROSTL_MLX_CURRENT_TARGET: {CURRENT_PARITY_TARGET}",
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
+        "EGL_PLATFORM: surfaceless",
+        'LIBGL_ALWAYS_SOFTWARE: "1"',
+        "PYOPENGL_PLATFORM: egl",
+        'PYTHONUNBUFFERED: "1"',
+    ):
+        assert line in env, line
+    jobs = yaml.safe_load(workflow)["jobs"]
+    for name in CURRENT_PARITY_JOBS:
+        job = jobs[name]
+        assert job["strategy"]["matrix"]["os"] == [
+            "ubuntu-latest",
+            "windows-latest",
+            "macOS-latest",
+        ]
+        for step in job["steps"]:
+            assert "CROSTL_MLX_CURRENT_TARGET" not in json.dumps(step), step["name"]
+
+
 def test_current_tree_native_parity_job_runs_each_family_group_once():
     from tests.ci_helpers import (
         CURRENT_PARITY_JOB,
@@ -1118,6 +1150,11 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "reduce-9",
         "reduce-10",
         "reduce-11",
+        "fft-0",
+        "fft-1",
+        "fft-2",
+        "fft-3",
+        "fft-4",
         "quantized",
         "quantized-qmv-0",
         "quantized-qmv-1",

@@ -21,7 +21,11 @@ the dispatch is recorded in the trace before the MLX outputs change.
 import ctypes
 import hashlib
 
-from crosstl.project import build_native_loader_dispatch_request, pack_storage_records
+from crosstl.project import (
+    build_native_loader_dispatch_request,
+    pack_storage_records,
+    pack_uniform_block,
+)
 from demos.integrations.mlx.portable_host import sdpa_vjp_layout as layout
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
@@ -42,6 +46,8 @@ LABEL = "SDPA VJP"
 ENTRY_PREFIXES = layout.ENTRY_PREFIXES
 # SDPAVJPTileParams: seven ints and a float.
 TILE_STRIDE = 32
+# OpenGL and Direct3D reflect the constant record as a uniform block.
+UNIFORM_LAYOUTS = {"opengl": "std140", "directx": "hlsl-constant-buffer"}
 
 
 def is_entry(entry):
@@ -108,12 +114,30 @@ def _storage(entry, supplied):
     return storage
 
 
-def _record(binding, metadata):
-    """``SDPAVJPTileParams`` as the reflected record's uint32 words."""
+def _record(binding, metadata, target):
+    """``SDPAVJPTileParams`` as the reflected record's or block's uint32
+    words."""
     scalar = binding["scalarLayout"]
+    fields = {name: metadata[name] for name in layout.TILE_FIELDS}
+    if target in UNIFORM_LAYOUTS and (
+        scalar.get("storageLayout") == UNIFORM_LAYOUTS[target]
+    ):
+        members = [
+            (member.get("name"), member.get("offsetBytes"))
+            for member in scalar.get("blockMembers", ())
+        ]
+        if (
+            binding.get("kind") != "constant-buffer"
+            or scalar.get("blockSizeBytes") != TILE_STRIDE
+            or members != [
+                (name, 4 * index) for index, name in enumerate(layout.TILE_FIELDS)
+            ]
+        ):
+            raise ValueError(f"{LABEL} reflected tile block differs")
+        words = pack_uniform_block(scalar, fields)
+        return {"dtype": "uint32", "shape": [len(words)], "values": words}
     if scalar.get("elementStrideBytes") != TILE_STRIDE:
         raise ValueError(f"{LABEL} reflected tile record stride differs")
-    fields = {name: metadata[name] for name in layout.TILE_FIELDS}
     words = pack_storage_records(scalar, [fields])
     return {"dtype": "uint32", "shape": [len(words)], "values": words}
 
@@ -135,7 +159,7 @@ def _inputs(host, entry, descriptor, storage, values, metadata):
             raise ValueError(f"Reflected {LABEL} binding differs from its source")
         bound.add(name)
         if name in layout.records(entry):
-            inputs[binding["name"]] = _record(binding, metadata)
+            inputs[binding["name"]] = _record(binding, metadata, host.target)
         elif name in layout.scalars(entry):
             inputs[binding["name"]] = encode_binding(
                 "int32",

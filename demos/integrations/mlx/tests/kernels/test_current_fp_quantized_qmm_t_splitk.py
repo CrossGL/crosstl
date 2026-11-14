@@ -1104,9 +1104,6 @@ def test_ci_requires_native_fp_quantized_qmm_t_splitk_parity():
         f"{SHARD_INDEX_ENV}: ${{{{ matrix.shard }}}}",
         f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
         "pytest -q -n auto",
         "demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_t_splitk.py",
     ):

@@ -30,7 +30,11 @@ CACHE_DIRECTORY = "fft"
 
 def project_config(root, output_dir, target, entry):
     """One frozen fft.metal entry with the host's proven subscript ranges."""
-    info = layout.signature(entry)
+    return signature_config(root, output_dir, target, layout.signature(entry))
+
+
+def signature_config(root, output_dir, target, info):
+    """``project_config`` for the launch a ``fft_layout.signature`` describes."""
     source = info["source"]
     opengl = target == "opengl"
     # generate_bluestein_twiddles is no template, so no host-named
@@ -55,9 +59,11 @@ def project_config(root, output_dir, target, entry):
         **workgroup,
         specialization_constants=dict(info["constants"]),
         freeze_specialization_constants=True,
-        index_range_assertions=layout.opengl_index_assertions(entry) if opengl else (),
+        index_range_assertions=(
+            layout.signature_index_assertions(info) if opengl else ()
+        ),
         workgroup_access_assertions=(
-            layout.workgroup_access_assertions(entry) if opengl else ()
+            layout.signature_workgroup_assertions(info) if opengl else ()
         ),
         source_options={
             "metal": {

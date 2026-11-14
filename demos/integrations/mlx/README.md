@@ -2650,6 +2650,62 @@ also match the unchanged upstream kernel run with the same function
 constants. This covers 108/17,832 entries; it does not run the upstream MLX
 test suite or redirect the MLX host runtime.
 
+`contracts/fft.current-tree.translation.json` pins all 101 entries of
+`fft.metal` as 153 units, each one `fft.cpp` pipeline hash name: an entry
+with one plan's function constants frozen and its `(1, batch, threads)`
+threadgroup. The 61 entries `fft.cpp` reaches use the host's own names and
+launches (`portable_host/fft_layout.py`), checked equal to the gate's;
+`tests/kernels/fft_model.py` plans the other 40 by the same rules: Rader at
+4096 points of threadgroup memory past `MAX_RADER_FFT_SIZE`, four-step passes
+outside `fft.cpp`'s splits (`64 x 128`, `64 x 256` and `64 x 512`), and the
+complex32_t entries, for which MLX has no array type. Every unit is
+translated with the host's recipe (`fft_packages.signature_config`) and runs
+`fft.cpp`'s grid with a partial last threadgroup where transforms share one,
+the Rader and Bluestein tables, both directions of complex transforms and
+Bluestein's first and last convolved length; four-step units run one pass,
+step 1 from the float32 rounding of the double-precision step 0 temporary.
+Every output must stay within `test_fft`'s tolerances of numpy's
+double-precision transform, every guard past the kernel's footprint must stay
+untouched and no input may change; on Metal the translation must also match
+the unchanged upstream kernel word for word. Direct3D and OpenGL refuse the
+50 complex32_t units with `project.translate.resource-aggregate-unsupported`
+until CrossGL lowers records pointing at threadgroup half2 arrays
+(crosstl#4576), and the gate pins that refusal. The units run in the `fft-0`
+to `fft-4` legs. This covers 101/17,832 entries (76 on Direct3D and OpenGL);
+it does not itself run the upstream MLX test suite, which the host stack
+runs for the reachable entries.
+
+`contracts/fence.current-tree.translation.json` pins `fence.metal`'s three
+entries, the kernels behind `fence.cpp`'s fast fences: `fence_update`,
+`fence_wait` and `input_coherent`, each ending or looping on a sequentially
+consistent device-memory fence at `thread_scope_system` over volatile
+`coherent(system)` storage. Metal translates all three with that storage and
+those fences intact, and each runs natively in `fence.cpp`'s threadgroups
+and must leave every buffer as the unchanged upstream kernel does, word for
+word (`fence_wait` only with the stored value already at or past the awaited
+one). HLSL and GLSL barriers reach device scope at most, so Direct3D and
+OpenGL refuse the three entries with their typed
+`atomic-fence-unsupported` diagnostics, which the gate pins. The gate runs in
+the `ordering` legs. This covers 3/17,832 entries (none on Direct3D and
+OpenGL).
+
+`contracts/sdpa_vjp.current-tree.translation.json` pins all 33 entries of
+`scaled_dot_product_attention_vjp.metal` on every target: the 24 row products
+`sdpa_vjp_odo` (eight head dimensions, three types), the three block kernels
+`sdpa_vjp_ds` and the six grouped-head reductions `sdpa_vjp_reduce_add` and
+`sdpa_vjp_reduce_set`. Each is translated with the host's recipe
+(`sdpa_vjp_packages.project_config`) and runs natively on launches that
+`sdpa_vjp_layout.plan_launch` accepts: partial threadgroups on both axes, a
+causal block across a nonzero diagonal offset, a fully masked row and a
+reduction into one window of a larger accumulator. Outputs are held to a
+double-precision reference within bounds counted from each kernel's float32
+roundings (Higham's gamma for the sums; exp's GLSL and Direct3D error bounds
+for the probabilities), masked elements must be exactly zero, the gradient
+output must be the accumulator rounded once to nearest even, and every guard,
+untouched accumulator row and input must come back unchanged. On Metal every
+buffer must also equal the unchanged upstream kernel's, word for word. The
+gate runs in the `backward` legs. This covers 33/17,832 entries.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

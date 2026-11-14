@@ -923,7 +923,11 @@ def opengl_index_assertions(entry):
     Device subscripts stay below the signed 32-bit extents ``plan_launch``
     admits; threadgroup subscripts stay inside the entry's ``shared_in``.
     """
-    info = signature(entry)
+    return signature_index_assertions(signature(entry))
+
+
+def signature_index_assertions(info):
+    """``opengl_index_assertions`` for the launch ``signature`` describes."""
     if info["kind"] == "twiddles":
         # One table element per invocation of fft.cpp's single threadgroup.
         last = BLUESTEIN_TWIDDLE_TABLE_SIZE - 1
@@ -969,7 +973,11 @@ def opengl_index_assertions(entry):
 
 def workgroup_access_assertions(entry):
     """Every threadgroup access of the entry stays inside ``shared_in``."""
-    info = signature(entry)
+    return signature_workgroup_assertions(signature(entry))
+
+
+def signature_workgroup_assertions(info):
+    """``workgroup_access_assertions`` for the launch ``signature`` describes."""
     if info["kind"] == "twiddles":
         return []
     return [

@@ -6951,9 +6951,17 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-native-parity-${{ strategy.job-index }}
       cancel-in-progress: false
-    env:
+    # Shared by the three current-tree parity jobs and every step they run.
+    env: &mlx-current-parity-env
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+      # Each runner proves its own target; any other runner fails the gates.
+      CROSTL_MLX_CURRENT_TARGET: ${{ matrix.os == 'ubuntu-latest' && 'opengl' || matrix.os == 'windows-latest' && 'directx' || matrix.os == 'macOS-latest' && 'metal' || 'unsupported' }}
+      EGL_PLATFORM: surfaceless
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      PYOPENGL_PLATFORM: egl
+      PYTHONUNBUFFERED: "1"
 
     name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: needs.ci-plan.outputs.heavy == 'true'
@@ -6963,16 +6971,21 @@ jobs:
       fail-fast: false
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
-      # 126 legs here, a third of them on macOS; the three jobs
+      # 141 legs here, a third of them on macOS; the three jobs
       # together run at most 28 legs at once. The group axis comes first, so
       # GitHub starts each group's three platform legs together instead of
       # every Linux leg before any macOS leg; at eight legs at a time the
       # platforms ran one after another for about six hours.
       max-parallel: 12
       matrix:
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, fft-0, fft-1, fft-2, fft-3, fft-4]
         os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
+          - {group: fft-0, family: fft, shard: 0}
+          - {group: fft-1, family: fft, shard: 1}
+          - {group: fft-2, family: fft, shard: 2}
+          - {group: fft-3, family: fft, shard: 3}
+          - {group: fft-4, family: fft, shard: 4}
           - {group: copy-0, family: copy, shard: 0}
           - {group: copy-1, family: copy, shard: 1}
           - {group: copy-2, family: copy, shard: 2}
@@ -7129,21 +7142,10 @@ jobs:
         if: matrix.group == 'elementwise'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_TERNARY: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX ternary native parity" --timeout-seconds 3600 -- \
@@ -7156,21 +7158,10 @@ jobs:
         if: matrix.group == 'elementwise'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_TWO: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX binary_two native parity" --timeout-seconds 5400 -- \
@@ -7183,21 +7174,10 @@ jobs:
         if: matrix.group == 'sequence'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_ROPE: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX rope native parity" --timeout-seconds 3600 -- \
@@ -7210,21 +7190,10 @@ jobs:
         if: matrix.group == 'attention'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX scaled dot-product attention native parity" \
@@ -7239,21 +7208,10 @@ jobs:
         if: matrix.group == 'attention'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX two-pass attention first pass native parity" \
@@ -7267,21 +7225,10 @@ jobs:
         if: matrix.group == 'sequence'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX gated delta native parity" \
@@ -7295,21 +7242,10 @@ jobs:
         if: matrix.group == 'backward'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA_VJP: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX gated delta backward native parity" \
@@ -7319,25 +7255,33 @@ jobs:
               --junitxml=mlx-current-results/gated-delta-vjp.xml \
               demos/integrations/mlx/tests/kernels/test_current_gated_delta_vjp.py
 
+      # scaled_dot_product_attention_vjp.metal's 33 entries with the host's
+      # recipe; Metal also matches the unchanged upstream kernel word for word.
+      - name: Prove current MLX SDPA VJP native parity
+        if: matrix.group == 'backward'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_MLX_CURRENT_SDPA_VJP: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX SDPA VJP native parity" \
+            --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/sdpa-vjp \
+              --junitxml=mlx-current-results/sdpa-vjp.xml \
+              demos/integrations/mlx/tests/kernels/test_current_sdpa_vjp.py
+
       - name: Prove current MLX sort native parity
         if: matrix.group == 'ordering'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_SORT: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX sort native parity" \
@@ -7347,25 +7291,33 @@ jobs:
               --junitxml=mlx-current-results/sort.xml \
               demos/integrations/mlx/tests/kernels/test_current_sort.py
 
+      # fence.metal's three entries: Metal runs them against upstream;
+      # Direct3D and OpenGL must refuse their system-scope fences.
+      - name: Prove current MLX fence native parity
+        if: matrix.group == 'ordering'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_MLX_CURRENT_FENCE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX fence native parity" \
+            --timeout-seconds 1800 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/fence \
+              --junitxml=mlx-current-results/fence.xml \
+              demos/integrations/mlx/tests/kernels/test_current_fence.py
+
       - name: Prove current MLX convolution native parity
         if: matrix.group == 'convolution'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_CONV: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX convolution native parity" \
@@ -7379,21 +7331,10 @@ jobs:
         if: matrix.group == 'convolution'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_WINOGRAD: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX Winograd native parity" \
@@ -7407,21 +7348,10 @@ jobs:
         if: matrix.group == 'scan'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_SCAN_FAMILY: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           if [ "$RUNNER_OS" = Windows ]; then
             # Fixed HLSL controls for the guarded slot write and read-back the
@@ -7449,21 +7379,10 @@ jobs:
         if: matrix.group == 'gemv'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMV: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX GEMV native parity" \
@@ -7479,21 +7398,10 @@ jobs:
         if: matrix.group == 'gemv'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMV_WIDE: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX wide GEMV native parity" \
@@ -7510,21 +7418,10 @@ jobs:
         if: matrix.group == 'gemv-masked'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMV_MASKED: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX masked GEMV native parity" \
@@ -7539,21 +7436,10 @@ jobs:
         if: matrix.group == 'gemv-t-masked'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMV_MASKED: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX masked GEMV-T native parity" \
@@ -7568,23 +7454,12 @@ jobs:
         if: matrix.family == 'copy'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
           CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX copy family native parity (shard ${{ matrix.shard }} of 6)" \
@@ -7598,23 +7473,12 @@ jobs:
         if: matrix.family == 'binary'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
           CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX binary family native parity (shard ${{ matrix.shard }} of 12)" \
@@ -7628,23 +7492,12 @@ jobs:
         if: matrix.family == 'unary'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FAMILY: "1"
           CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX unary family native parity (shard ${{ matrix.shard }} of 2)" \
@@ -7658,23 +7511,12 @@ jobs:
         if: matrix.family == 'reduce'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
           CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX reduce family native parity (shard ${{ matrix.shard }} of 12)" \
@@ -7689,21 +7531,10 @@ jobs:
         if: matrix.group == 'quantized'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantize and dequantize native parity" \
@@ -7719,21 +7550,10 @@ jobs:
         if: matrix.group == 'quantized'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_FP_QUANTIZED: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX fp quantize and dequantize native parity" \
@@ -7751,23 +7571,12 @@ jobs:
         if: matrix.family == 'fp-quantized-qmv'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_FP_QUANTIZED_QMV: "1"
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMV_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMV_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX fp quantized matrix-vector native parity (shard ${{ matrix.shard }} of 2)" \
@@ -7792,23 +7601,12 @@ jobs:
         if: matrix.family == 'fp-quantized-qmm'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_FP_QUANTIZED_QMM: "1"
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX fp quantized matrix-matrix native parity (shard ${{ matrix.shard }} of 2)" \
@@ -7828,23 +7626,12 @@ jobs:
         if: matrix.family == 'fp-quantized-qmm-rhs'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_FP_QUANTIZED_QMM_RHS: "1"
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_RHS_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_RHS_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX fp quantized gather_qmm_rhs native parity (shard ${{ matrix.shard }} of 2)" \
@@ -7860,23 +7647,12 @@ jobs:
         if: matrix.family == 'quantized-qmv'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized matrix-vector native parity (shard ${{ matrix.shard }} of 2)" \
@@ -7892,23 +7668,12 @@ jobs:
         if: matrix.family == 'quantized-qmv-unaligned'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED_SHARD_COUNT: "4"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX unaligned quantized matrix-vector native parity (shard ${{ matrix.shard }} of 4)" \
@@ -7924,23 +7689,12 @@ jobs:
         if: matrix.family == 'quantized-qmv-wide'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_WIDE: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_WIDE_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_WIDE_SHARD_COUNT: "9"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized wide matrix-vector native parity (shard ${{ matrix.shard }} of 9)" \
@@ -7956,23 +7710,12 @@ jobs:
         if: matrix.family == 'quantized-qvm'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QVM: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QVM_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QVM_SHARD_COUNT: "4"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized vector-matrix native parity (shard ${{ matrix.shard }} of 4)" \
@@ -7988,23 +7731,12 @@ jobs:
         if: matrix.family == 'quantized-qvm-split-k'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_COUNT: "4"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized split-K vector-matrix native parity (shard ${{ matrix.shard }} of 4)" \
@@ -8020,23 +7752,12 @@ jobs:
         if: matrix.family == 'quantized-qmm-t'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_T: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized transposed matrix-matrix native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8052,23 +7773,12 @@ jobs:
         if: matrix.family == 'quantized-qmm-n'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_N: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_N_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_N_SHARD_COUNT: "5"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized matrix-matrix native parity (shard ${{ matrix.shard }} of 5)" \
@@ -8084,23 +7794,12 @@ jobs:
         if: matrix.family == 'quantized-qmm-t-splitk'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK_SHARD_COUNT: "5"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized split-K matrix-matrix native parity (shard ${{ matrix.shard }} of 5)" \
@@ -8116,23 +7815,12 @@ jobs:
         if: matrix.family == 'quantized-gather-qmm'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_GATHER_QMM: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized gather matrix-matrix native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8149,23 +7837,12 @@ jobs:
         if: matrix.family == 'quantized-gather-qmm-rhs'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_GATHER_QMM_RHS: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_RHS_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_RHS_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized gather_qmm_rhs native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8181,23 +7858,12 @@ jobs:
         if: matrix.family == 'quantized-qmv-quad'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_QUAD: "1"
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_QUAD_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_QUAD_SHARD_COUNT: "3"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX quantized quad matrix-vector native parity (shard ${{ matrix.shard }} of 3)" \
@@ -8213,23 +7879,12 @@ jobs:
         if: matrix.family == 'gemm-family'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
           CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX GEMM family native parity (shard ${{ matrix.shard }} of 5)" \
@@ -8245,23 +7900,12 @@ jobs:
         if: matrix.family == 'gemm-splitk'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM_SPLITK: "1"
           CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX GEMM split-K native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8277,23 +7921,12 @@ jobs:
         if: matrix.family == 'gemm-gather'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM_GATHER: "1"
           CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX gathered GEMM native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8310,23 +7943,12 @@ jobs:
         if: matrix.family == 'gemm-masked'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM_MASKED: "1"
           CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT: "13"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX block-masked GEMM native parity (shard ${{ matrix.shard }} of 13)" \
@@ -8342,23 +7964,12 @@ jobs:
         if: matrix.family == 'gemm-segmented'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM_SEGMENTED: "1"
           CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_COUNT: "7"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX segmented GEMM native parity (shard ${{ matrix.shard }} of 7)" \
@@ -8374,23 +7985,12 @@ jobs:
         if: matrix.family == 'steel-conv'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV: "1"
           CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT: "6"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX steel_conv native parity (shard ${{ matrix.shard }} of 6)" \
@@ -8407,23 +8007,12 @@ jobs:
         if: matrix.family == 'steel-conv-general'
         shell: bash
         env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV_GENERAL: "1"
           CROSTL_MLX_CURRENT_STEEL_CONV_GENERAL_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_STEEL_CONV_GENERAL_SHARD_COUNT: "3"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX steel_conv_general native parity (shard ${{ matrix.shard }} of 3)" \
@@ -8432,6 +8021,28 @@ jobs:
               --basetemp=mlx-current-results/${{ matrix.group }} \
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
+
+      # fft.metal's 101 entries as 153 fft.cpp hash names (host-reachable
+      # and gate-local plans), in five shards; complex32_t runs on Metal and
+      # pins Direct3D's and OpenGL's typed refusal until crosstl#4576.
+      - name: Prove current MLX FFT native parity
+        if: matrix.family == 'fft'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_MLX_CURRENT_FFT: "1"
+          CROSTL_MLX_CURRENT_FFT_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_FFT_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX FFT native parity (shard ${{ matrix.shard }} of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_fft.py
 
       - name: Upload current MLX native parity evidence
         if: always()
@@ -8447,9 +8058,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-quantized-parity-${{ strategy.job-index }}
       cancel-in-progress: false
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    env: *mlx-current-parity-env
 
     name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: needs.ci-plan.outputs.heavy == 'true'
@@ -8539,9 +8148,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-gemm-parity-${{ strategy.job-index }}
       cancel-in-progress: false
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    env: *mlx-current-parity-env
 
     name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: needs.ci-plan.outputs.heavy == 'true'

@@ -130,9 +130,7 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmm_t import (
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmm_t import (
     VECTOR_LIMIT as TRANSPOSED_VECTOR_LIMIT,
 )
-from demos.integrations.mlx.tests.kernels.test_current_quantized_qmm_t import (
-    WORKGROUP,
-)
+from demos.integrations.mlx.tests.kernels.test_current_quantized_qmm_t import WORKGROUP
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     BROADCAST_LHS,
     BROADCAST_RHS,
@@ -1354,9 +1352,6 @@ def test_ci_requires_native_fp_quantized_gather_qmm_parity():
         f"{SHARD_INDEX_ENV}: ${{{{ matrix.shard }}}}",
         f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
         "pytest -q -n auto",
         "--basetemp=mlx-current-results/${{ matrix.group }}",
         "--junitxml=mlx-current-results/${{ matrix.group }}.xml",

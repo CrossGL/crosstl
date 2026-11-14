@@ -371,3 +371,55 @@ def test_the_host_ports_and_routes_the_fused_vjp():
         "ScaledDotProductAttentionVJP::use_fallback" in definition
         for definition in prepare.ATTENTION_DEFINITIONS
     )
+
+
+def _tile_block(storage_layout="std140", shift=0):
+    """SDPAVJPTileParams as OpenGL reflects it: a 32-byte std140 block."""
+    members = [
+        {
+            "alignmentBytes": 4,
+            "elementType": "float32" if name == "scale" else "int32",
+            "name": name,
+            "offsetBytes": 4 * index + (shift if index == 7 else 0),
+            "physicalType": "float" if name == "scale" else "int",
+            "sizeBytes": 4,
+            "vectorWidth": 1,
+        }
+        for index, name in enumerate(sdpa_vjp_layout.TILE_FIELDS)
+    ]
+    return {
+        "kind": "constant-buffer",
+        "scalarLayout": {
+            "alignmentBytes": 16,
+            "blockMembers": members,
+            "blockSizeBytes": 32,
+            "elementSizeBytes": 4,
+            "elementStrideBytes": 4,
+            "elementType": "uint32",
+            "memberOffsetBytes": 0,
+            "payloadEncoding": "uint32-le-words",
+            "physicalType": "SDPAVJPTileParams",
+            "runtimeSized": False,
+            "storageLayout": storage_layout,
+        },
+    }
+
+
+def test_tile_blocks_pack_as_opengl_reflects_them():
+    """The translated block kernel reads its record from a uniform block on
+    OpenGL; the host packs the fields at the reflected offsets."""
+    metadata = sdpa_vjp_layout.decode_tile(
+        tile(8, 40, 20, i0=8, j0=24, scale=0.5, diag_off=-3, causal=1)
+    )
+    value = sdpa_vjp_dispatch._record(_tile_block(), metadata, "opengl")
+    assert value == {
+        "dtype": "uint32",
+        "shape": [8],
+        "values": [8, 40, 20, 8, 24, _bits(0.5), 2**32 - 3, 1],
+    }
+    for binding in (_tile_block(shift=4), {**_tile_block(), "kind": "buffer"}):
+        with pytest.raises(ValueError, match="tile block differs"):
+            sdpa_vjp_dispatch._record(binding, metadata, "opengl")
+    # Only the target's own block layout is read as a block.
+    with pytest.raises(ValueError, match="tile record stride differs"):
+        sdpa_vjp_dispatch._record(_tile_block(), metadata, "metal")

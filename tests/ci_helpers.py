@@ -21,6 +21,14 @@ CURRENT_PARITY_JOBS = (
     "mlx-current-gemm-parity",
 )
 CURRENT_PARITY_UPLOAD = "Upload current MLX native parity evidence"
+# The environment the current-tree parity jobs share, under this anchor: the
+# checkout, Mesa's surfaceless software renderer and each runner's target.
+CURRENT_PARITY_ENV_ANCHOR = "&mlx-current-parity-env"
+CURRENT_PARITY_TARGET = (
+    "${{ matrix.os == 'ubuntu-latest' && 'opengl' || "
+    "matrix.os == 'windows-latest' && 'directx' || "
+    "matrix.os == 'macOS-latest' && 'metal' || 'unsupported' }}"
+)
 MAX_MATRIX_LEGS = 256
 
 
@@ -167,7 +175,38 @@ def current_parity_shard_step(workflow, name, *, family, count):
     return _checked_parity_step(workflow, job, name, step)
 
 
+def current_parity_env(workflow):
+    """The current-tree parity jobs' shared environment, as written.
+
+    Every parity job uses the one anchored mapping, and it maps each matrix
+    runner to the target that runner proves.
+    """
+    jobs = yaml.safe_load(workflow)["jobs"]
+    env = jobs[CURRENT_PARITY_JOB]["env"]
+    assert all(jobs[name]["env"] == env for name in CURRENT_PARITY_JOBS)
+    assert env["CROSTL_MLX_CURRENT_TARGET"] == CURRENT_PARITY_TARGET
+    assert env["CROSTL_MLX_CURRENT_ROOT"] == (
+        "${{ github.workspace }}/mlx-current-tree-upstream"
+    )
+    lines = workflow_text.workflow_job_text(workflow, CURRENT_PARITY_JOB).splitlines()
+    (start,) = (
+        index
+        for index, line in enumerate(lines)
+        if line == f"    env: {CURRENT_PARITY_ENV_ANCHOR}"
+    )
+    section = []
+    for line in lines[start + 1 :]:
+        if line.strip() and not line.startswith("      "):
+            break
+        section.append(line)
+    return "\n".join(section)
+
+
 def _checked_parity_step(workflow, job, name, step):
+    # The job's mapping is the only one: a step that chose its own target
+    # could prove one runner's target on another.
+    assert "CROSTL_MLX_CURRENT_TARGET" not in step, name
+    assert "CROSTL_MLX_CURRENT_ROOT" not in step, name
     # A family that also ran in the porting job would spend its budget twice.
     assert not workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", name
@@ -176,4 +215,5 @@ def _checked_parity_step(workflow, job, name, step):
     assert "if: always()" in upload
     assert "path: mlx-current-results" in upload
     assert job.index(name) < job.index(CURRENT_PARITY_UPLOAD)
-    return step
+    # The step runs with the job's environment.
+    return current_parity_env(workflow) + "\n" + step

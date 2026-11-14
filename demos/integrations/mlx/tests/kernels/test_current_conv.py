@@ -1925,9 +1925,6 @@ def test_ci_requires_native_conv_parity():
     for required in (
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
         "pytest -q -n auto",
         "--basetemp=mlx-current-results/conv",
         "--junitxml=mlx-current-results/conv.xml",
