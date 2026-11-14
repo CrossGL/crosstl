@@ -13,12 +13,14 @@ import pytest
 import crosstl
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen, OpenGLMetalMathError
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.refusals import WGSLRefusal
 
 BITFIELDS = """shader Bitfields {
     RWStructuredBuffer<uint> words @register(u0);
@@ -46,6 +48,33 @@ SELECTS = """shader Selects {
             vec2 h = mix(vec2(values[i]), vec2(0.0), c);
             float w = mix(values[i], 2.0, 0.25);
             values[i] = f + g.z + h.y + w;
+        }
+    }
+}"""
+
+MATRIX_SELECTS = """shader MatrixSelects {
+    RWStructuredBuffer<float> o @register(u0);
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uint3 id @gl_GlobalInvocationID) {
+            float x = o[0];
+            mat3 m0 = mat3(x, 0.0, 0.0, 0.0, x, 0.0, 0.0, 0.0, x);
+            mat3 m1 = mat3(x + 1.0, 0.0, 0.0, 0.0, x + 1.0, 0.0, 0.0, 0.0, x + 1.0);
+            mat3 a = select(m1, m0, x > 1.0);
+            o[1] = a[0][0] + a[1][1] + a[2][2] + a[0][1];
+        }
+    }
+}"""
+
+SCALAR_SELECTS = """shader ScalarSelects {
+    RWStructuredBuffer<float> o @register(u0);
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uint3 id @gl_GlobalInvocationID) {
+            float x = o[0];
+            float a = select(1.0, 2.0, x > 1.0);
+            vec3 v = select(vec3(0.0), vec3(1.0), x > 1.0);
+            o[1] = a + v.x;
         }
     }
 }"""
@@ -248,3 +277,88 @@ def _naga_validates(code, tmp_path):
     if shutil.which("naga"):
         (tmp_path / "out.wgsl").write_text(code, encoding="utf-8")
         _check(["naga", "out.wgsl"], tmp_path)
+
+
+def _slangc_compiles(code, tmp_path):
+    if shutil.which("slangc"):
+        (tmp_path / "out.slang").write_text(code, encoding="utf-8")
+        _check(
+            [
+                "slangc",
+                "out.slang",
+                "-target",
+                "spirv",
+                "-entry",
+                "main",
+                "-stage",
+                "compute",
+                "-o",
+                "out.spv",
+            ],
+            tmp_path,
+        )
+
+
+def test_matrix_select_lowers_to_ternary_on_metal_wgsl_and_slang(tmp_path):
+    # Metal, WGSL and Slang have no select() overload on matrices, so a matrix
+    # select is written as the ternary every target already accepts.
+    metal = MetalCodeGen().generate(parse(MATRIX_SELECTS))
+    wgsl = WGSLCodeGen().generate(parse(MATRIX_SELECTS))
+    slang = SlangCodeGen().generate(parse(MATRIX_SELECTS))
+    hlsl = HLSLCodeGen().generate(parse(MATRIX_SELECTS))
+    assembly = VulkanSPIRVCodeGen().generate(parse(MATRIX_SELECTS))
+
+    assert "select(" not in metal
+    assert "float3x3 a = x > 1.0 ? m0 : m1;" in metal
+    assert "select(" not in wgsl
+    assert "if ((x > 1.0))" in wgsl
+    assert "a = m0;" in wgsl and "a = m1;" in wgsl
+    assert "select(" not in slang
+    assert "(x > 1.0 ? m0 : m1)" in slang
+    # HLSL and SPIR-V already select matrices natively; they are unchanged.
+    assert "select((x > 1.0), m0, m1)" in hlsl
+    assert "OpSelectionMerge" in assembly
+    _metal_compiles(metal, tmp_path)
+    _hlsl_compiles(hlsl, tmp_path)
+    _spirv_validates(assembly, tmp_path)
+    _naga_validates(wgsl, tmp_path)
+    _slangc_compiles(slang, tmp_path)
+
+
+def test_scalar_select_is_unchanged_on_metal_wgsl_and_slang():
+    metal = MetalCodeGen().generate(parse(SCALAR_SELECTS))
+    wgsl = WGSLCodeGen().generate(parse(SCALAR_SELECTS))
+    slang = SlangCodeGen().generate(parse(SCALAR_SELECTS))
+
+    assert "float a = select(1.0, 2.0, x > 1.0);" in metal
+    assert "float3 v = select(float3(0.0), float3(1.0), x > 1.0);" in metal
+    assert "select(1.0, 2.0, (x > 1.0))" in wgsl
+    assert "select(vec3<f32>(0.0), vec3<f32>(1.0), (x > 1.0))" in wgsl
+    assert "float a = select(1.0, 2.0, x > 1.0);" in slang
+    assert "float3 v = select(float3(0.0), float3(1.0), x > 1.0);" in slang
+
+
+def test_matrix_select_assignment_lowers_to_if_else_on_wgsl():
+    source = MATRIX_SELECTS.replace(
+        "mat3 a = select(m1, m0, x > 1.0);",
+        "mat3 a;\n            a = select(m1, m0, x > 1.0);",
+    )
+    wgsl = WGSLCodeGen().generate(parse(source))
+
+    assert "select(" not in wgsl
+    assert "if ((x > 1.0))" in wgsl
+    assert "a = m0;" in wgsl and "a = m1;" in wgsl
+
+
+def test_matrix_select_in_a_nested_expression_is_refused_on_wgsl():
+    source = MATRIX_SELECTS.replace(
+        "mat3 a = select(m1, m0, x > 1.0);",
+        "o[1] = select(m1, m0, x > 1.0)[0][0];",
+    ).replace("            o[1] = a[0][0] + a[1][1] + a[2][2] + a[0][1];\n", "")
+    with pytest.raises(WGSLRefusal, match="WGSL select takes scalars and vectors only"):
+        WGSLCodeGen().generate(parse(source))
+
+
+def test_matrix_select_is_refused_on_glsl():
+    with pytest.raises(OpenGLMetalMathError, match="cannot preserve 'select'"):
+        GLSLCodeGen().generate(parse(MATRIX_SELECTS))

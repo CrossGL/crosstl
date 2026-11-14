@@ -9,7 +9,8 @@ branch::
     Pair r = c ? p : q;        var r: Pair;
                                if (c) { r = p; } else { r = q; }
 
-The condition is evaluated once and only the chosen branch is evaluated, as in the C-family source. A conditional in
+A ``select`` call on matrix operands lowers the same way, through the ternary it selects. The condition is
+evaluated once and only the chosen branch is evaluated, as in the C-family source. A conditional in
 a branch is lowered again as that branch's assignment. Anywhere else, such as ``(c ? p : q).a``, the conditional is
 refused with ``ValueError`` rather than written as a ``select`` that naga rejects.
 
@@ -26,6 +27,7 @@ from ..ast import (
     AssignmentNode,
     BlockNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
     IfNode,
     SwizzleNode,
@@ -55,6 +57,30 @@ class WGSLCompositeConditionalMixin:
             return True
         return self.vector_component_count(vtype) is not None
 
+    def matrix_select_ternary(self, value):
+        """The ternary a ``select`` call on matrix operands selects, or None.
+
+        ``select`` takes scalars and vectors only (WGSL section 17.3), so a
+        matrix ``select`` has no expression form; as a whole initializer or
+        assignment value it lowers exactly like the ternary it selects.
+        """
+        if not isinstance(value, FunctionCallNode):
+            return None
+        function = value.function
+        name = (
+            function if isinstance(function, str) else getattr(function, "name", None)
+        )
+        if name != "select" or len(value.arguments) != 3:
+            return None
+        if self.is_user_function_name(name):
+            return None
+        if self.boolean_expression_width(value.arguments[2]) != 1:
+            return None
+        for arg in value.arguments[:2]:
+            if self.matrix_shape(self.expression_type(arg)) is None:
+                return None
+        return TernaryOpNode(value.arguments[2], value.arguments[1], value.arguments[0])
+
     def lower_composite_ternary(self, stmt):
         """The statements that replace ``T x = c ? a : b`` or ``x = c ? a : b`` on a composite ``T``, or None."""
         if (
@@ -66,7 +92,9 @@ class WGSLCompositeConditionalMixin:
         if isinstance(stmt, VariableNode):
             value = stmt.initial_value
             if not isinstance(value, TernaryOpNode):
-                return None
+                value = self.matrix_select_ternary(value)
+                if value is None:
+                    return None
             var_type = self.local_variable_declaration_type(stmt)
             if self.is_select_operand_type(var_type):
                 return None
@@ -87,8 +115,12 @@ class WGSLCompositeConditionalMixin:
             return [declaration, AssignmentNode(IdentifierNode(stmt.name), value)]
         if isinstance(stmt, AssignmentNode):
             value = stmt.value
-            if stmt.operator != "=" or not isinstance(value, TernaryOpNode):
+            if stmt.operator != "=":
                 return None
+            if not isinstance(value, TernaryOpNode):
+                value = self.matrix_select_ternary(value)
+                if value is None:
+                    return None
             if self.is_select_operand_type(self.expression_type(stmt.target)):
                 return None
             return [
