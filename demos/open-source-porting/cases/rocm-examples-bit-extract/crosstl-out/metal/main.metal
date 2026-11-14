@@ -4,7 +4,7 @@
 using namespace metal;
 
 // Compute Shader
-kernel void bit_extract_kernel(device uint* d_output [[buffer(0)]], const device uint* d_input [[buffer(1)]], uint64_t size, uint3 thread_position_in_grid [[thread_position_in_grid]], uint3 threads_per_threadgroup [[threads_per_threadgroup]], uint3 threadgroups_per_grid [[threadgroups_per_grid]]) {
+kernel void bit_extract_kernel(device uint* d_output [[buffer(0)]], const device uint* d_input [[buffer(1)]], constant uint64_t& size [[buffer(2)]], uint3 thread_position_in_grid [[thread_position_in_grid]], uint3 threads_per_threadgroup [[threads_per_threadgroup]], uint3 threadgroups_per_grid [[threadgroups_per_grid]]) {
     uint64_t offset = thread_position_in_grid.x;
     uint64_t stride = threads_per_threadgroup.x * threadgroups_per_grid.x;
     for (uint64_t i = offset; i < size; i += stride) {

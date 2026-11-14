@@ -56,7 +56,9 @@ _EXACT_WIDTH = {
     **dict.fromkeys(("i8", "int8", "int8_t", "char", "signed char"), "char"),
     **dict.fromkeys(("u8", "uint8", "uint8_t", "uchar", "unsigned char"), "uchar"),
     **dict.fromkeys(("i16", "int16", "int16_t", "short", "signed short"), "short"),
-    **dict.fromkeys(("u16", "uint16", "uint16_t", "ushort", "unsigned short"), "ushort"),
+    **dict.fromkeys(
+        ("u16", "uint16", "uint16_t", "ushort", "unsigned short"), "ushort"
+    ),
 }
 
 

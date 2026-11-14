@@ -111,7 +111,11 @@ def test_bfloat16_buffers_keep_two_byte_elements(tmp_path):
         ("__float2bfloat16_rn", ["x"], "bfloat16(x)"),
         ("::__bfloat162float", ["h"], "f32(h)"),
         ("__float2bfloat162_rn", ["x"], "vec2<bfloat16>(bfloat16(x))"),
-        ("__floats2bfloat162_rn", ["a", "b"], "vec2<bfloat16>(bfloat16(a), bfloat16(b))"),
+        (
+            "__floats2bfloat162_rn",
+            ["a", "b"],
+            "vec2<bfloat16>(bfloat16(a), bfloat16(b))",
+        ),
         ("__float22bfloat162_rn", ["v"], "vec2<bfloat16>(v)"),
         ("__bfloat1622float2", ["v"], "vec2<f32>(v)"),
         ("__bfloat162bfloat162", ["h"], "vec2<bfloat16>(h)"),
@@ -159,7 +163,15 @@ def test_sizeof_operands_import_as_crossgl_types(tmp_path):
     ):
         assert spelling in crossgl, crossgl
     metal = _translate(tmp_path, SIZEOF_KERNEL, "metal")
-    assert [int(v) for v in re.findall(r"s\[\d\] = (\d+);", metal)] == [8, 8, 8, 4, 2, 4, 4]
+    assert [int(v) for v in re.findall(r"s\[\d\] = (\d+);", metal)] == [
+        8,
+        8,
+        8,
+        4,
+        2,
+        4,
+        4,
+    ]
 
 
 def test_hip_sizeof_folds_size_t_and_ptrdiff_t_to_eight(tmp_path):

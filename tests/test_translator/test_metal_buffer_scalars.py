@@ -52,7 +52,16 @@ def test_narrow_and_wide_scalar_uniforms_are_constant_references(
     shader = tmp_path / "scale.metal"
     shader.write_text(metal, encoding="utf-8")
     completed = subprocess.run(
-        [compiler, "-sdk", "macosx", "metal", "-c", str(shader), "-o", str(tmp_path / "scale.air")],
+        [
+            compiler,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader),
+            "-o",
+            str(tmp_path / "scale.air"),
+        ],
         capture_output=True,
         text=True,
     )
