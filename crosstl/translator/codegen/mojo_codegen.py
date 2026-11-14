@@ -59,7 +59,6 @@ from .array_utils import (
 )
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
-from .precise_evaluation import refuse_precise_evaluation
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -104,6 +103,7 @@ from .mojo_exact_lookups import (
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter

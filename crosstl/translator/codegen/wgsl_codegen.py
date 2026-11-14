@@ -60,7 +60,6 @@ from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .comma_expressions import is_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
-from .precise_evaluation import refuse_precise_evaluation
 from .enum_utils import (
     collect_enum_type_names,
     collect_enum_variant_constants,
@@ -76,6 +75,7 @@ from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
+from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location

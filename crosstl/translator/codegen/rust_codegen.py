@@ -59,9 +59,9 @@ from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
-from .precise_evaluation import refuse_precise_evaluation
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
+from .precise_evaluation import refuse_precise_evaluation
 from .rust_exact_lookups import (
     RUST_PRIMITIVE_SOURCE_TYPES,
     RUST_RAY_STAGE_METADATA_NAMES,
