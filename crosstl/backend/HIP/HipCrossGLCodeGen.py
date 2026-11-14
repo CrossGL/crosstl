@@ -8288,17 +8288,29 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                         f"(({lane}) & (WaveGetLaneCount() - 1)))"
                     )
                 if function_name == "__shfl_xor":
-                    return f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ {lane}))"
+                    # The partner lane may leave the wave (HIP __shfl_xor
+                    # returns the caller's own value there), so the index is
+                    # selected before the read; ROCm returns 0 for a disabled
+                    # source lane and the partner is inactive when it leaves.
+                    partner = f"(WaveGetLaneIndex() ^ {lane})"
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"(({partner} < WaveGetLaneCount()) ? {partner} "
+                        f": WaveGetLaneIndex()))"
+                    )
+                # Select the source index first and read in every lane: the
+                # shuffle must not sit in a branch, because the source lane is
+                # inactive in the lanes that take the other arm.
                 if function_name == "__shfl_up":
                     return (
+                        f"WaveReadLaneAt({value}, "
                         f"((WaveGetLaneIndex() >= ({lane})) ? "
-                        f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane}))) "
-                        f": {value})"
+                        f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
                     )
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(((WaveGetLaneIndex() + ({lane})) < WaveGetLaneCount()) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
                 )
             # A width splits the wave into width-lane segments: __shfl reads
             # the same offset inside the caller's segment, and the up/down/xor
@@ -8316,15 +8328,15 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 )
             if function_name == "__shfl_up":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(({segment_lane} >= ({lane})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
                 )
             if function_name == "__shfl_down":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"((({segment_lane} + ({lane})) < {width_limit}) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
                 )
             partner = f"(WaveGetLaneIndex() ^ {lane})"
             segment_end = f"({segment_base} + {width_limit})"

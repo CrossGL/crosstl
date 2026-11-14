@@ -1861,7 +1861,9 @@ class TestHipCodeGen:
             float f = __shfl(v, 3, 16);
             float g = __shfl_down(v, 2, 16);
             float h = __shfl(v, lane - 1);
-            out[i] = a + b + c + d + e + f + g + h;
+            float j = __shfl_up(v, 1, 16);
+            float k = __shfl_xor(v, 32);
+            out[i] = a + b + c + d + e + f + g + h + j + k;
         }
         """
         lexer = HipLexer(code)
@@ -1875,15 +1877,28 @@ class TestHipCodeGen:
         # the wave still reads a lane inside it.
         assert "WaveReadLaneAt(v, ((3) & (WaveGetLaneCount() - 1)))" in result
         assert "WaveReadLaneAt(v, (((lane - 1)) & (WaveGetLaneCount() - 1)))" in result
-        assert "WaveReadLaneAt(v, (WaveGetLaneIndex() ^ 4))" in result
+        # xor checks the partner lane first: an out-of-range partner must read
+        # the caller's own value, not an inactive lane.
         assert (
-            "(WaveGetLaneIndex() >= (1)) ? "
-            "WaveReadLaneAt(v, (WaveGetLaneIndex() - (1))) : v"
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() ^ 4) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() ^ 4) : WaveGetLaneIndex()))"
         ) in result
         assert (
-            "((WaveGetLaneIndex() + (2)) < WaveGetLaneCount()) ? "
-            "WaveReadLaneAt(v, (WaveGetLaneIndex() + (2))) : v"
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() ^ 32) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() ^ 32) : WaveGetLaneIndex()))"
         ) in result
+        # up/down select the source index and shuffle in every lane. The old
+        # `cond ? WaveReadLaneAt(v, ...) : v` form read an inactive lane from
+        # inside one arm of the branch.
+        assert (
+            "WaveReadLaneAt(v, ((WaveGetLaneIndex() >= (1)) ? "
+            "(WaveGetLaneIndex() - (1)) : WaveGetLaneIndex()))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() + (2)) < WaveGetLaneCount()) ? "
+            "(WaveGetLaneIndex() + (2)) : WaveGetLaneIndex()))"
+        ) in result
+        assert "? WaveReadLaneAt(" not in result
         # A constant width keeps the offset inside the caller's width-lane
         # segment (HIP __shfl family).
         assert (
@@ -1891,8 +1906,12 @@ class TestHipCodeGen:
             "(WaveGetLaneIndex() % 16)) + ((3) & (16 - 1))))"
         ) in result
         assert (
-            "((((WaveGetLaneIndex() % 16) + (2)) < 16) ? "
-            "WaveReadLaneAt(v, (WaveGetLaneIndex() + (2))) : v"
+            "WaveReadLaneAt(v, (((WaveGetLaneIndex() % 16) >= (1)) ? "
+            "(WaveGetLaneIndex() - (1)) : WaveGetLaneIndex()))"
+        ) in result
+        assert (
+            "WaveReadLaneAt(v, ((((WaveGetLaneIndex() % 16) + (2)) < 16) ? "
+            "(WaveGetLaneIndex() + (2)) : WaveGetLaneIndex()))"
         ) in result
         assert "has no CrossGL form" not in result
         assert "__shfl" not in result
