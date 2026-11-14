@@ -98,10 +98,12 @@ from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qmm_t import
     REQUIRE_ENV,
     SHARD_COUNT_ENV,
     SHARD_INDEX_ENV,
-    fp_qmm_config,
 )
 from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qmm_t import (
     _expected_validation_contract as _qmm_t_validation_contract,
+)
+from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qmm_t import (
+    fp_qmm_config,
 )
 from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qvm_split_k import (
     _check_ops,
