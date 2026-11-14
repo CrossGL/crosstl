@@ -82,7 +82,13 @@ def test_precise_return_names_avoid_parameters_locals_and_globals():
             return crossglPreciseReturn_1 + crossglPreciseReturn_2;
         }
     }"""))
-    names = re.findall(r"precise float (crossglPreciseReturn\w*) =", generated)
+    # The function's own local is a local of a precise function, so it is declared precise too.
+    assert generated.count("precise float crossglPreciseReturn_1 = b;") == 1
+    names = [
+        name
+        for name in re.findall(r"precise float (crossglPreciseReturn\w*) =", generated)
+        if name != "crossglPreciseReturn_1"
+    ]
     assert len(names) == len(set(names)) == 2
     assert not set(names) & {
         "crossglPreciseReturn",

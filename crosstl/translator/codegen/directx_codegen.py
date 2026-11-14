@@ -373,6 +373,7 @@ from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
 )
+from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
@@ -1893,6 +1894,7 @@ class _DirectXResourceRegisterAllocator(dict):
 class HLSLCodeGen(
     HlslGlslBlockRegisters,
     HLSLNarrowIntegerMixin,
+    HLSLPreciseFunctionMixin,
     HLSLResourceAccessVariantsMixin,
     LoweringRefusalMixin,
     HLSLBfloat16Vectors,
@@ -14953,8 +14955,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             else None
         )
+        # ``precise`` marks a value; a function that returns none keeps it on its locals and stores instead.
         declaration_return_type = (
-            f"{self.hlsl_precise_modifier_prefix(func)}{return_type}"
+            f"{self.hlsl_precise_modifier_prefix(func) if return_type != 'void' else ''}"
+            f"{return_type}"
         )
         self.validate_hlsl_local_groupshared_declarations(func)
         self.validate_hlsl_nonuniform_resource_index_calls(func)
@@ -15220,6 +15224,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_hlsl_constant_branch_guards = constant_branch_guards(
             self, func, self.hlsl_initial_bool_constants(func)
         )
+        previous_precise_function_state = self.enter_hlsl_precise_function(func, body)
         try:
             if stage_output_lowering is not None:
                 output_name = stage_output_lowering.get("local_name")
@@ -15254,7 +15259,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += self.generate_statement_body(body, indent + 1)
             declarations = "".join(
                 f"{'    ' * (indent + 1)}{vtype} {name};\n"
-                for vtype, name in self.hlsl_wide_integer_compound_indices
+                for vtype, name in self.hlsl_wide_integer_compound_indices + list(
+                    self.hlsl_precise_captures or ()
+                )
             )
             code = (
                 code[:compound_declaration_offset]
@@ -15262,6 +15269,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 + code[compound_declaration_offset:]
             )
         finally:
+            self.leave_hlsl_precise_function(previous_precise_function_state)
             self.current_hlsl_constant_branch_guards = previous_constant_guards
             self.current_hlsl_parameter_epilogue = previous_parameter_epilogue
             self.hlsl_wide_integer_compound_indices = previous_compound_indices
@@ -16327,7 +16335,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rendered.append("groupshared")
         if "buffer" in qualifiers:
             rendered.append("static")
-        if self.hlsl_has_precise_modifier(node):
+        if self.hlsl_has_precise_modifier(node) or self.hlsl_precise_function_local(
+            node
+        ):
             rendered.append("precise")
         if "const" in qualifiers and not omit_const:
             rendered.append("const")
@@ -25888,6 +25898,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target_type,
             source_type=self.hlsl_source_expression_type(value),
         )
+        rhs = self.hlsl_precise_stored_value(target, value, rhs, target_type, op)
         return f"{lhs} {op} {rhs}"
 
     def generate_hlsl_bfloat16_compound_assignment(
@@ -26240,6 +26251,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target_type,
                 source_type=self.hlsl_source_expression_type(value),
             )
+            rhs = self.hlsl_precise_stored_value(target, value, rhs, target_type, op)
             return f"{lhs} {op} {rhs}"
 
         block_store = self.generate_glsl_buffer_block_store(target, value, op)
@@ -26324,6 +26336,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target_type,
             source_type=self.hlsl_source_expression_type(value),
         )
+        rhs = self.hlsl_precise_stored_value(target, value, rhs, target_type, op)
         return f"{lhs} {op} {rhs}"
 
     def hlsl_resource_pointer_delta_type(self, value):
@@ -26491,8 +26504,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return expression
 
     def hlsl_condition_expression(self, condition):
-        return self.hlsl_strip_wrapping_parentheses(
-            self.generate_expression_with_expected(condition, "bool")
+        return self.hlsl_precise_condition(
+            condition,
+            self.hlsl_strip_wrapping_parentheses(
+                self.generate_expression_with_expected(condition, "bool")
+            ),
         )
 
     def generate_if(self, node, indent):
@@ -26621,8 +26637,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         self, node.condition, indent + 1
                     )
                 else:
-                    condition = (
-                        self.generate_expression(node.condition).strip().rstrip(";")
+                    condition = self.hlsl_precise_condition(
+                        node.condition,
+                        self.generate_expression(node.condition).strip().rstrip(";"),
                     )
 
             if hasattr(node, "update") and node.update:
@@ -27011,7 +27028,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if atomic_loop is not None:
             return atomic_loop
         indent_str = "    " * indent
-        condition = self.generate_expression(getattr(node, "condition", ""))
+        condition = self.hlsl_precise_condition(
+            getattr(node, "condition", None),
+            self.generate_expression(getattr(node, "condition", "")),
+        )
 
         code = f"{indent_str}while ({condition}) {{\n"
         code += self.generate_scoped_statement_body(
@@ -27025,7 +27045,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if atomic_loop is not None:
             return atomic_loop
         indent_str = "    " * indent
-        condition = self.generate_expression(getattr(node, "condition", ""))
+        condition = self.hlsl_precise_condition(
+            getattr(node, "condition", None),
+            self.generate_expression(getattr(node, "condition", "")),
+        )
 
         code = f"{indent_str}do {{\n"
         code += self.generate_scoped_statement_body(
@@ -29398,8 +29421,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 # Convert arms to the logical common type before selection;
                 # the enclosing context converts the selected value once.
                 expected_type = source_type
-            condition = self.generate_expression_with_expected(
-                getattr(expr, "condition", ""), "bool"
+            condition = self.hlsl_precise_condition(
+                getattr(expr, "condition", None),
+                self.generate_expression_with_expected(
+                    getattr(expr, "condition", ""), "bool"
+                ),
             )
             wide_integer_contract = self.hlsl_wide_integer_arithmetic_contract(
                 expr,
