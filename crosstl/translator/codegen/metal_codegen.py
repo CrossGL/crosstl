@@ -5010,6 +5010,11 @@ class MetalCodeGen(
         )
         if varying is not None:
             return varying
+        if semantic and str(semantic).lower() == "location":
+            # A location on a member of a struct no entry passes as stage I/O. Metal reads a member index only
+            # through [[stage_in]], where a vertex input location is its attribute index (MSL 5.2.3.1), so the
+            # struct keeps the index whichever way an entry later reads it.
+            semantic = self.metal_vertex_input_location_semantic(member) or semantic
         return self.map_semantic(semantic) if semantic else ""
 
     def metal_struct_member_declaration(
@@ -5173,9 +5178,12 @@ class MetalCodeGen(
                         f"{struct_name or '?'}.{member.name}",
                         "is a struct member",
                     )
+                # [[id(n)]] after the extent would appertain to the array type (metal_member_attributes).
+                declaration = attach_member_attributes(
+                    declaration, member.name, abi_attr
+                )
                 return (
-                    f"    {declaration}{abi_attr}{semantic_attr}"
-                    f"{interpolation_attr};\n",
+                    f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                     dependencies,
                 )
 
