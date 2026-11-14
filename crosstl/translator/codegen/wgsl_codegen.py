@@ -3624,7 +3624,9 @@ class WGSLCodeGen(
         if narrowed is not None:
             return narrowed
         if splat_scalars:
-            splat = self.vector_splat_expression(rendered, target_type, source_type)
+            splat = self.vector_splat_expression(
+                rendered, target_type, source_type, expr
+            )
             if splat is not None:
                 return splat
         target_scalar = self.scalar_type_name(target_type)
@@ -3750,10 +3752,12 @@ class WGSLCodeGen(
             self.generate_expression(expr), target_type, self.expression_type(expr)
         )
 
-    def vector_splat_expression(self, rendered, target_type, source_type):
+    def vector_splat_expression(self, rendered, target_type, source_type, expr=None):
         """A scalar stored to a vector, which HLSL, GLSL, MSL and CrossGL replicate into every component.
 
         WGSL has no implicit scalar-to-vector conversion, so the value becomes ``vecN<T>(T(value))``.
+        A negative integer literal ``expr`` stored to a ``vecN<u32>`` is written ``u32(-1i)``, as for a
+        scalar ``u32`` (see ``concrete_negative_integer_literal``).
         """
         target_shape = self.vector_shape(target_type)
         if target_shape is None or source_type is None:
@@ -3765,6 +3769,8 @@ class WGSLCodeGen(
         if source_scalar not in {"bool", "f16", "f32", "i32", "u32"}:
             return None
         element = target_shape[0]
+        if element == "u32" and source_scalar == "i32" and expr is not None:
+            rendered = self.concrete_negative_integer_literal(expr, rendered)
         value = rendered if source_scalar == element else f"{element}({rendered})"
         return f"{self.type_name_string(target_type)}({value})"
 
