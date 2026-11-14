@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..namespace_constants import is_c_family_namespace_constant
@@ -31,12 +33,15 @@ from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 
 
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
+
+
 class CudaToCrossGLConverter:
     """Serialize CUDA backend AST nodes back into CrossGL source."""
 
     CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
-        "CHECK_CUDA",
         "CUDA_CHECK",
+        "CHECK_CUDA",
         "checkCuda",
         "checkCudaErrors",
         "gpuErrchk",
@@ -255,16 +260,10 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    # ``let`` and ``match`` are CrossGL lexer keywords like ``kernel`` and ``var``.
-    CROSSGL_RESERVED_IDENTIFIERS = {
-        "buffer",
-        "in",
-        "kernel",
-        "let",
-        "match",
-        "precision",
-        "var",
-    }
+    # ``let``, ``match`` etc. are CrossGL value-identifier keywords rejected as
+    # local/parameter names by the CrossGL parser. The full keyword set is only
+    # used for record names (checked in convert_cuda_type_to_crossgl).
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
 
     def __init__(self, threadgroup_size=None):
         # The host picks a CUDA kernel's block size at launch time; this option names it.
@@ -6926,13 +6925,18 @@ class CudaToCrossGLConverter:
         if scoped_type is not None:
             return scoped_type
         if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
-            # A struct named after a CrossGL keyword is declared under its renamed name.
+            # A struct/enum/alias named after any CrossGL keyword is declared under
+            # its renamed name. Value identifiers (locals, params) use the narrower
+            # CROSSGL_RESERVED_IDENTIFIERS checked via sanitize_identifier_name.
+            return unused_identifier_name(cuda_type, self.source_identifier_names)
+        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL reserved value-identifier keyword.
             return self.sanitize_identifier_name(cuda_type)
         return cuda_type
+        normalized_type = str(cuda_type)
 
     def unqualified_leading_cuda_std_type_name(self, cuda_type):
         normalized_type = str(cuda_type)
-        prefix = "::cuda::std::"
         if normalized_type.startswith(prefix):
             return normalized_type[len(prefix) :]
         return None

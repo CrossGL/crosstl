@@ -3,6 +3,8 @@
 import hashlib
 import re
 
+from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.integer_literals import (
     IntegerLiteralError,
@@ -42,7 +44,10 @@ from .HipAst import (
 
 
 class HipRecordSemanticError(ValueError):
-    """Raised when used C++ record semantics cannot survive CrossGL lowering."""
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
+
+
+_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
     project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
     missing_capabilities = ("hip.record-lifecycle-layout-lowering",)
@@ -354,7 +359,8 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    # ``let``, ``match`` and ``var`` are CrossGL value-identifier keywords.
+    # Only these narrow names are rejected by the CrossGL parser as identifiers.
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
@@ -10494,9 +10500,13 @@ class HipToCrossGLConverter:
 
         if self.is_decltype_type_name(hip_type):
             return "auto"
-
+        if hip_type in _CROSSGL_ALL_KEYWORDS and hip_type in self.record_definitions:
+            # A struct/enum/alias whose name is any CrossGL keyword is declared under
+            # its sanitized name.  Value identifiers use the narrower
+            # CROSSGL_RESERVED_IDENTIFIERS, so only record names need the full set.
+            return self.sanitize_crossgl_type_identifier(hip_type)
         if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
-            # A struct named after a CrossGL keyword is declared under its renamed name.
+            # A type spelling that is a CrossGL reserved value-identifier keyword.
             return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)
 
