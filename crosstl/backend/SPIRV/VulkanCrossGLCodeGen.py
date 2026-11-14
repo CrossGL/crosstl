@@ -222,6 +222,7 @@ class VulkanToCrossGLConverter:
         self.renamed_spirv_global_names = {}
         self.spirv_module_shader_stages = self.collect_spirv_module_shader_stages(ast)
         code = "shader main {\n"
+        is_assembly = getattr(ast, "spirv_assembly", False)
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
             node
@@ -257,12 +258,9 @@ class VulkanToCrossGLConverter:
                 code += f"    {self.generate_global_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
                 shader_stage = self.function_shader_stage(node)
-                if shader_stage is not None or node.name == "main":
-                    if shader_stage is None:
-                        shader_stage = self.infer_main_shader_stage(
-                            node, compute_layouts
-                        )
-
+                if shader_stage is None and not is_assembly and node.name == "main":
+                    shader_stage = self.infer_main_shader_stage(node, compute_layouts)
+                if shader_stage is not None:
                     if shader_stage == "compute":
                         code += "    // Compute Shader\n"
                         code += "    compute {\n"
