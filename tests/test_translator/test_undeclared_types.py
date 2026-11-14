@@ -508,3 +508,102 @@ def test_translation_refuses_an_undeclared_vector_element_type(tmp_path, target)
     path = _write(tmp_path, "vector_element.cgl", VECTOR_ELEMENT_TYPE)
     with pytest.raises(UndeclaredTypeError, match="'foo'"):
         crosstl.translate(path, backend=target)
+
+
+# --- Regression tests for generic functions called with explicit type arguments (#3747) ---
+
+GENERIC_CALLED_WITH_TYPE_ARGS = """
+shader P {
+    T twice<T>(T x) {
+        foo f;
+        return x + x;
+    }
+    compute {
+        buffer float* outp;
+        void main() {
+            outp[0] = twice<float>(outp[3]);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl", "wgsl"])
+def test_generic_helper_called_with_type_args_undeclared_type_is_refused(
+    tmp_path, target
+):
+    # The #3747 shader: twice<float> must be recognised as a call to ``twice``,
+    # so its body is checked and the undeclared type ``foo`` is caught.
+    path = _write(tmp_path, "generic_call.cgl", GENERIC_CALLED_WITH_TYPE_ARGS)
+    with pytest.raises(UndeclaredTypeError, match="'foo'"):
+        crosstl.translate(path, backend=target)
+
+
+GENERIC_VEC2_VARIANT = """
+shader P {
+    T twice<T>(T x) {
+        vec2<U> v;
+        return x + x;
+    }
+    compute {
+        buffer float* outp;
+        void main() {
+            outp[0] = twice<float>(outp[3]);
+        }
+    }
+}
+"""
+
+
+def test_undeclared_vector_element_in_generic_called_with_type_args_is_refused():
+    # ``vec2<U>`` inside a helper reached via ``twice<float>(...)``: ``U`` is not a declared type.
+    uses = undeclared_type_uses(_program(GENERIC_VEC2_VARIANT))
+    assert [name for name, _ in uses] == ["U"]
+
+
+CHAINED_GENERIC_CALL = """
+shader P {
+    T inner<T>(T x) {
+        foo f;
+        return x;
+    }
+    T outer<T>(T x) {
+        return inner<T>(x);
+    }
+    compute {
+        buffer float* outp;
+        void main() {
+            outp[0] = outer<float>(outp[1]);
+        }
+    }
+}
+"""
+
+
+def test_undeclared_type_in_chained_generic_call_is_refused():
+    # ``outer<float>`` calls ``inner<T>`` which contains ``foo f;``.
+    # Both helpers must be recognised as reachable.
+    uses = undeclared_type_uses(_program(CHAINED_GENERIC_CALL))
+    assert [name for name, _ in uses] == ["foo"]
+
+
+VALID_GENERIC_HELPER = """
+shader P {
+    T twice<T>(T x) { return x + x; }
+    T unreachable<T>(T x) { return x; }
+    compute {
+        buffer float* outp;
+        void main() {
+            outp[0] = twice<float>(outp[1]);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl", "wgsl"])
+def test_valid_generic_helper_called_with_type_args_still_translates(tmp_path, target):
+    # A valid generic helper called as ``twice<float>(x)`` must still produce output.
+    path = _write(tmp_path, "valid_generic.cgl", VALID_GENERIC_HELPER)
+    result = crosstl.translate(path, backend=target)
+    assert result
