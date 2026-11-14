@@ -141,7 +141,49 @@ def test_scalar_results_of_known_intrinsics_are_splatted():
     assert "mat3 b = mat3(vec3(dot(v, v)), vec3(dot(v, v)), vec3(dot(v, v)));" in output
     assert "mat3 c = mat3(vec3(distance(v, v))," in output
     assert "mat3 d = mat3(vec3(uintBitsToFloat(id.x) * 1.0)," in output
-    assert "mat3 e = mat3(vec3(true), vec3(true), vec3(true));" in output
+    assert (
+        "mat3 e = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+
+
+def test_scalar_mul_and_select_are_splatted():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 a = mul(x, 2.0);
+        float3x3 b = select(x > 1.0, 1.0, 2.0);
+        o[1] = a[0][0] + b[1][1];
+    """)
+    assert "mat3 a = mat3(vec3((x * 2.0)), vec3((x * 2.0)), vec3((x * 2.0)));" in output
+    assert "mat3 b = mat3(vec3(select(2.0, 1.0, x > 1.0))," in output
+
+
+def test_bool_and_integer_scalars_are_converted_to_float_before_the_splat():
+    # WGSL's vec3<f32>(true) is a type error, and an integer dot is an integer.
+    output = to_crossgl("""
+        float x = o[0];
+        int3 iv = int3(1, 2, 3);
+        float3x3 a = true;
+        float3x3 b = x > 1.0;
+        float3x3 c = (bool)id.x;
+        float3x3 d = dot(iv, iv);
+        float3x3 e = id.x * 2 + 1;
+        float3x3 f = x * 2.0;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0] + f[0][0];
+    """)
+    assert (
+        "mat3 a = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+    assert "mat3 b = mat3(vec3(float(x > 1.0)), vec3(float(x > 1.0))," in output
+    assert "mat3 c = mat3(vec3(float(bool(id.x))), vec3(float(bool(id.x)))," in output
+    assert "mat3 d = mat3(vec3(float(dot(iv, iv))), vec3(float(dot(iv, iv)))," in output
+    assert (
+        "mat3 e = mat3(vec3(float((id.x * 2) + 1)), vec3(float((id.x * 2) + 1)),"
+        in output
+    )
+    # A float stays as it is.
+    assert "mat3 f = mat3(vec3(x * 2.0), vec3(x * 2.0), vec3(x * 2.0));" in output
 
 
 def test_values_of_unknown_type_are_not_written_unchanged():

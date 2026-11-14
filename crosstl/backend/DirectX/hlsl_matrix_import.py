@@ -87,8 +87,14 @@ _ELEMENTWISE_INTRINSICS = frozenset(
 )
 # Always a scalar, whatever the operands.
 _SCALAR_RESULT_INTRINSICS = frozenset({"determinant", "distance", "dot", "length"})
-# Vector or matrix results; these are never splatted.
-_AGGREGATE_RESULT_INTRINSICS = frozenset({"and", "or", "select", "mul", "transpose"})
+# Vector or matrix results whatever the operands; these are never splatted.
+_AGGREGATE_RESULT_INTRINSICS = frozenset({"transpose"})
+# Scalar for scalar operands, the operands' shape otherwise.
+_OPERAND_SHAPED_INTRINSICS = frozenset({"and", "mul", "or", "select"})
+_FLOAT_TYPES = frozenset(
+    {"double", "fixed", "float", "float16_t", "half", "min10float", "min16float"}
+)
+_FAMILY_RANK = {"bool": 0, "int": 1, "float": 2}
 # Keep the shape of the operand, only changing the element type.
 _REINTERPRET_INTRINSICS = frozenset({"asfloat", "asint", "asuint"})
 _ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
@@ -495,7 +501,8 @@ class HLSLMatrixImportMixin:
         if self.hlsl_matrix_rows_are_columns():
             column_length, column_count = column_count, column_length
         column_type = self.matrix_vector_type(shape[0], column_length)
-        columns = ", ".join(f"{column_type}({rendered})" for _ in range(column_count))
+        element = self.splat_scalar_text(shape, value, rendered)
+        columns = ", ".join(f"{column_type}({element})" for _ in range(column_count))
         return f"{target}({columns})"
 
     def scalar_matrix_splat_expression(self, shape, value, is_main):
@@ -550,7 +557,12 @@ class HLSLMatrixImportMixin:
                     return "scalar"
                 if name in _AGGREGATE_RESULT_INTRINSICS:
                     return "other"
-                if name in _ELEMENTWISE_INTRINSICS | _REINTERPRET_INTRINSICS:
+                if (
+                    name
+                    in _ELEMENTWISE_INTRINSICS
+                    | _REINTERPRET_INTRINSICS
+                    | _OPERAND_SHAPED_INTRINSICS
+                ):
                     return self._combined_value_kind(list(expr.args or []))
         try:
             raw_type = self.expression_value_raw_type(expr)
@@ -560,6 +572,87 @@ class HLSLMatrixImportMixin:
         if not raw_type:
             return None
         return "scalar" if raw_type in _SCALAR_TYPES else "other"
+
+    def hlsl_scalar_family(self, expr):
+        """``"bool"``, ``"int"`` or ``"float"`` for the scalar type of ``expr``.
+
+        ``"literal"`` is an integer literal, which takes the type it is stored as, and ``None`` is a value whose
+        type the importer cannot tell. A vector reports the family of its elements.
+        """
+        if isinstance(expr, bool):
+            return "bool"
+        if isinstance(expr, float):
+            return "float"
+        if isinstance(expr, int):
+            return "literal"
+        if isinstance(expr, CastNode):
+            return self._type_family(str(expr.target_type).strip())
+        if isinstance(expr, UnaryOpNode):
+            if _operator_text(expr.op) == "!":
+                return "bool"
+            return self.hlsl_scalar_family(expr.operand)
+        if isinstance(expr, BinaryOpNode):
+            operator = _operator_text(expr.op)
+            if operator in _COMPARISON_OPERATORS | {"&&", "||"}:
+                return "bool"
+            if operator in _ARITHMETIC_OPERATORS | _BITWISE_OPERATORS:
+                family = self._promoted_family([expr.left, expr.right])
+                return "int" if family == "bool" else family
+        elif isinstance(expr, TernaryOpNode):
+            return self._promoted_family([expr.true_expr, expr.false_expr])
+        elif isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            args = list(expr.args or [])
+            if name not in self.source_function_names:
+                if name in _SCALAR_TYPES:
+                    return self._type_family(name)
+                if name in {"length", "distance", "determinant", "asfloat"}:
+                    return "float"
+                if name in {"asint", "asuint"}:
+                    return "int"
+                if name in {"and", "or"}:
+                    return "bool"
+                if name == "select":
+                    return self._promoted_family(args[1:])
+                if name in {"dot", "mul"} | _ELEMENTWISE_INTRINSICS:
+                    return self._promoted_family(args)
+        try:
+            raw_type = self.expression_value_raw_type(expr)
+        except ValueError:
+            return None
+        if not raw_type:
+            return None
+        return self._type_family(self.vector_element_raw_type(raw_type) or raw_type)
+
+    def _type_family(self, type_name):
+        type_name = self.resolve_integer_alias(type_name)
+        if type_name == "bool":
+            return "bool"
+        if type_name in _FLOAT_TYPES:
+            return "float"
+        return "int" if type_name in _SCALAR_TYPES else None
+
+    def _promoted_family(self, operands):
+        families = [self.hlsl_scalar_family(operand) for operand in operands]
+        if not families or None in families:
+            return None
+        typed = [family for family in families if family != "literal"]
+        if not typed:
+            return "literal"
+        return max(typed, key=_FAMILY_RANK.__getitem__)
+
+    def splat_scalar_text(self, shape, value, rendered):
+        """``rendered`` converted to the matrix's element type when ``value`` is a scalar of another one.
+
+        WGSL's ``vec3<f32>(true)`` is a type error and ``dot`` of integer vectors is an integer, so a bool or
+        integer value is written ``float(...)`` before it is repeated into the columns.
+        """
+        family = self.hlsl_scalar_family(value)
+        if family in (None, "literal"):
+            return rendered
+        if family == self._type_family(shape[0]):
+            return rendered
+        return f"{self.map_type(shape[0])}({rendered})"
 
     def _combined_value_kind(self, operands):
         kinds = [self.hlsl_value_kind(operand) for operand in operands]
@@ -847,6 +940,7 @@ class HLSLMatrixImportMixin:
                 in _ELEMENTWISE_INTRINSICS
                 | _SCALAR_RESULT_INTRINSICS
                 | _REINTERPRET_INTRINSICS
+                | _OPERAND_SHAPED_INTRINSICS
                 and name not in self.source_function_names
                 and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
             )
