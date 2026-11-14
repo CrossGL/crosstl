@@ -1,0 +1,7 @@
+shader S {
+  compute {
+    buffer int o[];
+    @workgroup_size(1,1,1)
+    void main() { char c = 65; o[0] = int(c); }
+  }
+}

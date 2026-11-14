@@ -13405,7 +13405,10 @@ class TestHipCodeGen:
         linear = "(threadIdx.z * blockDim.y * blockDim.x + threadIdx.y * blockDim.x + threadIdx.x)"
         assert f"unsigned int lane = ({linear} % ((unsigned int)warpSize));" in hip_code
         assert "unsigned int count = warpSize;" in hip_code
-        assert f"bool first = (({linear} % ((unsigned int)warpSize)) == 0);" in hip_code
+        assert (
+            f"bool first = (static_cast<int>(({linear} % ((unsigned int)warpSize))) "
+            "== (__ffsll(__ballot(1)) - 1));" in hip_code
+        )
         assert "threadIdx.x & (warpSize - 1)" not in hip_code
         assert (
             "__device__ inline unsigned int "

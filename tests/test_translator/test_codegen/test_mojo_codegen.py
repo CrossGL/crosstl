@@ -58,6 +58,7 @@ from crosstl.translator.codegen.mojo_codegen import (
 from crosstl.translator.codegen.mojo_refusals import MojoLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.refusals import MojoRefusal
 
 
 def tokenize_code(code: str) -> List:
@@ -15894,146 +15895,47 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_intrinsics_lower_to_mojo_subgroup_helpers():
-    code = """
-    shader ComputeWaveDiagnostics {
-        compute {
-            void main() {
-                uint lane = WaveGetLaneIndex();
-                uint count = WaveGetLaneCount();
-                bool first = WaveIsFirstLane();
-                uint sumValue = WaveActiveSum(lane);
-                bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
-                uvec4 ballot = WaveActiveBallot(anyLane);
-                uint broadcast = WaveReadLaneAt(sumValue, 0u);
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "uint lane = WaveGetLaneIndex();",
+        "uint count = WaveGetLaneCount();",
+        "bool first = WaveIsFirstLane();",
+        "uint sumValue = WaveActiveSum(1u);",
+        "bool anyLane = WaveActiveAnyTrue(true);",
+        "uvec4 ballot = WaveActiveBallot(true);",
+        "uint broadcast = WaveReadLaneAt(1u, 0u);",
+        "uint prefix = WavePrefixCountBits(true);",
+        "uvec4 match = WaveMatch(1u);",
+        "uint quad = QuadReadAcrossX(1u);",
+    ],
+)
+def test_wave_intrinsics_are_refused_by_mojo(statement):
+    # A one-lane stand-in (the lane's own value, lane 0 of a one-lane wave) is wrong on every GPU wave.
+    code = f"""
+    shader ComputeWave {{
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "# CrossGL wave/subgroup placeholders" in generated_code
-    assert "fn _crossgl_wave_get_lane_index() -> UInt32:" in generated_code
-    assert "fn _crossgl_wave_get_lane_count() -> UInt32:" in generated_code
-    assert "fn _crossgl_wave_is_first_lane() -> Bool:" in generated_code
-    assert "fn _crossgl_wave_active_sum(value: UInt32) -> UInt32:" in generated_code
-    assert (
-        "fn _crossgl_wave_active_any_true(predicate: Bool) -> Bool:" in generated_code
-    )
-    assert (
-        "fn _crossgl_wave_active_ballot(predicate: Bool) -> SIMD[DType.uint32, 4]:"
-        in generated_code
-    )
-    assert (
-        "fn _crossgl_wave_read_lane_at(value: UInt32, lane: UInt32) -> UInt32:"
-        in generated_code
-    )
-    assert "var lane: UInt32 = _crossgl_wave_get_lane_index()" in generated_code
-    assert "var count: UInt32 = _crossgl_wave_get_lane_count()" in generated_code
-    assert "var first: Bool = _crossgl_wave_is_first_lane()" in generated_code
-    assert "var sumValue: UInt32 = _crossgl_wave_active_sum(lane)" in generated_code
-    assert (
-        "var anyLane: Bool = _crossgl_wave_active_any_true((sumValue > 0))"
-        in generated_code
-    )
-    assert (
-        "var ballot: SIMD[DType.uint32, 4] = _crossgl_wave_active_ballot(anyLane)"
-        in generated_code
-    )
-    assert (
-        "var broadcast: UInt32 = _crossgl_wave_read_lane_at(sumValue, 0)"
-        in generated_code
-    )
-    assert "Unsupported Mojo wave intrinsic" not in generated_code
-    assert "WaveOpNode(" not in generated_code
+    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic .*no lowering"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_match_count_quad_and_multi_prefix_lower_to_mojo_helpers():
-    code = """
-    shader ComputeWave {
-        compute {
-            void main() {
-                uint lane = WaveGetLaneIndex();
-                bool equal = WaveActiveAllEqual(lane);
-                uint bitCount = WaveActiveCountBits(equal);
-                uint prefixCount = WavePrefixCountBits(equal);
-                uvec4 mask = WaveMatch(lane);
-                uint quadLane = QuadReadLaneAt(lane, 1u);
-                uint quadX = QuadReadAcrossX(lane);
-                uint quadY = QuadReadAcrossY(lane);
-                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
-                uint sum = WaveMultiPrefixSum(lane, mask);
-                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
-                uint count = WaveMultiPrefixCountBits(equal, mask);
-                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
-                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
-                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
-            }
-        }
-    }
-    """
+def test_cuda_warp_shuffle_is_refused_by_mojo():
+    codegen = MojoCodeGen()
+    args = [
+        LiteralNode(0xFFFFFFFF, PrimitiveType("uint")),
+        LiteralNode(1.0, PrimitiveType("float")),
+        LiteralNode(1, PrimitiveType("int")),
+    ]
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "_crossgl_wave_active_all_equal(lane)" in generated_code
-    assert "_crossgl_wave_active_count_bits(equal)" in generated_code
-    assert "_crossgl_wave_prefix_count_bits(equal)" in generated_code
-    assert "_crossgl_wave_match(lane)" in generated_code
-    assert "_crossgl_quad_read_lane_at(lane, 1)" in generated_code
-    assert "_crossgl_quad_read_across_x(lane)" in generated_code
-    assert "_crossgl_quad_read_across_y(lane)" in generated_code
-    assert "_crossgl_quad_read_across_diagonal(lane)" in generated_code
-    assert "_crossgl_wave_multi_prefix_sum(lane, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_product((lane + 1), mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_count_bits(equal, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_and(product, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_or(bitAnd, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_xor(bitOr, mask)" in generated_code
-    assert "fn _crossgl_wave_match(value: UInt32) -> SIMD[DType.uint32, 4]:" in (
-        generated_code
-    )
-    assert (
-        "fn _crossgl_wave_multi_prefix_sum(value: UInt32, "
-        "mask: SIMD[DType.uint32, 4]) -> UInt32:" in generated_code
-    )
-    assert "Unsupported Mojo wave intrinsic" not in generated_code
-
-
-def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
-    mojo = find_mojo_compiler()
-
-    code = """
-    uint waveHelpers(uint lane, bool active, uvec4 mask) {
-        uint sumValue = WaveActiveSum(lane);
-        bool anyLane = WaveActiveAnyTrue(active);
-        uvec4 matched = WaveMatch(sumValue);
-        uint multi = WaveMultiPrefixSum(sumValue, mask);
-        uint quad = QuadReadLaneAt(multi, 1u);
-        return WaveReadLaneAt(quad, 0u);
-    }
-    """
-
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-    assert "_crossgl_wave_active_sum(lane)" in generated_code
-    assert "_crossgl_wave_match(sumValue)" in generated_code
-    assert "_crossgl_wave_multi_prefix_sum(sumValue, mask)" in generated_code
-    assert "_crossgl_quad_read_lane_at(multi, 1)" in generated_code
-    assert "_crossgl_wave_read_lane_at(quad, 0)" in generated_code
-
-    package_dir = tmp_path / "mojo_wave_helpers_pkg"
-    package_dir.mkdir()
-    (package_dir / "__init__.mojo").write_text(generated_code)
-    output_path = tmp_path / "mojo_wave_helpers_pkg.mojopkg"
-    result = subprocess.run(
-        [mojo, "package", str(package_dir), "-o", str(output_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert output_path.exists()
+    with pytest.raises(MojoRefusal, match="__shfl_down_sync: .*no lowering"):
+        codegen.generate_cuda_shuffle_down_call(args)
 
 
 @pytest.mark.parametrize(
@@ -16121,20 +16023,13 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     assert "dispatch_mesh" in codegen.required_mesh_helpers
 
 
-def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():
+def test_direct_wave_ir_node_is_refused_by_mojo():
     codegen = MojoCodeGen()
 
-    generated_expr = codegen.generate_expression(
-        WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
-    )
-
-    assert generated_expr == "_crossgl_wave_active_sum(1)"
-    assert (
-        "_crossgl_wave_active_sum",
-        ("UInt32",),
-        "UInt32",
-        "WaveActiveSum",
-    ) in codegen.required_wave_helpers
+    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic WaveActiveSum"):
+        codegen.generate_expression(
+            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+        )
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():

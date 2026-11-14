@@ -1,0 +1,8 @@
+shader S {
+  compute {
+    buffer float inp[];
+    buffer float o[];
+    @workgroup_size(1,1,1)
+    void main() { half a = half(inp[0]); half b = half(inp[1]); half c = a * b; o[0] = float(c); }
+  }
+}

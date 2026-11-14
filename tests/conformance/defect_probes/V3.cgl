@@ -1,0 +1,16 @@
+shader S {
+  compute {
+    buffer uint o[];
+    buffer float f[];
+    @workgroup_size(1,1,1)
+    void main() {
+      mat4 m = mat4(1.0);
+      float x = f[0];
+      bool n = isnan(x);
+      float r = fmod(x, 2.0);
+      uint8 b = uint8(3);
+      atomicAdd(o[0], 1u);
+      f[1] = m[1][1] + r + (n ? 1.0 : 0.0) + float(b);
+    }
+  }
+}

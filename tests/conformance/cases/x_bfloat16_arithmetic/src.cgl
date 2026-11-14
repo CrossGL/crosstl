@@ -1,0 +1,20 @@
+// bfloat16 arithmetic rounds every result to bfloat16 (MSL bfloat; CUDA __nv_bfloat16 operators).
+shader Bfloat16Arithmetic {
+    compute hazard {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        buffer float* inp;
+        buffer float* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            bfloat16 x = bfloat16(inp[2u * i]);
+            bfloat16 y = bfloat16(inp[2u * i + 1u]);
+            outp[4u * i] = float(x * y);
+            outp[4u * i + 1u] = float(x + y);
+            outp[4u * i + 2u] = float(x - y);
+            float product = x * y;
+            outp[4u * i + 3u] = product;
+        }
+    }
+}

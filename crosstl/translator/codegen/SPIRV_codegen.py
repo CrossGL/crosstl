@@ -2610,7 +2610,16 @@ class VulkanSPIRVCodeGen(
 
         return self.composite_construct(target_type, values)
 
-    def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
+    def promoted_numeric_type_name(
+        self, type_names: List[str], *, arithmetic: bool = False
+    ) -> Optional[str]:
+        """The common numeric type of ``type_names``, or ``None`` when one is not numeric.
+
+        bfloat16 operands are compared and selected as binary32, which is exact. An ``arithmetic`` result of
+        bfloat16 operands, with no binary32 or binary64 operand, is bfloat16 itself: MSL's ``bfloat`` operators
+        and CUDA's ``__nv_bfloat16`` operators round each result to bfloat16, so ``binary_operation`` computes
+        it in binary32 and rounds it back instead of keeping the binary32 result.
+        """
         numeric_types = {
             "float",
             "double",
@@ -2633,7 +2642,7 @@ class VulkanSPIRVCodeGen(
         if "float" in normalized:
             return "float"
         if self.BFLOAT16_TYPE_NAME in normalized:
-            return "float"
+            return self.BFLOAT16_TYPE_NAME if arithmetic else "float"
         return self.usual_arithmetic_integer_type_name(normalized)
 
     def usual_arithmetic_integer_type_name(self, normalized: List[str]) -> str:
@@ -4528,7 +4537,7 @@ class VulkanSPIRVCodeGen(
             if left_vector[1] != right_vector[1]:
                 return left_type
             component_type = self.promoted_numeric_type_name(
-                [left_vector[0], right_vector[0]]
+                [left_vector[0], right_vector[0]], arithmetic=True
             )
             if component_type is None:
                 return left_type
@@ -4538,7 +4547,7 @@ class VulkanSPIRVCodeGen(
 
         if left_vector is not None:
             component_type = self.promoted_numeric_type_name(
-                [left_vector[0], right_type.type.base_type]
+                [left_vector[0], right_type.type.base_type], arithmetic=True
             )
             if component_type is None:
                 return left_type
@@ -4548,7 +4557,7 @@ class VulkanSPIRVCodeGen(
 
         if right_vector is not None:
             component_type = self.promoted_numeric_type_name(
-                [left_type.type.base_type, right_vector[0]]
+                [left_type.type.base_type, right_vector[0]], arithmetic=True
             )
             if component_type is None:
                 return right_type
@@ -4557,7 +4566,8 @@ class VulkanSPIRVCodeGen(
             )
 
         scalar_type = self.promoted_numeric_type_name(
-            [left_type.type.base_type, right_type.type.base_type]
+            [left_type.type.base_type, right_type.type.base_type],
+            arithmetic=True,
         )
         if scalar_type is None:
             return left_type

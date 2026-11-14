@@ -224,12 +224,12 @@
     },
     "g_frexp_ldexp_modf|glsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "d3f9b5ef244210c8befef78e9e357ee6ccc621c7a78bc77d0038093dd92f34c7",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9ff4e30b31f2a819123174831bf328a202a20d9daa966b6355df5bef83ca0e2e"
     },
     "g_frexp_ldexp_modf|glsl|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "d3f9b5ef244210c8befef78e9e357ee6ccc621c7a78bc77d0038093dd92f34c7",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9ff4e30b31f2a819123174831bf328a202a20d9daa966b6355df5bef83ca0e2e"
     },
     "g_isnan|glsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
@@ -324,12 +324,12 @@
     },
     "g_reference_copy_order|glsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "15ec8d4456520cbf72f2d06a74e353acb3dd6d219dcf031701f35a7429bc0bbe"
     },
     "g_reference_copy_order|glsl|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "ce668bd65bb30178c4714f2be359dbf8b18947765f4210b383fd4dcfd857eb28",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "15ec8d4456520cbf72f2d06a74e353acb3dd6d219dcf031701f35a7429bc0bbe"
     },
     "g_return_reference_copy|glsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
@@ -522,7 +522,7 @@
     },
     "h_frexp_ldexp_modf|hlsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "6f188258f5a551aa8021008a4b4ec4a2c8c059588ac941a7a0d33c2ab02da9c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "3b4472ccc7ff214a5255487c6688c5a3c4a81a868b123e41ff38b116395c2ddb"
     },
     "h_frexp_ldexp_modf|hlsl|hlsl|strict|reference|vulkan1.1|d3d12-warp": {
@@ -532,7 +532,7 @@
     },
     "h_frexp_ldexp_modf|hlsl|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "6f188258f5a551aa8021008a4b4ec4a2c8c059588ac941a7a0d33c2ab02da9c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "3b4472ccc7ff214a5255487c6688c5a3c4a81a868b123e41ff38b116395c2ddb"
     },
     "h_ftoi_sat|hlsl|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
@@ -819,12 +819,12 @@
     },
     "m_fmod_sign|metal|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "146e914d22c6b4f3ac05222416d2e9da3c3fb903ea88f1d7170149ca76374134",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "c848738bbfd97df10e95fae49fd5e1b5c5e681c4d8cdf27c42767ff5c9474857"
     },
     "m_fmod_sign|metal|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "146e914d22c6b4f3ac05222416d2e9da3c3fb903ea88f1d7170149ca76374134",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "c848738bbfd97df10e95fae49fd5e1b5c5e681c4d8cdf27c42767ff5c9474857"
     },
     "m_ftoi_nan|metal|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
@@ -1079,12 +1079,12 @@
     },
     "s_frexp_ldexp_modf|spirv|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "d3f9b5ef244210c8befef78e9e357ee6ccc621c7a78bc77d0038093dd92f34c7",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "4f578e71a930918dfc109cdc678818cfb2c71aca44aaea4c7d1b4585d01312b3"
     },
     "s_frexp_ldexp_modf|spirv|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "d3f9b5ef244210c8befef78e9e357ee6ccc621c7a78bc77d0038093dd92f34c7",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "4f578e71a930918dfc109cdc678818cfb2c71aca44aaea4c7d1b4585d01312b3"
     },
     "s_integer_signedness|spirv|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
@@ -1243,12 +1243,12 @@
     },
     "u_fmodf_sign|cuda|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "146e914d22c6b4f3ac05222416d2e9da3c3fb903ea88f1d7170149ca76374134",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "4ffe84fc7278401401620a420c7c253517e7c60727042c9072b976cd4ba17d19"
     },
     "u_fmodf_sign|cuda|hlsl|strict|translated|vulkan1.1|d3d12-warp": {
       "inputSHA256": "146e914d22c6b4f3ac05222416d2e9da3c3fb903ea88f1d7170149ca76374134",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "4ffe84fc7278401401620a420c7c253517e7c60727042c9072b976cd4ba17d19"
     },
     "u_fmul_rn|cuda|hlsl|relaxed|translated|vulkan1.1|d3d12-warp": {
