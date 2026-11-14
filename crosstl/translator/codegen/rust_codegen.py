@@ -1450,7 +1450,6 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            self.required_mesh_helpers.add("dispatch_mesh")
             if len(args) == 4:
                 return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args[:3])}, &mut {args[3]}) }}"
             return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
