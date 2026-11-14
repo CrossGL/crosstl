@@ -2591,6 +2591,9 @@ class HLSLToCrossGLConverter(
         member = self.templated_method_base(expr.name.member)
         resource_type = self.expression_raw_type(expr.name.object)
         resource_base = self.raw_type_base(resource_type)
+        method = self.struct_methods.get(resource_base, {}).get(member)
+        if method is not None and method.definition is not None:
+            return method.definition.return_type
         if member in {"Load", "Load2", "Load3", "Load4"}:
             if resource_base in {
                 "ByteAddressBuffer",

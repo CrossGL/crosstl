@@ -203,6 +203,71 @@ def test_scalar_stores_that_cannot_be_repeated_are_refused(statement):
         )
 
 
+METHOD_STRUCT = """
+    struct S {
+        float3x3 m;
+        float3x3 get() { return m; }
+        float sc() { return m[0][0]; }
+        float two() { float t = m[0][0]; return t * 2.0; }
+        float3x3 bump() { m[0][0] += 1.0; return m; }
+        float sbump() { m[0][0] += 1.0; return m[0][0]; }
+        float tw(inout float q) { q = 1.0; return q; }
+    };
+"""
+
+
+def test_matrix_returned_by_a_method_is_stored_as_it_is():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get();
+        float3x3 b = s.bump();
+        o[1] = a[0][0] + b[1][1];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = S_get(s);" in output
+    assert "mat3 b = S_bump(s);" in output
+
+
+def test_scalar_returned_by_a_pure_method_is_splatted():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get()[0][0];
+        float3x3 b = s.sc();
+        float3x3 c = s.two();
+        o[1] = a[0][0] + b[1][1] + c[2][2];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = mat3(vec3(S_get(s)[0][0]), vec3(S_get(s)[0][0])," in output
+    assert "mat3 b = mat3(vec3(S_sc(s)), vec3(S_sc(s)), vec3(S_sc(s)));" in output
+    assert "mat3 c = mat3(vec3(S_two(s)), vec3(S_two(s)), vec3(S_two(s)));" in output
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float3x3 a = s.sbump();",
+        "float3x3 a = s.bump()[0][0];",
+        "float3x3 a = s.tw(x);",
+    ],
+)
+def test_scalar_returned_by_a_method_that_changes_state_is_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\nS s;\ns.m = (float3x3)x;\n"
+            + statement
+            + "\no[1] = a[0][0];",
+            METHOD_STRUCT,
+        )
+
+
 def test_matrix_values_are_not_splatted():
     output = to_crossgl("""
         float3x3 a = (float3x3)1.0;

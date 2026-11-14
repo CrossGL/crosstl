@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from ..common_ast import InitializerListNode
+from ..common_ast import InitializerListNode, ReturnNode
 from .DirectxAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -944,7 +944,56 @@ class HLSLMatrixImportMixin:
                 and name not in self.source_function_names
                 and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
             )
+        if isinstance(expr, FunctionCallNode) and isinstance(
+            expr.name, MemberAccessNode
+        ):
+            method = self.source_struct_method(expr.name)
+            return (
+                method is not None
+                and self.struct_method_is_pure(method)
+                and self.matrix_operand_is_pure(expr.name.object)
+                and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
+            )
         return False
+
+    def source_struct_method(self, member):
+        """The source struct method that ``object.member(...)`` calls, or ``None``."""
+        owner = self.raw_type_base(self.expression_raw_type(member.object))
+        method = self.struct_methods.get(owner, {}).get(
+            self.templated_method_base(member.member)
+        )
+        if method is None or method.definition is None:
+            return None
+        return method
+
+    def struct_method_is_pure(self, method):
+        """Whether calling ``method`` twice does the same as calling it once.
+
+        Only a body of declarations and a ``return`` over reads, intrinsics and arithmetic qualifies, and the
+        method must neither modify its receiver nor take an ``out`` or ``inout`` parameter.
+        """
+        definition = method.definition
+        if method.mutates_receiver or getattr(definition, "template_parameters", None):
+            return False
+        for param in getattr(definition, "params", []) or []:
+            qualifiers = {
+                str(q).lower() for q in getattr(param, "qualifiers", []) or []
+            }
+            if qualifiers & {"out", "inout"}:
+                return False
+        body = getattr(definition, "body", None)
+        if not isinstance(body, list):
+            return False
+        for statement in body:
+            if isinstance(statement, ReturnNode):
+                value = statement.value
+            elif isinstance(statement, VariableNode):
+                value = statement.value
+            else:
+                return False
+            if value is not None and not self.matrix_operand_is_pure(value):
+                return False
+        return True
 
     def matrix_row_setter_name(self, shape):
         helpers = self.__dict__.setdefault("matrix_row_setters", {})
