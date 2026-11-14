@@ -188,6 +188,10 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
 )
 from .generic_global_types import metal_generic_global_types
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import (
     build_generic_struct_specialization,
     collect_generic_struct_definitions,
@@ -2138,6 +2142,7 @@ class MetalCodeGen(
 
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
         self.metal_safe_math = metal_safe_math_requested(ast)
@@ -2147,6 +2152,7 @@ class MetalCodeGen(
                 output, self.written_foreign_type_names, "Metal"
             )
             refuse_written_foreign_calls(output, METAL_CALLABLE_FUNCTION_NAMES, "Metal")
+            refuse_written_generic_pointers(output, self.refuse_lowering, "Metal")
         finally:
             self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)

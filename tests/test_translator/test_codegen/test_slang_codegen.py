@@ -81,10 +81,25 @@ def generate_refused_code(ast_node) -> RefusedSlang:
         record(reason)
 
     codegen.refusals.record = record_site
-    code = codegen.generate_program(ast_node)
+    code = codegen.generate_checked_program(ast_node)
     assert tuple(codegen.refusals.reasons) == refused.value.reasons
     assert "/* unsupported" not in code
     return RefusedSlang(code, refused.value.reasons, sites)
+
+
+def generate_thread_pointer_refused_code(code: str, declarations) -> str:
+    """Generate a program Slang refuses only for pointers into thread memory, named ``function.declaration``.
+
+    Slang User's Guide, "Pointers (limited)": "It is invalid to define a pointer to a local variable."
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    reasons = sorted(refused.reasons)
+    assert reasons == sorted(
+        f"pointer declaration: '{name}' points into thread memory, and Slang defines no pointer to a "
+        'local variable (Slang User\'s Guide, "Pointers (limited)")'
+        for name in declarations
+    )
+    return refused.code
 
 
 def generate_crossgl_from_slang(code: str) -> str:
@@ -5195,7 +5210,8 @@ def test_dispatch_mesh_payload_argument_accepts_reference_and_pointer_lvalues():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(code, ["main.payloadPtr"])
 
     assert "groupshared MeshPayload payload;" in generated_code
     assert "MeshPayload& payloadRef = payload;" in generated_code
@@ -7668,7 +7684,10 @@ def test_slang_ray_tracing_interface_pointer_and_reference_aliases_emit_native_c
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code, ["main.rayPtr", "main.callablePtr", "main.hitPtr"]
+    )
 
     assert "RayPayload& payloadRef = payload;" in generated_code
     assert "RayPayloadHolder* rayPtr = &rays;" in generated_code
@@ -7754,7 +7773,10 @@ def test_slang_ray_tracing_interface_pointer_dereferences_emit_native_calls():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code, ["main.payloadPtr", "main.callablePtr", "main.attributesPtr"]
+    )
 
     assert "RayPayload* payloadPtr = &payload;" in generated_code
     assert "CallableData* callablePtr = &callableData;" in generated_code
@@ -7850,7 +7872,18 @@ def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code,
+        [
+            "traceHolder.rays",
+            "invokeHolder.callables",
+            "reportHolder.hits",
+            "main.rayPtr",
+            "main.callablePtr",
+            "main.hitPtr",
+        ],
+    )
 
     assert (
         "void traceHolder(RaytracingAccelerationStructure accelerationStructure, "
@@ -7977,7 +8010,15 @@ def test_slang_ray_tracing_helper_address_of_pointer_relays_emit_native_calls():
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code,
+        [
+            "tracePointerRelay.rays",
+            "callablePointerRelay.callables",
+            "reportPointerRelay.hits",
+        ],
+    )
 
     assert "tracePointerRelay(scene, ray, &rays);" in generated_code
     assert "callablePointerRelay(2, &callables);" in generated_code
@@ -8076,7 +8117,16 @@ def test_slang_nested_ray_interface_relay_helpers_preserve_lvalues():
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code,
+        [
+            "tracePointerRelay.rays",
+            "callablePointerRelay.callables",
+            "main.rayPtr",
+            "main.callablePtr",
+        ],
+    )
 
     assert (
         "void traceReferenceRelay("
@@ -8400,7 +8450,10 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code, ["main.holderPtr", "main.rqPtr"]
+    )
 
     assert "RayQuery<RAY_FLAG_NONE>& rqRef = rq;" in generated_code
     assert "rqRef.TraceRayInline(scene, 0, 255, ray);" in generated_code
@@ -8478,7 +8531,10 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
         }
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    # Slang has no pointer to a local; the rest of the program still lowers to native calls.
+    generated_code = generate_thread_pointer_refused_code(
+        code, ["advanceQueryPointer.query", "advanceHolderPointer.holder"]
+    )
 
     assert (
         "void advanceQuery(inout RayQuery<RAY_FLAG_NONE> query, "
