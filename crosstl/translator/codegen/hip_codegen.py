@@ -137,6 +137,7 @@ from .gpu_subgroup_builtins import (
 )
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
+from .kernel_only_stages import NON_KERNEL_STAGES, refuse_non_kernel_stages
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -1124,7 +1125,7 @@ class HipCodeGen(
         return member_types
 
     def unsupported_stage_types(self):
-        return set()
+        return NON_KERNEL_STAGES
 
     def hip_ray_stage_names(self):
         return {
@@ -1535,9 +1536,7 @@ class HipCodeGen(
                 ):
                     unsupported_stages.add(stage_name)
 
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise HipRefusal(f"HIP output does not support stage type(s): {stage_list}")
+        refuse_non_kernel_stages("hip", "HIP", unsupported_stages)
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""

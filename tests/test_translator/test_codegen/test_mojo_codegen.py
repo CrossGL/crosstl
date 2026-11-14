@@ -17738,11 +17738,37 @@ def test_bool_string_and_char_literals_emit_mojo_syntax():
     assert "var disabled: Bool = False" in generated_code
     assert "var inverted: Bool = (not disabled)" in generated_code
     assert 'var label: String = "debug"' in generated_code
-    assert 'var marker: String = "x"' in generated_code
+    # CrossGL char is a signed 8-bit integer, so 'x' is its code, not text.
+    assert "var marker: Int8 = Int8(120)" in generated_code
     assert "if (enabled and (not disabled)):" in generated_code
     assert "!disabled" not in generated_code
     assert 'label = "active"' in generated_code
-    assert 'marker = "y"' in generated_code
+    assert "marker = Int8(121)" in generated_code
+
+
+def test_mojo_char_and_short_operands_promote_to_int():
+    code = """
+    shader NarrowArithmetic {
+        int addChars(char a, char b) { return a + b; }
+        int shortProduct(short a, short b) { return a * b; }
+        bool exceeds(char a, char b, int limit) { return a + b > limit; }
+        char newline() { return '\\n'; }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "String" not in generated_code
+    assert "fn addChars(a: Int8, b: Int8) -> Int32:" in generated_code
+    # C17 6.3.1.1: char and short operands are converted to int, so 100 + 100 is 200, not Int8's -56.
+    assert "return (Int32(a) + Int32(b))" in generated_code
+    assert "return (Int32(a) * Int32(b))" in generated_code
+    assert "return ((Int32(a) + Int32(b)) > limit)" in generated_code
+    assert "return Int8(10)" in generated_code
+
+
+def test_mojo_refuses_a_char_literal_without_a_single_byte_value():
+    with pytest.raises(MojoRefusal, match="signed 8-bit integer"):
+        MojoCodeGen().format_literal("\u00e9", "char")
 
 
 def test_inferred_let_declarations_do_not_emit_none_type():
