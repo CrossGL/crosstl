@@ -19803,6 +19803,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 argument_type = self.expression_result_type(args[0])
                 if self.hlsl_floating_arithmetic_type_info(argument_type) is not None:
                     return self.hlsl_boolean_expression_result_type(argument_type)
+            if func_name in {"any", "all"} and len(args) == 1:
+                return "bool"
             if (
                 len(args) == 1
                 and func_name in self.hlsl_componentwise_float_unary_calls

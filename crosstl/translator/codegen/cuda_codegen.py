@@ -8089,6 +8089,11 @@ class CudaCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            scalar_boolean_type = self.scalar_boolean_builtin_result_type(
+                func_name, raw_args
+            )
+            if scalar_boolean_type is not None:
+                return scalar_boolean_type
             if func_name in self.CUDA_SHADER_CLOCK_RESULT_TYPES:
                 return self.CUDA_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (

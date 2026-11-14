@@ -70,7 +70,11 @@ from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .buffer_length import HlslBufferLength
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
-from .builtin_result_types import C_FAMILY, builtin_call_result_type
+from .builtin_result_types import (
+    C_FAMILY,
+    boolean_builtin_result_type,
+    builtin_call_result_type,
+)
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
     c_family_comma_expression,
@@ -9820,6 +9824,14 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
 
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
+
+        boolean_type = boolean_builtin_result_type(
+            func_name,
+            [self.type_name_string(self.expression_result_type(a)) for a in args],
+            C_FAMILY,
+        )
+        if boolean_type is not None:
+            return boolean_type
 
         if func_name in {"transpose", "inverse"}:
             return builtin_call_result_type(
