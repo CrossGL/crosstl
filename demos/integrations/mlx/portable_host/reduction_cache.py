@@ -19,6 +19,7 @@ from crosstl.project import (
 )
 from crosstl.translator.dispatch_region_identity import translation_implementation_hash
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
+from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 from demos.integrations.mlx.portable_host.reduction_layout import stage
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -89,8 +90,10 @@ def verify_events(events, root, directory, index):
                 )
                 check_source_span(
                     event["inputs"][binding["name"]],
-                    binding["scalarLayout"]["elementType"],
+                    binding["scalarLayout"],
                     size,
+                    target=index["target"],
+                    resource_kind=binding.get("kind", ""),
                 )
         verify_artifacts(
             [event],
@@ -120,11 +123,30 @@ def uploaded_length(values):
     return None
 
 
-def check_source_span(packet, dtype, size):
-    """Require a row upload of ``dtype`` that spans exactly ``size`` elements."""
+def check_source_span(packet, scalar_layout, size, *, target, resource_kind):
+    """Require a row upload that spans exactly ``size`` elements of its binding.
+
+    The upload names its logical dtype. A binding whose reflected layout
+    records a storage codec (DirectX keeps float16 in uint16 words) must
+    receive the codec's logical dtype in the codec's encoding; any other
+    binding must receive exactly its reflected element type.
+    """
+    if not isinstance(packet, dict):
+        raise ValueError("Row trace upload differs from its source span")
+    codec = scalar_layout.get("storageEncoding")
+    try:
+        physical = encoded_storage_dtype(
+            scalar_layout,
+            target=target,
+            resource_kind=resource_kind,
+            logical_dtype=packet.get("dtype"),
+        )
+    except ValueError:
+        physical = None
     if (
-        not isinstance(packet, dict)
-        or packet.get("dtype") != dtype
+        physical is None
+        or physical != scalar_layout.get("elementType")
+        or (codec is not None and packet.get("encoding") != codec.get("encoding"))
         or packet.get("shape") != [size]
         or uploaded_length(packet.get("values")) != size
     ):

@@ -733,12 +733,21 @@ def test_row_source_spans_accept_compacted_uploads_of_the_same_length():
         compact_trace_values,
     )
 
+    def check(packet, dtype, size, target="metal"):
+        check_source_span(
+            packet,
+            {"elementType": dtype},
+            size,
+            target=target,
+            resource_kind="buffer",
+        )
+
     values = [float(i) for i in range(420)]
     full = {"dtype": "float32", "shape": [420], "values": values}
     compact = compact_trace_values(full)
     assert "compactedValues" in compact["values"]
     for packet in (full, compact):
-        check_source_span(packet, "float32", 420)
+        check(packet, "float32", 420)
     short = compact_trace_values({**full, "values": values[:-1]})
     digest = {**compact["values"]["compactedValues"], "sha256": "0"}
     for packet, dtype, size in (
@@ -752,4 +761,52 @@ def test_row_source_spans_accept_compacted_uploads_of_the_same_length():
         (None, "float32", 420),
     ):
         with pytest.raises(ValueError, match="source span"):
-            check_source_span(packet, dtype, size)
+            check(packet, dtype, size)
+
+
+def test_row_source_spans_accept_directx_binary16_storage():
+    """DirectX keeps float16 rows in uint16 words that record a binary16 codec.
+
+    The upload names the logical float16 dtype in the codec's encoding, so the
+    span check resolves the codec instead of comparing the reflected word type.
+    """
+    from crosstl.translator.resource_storage import BINARY16_STORAGE
+    from demos.integrations.mlx.portable_host.reduction_cache import (
+        check_source_span,
+    )
+    from demos.integrations.mlx.portable_host.trace_records import (
+        compact_trace_values,
+    )
+
+    layout = {
+        "elementType": "uint16",
+        "elementStrideBytes": 2,
+        "storageEncoding": dict(BINARY16_STORAGE),
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    packet = compact_trace_values(
+        {
+            "dtype": "float16",
+            "shape": [4096],
+            "values": [15360] * 4096,
+            "encoding": BINARY16_STORAGE["encoding"],
+        }
+    )
+    check_source_span(packet, layout, 4096, target="directx", resource_kind="buffer")
+    for faulty, target, kind, size in (
+        ({**packet, "encoding": "ieee754-binary32"}, "directx", "buffer", 4096),
+        (
+            {k: v for k, v in packet.items() if k != "encoding"},
+            "directx",
+            "buffer",
+            4096,
+        ),
+        ({**packet, "dtype": "uint16"}, "directx", "buffer", 4096),
+        ({**packet, "dtype": "float32"}, "directx", "buffer", 4096),
+        (packet, "opengl", "buffer", 4096),
+        (packet, "directx", "texture", 4096),
+        (packet, "directx", "buffer", 4095),
+    ):
+        with pytest.raises(ValueError, match="source span"):
+            check_source_span(faulty, layout, size, target=target, resource_kind=kind)
