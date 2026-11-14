@@ -1,4 +1,5 @@
 
+#pragma METAL fp math_mode(safe)
 #include <metal_stdlib>
 using namespace metal;
 

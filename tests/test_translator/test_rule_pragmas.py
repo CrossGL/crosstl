@@ -53,7 +53,8 @@ def test_imported_programs_declare_their_source_families():
     assert rule_pragma("metal") == "#pragma cgl_rules(ftoi_nan)"
     assert rule_pragma("directx") == "#pragma cgl_rules(udiv_zero, wrap)"
     assert rule_pragma("opengl") == "#pragma cgl_rules(wrap)"
-    assert rule_pragma("cuda") is None
+    assert rule_pragma("cuda") == "#pragma cgl_rules(fp_ieee)"
+    assert rule_pragma("slang") is None
 
 
 def test_the_crossgl_of_a_metal_program_carries_its_rules(tmp_path):

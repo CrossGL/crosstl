@@ -25,6 +25,7 @@ from crosstl.backend.CUDA.CudaAst import (
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.backend.CUDA.directed_rounding import DirectedRoundingUnsupportedError
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
@@ -2609,12 +2610,14 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     # Single Precision Intrinsics.
     # URL:
     # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
+    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) have no CrossGL
+    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float rounded_intrinsics(float x, float y, float z) {
-        float ops = __fadd_rn(x, y) + __fsub_rz(x, y) + __fmul_ru(x, y);
-        float ratios = __fdiv_rd(x, y) + __frcp_rn(y);
+        float ops = __fadd_rn(x, y) + __fsub_rn(x, y) + __fmul_rn(x, y);
+        float ratios = __fdiv_rn(x, y) + __frcp_rn(y);
         float roots = __fsqrt_rn(x) + __frsqrt_rn(y);
-        float fused = __fmaf_rn(x, y, z) + __fmaf_ieee_rz(x, y, z);
+        float fused = __fmaf_rn(x, y, z) + __fmaf_ieee_rn(x, y, z);
         float base10 = __exp10f(x);
         float standard_fma = fmaf(x, y, z);
         return ops + ratios + roots + fused + base10 + standard_fma;
@@ -2632,18 +2635,29 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     assert "var standard_fma: f32 = fma(x, y, z);" in crossgl
     for raw_name in {
         "__fadd_rn",
-        "__fsub_rz",
-        "__fmul_ru",
-        "__fdiv_rd",
+        "__fsub_rn",
+        "__fmul_rn",
+        "__fdiv_rn",
         "__frcp_rn",
         "__fsqrt_rn",
         "__frsqrt_rn",
         "__fmaf_rn",
-        "__fmaf_ieee_rz",
+        "__fmaf_ieee_rn",
         "__exp10f",
         "fmaf",
     }:
         assert raw_name not in crossgl
+
+    for directed in (
+        "__fsub_rz(x, y)",
+        "__fmul_ru(x, y)",
+        "__fdiv_rd(x, y)",
+        "__fmaf_ieee_rz(x, y, z)",
+    ):
+        with pytest.raises(DirectedRoundingUnsupportedError):
+            cuda_to_crossgl(
+                f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
+            )
 
 
 def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
