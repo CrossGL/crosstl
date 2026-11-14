@@ -1,0 +1,7 @@
+shader S {
+  compute {
+    buffer vec4 o[];
+    @workgroup_size(1,1,1)
+    void main() { vec4 a = vec4(1.0); vec4 b = a * 2.0 + vec4(1.0).xyzw; o[0] = b; }
+  }
+}

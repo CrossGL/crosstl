@@ -1,0 +1,7 @@
+shader S {
+  compute {
+    buffer float o[];
+    @workgroup_size(1,1,1)
+    void main() { o[0] = undefinedThing(1.0); }
+  }
+}

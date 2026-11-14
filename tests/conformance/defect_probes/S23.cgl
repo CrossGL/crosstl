@@ -1,0 +1,1 @@
+shader S { compute { void main() { int x = ; } } }

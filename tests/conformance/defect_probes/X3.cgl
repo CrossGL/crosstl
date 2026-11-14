@@ -1,0 +1,7 @@
+shader S {
+  compute {
+    buffer uint o[];
+    @workgroup_size(1,1,1)
+    void main() { int8 x = int8(1); uint8 y = uint8(2); o[0] = uint(y) + uint(int(x)); }
+  }
+}
