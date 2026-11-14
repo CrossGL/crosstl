@@ -1465,33 +1465,20 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            self.required_mesh_helpers.add("dispatch_mesh")
-            if len(args) == 3:
-                return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
-            return f"_crossgl_dispatch_mesh({', '.join(args)})"
-
+            if len(args) == 4:
+                return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext_payload({', '.join(args[:3])}, &mut {args[3]}) }}"
+            return f"unsafe {{ spirv_std::arch::emit_mesh_tasks_ext({', '.join(args)}) }}"
         raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
 
     def generate_required_rust_mesh_helpers(self):
         if not self.required_mesh_helpers:
             return ""
-        code = "// CrossGL mesh/task placeholders\n"
+        code = "// CrossGL mesh/task placeholders
         if "set_mesh_output_counts" in self.required_mesh_helpers:
             code += (
                 "pub fn _crossgl_set_mesh_output_counts("
                 "vertices: u32, primitives: u32) {\n"
                 "    let _ = (vertices, primitives);\n"
-                "}\n\n"
-            )
-        if "dispatch_mesh" in self.required_mesh_helpers:
-            code += (
-                "pub fn _crossgl_dispatch_mesh<T>("
-                "x: u32, y: u32, z: u32, payload: T) {\n"
-                "    let _ = (x, y, z, payload);\n"
-                "}\n\n"
-                "pub fn _crossgl_dispatch_mesh_without_payload("
-                "x: u32, y: u32, z: u32) {\n"
-                "    let _ = (x, y, z);\n"
                 "}\n\n"
             )
         return code

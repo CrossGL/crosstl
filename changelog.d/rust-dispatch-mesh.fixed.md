@@ -1,0 +1,2 @@
+Rust backend: `DispatchMesh` now emits `unsafe { spirv_std::arch::emit_mesh_tasks_ext(...) }` (3-arg) or `emit_mesh_tasks_ext_payload(...)` (4-arg) directly instead of delegating to a no-op placeholder helper, and the `_crossgl_dispatch_mesh_without_payload` placeholder has been removed.
+Mojo backend: `DispatchMesh` raises `MojoLoweringRefused` with a diagnostic directing users to the SPIR-V, HLSL, or Slang backends, as Mojo's GPU modules have no mesh-task launch intrinsic.
