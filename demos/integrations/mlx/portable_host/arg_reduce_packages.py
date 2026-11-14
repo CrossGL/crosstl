@@ -3,12 +3,14 @@
 Each host variant is one ``argmin_<type>`` or ``argmax_<type>`` entry at one
 threadgroup width, keyed ``<entry>@<width>``. The kernel reduces each simdgroup
 with ``simd_shuffle_down`` and then returns every simdgroup but the first
-before its final shuffles. Direct3D runs it in exact 32-lane waves
-(``WaveSize(32)``), numbered from the first invocation each one holds, so the
-surviving wave holds thread 0; OpenGL runs 32-lane software subgroups, whose
-early exits converge before the final shuffles. Run as a
-module, it translates variants into a host package directory's cache ahead
-of execution, several processes at a time.
+before its final shuffles. Direct3D and OpenGL run it in 32-lane software
+subgroups, whose early exits converge before the final shuffles, so the
+surviving subgroup holds thread 0 as on Metal. Direct3D does not use hardware
+waves here: WARP, which runs the Windows legs, corrupts the low lanes of the
+``WaveReadLaneAt`` shuffles an exact 32-lane wave lowers them to
+(``tests/test_translator/test_multiwave_index_ties.py``). Run as a module, it
+translates variants into a host package directory's cache ahead of execution,
+several processes at a time.
 """
 
 import hashlib
@@ -33,7 +35,10 @@ from demos.integrations.mlx.portable_host.matmul_packages import (
 # The directory under a host package root that HostRuntime caches entries in.
 CACHE_DIRECTORY = "arg-reduce"
 TARGET_OPTIONS = {
-    "directx": {"relative_wave_shuffle_out_of_range": "self"},
+    "directx": {
+        "software_subgroup_width": SIMD_SIZE,
+        "relative_wave_shuffle_out_of_range": "self",
+    },
     "opengl": {"software_subgroup_width": SIMD_SIZE},
 }
 
@@ -62,7 +67,6 @@ def project_config(root, output_dir, target, key):
         output_dir=output_dir,
         entry_points={SOURCE: (entry,)},
         entry_workgroup_size_rules={SOURCE: {entry: workgroup}},
-        subgroup_width_rules={SOURCE: SIMD_SIZE} if target == "directx" else {},
         # arg_reduce_layout.plan refuses a launch whose furthest source
         # offset, padded reads included, exceeds 2^31 - 1.
         index_range_assertions=[

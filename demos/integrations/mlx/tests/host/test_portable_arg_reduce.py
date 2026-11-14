@@ -373,9 +373,9 @@ def test_multi_simdgroup_rows_run_on_metal(monkeypatch, tmp_path):
 def test_rows_of_more_than_one_simdgroup_run_on_every_target(
     monkeypatch, tmp_path, target
 ):
-    # Direct3D numbers its waves from the first invocation each holds and
-    # OpenGL converges the early simdgroup exits, so both keep thread 0 in the
-    # surviving simdgroup, as Metal does.
+    # Direct3D and OpenGL converge the early simdgroup exits of their software
+    # subgroups, so both keep thread 0 in the surviving simdgroup, as Metal
+    # does.
     for operation, size, width in (("argmin", 1560, 416), ("argmax", 4096, 1024)):
         words = sample_words("float32", size)
         out, event, host = run(
@@ -454,7 +454,7 @@ def test_dispatch_refuses_incomplete_buffers(tmp_path):
         arg_reduce_layout.validate("argmin_int32", buffers, rows * SHAPE[0], launch)
 
 
-def test_package_configs_choose_exact_waves_or_software_subgroups(tmp_path):
+def test_package_configs_choose_software_subgroups_off_metal(tmp_path):
     key = "argmin_float32@416"
     configs = {
         target: arg_reduce_packages.project_config(tmp_path, "out", target, key)
@@ -467,18 +467,17 @@ def test_package_configs_choose_exact_waves_or_software_subgroups(tmp_path):
         }
         options = config.source_options["metal"]["target_options"]
         assert options == arg_reduce_packages.TARGET_OPTIONS
-    assert {
-        source: int(width)
-        for source, width in configs["directx"].subgroup_width_rules.items()
-    } == {arg_reduce_layout.SOURCE: 32}
-    assert (
-        "software_subgroup_width" not in arg_reduce_packages.TARGET_OPTIONS["directx"]
-    )
+    # WARP corrupts the WaveReadLaneAt shuffles of exact 32-lane waves, so
+    # Direct3D runs software subgroups and no hardware wave size.
+    assert arg_reduce_packages.TARGET_OPTIONS["directx"] == {
+        "software_subgroup_width": 32,
+        "relative_wave_shuffle_out_of_range": "self",
+    }
     assert arg_reduce_packages.TARGET_OPTIONS["opengl"] == {
         "software_subgroup_width": 32
     }
-    assert not configs["metal"].subgroup_width_rules
-    assert not configs["opengl"].subgroup_width_rules
+    for config in configs.values():
+        assert not config.subgroup_width_rules
     assert [
         item.expression for item in configs["opengl"].index_range_assertions
     ] == list(arg_reduce_layout.index_assertions())
