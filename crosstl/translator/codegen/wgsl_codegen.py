@@ -4809,6 +4809,11 @@ class WGSLCodeGen(
             "normalize",
         }
     )
+    # Built-ins whose scalar GLSL overloads are floating-point only. Integer
+    # arguments are implicitly converted to f32 for these calls.
+    FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS = frozenset(
+        COMPONENTWISE_MATH_BUILTINS - {"abs", "sign", "min", "max", "clamp", "mix"}
+    )
     VECTOR_COMPONENT_NAMES = "xyzw"
 
     def generate_matrix_scalar_binary(self, expr):
@@ -5257,7 +5262,34 @@ class WGSLCodeGen(
             )
             if vector_type is not None:
                 return vector_type
-            if self.scalar_type_name(argument_types[0]) is not None:
+            scalar_arguments = argument_types
+            boolean_selector = False
+            if function_name == "mix" and len(arguments) == 3:
+                # A boolean selector may be a comparison or logical expression;
+                # its expression_type is intentionally not a scalar type. Infer
+                # the result from x and y, then let generate_boolean_mix_call
+                # validate the selector shape.
+                boolean_selector = (
+                    self.boolean_expression_width(arguments[2]) is not None
+                )
+                if boolean_selector:
+                    scalar_arguments = argument_types[:2]
+            scalar_names = [self.scalar_type_name(t) for t in scalar_arguments]
+            if any(s is None for s in scalar_names):
+                return None
+            if function_name in self.FLOAT_ONLY_COMPONENTWISE_MATH_BUILTINS:
+                return "f32"
+            if (
+                function_name == "mix"
+                and not boolean_selector
+                and "bool" not in scalar_names
+            ):
+                return "f32"
+            for target in ("f32", "u32", "i32"):
+                for t, s in zip(argument_types, scalar_names):
+                    if s == target:
+                        return t
+            if scalar_names and scalar_names[0] is not None:
                 return argument_types[0]
         return None
 
