@@ -8268,13 +8268,32 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
 
-        if function_name in {
-            "__ballot",
-            "__shfl",
-            "__shfl_up",
-            "__shfl_down",
-            "__shfl_xor",
-        }:
+        if function_name in {"__shfl", "__shfl_up", "__shfl_down", "__shfl_xor"}:
+            # HIP's own (non-``_sync``) shuffle family takes the same
+            # (value, lane/delta[, width]) arguments minus the mask. hipcc
+            # 5.7.1 does not declare the ``_sync`` forms at all, so these are
+            # the ones real kernels compile against.
+            width_limit = self.hip_warp_shuffle_width_limit(args[2:] or None)
+            if len(args) not in {2, 3} or width_limit is None:
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            value, lane = args[0], args[1]
+            if function_name == "__shfl":
+                return f"WaveReadLaneAt({value}, {lane})"
+            if function_name == "__shfl_xor":
+                return f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ {lane}))"
+            if function_name == "__shfl_up":
+                return (
+                    f"((WaveGetLaneIndex() >= ({lane})) ? "
+                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane}))) "
+                    f": {value})"
+                )
+            return (
+                f"(((WaveGetLaneIndex() + ({lane})) < {width_limit}) ? "
+                f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane}))) "
+                f": {value})"
+            )
+
+        if function_name == "__ballot":
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
         return None

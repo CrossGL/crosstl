@@ -1845,6 +1845,41 @@ class TestHipCodeGen:
         assert "__shfl_down_sync" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_nosync_warp_shuffles_lower_without_a_mask(self):
+        # hipcc 5.7.1 does not declare the CUDA-style `_sync` forms, so real
+        # kernels use HIP's own (mask-less) shuffle family.
+        code = """
+        __global__ void shfl_kernel(const float* in, float* out) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            float v = in[i];
+            float a = __shfl(v, 3);
+            float b = __shfl_xor(v, 4);
+            float c = __shfl_down(v, 2);
+            float d = __shfl_up(v, 1);
+            float e = __shfl(v, 3, warpSize);
+            out[i] = a + b + c + d + e;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "WaveReadLaneAt(v, 3)" in result
+        assert "WaveReadLaneAt(v, (WaveGetLaneIndex() ^ 4))" in result
+        assert (
+            "(WaveGetLaneIndex() >= (1)) ? "
+            "WaveReadLaneAt(v, (WaveGetLaneIndex() - (1))) : v"
+        ) in result
+        assert (
+            "((WaveGetLaneIndex() + (2)) < WaveGetLaneCount()) ? "
+            "WaveReadLaneAt(v, (WaveGetLaneIndex() + (2))) : v"
+        ) in result
+        assert "__shfl" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cooperative_groups_thread_block_sync_rank_and_size_convert(self):
         code = """
         #include <hip/hip_cooperative_groups.h>

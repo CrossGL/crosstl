@@ -1945,7 +1945,8 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     assert kernel.params[1]["name"] == "in"
     assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
-    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" in message
+    assert "WaveReadLaneAt(val, ((y * width) + x))" in crossgl
+    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" not in message
     assert "HIP warp intrinsic __shfl_sync" in message
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
