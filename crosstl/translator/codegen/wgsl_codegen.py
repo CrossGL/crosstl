@@ -208,6 +208,48 @@ from .wgsl_vector_initializers import (
 from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS, hoist_workgroup_locals
 from .wgsl_workgroup_size_inputs import lower_workgroup_size_inputs
 
+# Component-wise numeric built-in functions whose return type equals the type of
+# their first argument.  These are the WGSL / CrossGL / GLSL / HLSL names whose
+# ``semantic_key`` (lower-case, no punctuation) is listed here.  ``expression_type``
+# uses this set to give calls such as ``sqrt(4.0)`` or ``abs(x)`` a concrete type.
+_COMPONENT_WISE_NUMERIC_BUILTINS = frozenset(
+    {
+        "abs",
+        "acos",
+        "acosh",
+        "asin",
+        "asinh",
+        "atan",
+        "atanh",
+        "ceil",
+        "cos",
+        "cosh",
+        "degrees",
+        "exp",
+        "exp2",
+        "floor",
+        "frac",
+        "fract",
+        "inversesqrt",
+        "log",
+        "log2",
+        "normalize",
+        "pow",
+        "radians",
+        "round",
+        "roundeven",
+        "rsqrt",
+        "saturate",
+        "sign",
+        "sin",
+        "sinh",
+        "sqrt",
+        "tan",
+        "tanh",
+        "trunc",
+        "max",
+        "min",
+
 
 class WGSLAggregateInitializerError(ValueError):
     """Raised when an aggregate initializer has no faithful WGSL lowering."""
@@ -8517,13 +8559,34 @@ class WGSLCodeGen(
                     self.function_signature_key(resolved_function),
                     getattr(resolved_function, "return_type", None),
                 )
-            return self._function_return_types.get(function_name)
+            user_return = self._function_return_types.get(function_name)
+            if user_return is not None:
+                return user_return
+            if (
+                not self.is_user_function_name(function_name)
+                and expr.arguments
+                and not isinstance(expr.function, MemberAccessNode)
+            ):
+                normalized = self.semantic_key(function_name)
+                if normalized in _COMPONENT_WISE_NUMERIC_BUILTINS:
+                    return self.expression_type(expr.arguments[0])
+            return None
         if isinstance(expr, ConstructorNode):
             return expr.constructor_type
         if isinstance(expr, CastNode):
             return expr.target_type
         if isinstance(expr, LiteralNode):
-            return getattr(expr, "literal_type", None)
+            literal_type = getattr(expr, "literal_type", None)
+            if literal_type is not None:
+                return literal_type
+            value = expr.value
+            if isinstance(value, bool):
+                return "bool"
+            if isinstance(value, float):
+                return "f32"
+            if isinstance(value, int):
+                return "i32"
+            return None
         if isinstance(expr, SwizzleNode):
             vector_type = self.expression_type(expr.vector_expr)
             component_type = self.vector_component_type(vector_type)
