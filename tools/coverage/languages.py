@@ -33,7 +33,9 @@ class GLSL(Dialect):
         return f"layout({layout}) uniform {spelling} {name};"
 
     def enable(self, extension: str) -> list[str]:
-        return [f"#extension {extension} : require"]
+        # A feature may need several extensions, separated by spaces: subgroupQuadAll needs
+        # GL_KHR_shader_subgroup_vote and GL_EXT_shader_quad_control.
+        return [f"#extension {name} : require" for name in extension.split()]
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lanes = parts.get("lanes", 1)

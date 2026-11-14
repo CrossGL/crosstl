@@ -66,6 +66,27 @@ SOURCES = {
         "fc653cfd7e9392e3a42824ebddb7edbd19678fae974b0a925969d4c4a191d2d8",
         "GL_KHR_shader_subgroup (section 8.18, shader invocation group functions)",
     ),
+    "glsl-subgroup-rotate": Source(
+        "KhronosGroup/GLSL",
+        "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+        "extensions/khr/GL_KHR_shader_subgroup_rotate.txt",
+        "a460a079e0cbbf25402bb94c33a26b0456af866fe9db6c7d6cf8f3be879e3569",
+        "GL_KHR_shader_subgroup_rotate (subgroup rotations)",
+    ),
+    "glsl-quad-control": Source(
+        "KhronosGroup/GLSL",
+        "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+        "extensions/ext/GLSL_EXT_shader_quad_control.txt",
+        "d422e00d32d7b6f3a0be78b91e0f625975ae89e7b71d5d463f8370cf649b153a",
+        "GL_EXT_shader_quad_control (quad votes)",
+    ),
+    "glsl-subgroup-partitioned": Source(
+        "KhronosGroup/GLSL",
+        "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+        "extensions/nv/GL_NV_shader_subgroup_partitioned.txt",
+        "18b35863b3ef1e257fb2846645ef731ad914915309fb1e1cb36ba8f6519b8d46",
+        "GL_NV_shader_subgroup_partitioned (partitioned subgroup operations)",
+    ),
     # HIP is pinned to the versions Ubuntu 24.04 packages (hipcc 5.7.1 on clang 17.0.6), the compiler the probes are
     # validated with, so the list names exactly what that compiler's headers define.
     "hip": Source(
