@@ -17,13 +17,13 @@ binds instead of its record. :func:`refuse_shader_record_buffers` refuses target
 
 * Direct3D 12 passes record data as local root arguments, which need a local root signature (DirectX Raytracing
   functional spec, "Local root signatures vs global root signatures"); CrossTL does not emit root signatures.
-* Direct3D 12 passes record data as local root arguments, which need a local root signature (DirectX Raytracing
-  functional spec, "Local root signatures vs global root signatures"); CrossTL does not emit root signatures.
 * Metal, WGSL and the compute languages have no shader binding table.
 
 Slang reads the record through a ``[[vk::shader_record]] ConstantBuffer<T>`` global variable (which slangc lowers
 to ``ShaderRecordBufferKHR``). Rust/rust-gpu reads it through a ``#[spirv(shader_record_buffer)]`` entry parameter.
 Both are therefore supported and not refused.
+"""
+
 from __future__ import annotations
 
 from .. import ast as A
@@ -37,13 +37,14 @@ __all__ = [
     "shader_record_memory_layout",
 ]
 
+_MEMORY_LAYOUTS = ("std430", "std140", "scalar")
+
 # Targets whose emitters declare a shader record buffer: GLSL (the Vulkan dialect for ray stages) and SPIR-V.
 SHADER_RECORD_TARGETS = frozenset(
-    {"opengl", "glsl", "vulkan", "spirv", "cgl", "crossgl"}
-# Slang emits [[vk::shader_record]] ConstantBuffer<T> (lowered to ShaderRecordBufferKHR by slangc).
-# Rust emits #[spirv(shader_record_buffer)] entry parameters (rust-gpu ShaderRecordBufferKHR).
-)
+    # Slang emits [[vk::shader_record]] ConstantBuffer<T> (lowered to ShaderRecordBufferKHR by slangc).
+    # Rust emits #[spirv(shader_record_buffer)] entry parameters (rust-gpu ShaderRecordBufferKHR).
     {"opengl", "glsl", "vulkan", "spirv", "cgl", "crossgl", "slang", "rust"}
+)
 
 
 def _normalized(text):

@@ -6022,10 +6022,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, direct_buffer_type, auto_assign=True
             )
+            return f"{declaration};
+
         if is_shader_record_buffer(node):
             return self.slang_shader_record_global_variable_declaration(node)
-
-            return f"{declaration};\n"
 
         lowered_block_type = self.slang_glsl_buffer_block_resource_type(node)
         if lowered_block_type is not None:
@@ -6079,29 +6079,6 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"{element_type}[]" if size is None else f"{element_type}[{size}]"
             )
             if self.skip_duplicate_slang_global_variable(node, declaration_type):
-    def slang_shader_record_global_variable_declaration(self, node):
-        """Emit ``[[vk::shader_record]] ConstantBuffer<T> name;`` for a CrossGL shader record buffer.
-
-        Slang lowers ``[[vk::shader_record]] ConstantBuffer<T>`` to a ``ShaderRecordBufferKHR``
-        variable in SPIR-V, with no descriptor-set or binding decoration, so the stage reads
-        exactly the data the shader binding table record carries.
-        """
-        vtype = self.type_name_string(glsl_buffer_block_node_type(node))
-        struct_type = str(self.resource_base_type(vtype or ""))
-        name = getattr(node, "name", None) or ""
-        if struct_type and struct_type in self.user_struct_names:
-            mapped_struct = self.convert_type(struct_type)
-        elif struct_type:
-            mapped_struct = struct_type
-        else:
-            mapped_struct = "void"
-        self.register_variable_type(name, vtype, node)
-        if self.skip_duplicate_slang_global_variable(node, f"ConstantBuffer<{mapped_struct}>"):
-            return ""
-        return (
-            f"[[vk::shader_record]] ConstantBuffer<{mapped_struct}> {name};\n"
-        )
-
                 return ""
             prefix = self.slang_static_storage_prefix(
                 node
@@ -6134,6 +6111,27 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             return f"{declaration} = {initial_expr};\n"
         return f"{declaration};\n"
+
+    def slang_shader_record_global_variable_declaration(self, node):
+        """Emit ``[[vk::shader_record]] ConstantBuffer<T> name;`` for a CrossGL shader record buffer.
+
+        Slang lowers ``[[vk::shader_record]] ConstantBuffer<T>`` to a ``ShaderRecordBufferKHR``
+        variable in SPIR-V, with no descriptor-set or binding decoration, so the stage reads
+        exactly the data the shader binding table record carries.
+        """
+        vtype = self.type_name_string(glsl_buffer_block_node_type(node))
+        struct_type = str(self.resource_base_type(vtype or ""))
+        name = getattr(node, "name", None) or ""
+        if struct_type and struct_type in self.user_struct_names:
+            mapped_struct = self.convert_type(struct_type)
+        elif struct_type:
+            mapped_struct = struct_type
+        else:
+            mapped_struct = "void"
+        self.register_variable_type(name, vtype, node)
+        if self.skip_duplicate_slang_global_variable(node, f"ConstantBuffer<{mapped_struct}>"):
+            return ""
+        return f"[[vk::shader_record]] ConstantBuffer<{mapped_struct}> {name};
 
     def generate_struct(self, node):
         if isinstance(node, EnumNode):
