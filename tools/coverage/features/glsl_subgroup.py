@@ -32,7 +32,9 @@ _CONSTANT = re.compile(
 )
 # "subgroupAdd(value) -> OpGroupNonUniformIAdd | OpGroupNonUniformFAdd(": the instructions a function compiles to.
 _MAPPING = re.compile(
-    r"^\s+(subgroup\w+)\([^)]*\)\s*->\s*((?:\s*\|?\s*OpGroupNonUniform\w+)+)\(", re.M
+    r"^[ \t]+(subgroup\w+)\([^)\n]*\)[ \t]*->[ \t]*"
+    r"(OpGroupNonUniform\w+(?:[ \t]*\|[ \t]*OpGroupNonUniform\w+)*)\(",
+    re.M,
 )
 # The operand type an instruction's name selects: OpGroupNonUniformIAdd takes integers, FAdd floats, SMin signed and
 # UMin unsigned integers, and the bitwise and logical operations integers and booleans.
