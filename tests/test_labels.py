@@ -268,15 +268,18 @@ def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
         "schedule",
         "workflow_dispatch",
     }
+    # A merge-queue rebuild requests one Coverage run per group. Those would each
+    # take the concurrency group's pending place and drop a pull request's run.
     assert workflow[True]["workflow_run"] == {
         "workflows": ["Coverage"],
         "types": ["requested"],
+        "branches-ignore": ["gh-readonly-queue/**"],
     }
     assert workflow[True]["push"] == {"branches": ["main"]}
     assert workflow[True]["schedule"]
     (job,) = workflow["jobs"].values()
-    # Coverage also runs on pushes to main and in the merge queue; only a pull
-    # request's run can bring a new pull request.
+    # Coverage also runs on pushes to main; only a pull request's run can bring a
+    # new pull request.
     assert job["if"] == (
         "github.event_name != 'workflow_run'"
         " || github.event.workflow_run.event == 'pull_request'"

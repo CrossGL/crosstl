@@ -6,12 +6,14 @@ name: Coverage comment
 # of tools/coverage: it checks out main, never the pull request, and reads only the run's coverage.json, which
 # `tools.coverage compare` treats as untrusted data. Values from the triggering run reach scripts through `env` only.
 # The comparison reads the merged commit's parents through the API, to name the pull requests that separate the main
-# it was measured on from the published coverage.
+# it was measured on from the published coverage. Coverage runs in the merge queue have no pull request to comment
+# on, so they start no run.
 
 on:
   workflow_run:
     workflows: [Coverage]
     types: [completed]
+    branches-ignore: ["gh-readonly-queue/**"]
 
 permissions:
   contents: read
