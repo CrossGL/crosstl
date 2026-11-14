@@ -248,6 +248,10 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
     reject_unresolved_generic_member_call,
 )
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import (
     build_generic_struct_specialization,
     collect_generic_struct_definitions,
@@ -3778,6 +3782,7 @@ class HLSLCodeGen(
 
     def render_program(self, ast, target_stage=None):
         ast = fold_workgroup_size_extents(ast, "HLSL", self.refuse_lowering)
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
         try:
@@ -3792,6 +3797,9 @@ class HLSLCodeGen(
                 HLSL_CALLABLE_FUNCTION_NAMES,
                 self.LOWERING_REFUSAL_TYPE.label,
                 (HLSL_PAYLOAD_ACCESS_QUALIFIER,),
+            )
+            refuse_written_generic_pointers(
+                code, self.refuse_lowering, self.LOWERING_REFUSAL_TYPE.label
             )
         finally:
             self.written_foreign_type_names = None
@@ -14922,6 +14930,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "ray_callable": "callable",
         }
 
+        if isinstance(getattr(func, "return_type", None), PointerType):
+            # HLSL has no pointer types; DXC rejects "T *f()" ("pointers are unsupported in HLSL").
+            self.refuse_lowering(
+                f"pointer return: '{func.name}' returns a pointer, which HLSL has no type for"
+            )
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
             if "[" in raw_return_type:
