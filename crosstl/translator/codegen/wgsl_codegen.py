@@ -5013,13 +5013,23 @@ class WGSLCodeGen(
         value_expr = self.generate_expression(node.arguments[0])
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
-        if vector_type_name is None or mixed_integer_call_is_unsigned(
-            self, node.arguments
+        float_component = self.float_call_component("clamp", node.arguments)
+        if float_component is None and (
+            vector_type_name is None
+            or mixed_integer_call_is_unsigned(self, node.arguments)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
-            args = self.convert_integer_call_arguments("clamp", node.arguments, args)
             return f"clamp({', '.join(args)})"
-        float_component = self.float_call_component("clamp", node.arguments)
+        if vector_type_name is None:
+            # A float argument picks the float overload, so each integer argument converts to
+            # float from its own value; through the mixed-integer u32 form a negative int
+            # would wrap first.
+            args = self.convert_integer_call_arguments(
+                "clamp",
+                node.arguments,
+                [self.generate_expression(argument) for argument in node.arguments],
+            )
+            return f"clamp({', '.join(args)})"
         if float_component is not None:
             vector_type_name = (
                 f"vec{self.vector_component_count(value_type)}<{float_component}>"
@@ -8352,8 +8362,10 @@ class WGSLCodeGen(
                 function_name in {"min", "max", "clamp"}
                 and not self.is_user_function_name(function_name)
                 and mixed_integer_call_is_unsigned(self, expr.arguments)
+                and self.float_call_component(function_name, expr.arguments) is None
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
+                # A float argument picks the float overload instead (generate_clamp_call).
                 return mixed_integer_call_type(self, expr.arguments)
             math_call_type = self.builtin_math_call_type(function_name, expr.arguments)
             if math_call_type is not None:

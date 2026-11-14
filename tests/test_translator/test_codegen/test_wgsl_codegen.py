@@ -357,6 +357,7 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
                 int k = io[0];
                 uint u = uo[0];
                 ivec2 iv = ivec2(k, k);
+                uvec2 uv = uvec2(u, u);
                 float a = max(f, k);
                 float b = min(f, u);
                 float c = step(k, f);
@@ -377,8 +378,12 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
                 vec2 z = mix(iv, iv, 0.5);
                 vec2 su = max(v, 1u);
                 float lit = max(f, 1) + min(f, -2) + clamp(f, 0, 1);
+                float ci = clamp(f, k, u);
+                float ck = clamp(k, u, f);
+                vec2 cv = clamp(v, iv, uv);
+                uint cu = clamp(u, k, 7u);
                 fo[4] = a + b + c + d + e + g.x + h.x + m + n + o + p + q + r + s.x
-                    + t.x + x.x + y.x + z.x + su.x + lit;
+                    + t.x + x.x + y.x + z.x + su.x + lit + ci + ck + cv.x + float(cu);
             }
         }
     }
@@ -413,6 +418,14 @@ def test_wgsl_codegen_converts_integer_arguments_of_float_builtins(tmp_path):
         in generated
     )
     assert "var su: vec2<f32> = max(v, vec2<f32>(f32(1u)));" in generated
+    # With a float argument, clamp's int and uint arguments convert to f32 from their own
+    # values, not through u32, which would wrap a negative int.
+    assert "var ci: f32 = clamp(f, f32(k), f32(u));" in generated
+    assert "var ck: f32 = clamp(f32(k), f32(u), f);" in generated
+    assert "var cv: vec2<f32> = clamp(v, vec2<f32>(iv), vec2<f32>(uv));" in generated
+    assert "u32(k)), f32(u)" not in generated
+    # Without one, the int is still written as u32 for the uint overload.
+    assert "var cu: u32 = clamp(u, u32(k), 7u);" in generated
     # Integer literals are abstract in WGSL and stay as written.
     assert "max(f, 1)" in generated
     assert "min(f, -2)" in generated
