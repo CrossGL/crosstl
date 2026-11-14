@@ -58,6 +58,9 @@ from crosstl.backend.Metal.orphaned_explicit_specializations import (
     prune_orphaned_explicit_specializations,
 )
 from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
+from crosstl.backend.Metal.post_member_helpers import (
+    lower_members_before_post_member_helpers,
+)
 from crosstl.backend.Metal.return_type_enablers import fold_concrete_enablers
 from crosstl.backend.Metal.template_overloads import (
     declared_type_names,
@@ -20556,6 +20559,61 @@ def _canonicalize_relocated_metal_template_aliases(
     return working
 
 
+def _lower_metal_members_before_post_member_helpers(
+    preprocessor: Any,
+    source: str,
+    *,
+    work_budget: Any,
+    decay_local_array_arguments: bool,
+    known_materializations: Mapping[tuple[str, tuple[str, ...], tuple[str, ...]], str],
+) -> tuple[
+    str,
+    list[dict[str, Any]],
+    set[str],
+    dict[tuple[str, tuple[str, ...], tuple[str, ...]], str],
+]:
+    """Lower struct members, then materialize the helpers lowered bodies call."""
+    from crosstl.backend.Metal.preprocessor import MetalStructMethodError
+
+    def lower(text: str) -> str:
+        lowered = _lower_metal_struct_members_with_generated_aliases(
+            preprocessor,
+            text,
+            work_budget=work_budget,
+            rematerialize=True,
+        )
+        return preprocessor._materialize_inferred_constrained_template_function_calls(
+            lowered
+        )
+
+    def materialize_helpers(text: str, known: Mapping[Any, str]) -> Any:
+        return _materialize_plain_template_helper_calls(
+            preprocessor,
+            text,
+            work_budget=work_budget,
+            include_struct_members=True,
+            decay_local_array_arguments=decay_local_array_arguments,
+            known_materializations=known,
+        )
+
+    def materialize(text: str) -> str:
+        return preprocessor._materialize_explicit_template_struct_instantiations(
+            text,
+            work_budget=work_budget,
+            allow_partial_object_specializations=True,
+        )
+
+    return lower_members_before_post_member_helpers(
+        preprocessor,
+        source,
+        lower=lower,
+        materialize_helpers=materialize_helpers,
+        materialize=materialize,
+        known=known_materializations,
+        error_type=MetalStructMethodError,
+    )
+
+
 def _lower_metal_struct_members_with_generated_aliases(
     preprocessor: Any,
     source: str,
@@ -23172,27 +23230,18 @@ def _project_template_materialization_for_artifact(
         # also relocate namespace aliases such as `Int<(Stride)>` into generated
         # global free functions. Resolve only those provenance-backed aliases,
         # then materialize the resulting concrete structs before helper discovery.
-        materialized = _lower_metal_struct_members_with_generated_aliases(
-            preprocessor,
-            materialized,
-            work_budget=explicit_work_budget,
-            rematerialize=True,
-        )
-        materialized = (
-            preprocessor._materialize_inferred_constrained_template_function_calls(
-                materialized
-            )
-        )
+        # Helpers that only lowered member bodies call are materialized after
+        # member lowering; one that calls a lowered struct's member is lowered
+        # with that struct instead (see the helper's module).
         (
             materialized,
             struct_field_specializations,
             struct_field_template_names,
             post_member_materialized_names,
-        ) = _materialize_plain_template_helper_calls(
+        ) = _lower_metal_members_before_post_member_helpers(
             preprocessor,
             materialized,
             work_budget=explicit_work_budget,
-            include_struct_members=True,
             decay_local_array_arguments=target in _METAL_ARRAY_DECAY_TEMPLATE_TARGETS,
             known_materializations=inferred_plain_materialized_names,
         )

@@ -52,6 +52,34 @@ CHANNEL_VECTORS = {1: 1, 2: 2, 3: 4, 4: 4}
 SMALL_FILTER_TAPS = 16
 
 
+SIGNED_MAX = 2**31 - 1
+# The scalar spelling resource-aggregate helpers carry for each element type.
+HELPER_ELEMENTS = {"float32": "float", "float16": "float16", "bfloat16": "bfloat16"}
+# The current-tree gate's lowering of BlockMMA's simdgroup matrices.
+TARGET_OPTIONS = {
+    "directx": {
+        "cooperative_matrix_software_lowering": True,
+        "software_subgroup_width": SIMD_WIDTH,
+        "relative_wave_shuffle_out_of_range": "self",
+    },
+    "opengl": {
+        "cooperative_matrix_software_lowering": True,
+        "software_subgroup_width": SIMD_WIDTH,
+    },
+}
+# Records the kernel reads through constant pointers, by GLSL helper name.
+RECORD_HELPERS = {
+    rank: (
+        f"ImplicitGemmConv{rank}DParams",
+        "MLXConvParams",
+        f"MLXConvParams<{rank}>",
+        f"MLXConvParams_{rank}",
+        f"MLXConvParams_int_{rank}",
+    )
+    for rank in SOURCES
+}
+
+
 @dataclass(frozen=True)
 class Loader:
     """One loader's threadgroup tile: ``rows`` x ``columns`` with row pitch
@@ -198,6 +226,65 @@ def entries(rank=2):
         for dtype, metal_type, size in TYPES
         for block in BLOCKS
         for selection in FILTERS[rank]
+    )
+
+
+def metal_source_options():
+    """The Metal source options of the current-tree steel_conv gate."""
+    return {
+        "max_template_specializations": 256,
+        "max_template_materialization_work": 8192,
+        "cooperative_matrix_fragment_mapping": "tile_4x4_row_pair",
+        "cooperative_matrix_fragment_mapping_provenance": (
+            "mlx_steel_BaseMMAFrag_get_coord"
+        ),
+        "preserve_resource_origins": True,
+        "target_options": TARGET_OPTIONS,
+    }
+
+
+def tile_maxima(entry):
+    """The last A and B threadgroup slots the loaders write or BlockMMA reads."""
+    a_slots, b_slots = entry.tile_reads()
+    loader_a, loader_b = entry.loaders
+    written_a = {slot for lane in loader_a.slots() for slot in lane}
+    written_b = {slot for lane in loader_b.slots() for slot in lane}
+    return max(a_slots | written_a), max(b_slots | written_b)
+
+
+def index_assertions(entry):
+    """GLSL index ranges: MLX buffers stay below 2^31 elements.
+
+    The two parameter records are single elements. The threadgroup tiles
+    reach only the slots their loaders write and ``BlockMMA`` reads.
+    """
+    element = HELPER_ELEMENTS[entry.dtype]
+    device = [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_resource_{access}_{scalar}",
+            "maximum": SIGNED_MAX,
+        }
+        for access in ("load", "store")
+        for scalar in sorted({element, "int", "int64_t", "uint"})
+    ] + [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_resource_load_{record}",
+            "maximum": 0,
+        }
+        for record in RECORD_HELPERS[entry.rank]
+    ]
+    workgroup = [
+        {
+            "expression": "reference.offset + index",
+            "indexed": f"crosstl_workgroup_{tile}",
+            "maximum": maximum,
+        }
+        for tile, maximum in zip(("As", "Bs"), tile_maxima(entry))
+    ]
+    return tuple(
+        {"source": entry.source, **item, "minimum": 0} for item in device + workgroup
     )
 
 

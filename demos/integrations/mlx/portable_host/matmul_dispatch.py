@@ -6,7 +6,7 @@ import struct
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator.resource_storage import encoded_storage_dtype
-from demos.integrations.mlx.portable_host import matmul_layout
+from demos.integrations.mlx.portable_host import element_storage, matmul_layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.quantization_dispatch import (
     GUARDS,
@@ -29,6 +29,12 @@ STRIDES.update(bfloat16=2, float32=4, int32=4, int64=8)
 
 def encode_binding(dtype, words, host_target, layout, kind):
     """The runtime value of one reflected binding holding ``dtype`` words."""
+    if dtype == element_storage.COMPLEX:
+        # complex64_t is a packed {real, imag} float32 struct on every target.
+        value = element_storage.packet(dtype, host_target, words)
+        if not element_storage.reflected_layout_matches(layout, value, dtype):
+            raise ValueError("Matrix-vector reflected complex layout differs")
+        return value
     physical = layout["elementType"]
     if dtype in ("float32", "float16", "bfloat16"):
         storage = "float16" if dtype == "float16" and physical == "uint16" else physical
@@ -78,11 +84,12 @@ def dispatch(host, entry, buffers, count, threads, launch):
 def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
     """Run one launch of ``layout``'s quantized product kernels through ``cache``.
 
-    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout`` or
-    ``fp_qmm_layout``:
+    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout``,
+    ``fp_qmm_layout``, ``gather_qmm_layout`` or ``fp_gather_qmm_layout``:
     each binds the weights ``w``, the ``scales``, the input ``x``, the output
     ``y`` and, for affine kernels, the ``biases``, all in
-    ``layout.MATRIX_PARAMETERS``.
+    ``layout.MATRIX_PARAMETERS``. A layout whose arrays depend on the entry,
+    such as a global scale, names them with ``layout.matrix_parameters``.
     """
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -101,6 +108,12 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
         if name in supplied:
             raise ValueError(f"{label} buffer names must be unique")
         supplied[name] = buffer
+    # Layouts whose bound arrays depend on the entry name them per entry.
+    matrices = (
+        layout.matrix_parameters(entry)
+        if hasattr(layout, "matrix_parameters")
+        else layout.MATRIX_PARAMETERS
+    )
     counts, parameters = layout.read_storage(entry, supplied)
     execution = launch.execution()
     metadata = layout.plan(entry, counts, parameters, threads, execution)
@@ -113,7 +126,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
             + [POISON[layout.parameter_type(entry, name)]]
             * (GUARD_COUNT + metadata["overreadPadding"].get(name, 0))
         )
-        for name in layout.MATRIX_PARAMETERS
+        for name in matrices
     }
     for name, value in metadata["parameters"].items():
         storage[name] = [value] if isinstance(value, int) else list(value)
@@ -200,7 +213,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in layout.MATRIX_PARAMETERS
+            for name in matrices
             if name != "y"
         },
         "outputValues": words[:size] if size <= 4096 else None,

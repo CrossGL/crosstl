@@ -172,6 +172,15 @@ def dispatches():
             result.append((entry, span))
             continue
         contiguous = value.flags.c_contiguous
+        if entry in COMPARISON_ENTRIES:
+            # MLX's binary op type runs two row- or two column-contiguous
+            # operands as one vector-vector dispatch, without copies.
+            other = operand(source, layout, second=True)
+            contiguous = (
+                contiguous
+                and other.flags.c_contiguous
+                or (value.flags.f_contiguous and other.flags.f_contiguous)
+            )
         copy = BOOLEAN_COPY_ENTRY if source == "bool_" else COPY_ENTRY
         if operation == "copy":
             if not contiguous:

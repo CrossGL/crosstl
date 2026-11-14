@@ -167,7 +167,9 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     required = next(
         step for step in steps if step.get("name") == "Install pinned DirectX tools"
     )
-    assert "microsoft.direct3d.warp/1.0.21/" in required["run"]
+    assert required["run"] == "./demos/integrations/mlx/install_directx_tools.ps1"
+    installer = (ROOT / required["run"]).read_text(encoding="utf-8")
+    assert "microsoft.direct3d.warp/1.0.21/" in installer
     assert "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" in script
 
 
@@ -182,7 +184,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for index, (batch, count) in enumerate(zip(batches, (47, 36))):
+    for index, (batch, count) in enumerate(zip(batches, (48, 36))):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
         assert not re.search(r"(?:^|\s)(?:-m|--maxfail)(?:\s|=|$)", batch)

@@ -16,6 +16,10 @@ RMS_NORM_HARNESS_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
 )
 MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "demo-project-testing.yml"
+# The workflow's frontier accounting step runs this module.
+MLX_FRONTIER_ACCOUNTING_PATH = (
+    ROOT / "demos" / "integrations" / "mlx" / "frontier_accounting.py"
+)
 MLX_README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
 RMS_NORM_FIXTURE_ROOT = ROOT / "demos/integrations/mlx/fixtures/project_porting"
 
@@ -1974,9 +1978,10 @@ def test_nested_const_alias_evidence_rejects_unlowered_or_copied_reads(
 
 
 def test_mlx_workflow_accounts_nested_const_alias_native_validation():
-    workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
-
-    assert "os: [ubuntu-latest, windows-latest, macOS-latest]" in workflow
+    assert "os: [ubuntu-latest, windows-latest, macOS-latest]" in (
+        MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
+    )
+    workflow = MLX_FRONTIER_ACCOUNTING_PATH.read_text(encoding="utf-8")
     assert '"nestedConstAliasProofStatus"' in workflow
     assert 'proof["nestedConstAliasEvidence"]' in workflow
     assert "verified-original-nested-storage-const-alias-read" in workflow
@@ -4319,7 +4324,7 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     assert status["runtime_integration_included"] is False
     assert status["runtime_parity_claimed"] is False
 
-    workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
+    workflow = MLX_FRONTIER_ACCOUNTING_PATH.read_text(encoding="utf-8")
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in workflow
     assert "if opengl_toolchain_frontier_count != 3:" in workflow
     assert "expected 3 OpenGL toolchain frontier sources" in workflow

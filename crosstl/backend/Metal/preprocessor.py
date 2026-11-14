@@ -1258,6 +1258,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ] = {}
         self._materialized_function_names: Set[str] = set()
         self._materialized_function_templates: Set[Tuple[str, str]] = set()
+        # Concrete functions that are reachable although no entry point calls
+        # them yet: a helper defined before the member body that calls it is
+        # lowered (see post_member_helpers.py).
+        self._additional_reachability_roots: FrozenSet[str] = frozenset()
         # Explicit free-function template calls materialized by `preprocess`,
         # shared by its passes so a call first reached after member lowering
         # reuses the helper an earlier pass emitted instead of redefining it.
@@ -27945,7 +27949,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if not functions:
             return None
 
-        roots = [function for function in functions if function.is_entry]
+        roots = [
+            function
+            for function in functions
+            if function.is_entry or function.name in self._additional_reachability_roots
+        ]
         if not roots:
             return None
 

@@ -90,6 +90,10 @@ def buffers(case, *, normalize_scalar=False):
     if normalize_scalar and indices[0].ndim == 0:
         indices = [index.reshape(1) for index in indices]
         updates = np.expand_dims(updates, 0)
+    return launch_buffers(case, source, indices, updates, expected)
+
+
+def launch_buffers(case, source, indices, updates, expected):
     indices = [
         (
             np.ascontiguousarray(index)
@@ -142,9 +146,11 @@ def buffers(case, *, normalize_scalar=False):
             (size - 1) * (step // array.itemsize)
             for size, step in zip(array.shape, array.strides)
         )
+        # 16-bit float workloads hold raw words; the host names their dtype.
+        kind = case["dtype"] if name in {"out", "updates"} else str(array.dtype)
         supplied[name] = runtime.Buffer(
             name.encode(),
-            b"bool_" if name == "idx_contigs" else str(array.dtype).encode(),
+            b"bool_" if name == "idx_contigs" else kind.encode(),
             array.ctypes.data,
             span,
             int(name == "out"),
@@ -181,6 +187,59 @@ def test_scatter_validates_workload_allocations_and_launch(case):
     )
     if case["layout"].startswith("work"):
         assert result["workPerThread"] == int(case["layout"][4:])
+
+
+def test_scatter_storage_exceeds_one_launch_axis():
+    # gather_mm_sorted_vjp's b[rhs] gradient: one 100 x 100 slice per row.
+    case = {"dtype": "float32", "index_dtype": "uint32", "operation": "sum"}
+    source = np.zeros((8, 100, 100), dtype="float32")
+    indices = [np.array([0, 3, 3, 7], dtype="uint32")]
+    updates = np.arange(4 * 100 * 100, dtype="float32").reshape(4, 100, 100)
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, indices, updates, source
+    )
+    assert execution["workgroupCount"] == [10000, 4, 1]
+    result = layout.validate(entry, supplied, source.size, execution)
+    assert result["outputCount"] == 80000 and result["updateCount"] == 40000
+    assert result["maximumIndex"] == 79999 > layout.MAX_ELEMENTS
+    assert layout.MAX_STORAGE_ELEMENTS == 2**28 - 33
+
+
+def test_scatter_rejects_rows_beyond_one_launch_axis():
+    case = {"dtype": "int32", "index_dtype": "int32", "operation": "sum"}
+    source = np.zeros(65536, dtype="int32")
+    indices = [np.arange(65536, dtype="int32")]
+    updates = np.ones(65536, dtype="int32")
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, indices, updates, source
+    )
+    assert execution["workgroupCount"] == [1, 65536, 1]
+    with pytest.raises(ValueError, match="per-axis workgroup limits"):
+        layout.validate(entry, supplied, source.size, execution)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    # A slab of whole trailing rows, and a run along the last index axis.
+    ((slice(1, 3), slice(None)), (slice(2, 3), slice(1, 3))),
+)
+def test_scatter_validates_rebased_index_tiles(rows):
+    """The host's launch tiles rebase index and update views onto their rows."""
+    case = {"dtype": "float32", "index_dtype": "int64", "operation": "sum"}
+    source = np.zeros((5, 6), dtype="float32")
+    index = np.arange(12, dtype="int64").reshape(4, 3) % 5
+    updates = np.arange(4 * 3 * 6, dtype="float32").reshape(4, 3, 6)
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, [index[rows]], updates[rows], source
+    )
+    rows_in_tile = index[rows].size
+    assert execution["workgroupCount"] == [6, rows_in_tile, 1]
+    assert supplied["idx0"].count == (
+        3 * (index[rows].shape[0] - 1) + index[rows].shape[1]
+    )
+    result = layout.validate(entry, supplied, source.size, execution)
+    assert result["indexShape"] == list(index[rows].shape)
+    assert result["updateCount"] == rows_in_tile * 6
 
 
 @pytest.mark.parametrize(
@@ -274,7 +333,7 @@ def test_scatter_rejects_invalid_layout_before_translation(fault):
 @pytest.mark.parametrize(
     "entry",
     (
-        "scatterfloat16int32_sum_1_updc_true_nwork1_int",
+        "scatterint64int32_sum_1_updc_true_nwork1_int",
         "scatterint32int32_median_1_updc_true_nwork1_int",
         "scatterint32int32_sum_0_updc_true_nwork1_int",
         "scatterint32int32_sum_01_updc_true_nwork1_int",
@@ -403,23 +462,46 @@ def test_scatter_audit_accounts_for_generated_dispatch_input(tmp_path):
     scatter_evidence.audit_event(np, event)
 
 
-def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
+def scatter_event(
+    tmp_path, case, target="metal", *, normalize_scalar=False, launch=None
+):
+    """A retained scatter event for ``case``, or for a prebuilt ``launch``.
+
+    A complex64 sum uploads its updates as ``element_storage`` lane pairs and
+    its output, like its readback, as two raw atomic words per element.
+    """
+    from demos.integrations.mlx.portable_host.element_storage import (
+        COMPLEX_LAYOUT,
+        buffer_words,
+        packet,
+    )
     from demos.integrations.mlx.tests.host.test_portable_gather import evidence_event
 
     event = evidence_event(tmp_path)
     for key in list(event):
         if key.startswith("gather"):
             del event[key]
-    entry, supplied, arrays, expected, execution = buffers(
+    entry, supplied, arrays, expected, execution = launch or buffers(
         case, normalize_scalar=normalize_scalar
     )
+    packed = case["dtype"] in layout.PACKED_TYPES
     event.update(entry=entry, target=target, threads=expected.size, **execution)
     event.update(
         scatterMetadata=layout.validate(entry, supplied, expected.size, execution),
         scatterValues=(
             words(np, expected)
             if case["dtype"] == "float32"
-            else expected.reshape(-1).tolist()
+            else (
+                expected.reshape(-1).view(np.uint32).tolist()
+                if case["dtype"] == "complex64"
+                else (
+                    layout.pack_lanes(
+                        expected.reshape(-1).tolist(), layout.PADDING[case["dtype"]]
+                    )
+                    if packed
+                    else expected.reshape(-1).tolist()
+                )
+            )
         ),
         scatterGuardValues=runtime.COPY_GUARD.copy(),
         scatterStorageType=case["dtype"],
@@ -444,15 +526,35 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         storage = runtime.physical_dtype(kind, target)
         if name == "out":
             storage = layout.atomic_storage_dtype(kind, target)
-        values = (
-            list(
+        if kind == "complex64" and name == "updates":
+            value = packet(kind, target, buffer_words(buffer, kind))
+            event["inputs"][name] = value
+            request["buffers"][name] = {
+                **{key: item for key, item in value.items() if key != "values"},
+                "binding": {"metadata": {"scalarLayout": dict(COMPLEX_LAYOUT)}},
+            }
+            continue
+        lanes = layout.ATOMIC_LANES.get(kind, 1) if name == "out" else 1
+        if kind == "float32" or lanes > 1:
+            values = list(
                 ctypes.cast(
-                    buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                    buffer.data,
+                    ctypes.POINTER(ctypes.c_uint32 * (buffer.count * lanes)),
                 ).contents
             )
-            if kind == "float32"
-            else layout.values(buffer)
-        )
+        elif kind in layout.PACKED_TYPES:
+            words_ = list(
+                ctypes.cast(
+                    buffer.data, ctypes.POINTER(ctypes.c_uint16 * buffer.count)
+                ).contents
+            )
+            values = (
+                layout.pack_lanes(words_, layout.PADDING[kind])
+                if name == "out"
+                else layout.carriers(kind, words_, target)
+            )
+        else:
+            values = layout.values(buffer)
         if name == "idx_contigs":
             values = [
                 bool(value) if target == "metal" else int(value) for value in values
@@ -464,9 +566,20 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         scalar = {
             "elementType": storage,
             "elementStrideBytes": (
-                1 if storage == "bool" else np.dtype(storage).itemsize
+                1 if storage == "bool" else ctypes.sizeof(runtime.TYPES[storage])
             ),
         }
+        if storage == "float16" and target == "directx":
+            # The reflected DirectX binary16 contract: uint16 structured words.
+            scalar.update(
+                elementType="uint16",
+                storageLayout="hlsl-structured-buffer",
+                runtimeSized=True,
+                storageEncoding={
+                    "encoding": "ieee754-binary16",
+                    "logicalElementType": "float16",
+                },
+            )
         if name == "out":
             scalar.update(
                 componentCount=1,
@@ -481,11 +594,11 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         request["buffers"][name] = {
             "dtype": storage,
             "shape": shape,
-            "binding": {"metadata": {"scalarLayout": scalar}},
+            "binding": {"kind": "buffer", "metadata": {"scalarLayout": scalar}},
         }
-        if storage == "float32":
-            event["inputs"][name]["encoding"] = "ieee754-binary32"
-            request["buffers"][name]["encoding"] = "ieee754-binary32"
+        if storage in layout.ENCODINGS:
+            event["inputs"][name]["encoding"] = layout.ENCODINGS[storage]
+            request["buffers"][name]["encoding"] = layout.ENCODINGS[storage]
     if target != "metal":
         module = tmp_path / ("test.dxil" if target == "directx" else "test.glsl")
         module.write_bytes(b"retained-test-module")

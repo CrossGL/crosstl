@@ -28045,14 +28045,14 @@ def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
             "width / 2u",
             "offset > 0u",
             "offset /= 2u",
-            "float neighbor = shuffleValue(value, offset); break;",
+            "float neighbor = shuffleValue(value, offset); if (neighbor > 3.0) { break; }",
             "potentially-divergent-control-flow",
         ),
         (
             "width / 2u",
             "offset > 0u",
             "offset /= 2u",
-            "float neighbor = shuffleValue(value, offset); return;",
+            "float neighbor = shuffleValue(value, offset); if (neighbor > 3.0) { return; }",
             "potentially-divergent-control-flow",
         ),
         (
@@ -29622,9 +29622,25 @@ def test_glsl_software_subgroup_accepts_workgroup_uniform_runtime_loop(
             "gl_LocalInvocationID.x",
             "",
         ),
-        ("uint rowEnd = nRows;", "0u", "rowEnd", "break;"),
-        ("uint rowEnd = nRows;", "0u", "rowEnd", "continue;"),
-        ("uint rowEnd = nRows;", "0u", "rowEnd", "return;"),
+        # Exits every invocation takes together are proven; these are not.
+        (
+            "uint rowEnd = nRows;",
+            "0u",
+            "rowEnd",
+            "if (gl_LocalInvocationID.x == 0u) { break; }",
+        ),
+        (
+            "uint rowEnd = nRows;",
+            "0u",
+            "rowEnd",
+            "if (gl_LocalInvocationID.x == 0u) { continue; }",
+        ),
+        (
+            "uint rowEnd = nRows;",
+            "0u",
+            "rowEnd",
+            "if (gl_LocalInvocationID.x == 0u) { return; }",
+        ),
     ],
 )
 def test_glsl_software_subgroup_runtime_loop_proof_fails_closed(
