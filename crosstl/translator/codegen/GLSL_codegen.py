@@ -45079,6 +45079,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[2], element_type)
+            value = self.glsl_precise_stored_value(None, args[2], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )
@@ -45099,6 +45100,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[1], element_type)
+            value = self.glsl_precise_stored_value(None, args[1], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )
