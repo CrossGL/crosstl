@@ -8,11 +8,13 @@ env:
 # for pull requests from forks too. It runs when a pull request's Coverage run is requested, which every push to a
 # pull request does, so a new pull request is labelled within minutes. It also runs on every push to main, and hourly
 # as a backstop, since GitHub starts scheduled runs on this repository hours late. Runs share one concurrency group:
-# the newest waits for the running one and the others are dropped.
+# the newest waits for the running one and the others are dropped. Coverage runs in the merge queue start no run,
+# since a queue rebuild would start one per group and they would drop the pending run of a pull request.
 on:
   workflow_run:
     workflows: [Coverage]
     types: [requested]
+    branches-ignore: ["gh-readonly-queue/**"]
   push:
     branches: [main]
   schedule:
