@@ -110,8 +110,19 @@
       "class": "silent",
       "component": "WGSL emitter",
       "summary": "precise dropped without a diagnostic, although WGSL cannot forbid contraction",
-      "status": "open",
-      "note": "Main still emits WGSL for an HLSL precise local. The refusal (PreciseEvaluationUnsupportedError, WGSL section 15.7.5) is in review (core/precise-c-family)."
+      "status": "refused",
+      "probes": [
+        {
+          "source": "S5.hlsl",
+          "target": "wgsl",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_precise_evaluation.py::test_precise_local_is_refused_on_wgsl",
+        "tests/test_translator/test_precise_evaluation.py::test_targets_without_precise_evaluation_refuse_it"
+      ],
+      "note": "WGSL has no way to forbid contraction (WGSL section 15.7.5), so precise is refused with PreciseEvaluationUnsupportedError."
     },
     {
       "id": "S6",
