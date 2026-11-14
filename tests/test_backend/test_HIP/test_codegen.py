@@ -103,7 +103,10 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "out[gl_LocalInvocationID.x] = (gl_WorkGroupSize.y + 32);" in result
+        assert (
+            "out[gl_LocalInvocationID.x] = (gl_WorkGroupSize.y + int(gl_SubgroupSize));"
+            in result
+        )
         assert "hipThreadIdx_x" not in result
         assert "hipBlockDim_y" not in result
         assert "warpSize" not in result
@@ -1797,7 +1800,13 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
-        assert "WaveReadLaneAt(maxval, (WaveGetLaneIndex() ^ offset))" in result
+        # Width 32 splits a 64-lane wavefront into two segments; a partner beyond the caller's segment reads
+        # the caller's own lane (HIP __shfl_xor).
+        assert (
+            "WaveReadLaneAt(maxval, (((WaveGetLaneIndex() ^ offset) < "
+            "((WaveGetLaneIndex() - (WaveGetLaneIndex() % 32)) + 32)) ? "
+            "(WaveGetLaneIndex() ^ offset) : WaveGetLaneIndex()))"
+        ) in result
         assert "hip warp intrinsic __shfl_xor_sync" not in result
         assert "__shfl_xor_sync" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -1826,16 +1835,17 @@ class TestHipCodeGen:
             "(WaveGetLaneIndex() >= (delta)) ? "
             "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
         ) in result
+        # The default width and an explicit warpSize are both the wavefront width, which is 32 or 64 lanes
+        # depending on the device, so neither may become the constant 32.
         assert (
-            "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
-        ) in result
+            result.count(
+                "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
+                "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+            )
+            == 2
+        )
         assert (
-            "((WaveGetLaneIndex() + (delta)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
-        ) in result
-        assert (
-            "((WaveGetLaneIndex() + (1)) < 32) ? "
+            "(((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
             "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value"
         ) in result
         assert "hip warp intrinsic __shfl_up_sync" not in result
@@ -16824,7 +16834,9 @@ class TestHipCodeGen:
         )
         assert "@group(0) @binding(3) var<uniform> size: u32" in result
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
-        assert "var lid: u32 = (gl_LocalInvocationID.x % 32);" in result
+        assert (
+            "var lid: u32 = (gl_LocalInvocationID.x % int(gl_SubgroupSize));" in result
+        )
         assert "var bid: u32 = gl_WorkGroupID.x;" in result
         assert "var warp_mask: u64 = (1u << lid);" in result
         assert "std::uint" not in result

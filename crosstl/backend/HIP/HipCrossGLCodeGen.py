@@ -8135,13 +8135,20 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
 
         if function_name == "__shfl_sync":
+            width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
             if (
                 len(args) not in {3, 4}
                 or not self.is_full_or_active_warp_mask(args[0])
-                or self.hip_warp_shuffle_width_limit(args[3:] or None) is None
+                or width_limit is None
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
-            return f"WaveReadLaneAt({args[1]}, {args[2]})"
+            if width_limit == "WaveGetLaneCount()":
+                return f"WaveReadLaneAt({args[1]}, {args[2]})"
+            # HIP reads lane srcLane & (width - 1) of the caller's width-lane segment (HIP __shfl).
+            return (
+                f"WaveReadLaneAt({args[1]}, ((WaveGetLaneIndex() - "
+                f"(WaveGetLaneIndex() % {width_limit})) + (({args[2]}) & ({width_limit} - 1))))"
+            )
 
         if function_name in {"__shfl_up_sync", "__shfl_down_sync"}:
             width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
@@ -8152,26 +8159,46 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             value, delta = args[1], args[2]
+            # Lanes shift within their width-lane segment; a source lane outside it keeps the caller's value.
+            segment_lane = (
+                "WaveGetLaneIndex()"
+                if width_limit == "WaveGetLaneCount()"
+                else f"(WaveGetLaneIndex() % {width_limit})"
+            )
             if function_name == "__shfl_up_sync":
                 return (
-                    f"((WaveGetLaneIndex() >= ({delta})) ? "
+                    f"(({segment_lane} >= ({delta})) ? "
                     f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({delta}))) "
                     f": {value})"
                 )
             return (
-                f"(((WaveGetLaneIndex() + ({delta})) < {width_limit}) ? "
+                f"((({segment_lane} + ({delta})) < {width_limit}) ? "
                 f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({delta}))) "
                 f": {value})"
             )
 
         if function_name == "__shfl_xor_sync":
+            width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
             if (
                 len(args) not in {3, 4}
                 or not self.is_full_or_active_warp_mask(args[0])
-                or self.hip_warp_shuffle_width_limit(args[3:] or None) is None
+                or width_limit is None
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
-            return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
+            if width_limit == "WaveGetLaneCount()":
+                return (
+                    f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
+                )
+            # HIP __shfl_xor: a partner beyond the caller's width-lane segment reads the caller's own lane.
+            partner = f"(WaveGetLaneIndex() ^ {args[2]})"
+            segment_end = (
+                f"((WaveGetLaneIndex() - (WaveGetLaneIndex() % {width_limit})) "
+                f"+ {width_limit})"
+            )
+            return (
+                f"WaveReadLaneAt({args[1]}, (({partner} < {segment_end}) ? "
+                f"{partner} : WaveGetLaneIndex()))"
+            )
 
         if function_name in {
             "__ballot",
@@ -8193,9 +8220,17 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         if len(width_args) != 1:
             return None
         normalized = self.normalize_warp_mask_expression(width_args[0])
-        if normalized in {"32", "32u", "64", "64u"}:
+        # HIP widths are powers of two up to warpSize; shuffles work inside width-lane segments.
+        if normalized.rstrip("u") in {"1", "2", "4", "8", "16", "32", "64"}:
             return normalized.rstrip("u")
-        if normalized in {"warpsize", "warp_size", "warp_full_width"}:
+        # warpSize arrives already imported as int(gl_SubgroupSize) (visit_HipBuiltinNode).
+        if normalized in {
+            "warpsize",
+            "warp_size",
+            "warp_full_width",
+            "gl_subgroupsize",
+            "int(gl_subgroupsize)",
+        }:
             return "WaveGetLaneCount()"
         return None
 
@@ -10130,12 +10165,14 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         return ", ".join(formatted)
 
     def visit_HipBuiltinNode(self, node):
+        # HIP's warpSize is the device's wavefront width, 32 or 64 lanes (HIP programming guide, "Warp
+        # cross-lane functions"), not a constant: it is the subgroup size of the target, as an int.
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
             "blockIdx": "gl_WorkGroupID",
             "gridDim": "gl_NumWorkGroups",
             "blockDim": "gl_WorkGroupSize",
-            "warpSize": "32",
+            "warpSize": "int(gl_SubgroupSize)",
         }
 
         # The parser builds this node only for the five built-ins builtin_map covers, flat ones included.
