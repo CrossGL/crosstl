@@ -60,6 +60,7 @@ from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .comma_expressions import is_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .precise_evaluation import refuse_precise_evaluation
 from .enum_utils import (
     collect_enum_type_names,
     collect_enum_variant_constants,
@@ -946,6 +947,7 @@ class WGSLCodeGen(
 
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
+        refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
         target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.

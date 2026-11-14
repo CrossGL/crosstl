@@ -61,6 +61,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .precise_evaluation import PreciseEvaluationMixin
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .float_remainder_assignment import float_remainder_assignment
@@ -258,6 +259,7 @@ def _refuse_buffer_counter(reason):
 
 class CudaCodeGen(
     LoweringRefusalMixin,
+    PreciseEvaluationMixin,
     CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
@@ -266,6 +268,13 @@ class CudaCodeGen(
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = CudaLoweringRefused
+    # nvcc never merges these into a multiply-add (CUDA Math API); see precise_evaluation.
+    PRECISE_MULTIPLY_INTRINSICS = {
+        "float": "__fmul_rn",
+        "double": "__dmul_rn",
+        "half": "__hmul_rn",
+    }
+    PRECISE_TARGET_LABEL = "CUDA"
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
@@ -1698,7 +1707,11 @@ class CudaCodeGen(
             if self.is_cuda_shared_variable(local_var):
                 self.visit(local_var)
 
-        self.emit_body(body)
+        precise_state = self.enter_precise_evaluation(node)
+        try:
+            self.emit_body(body)
+        finally:
+            self.leave_precise_evaluation(precise_state)
         if fragment_output_name is not None and not self.statement_body_terminates(
             body
         ):
@@ -3196,6 +3209,11 @@ class CudaCodeGen(
         )
         if remainder is not None:
             return self.format_assignment_expression(remainder)
+        precise_product = self.precise_multiply_assignment(
+            node, node.target, node.value, operator
+        )
+        if precise_product is not None:
+            return self.format_assignment_expression(precise_product)
         swizzle_assignment = self.format_swizzle_assignment_expression(
             node.target,
             node.value,
@@ -3325,6 +3343,9 @@ class CudaCodeGen(
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        precise = self.precise_binary_operation(node, left, right, operator)
+        if precise is not None:
+            return precise
         logical = self.lower_vector_logical_operation(
             node.left,
             left,

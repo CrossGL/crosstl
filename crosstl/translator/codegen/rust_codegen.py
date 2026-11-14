@@ -59,6 +59,7 @@ from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .precise_evaluation import refuse_precise_evaluation
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_exact_lookups import (
@@ -689,6 +690,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         """
         # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
+        refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
         return self.refusals.run(self.generate_program, ast)
 

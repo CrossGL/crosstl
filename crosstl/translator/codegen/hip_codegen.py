@@ -70,6 +70,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .precise_evaluation import PreciseEvaluationMixin
 from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -322,6 +323,7 @@ class UnsupportedHIPAstNodeError(ValueError):
 
 class HipCodeGen(
     LoweringRefusalMixin,
+    PreciseEvaluationMixin,
     CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
@@ -330,6 +332,9 @@ class HipCodeGen(
     """Emit HIP source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = HipLoweringRefused
+    # Clang disables contraction for the compound statement the pragma starts; see precise_evaluation.
+    PRECISE_BODY_PRAGMA = "#pragma clang fp contract(off)"
+    PRECISE_TARGET_LABEL = "HIP"
 
     resource_diagnostic_backend = "HIP"
     struct_constructor_uses_braces = True
@@ -2309,6 +2314,9 @@ class HipCodeGen(
             self.add_line(signature)
             self.add_line("{")
             self.indent_level += 1
+            precise_state = self.enter_precise_evaluation(node)
+            for line in self.precise_body_prologue():
+                self.add_line(line)
             for statement in value_array_copy_statements:
                 self.add_line(statement)
             fragment_output_name = None
@@ -2333,7 +2341,10 @@ class HipCodeGen(
             for local_var in getattr(self, "current_stage_local_variables", []) or []:
                 if self.is_hip_shared_variable(local_var):
                     self.visit(local_var)
-            self.emit_body(body)
+            try:
+                self.emit_body(body)
+            finally:
+                self.leave_precise_evaluation(precise_state)
             if fragment_output_name is not None and not self.statement_body_terminates(
                 body
             ):
@@ -4167,6 +4178,9 @@ class HipCodeGen(
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        precise = self.precise_binary_operation(node, left, right, operator)
+        if precise is not None:
+            return precise
 
         logical = self.lower_vector_logical_operation(
             node.left,
