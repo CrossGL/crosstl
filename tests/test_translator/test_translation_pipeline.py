@@ -1577,6 +1577,133 @@ def test_spirv_assembly_vertex_position_output_lowers_to_wgsl(tmp_path):
     assert_spirv_position_output_wgsl_contract(generated)
 
 
+# Importers such as Vulkan GLSL emit a void ``main`` that writes gl_Position
+# directly, with no output variable. WGSL has no writable position global, so
+# the write is lowered to a @builtin(position) field of a synthesized output
+# struct, whatever shape the reference takes.
+_VULKAN_POSITION_WRITE_CASES = {
+    "whole_write": """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        layout(set = 0, binding = 0) uniform U { mat4 mvp; } u;
+        void main() { gl_Position = u.mvp * vec4(pos, 1.0); }
+    """,
+    "component_write": """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        void main() {
+            gl_Position = vec4(pos, 1.0);
+            gl_Position.y = -gl_Position.y;
+        }
+    """,
+    "read_back": """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        layout(location = 0) out float depth;
+        void main() {
+            gl_Position = vec4(pos, 1.0);
+            depth = gl_Position.z / gl_Position.w;
+        }
+    """,
+    "early_return": """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        void main() {
+            if (pos.x > 0.0) {
+                gl_Position = vec4(1.0);
+                return;
+            }
+            gl_Position = vec4(pos, 1.0);
+        }
+    """,
+}
+
+
+def _assert_vertex_position_builtin_wgsl_contract(generated):
+    _assert_generated_output_is_usable(generated)
+    assert "struct VertexOutput {" in generated
+    assert "@builtin(position) position: vec4<f32>," in generated
+    assert "fn vertex_main() -> VertexOutput" in generated
+    assert "output.position = " in generated
+    assert "return output;" in generated
+    # The position builtin must not leak as an undefined WGSL identifier.
+    assert "gl_Position" not in generated
+
+
+@pytest.mark.parametrize("case", sorted(_VULKAN_POSITION_WRITE_CASES))
+def test_vulkan_vertex_gl_position_write_lowers_to_wgsl_output(tmp_path, case):
+    source = textwrap.dedent(_VULKAN_POSITION_WRITE_CASES[case]).strip()
+    source_path = _write_source(tmp_path, f"{case}.vert", source)
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="wgsl",
+        source_backend="vulkan",
+        format_output=False,
+    )
+
+    _assert_vertex_position_builtin_wgsl_contract(generated)
+
+
+# Only the position builtin is lowered to the stage output. Any other stage
+# builtin on this path has no modelling, so it is refused with a typed error
+# rather than silently emitted as an undefined identifier.
+_VULKAN_UNSUPPORTED_BUILTIN_CASES = {
+    "point_size": (
+        """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        void main() {
+            gl_Position = vec4(pos, 1.0);
+            gl_PointSize = 2.0;
+        }
+        """,
+        "gl_PointSize",
+    ),
+    "clip_distance": (
+        """
+        #version 450
+        layout(location = 0) in vec3 pos;
+        void main() {
+            gl_Position = vec4(pos, 1.0);
+            gl_ClipDistance[0] = pos.x;
+        }
+        """,
+        "gl_ClipDistance",
+    ),
+    "vertex_index": (
+        """
+        #version 450
+        void main() {
+            vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+            gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+        }
+        """,
+        "gl_VertexIndex",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_VULKAN_UNSUPPORTED_BUILTIN_CASES))
+def test_vulkan_vertex_unsupported_builtin_is_refused(tmp_path, case):
+    source_text, builtin = _VULKAN_UNSUPPORTED_BUILTIN_CASES[case]
+    source = textwrap.dedent(source_text).strip()
+    source_path = _write_source(tmp_path, f"{case}.vert", source)
+
+    with pytest.raises(ValueError) as excinfo:
+        crosstl.translate(
+            str(source_path),
+            backend="wgsl",
+            source_backend="vulkan",
+            format_output=False,
+        )
+
+    message = str(excinfo.value)
+    assert builtin in message
+    # The position builtin stays supported; it is not named among the refused.
+    assert "gl_Position" not in message
+
+
 @pytest.mark.parametrize(
     ("filename", "source", "stage", "expected_crossgl"),
     (
