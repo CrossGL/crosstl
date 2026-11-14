@@ -36,12 +36,12 @@ from .reference_parameters import ReferenceParameters
 class CudaToCrossGLConverter:
 _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
-_CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
-
+class CudaToCrossGLConverter:
     """Serialize CUDA backend AST nodes back into CrossGL source."""
+
+    CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_CUDA",
-        "CUDA_CHECK",
         "checkCuda",
         "checkCudaErrors",
         "gpuErrchk",
