@@ -14,8 +14,8 @@ The guide's limitations rule out the other memories a CrossGL pointer can point 
 
 The Slang generator wrote such a pointer as ``T*``, which slangc rejected or miscompiled.
 :func:`refuse_slang_pointer_declarations` refuses each function parameter and local declared with a pointer type,
-naming the memory it points into. Storage buffers declared as ``buffer T* name`` at module or stage scope are buffers,
-not pointers, and are not affected.
+naming the memory it points into. Storage buffers declared as ``buffer T* name``, at module or stage scope or as a
+helper parameter that receives one, are buffers, not pointers, and are not affected.
 """
 
 from __future__ import annotations
@@ -57,6 +57,13 @@ def _pointed_memory(type_node):
     return None
 
 
+def _is_buffer_declaration(declaration):
+    """``buffer T* name`` binds a storage buffer (a helper receives the caller's), so it is no pointer."""
+    return "buffer" in {
+        str(q).lower() for q in getattr(declaration, "qualifiers", None) or []
+    }
+
+
 def _entry_ids(ast, functions):
     entries = {
         id(f) for f in functions if function_stage_name(f) in STAGE_QUALIFIER_NAMES
@@ -90,6 +97,8 @@ def refuse_slang_pointer_declarations(ast, refuse):
             if isinstance(node, A.VariableNode)
         )
         for declaration, declared in declarations:
+            if _is_buffer_declaration(declaration):
+                continue
             pointed = _pointed_memory(declared)
             if pointed is None:
                 continue

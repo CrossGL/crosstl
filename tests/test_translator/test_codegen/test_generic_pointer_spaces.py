@@ -355,17 +355,18 @@ def test_cuda_helpers_take_the_spaces_of_their_arguments(backend, tmp_path):
     source = tmp_path / "kernel.cu"
     source.write_text(CUDA_KERNEL, encoding="utf-8")
 
-    code = crosstl.translate(str(source), backend=backend)
+    # Unformatted, so the spellings do not depend on whether clang-format is installed.
+    code = crosstl.translate(str(source), backend=backend, format_output=False)
 
     assert written_generic_pointer_spellings(code) == []
     assert "launch" not in code
     if backend == "metal":
         for signature in (
-            "float load2_threadgroup(threadgroup float *p, int i)",
-            "float load2_thread(thread float *p, int i)",
-            "void store_device(device float *p, float v)",
-            "void store_threadgroup(threadgroup float *p, float v)",
-            "threadgroup float *t = tile + 1;",
+            "float load2_threadgroup(threadgroup float* p, int i)",
+            "float load2_thread(thread float* p, int i)",
+            "void store_device(device float* p, float v)",
+            "void store_threadgroup(threadgroup float* p, float v)",
+            "threadgroup float* t = tile + 1;",
         ):
             assert signature in code
     compile_natively(backend, code, tmp_path)
@@ -383,13 +384,13 @@ def test_hip_read_only_buffers_reach_const_helpers(backend, tmp_path):
         encoding="utf-8",
     )
 
-    code = crosstl.translate(str(source), backend=backend)
+    code = crosstl.translate(str(source), backend=backend, format_output=False)
 
     assert written_generic_pointer_spellings(code) == []
     if backend == "metal":
-        assert "float sum2_const_device(const device float *p, int i)" in code
-        assert "const device float *q = p + 1;" in code
-        assert "float sum2_device(device float *p, int i)" in code
+        assert "float sum2_const_device(const device float* p, int i)" in code
+        assert "const device float* q = p + 1;" in code
+        assert "float sum2_device(device float* p, int i)" in code
     compile_natively(backend, code, tmp_path)
 
 
