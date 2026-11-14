@@ -2183,6 +2183,36 @@ def test_wgsl_codegen_converts_mixed_integer_vector_operands(tmp_path):
         validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_mixed_integer_vector_compound_operands(tmp_path):
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                int t = 2;
+                uvec2 a = u;
+                a += k;
+                a -= k.x;
+                a *= t;
+                uo[1] = a;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "a += vec2<u32>(k);" in generated
+    assert "a -= vec2<u32>(u32(k.x));" in generated
+    assert "a *= vec2<u32>(u32(t));" in generated
+    if shutil.which("naga") is not None:
+        validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
     # Built-ins min, max and clamp convert signed arguments to u32 when combined with uint (#3628).
     shader = """

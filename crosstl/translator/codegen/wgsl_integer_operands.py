@@ -88,9 +88,7 @@ def wgsl_mixed_integer_call_arguments(codegen, arguments):
     if "u32" in arg_scalars:
         for i, arg in enumerate(arguments):
             if arg_scalars[i] == "i32" and not is_abstract_integer_literal(arg):
-                rendered[i] = (
-                    f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
-                )
+                rendered[i] = f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
     return rendered
 
 
