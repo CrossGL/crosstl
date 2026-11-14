@@ -1284,30 +1284,31 @@ class TestCudaCodeGen:
         )
         assert f"uint lane = {lane_index};" in cuda_code
         assert "uint count = warpSize;" in cuda_code
-        assert f"bool first = ({lane_index} == 0);" in cuda_code
+        assert (
+            f"bool first = (static_cast<int>({lane_index}) == (__ffs(__activemask()) - 1));"
+            in cuda_code
+        )
         assert (
             "__device__ inline uint cgl_cuda_wave_active_sum_uint_uint(uint value)"
             in cuda_code
         )
-        assert "__shfl_down_sync(mask, result, offset)" in cuda_code
+        assert "__shfl_sync(active, value, static_cast<int>(source))" in cuda_code
         assert "uint sumValue = cgl_cuda_wave_active_sum_uint_uint(lane);" in cuda_code
         assert (
             "bool anyLane = "
             "cgl_cuda_wave_active_any_true_bool_bool((sumValue > 0u));" in cuda_code
         )
-        assert "__any_sync(mask, predicate)" in cuda_code
+        assert "(__any_sync(active, predicate) != 0)" in cuda_code
         assert (
             "uint4 ballot = cgl_cuda_wave_active_ballot_uint4_bool(anyLane);"
             in cuda_code
         )
-        assert "__ballot_sync(__activemask(), predicate)" in cuda_code
+        assert "__ballot_sync(active, predicate)" in cuda_code
         assert (
             "uint broadcast = cgl_cuda_wave_read_lane_at_uint_uint_uint(sumValue, 0u);"
             in cuda_code
         )
-        assert "__shfl_sync(__activemask(), value, static_cast<int>(lane))" in (
-            cuda_code
-        )
+        assert "__shfl_sync(active, value, static_cast<int>(lane))" in (cuda_code)
         assert "WaveOpNode(" not in cuda_code
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
 
@@ -1334,7 +1335,10 @@ class TestCudaCodeGen:
         )
 
         assert f"uint lane = {lane_index};" in cuda_code
-        assert f"bool first = ({lane_index} == 0);" in cuda_code
+        assert (
+            f"bool first = (static_cast<int>({lane_index}) == (__ffs(__activemask()) - 1));"
+            in cuda_code
+        )
         assert f"uint lane_index = {lane_index};" in cuda_code
         assert "uint lane = (threadIdx.x & (warpSize - 1));" not in cuda_code
         assert "uint lane_index = (threadIdx.x & (warpSize - 1));" not in cuda_code
@@ -1371,12 +1375,12 @@ class TestCudaCodeGen:
         assert "cgl_cuda_wave_active_count_bits_uint_bool(equal)" in cuda_code
         assert "cgl_cuda_wave_prefix_count_bits_uint_bool(equal)" in cuda_code
         assert "cgl_cuda_wave_match_uint4_uint(lane)" in cuda_code
-        assert "matching |= (1u << candidate);" in cuda_code
+        assert "matching |= 1u << candidate;" in cuda_code
         assert "cgl_cuda_quad_read_lane_at_uint_uint_uint(lane, 1u)" in cuda_code
         assert "cgl_cuda_quad_read_across_x_uint_uint(lane)" in cuda_code
         assert "cgl_cuda_quad_read_across_y_uint_uint(lane)" in cuda_code
         assert "cgl_cuda_quad_read_across_diagonal_uint_uint(lane)" in cuda_code
-        assert "__shfl_xor_sync(__activemask(), value, 1)" in cuda_code
+        assert "__shfl_xor_sync(active, value, 1)" in cuda_code
         assert "cgl_cuda_wave_multi_prefix_sum_uint_uint_uint4(lane, mask)" in cuda_code
         assert "unsigned int partition = mask.x & active;" in cuda_code
         assert (
