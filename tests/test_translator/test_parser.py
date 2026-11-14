@@ -53,6 +53,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError, Parser
+from crosstl.translator.refusals import CrossGLSyntaxError
 
 
 def tokenize_code(code: str) -> List:
@@ -70,6 +71,19 @@ def parse_code(tokens: List):
     """
     parser = Parser(tokens)
     return parser.parse()
+
+
+def test_stage_with_helpers_but_no_entry_is_rejected():
+    source = """
+    shader MissingEntry {
+        vertex {
+            void helper() {}
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLSyntaxError, match="has no main or @stage_entry"):
+        parse_code(tokenize_code(source))
 
 
 @pytest.mark.parametrize("space", ["threadgroup", "thread", "device", "constant"])

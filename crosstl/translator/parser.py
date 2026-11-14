@@ -952,6 +952,26 @@ class Parser:
                 None,
             )
 
+        role_attributes = {
+            "callable_data",
+            "hit_attribute",
+            "indices",
+            "mesh_payload",
+            "payload",
+            "primitives",
+            "vertices",
+        }
+        has_role_function = any(
+            str(getattr(attribute, "name", "")).lower() in role_attributes
+            for function in parsed_functions
+            for parameter in getattr(function, "parameters", []) or []
+            for attribute in getattr(parameter, "attributes", []) or []
+        )
+        if main_function is None and parsed_functions and not has_role_function:
+            raise CrossGLSyntaxError(
+                f"{stage_type} stage declares functions but has no main or @stage_entry"
+            )
+
         local_functions.extend(
             func for func in parsed_functions if func is not main_function
         )
