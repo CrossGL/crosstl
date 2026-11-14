@@ -240,6 +240,66 @@
       "outcome": "preserved",
       "sourceSHA256": "22e4367d07ca2757d8a662146cb12a0c41340d001f6b5b72423c737d6cf97a19"
     },
+    "c_cos_range|opencl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
+    "c_cos_range|opencl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "1599dcd68104ff2e78f13675af15cc9ab03963ee4bc8e46505ef4dc072db5376"
+    },
     "c_fmin_nan|opencl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "169fba4f996b245fd94d5109c950313e685a32bf632657d3de40d088930dd525",
       "outcome": "preserved",
@@ -632,7 +692,7 @@
     },
     "c_sin|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "81fecbff2c524b4c42bac83415e6a6c7e158e5e27bfe0c2c685ba04deb8c99de"
     },
     "c_sin|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
@@ -642,12 +702,12 @@
     },
     "c_sin|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "81fecbff2c524b4c42bac83415e6a6c7e158e5e27bfe0c2c685ba04deb8c99de"
     },
     "c_sin|opencl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "81fecbff2c524b4c42bac83415e6a6c7e158e5e27bfe0c2c685ba04deb8c99de"
     },
     "c_sin|opencl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
@@ -657,7 +717,7 @@
     },
     "c_sin|opencl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "81fecbff2c524b4c42bac83415e6a6c7e158e5e27bfe0c2c685ba04deb8c99de"
     },
     "c_uchar_wrap|opencl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -4770,6 +4830,66 @@
       "outcome": "preserved",
       "sourceSHA256": "92417630cce716b64fdb9ccf9304f087012714325bd517a27ce6f91a8dd73595"
     },
+    "u_cosf_range|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
+    "u_cosf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "521434592f34fd560fd1c9b45ed67ee6e11c6872ea6210430ffb3975014c6fd0"
+    },
     "u_denorm|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "ed265f341fd68634c312fb7d3c8490d24649d0f4981927441951cc4d21db7d37",
       "outcome": "preserved",
@@ -5300,6 +5420,66 @@
       "outcome": "preserved",
       "sourceSHA256": "402a7bde42a92afa1719bbff4e7774c8cb9d945d089bed0ab5d6cfc753abe479"
     },
+    "u_sinf_range|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "compiled-only",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
+    "u_sinf_range|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "53c39b54b8d54086028e49f79c32b8e80b8ed71c2441afac2862c67a189f6f39",
+      "outcome": "preserved",
+      "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
+    },
     "u_sinf|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
       "outcome": "preserved",
@@ -5332,7 +5512,7 @@
     },
     "u_sinf|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
     },
     "u_sinf|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
@@ -5342,12 +5522,12 @@
     },
     "u_sinf|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
     },
     "u_sinf|cuda|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
     },
     "u_sinf|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
@@ -5357,7 +5537,7 @@
     },
     "u_sinf|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "b14846338297ccc22c372104ae6024361489470a907ab4acfdc49287fe91abe6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "e3f912d90cf76a62a7ac8c4c38736ecd51ad2786a7c7f95b78213060ca22174c"
     },
     "u_srem_sign|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -5660,16 +5840,6 @@
       "outcome": "preserved",
       "sourceSHA256": "eb8d1a29c6d9c1d1f5d5747a9bf640b435822b6979695c12debaaf06c198df1c"
     }
-  },
-  "counts": {
-    "compiled-only": 206,
-    "diverged": 88,
-    "driver-rejected": 8,
-    "interface-changed": 4,
-    "invalid": 12,
-    "observed": 40,
-    "preserved": 758,
-    "refused": 16
   },
   "keys": [
     "case",
