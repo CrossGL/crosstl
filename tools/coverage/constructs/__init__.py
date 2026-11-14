@@ -54,7 +54,7 @@ _WIDTHS = {
 _BUFFERS = (("float", "fin"), ("int", "iin"), ("float", "outp"))
 _INPUTS = re.compile(r"\b(fin|iin)\b")
 # The languages whose probes are compiled to the SPIR-V input probes (:mod:`..spirv_input`).
-_SPIRV_SOURCES = ("glsl", "hlsl")
+_SPIRV_SOURCES = ("glsl", "hlsl", "slang")
 
 # The curated features, by category. The stages and scalar widths are added from the grammar.
 CURATED: tuple[Construct, ...] = (
@@ -121,9 +121,9 @@ def _template(name: str, language: str) -> Template | None:
 def features(language: str, grammar_text: str) -> list[Feature]:
     """The language-level features ``language`` has.
 
-    SPIR-V has every one that GLSL or HLSL spells, since they are SPIR-V's own items and its input probes are compiled
-    from those two languages (:mod:`..spirv_input`). A construct that neither spells, such as OpenCL C's ``.hi``, is
-    another language's name for instructions that other constructs already measure.
+    SPIR-V has every one that GLSL, HLSL or Slang spells, since they are SPIR-V's own items and its input probes are
+    compiled from those languages (:mod:`..spirv_input`). A construct that none of them spells, such as OpenCL C's
+    ``.hi``, is another language's name for instructions that other constructs already measure.
     """
     result = []
     for construct in universe(grammar_text):
