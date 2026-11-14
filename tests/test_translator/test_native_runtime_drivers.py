@@ -6963,3 +6963,99 @@ def test_runtime_parity_metal_mutating_struct_method_executes_on_vulkan(tmp_path
     assert report["success"] is True, failure_context
     assert result["status"] == "passed"
     assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+# ---------------------------------------------------------------------------
+# GPU-free unit tests for the new SPIR-V version helpers and _create_instance
+# ---------------------------------------------------------------------------
+
+_SPIRV_MAGIC_LE_BYTES = b"\x03\x02\x23\x07"
+_SPIRV_MAGIC_BE_BYTES = b"\x07\x23\x02\x03"
+
+
+def _make_spirv_header(major: int, minor: int, *, big_endian: bool = False) -> bytes:
+    """Build a minimal 20-byte SPIR-V header with the given version."""
+    version_word = (major << 16) | (minor << 8)
+    if big_endian:
+        import struct as _struct
+        return _SPIRV_MAGIC_BE_BYTES + _struct.pack(">IIII", version_word, 0, 1, 0)
+    import struct as _struct
+    return _SPIRV_MAGIC_LE_BYTES + _struct.pack("<IIII", version_word, 0, 1, 0)
+
+
+def test_spirv_module_version_little_endian_header():
+    code = _make_spirv_header(1, 3)
+    assert _spirv_module_version(code) == (1, 3)
+
+
+def test_spirv_module_version_big_endian_header():
+    code = _make_spirv_header(1, 5, big_endian=True)
+    assert _spirv_module_version(code) == (1, 5)
+
+
+def test_spirv_module_version_non_spirv_input():
+    assert _spirv_module_version(b"\x00" * 20) is None
+    assert _spirv_module_version(b"\x03\x02\x23") is None  # too short
+    assert _spirv_module_version(b"DXBC\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") is None
+
+
+@pytest.mark.parametrize(
+    ("minor", "expected_ceiling"),
+    [
+        (0, (1, 0)),
+        (1, (1, 3)),
+        (2, (1, 5)),
+        (3, (1, 6)),
+    ],
+)
+def test_vulkan_spirv_ceiling(minor, expected_ceiling):
+    # Build a Vulkan API version integer: major=1, minor=<minor>, patch=0
+    api_version = (1 << 22) | (minor << 12)
+    assert _vulkan_spirv_ceiling(api_version) == expected_ceiling
+
+
+def test_validate_vulkan_spirv_module_version_raises_for_spirv_1_3_under_vulkan_1_0():
+    # SPIR-V 1.3 is too new for Vulkan 1.0 (ceiling is SPIR-V 1.0).
+    code = _make_spirv_header(1, 3)
+    api_version_1_0 = 1  # VK_API_VERSION_1_0 encodes as (1<<22)|(0<<12) but
+    # the actual vulkan binding uses (1<<22) so we compute it properly:
+    api_version_1_0 = (1 << 22) | (0 << 12)
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _validate_vulkan_spirv_module_version(code, api_version_1_0)
+
+    details = excinfo.value.details
+    assert details["reasonKind"] == "spirv-version-incompatible"
+    assert details["spirvModuleVersion"] == "1.3"
+    assert details["maxAcceptedSpirvVersion"] == "1.0"
+    assert details["vulkanApiVersion"] == "1.0"
+
+
+def test_create_instance_uses_vkenumerateinstanceversion_to_request_1_1():
+    """_create_instance must request VK_MAKE_VERSION(1,1,0) when the loader reports >= 1.1."""
+    version_1_1 = (1 << 22) | (1 << 12)
+    version_1_4 = (1 << 22) | (4 << 12)
+
+    created_infos = []
+
+    vk = SimpleNamespace(
+        VK_STRUCTURE_TYPE_APPLICATION_INFO=0,
+        VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1,
+        VK_API_VERSION_1_0=(1 << 22),
+        VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR=0x1,
+        VK_QUEUE_COMPUTE_BIT=0x2,
+        VK_MAKE_VERSION=lambda major, minor, patch: (major << 22) | (minor << 12) | patch,
+        vkEnumerateInstanceVersion=lambda: version_1_4,
+        vkEnumerateInstanceExtensionProperties=lambda layer: [],
+        vkDestroyInstance=lambda instance, allocator: None,
+    )
+    vk.VkApplicationInfo = lambda **kwargs: kwargs
+    vk.VkInstanceCreateInfo = lambda **kwargs: (created_infos.append(kwargs), kwargs)[1]
+    vk.vkCreateInstance = lambda create_info, allocator: "fake-instance"
+
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+    runtime._create_instance(vk)
+
+    assert len(created_infos) == 1
+    app_info = created_infos[0]["pApplicationInfo"]
+    assert app_info["apiVersion"] == version_1_1

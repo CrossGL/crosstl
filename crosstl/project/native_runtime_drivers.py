@@ -2250,6 +2250,8 @@ class _VulkanDispatchContext:
 
     def _create_buffers(self) -> None:
         for prepared in self.buffers:
+        api_ver = getattr(self, "_effective_api_version", vk.VK_API_VERSION_1_0)
+        _validate_vulkan_spirv_module_version(self.shader_code, api_ver)
             self.resources.append(self._create_buffer(prepared))
 
     def _create_buffer(self, prepared: _PreparedVulkanBuffer) -> _VulkanBufferResource:
