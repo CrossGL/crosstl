@@ -6924,10 +6924,6 @@ class CudaToCrossGLConverter:
         scoped_type = self.convert_cuda_scoped_type_to_crossgl(cuda_type)
         if scoped_type is not None:
             return scoped_type
-        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
-            # A struct/enum/alias named after any CrossGL keyword is declared under
-            # its renamed name. Value identifiers (locals, params) use the narrower
-            # CROSSGL_RESERVED_IDENTIFIERS checked via sanitize_identifier_name.
         if cuda_type in _CROSSGL_ALL_KEYWORDS and cuda_type in self.cuda_record_names:
             # A struct/enum/alias named after any CrossGL keyword is declared under
             # its renamed name.
@@ -6936,10 +6932,14 @@ class CudaToCrossGLConverter:
             # A struct named after a CrossGL reserved value-identifier keyword.
             return self.sanitize_identifier_name(cuda_type)
         return cuda_type
+
+    def unqualified_leading_cuda_std_type_name(self, cuda_type):
+        normalized_type = str(cuda_type)
+        prefix = "::cuda::std::"
+        if normalized_type.startswith(prefix):
             return normalized_type[len(prefix) :]
         return None
 
-        prefix = "::cuda::std::"
     def convert_nested_scoped_template_type_to_crossgl(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)
         if not template_args or "::" not in str(cuda_type):
