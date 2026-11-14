@@ -4104,7 +4104,9 @@ class WGSLCodeGen(
             and not self.is_user_function_name(function_name)
         ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
-            args = self.replicate_scalar_call_arguments(node.arguments, args)
+            if not mixed_integer_call_is_unsigned(self, node.arguments):
+                # An unsigned mixed call already has its scalars written as vecN<u32>.
+                args = self.replicate_scalar_call_arguments(node.arguments, args)
             return f"{normalized_name}({args[0]}, {args[1]})"
         if normalized_name in {"step", "smoothstep"} and not (
             self.is_user_function_name(function_name)
@@ -5006,14 +5008,9 @@ class WGSLCodeGen(
         replicated = []
         for arg, arg_type, text in zip(arguments, argument_types, rendered):
             literal = arg.operand if isinstance(arg, UnaryOpNode) else arg
-            already_vector = text.startswith(f"vec{size}<{component}>(")
-            if (
-                self.vector_shape(arg_type) is None
-                and not already_vector
-                and (
-                    isinstance(literal, LiteralNode)
-                    or self.scalar_type_name(arg_type) == component
-                )
+            if self.vector_shape(arg_type) is None and (
+                isinstance(literal, LiteralNode)
+                or self.scalar_type_name(arg_type) == component
             ):
                 text = f"vec{size}<{component}>({text})"
             replicated.append(text)

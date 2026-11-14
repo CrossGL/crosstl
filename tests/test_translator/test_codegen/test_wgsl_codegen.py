@@ -295,8 +295,9 @@ def test_wgsl_codegen_replicates_scalar_arguments_of_vector_builtins(tmp_path):
 
 def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
     # A scalar from length, dot, distance or a component-wise built-in such as
-    # abs or sqrt is replicated too (#4498 review); a signed literal beside a
-    # uvec is converted once, not wrapped twice.
+    # abs or sqrt is replicated too (#4498 review), and so is a swizzle of a
+    # vector constructor; a signed literal beside a uvec is converted once, not
+    # wrapped twice.
     shader = """
     shader Probe {
         buffer vec3* go;
@@ -312,7 +313,10 @@ def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
                 vec3 d = step(abs(f), w);
                 vec3 g = max(w, sqrt(f));
                 vec3 h = smoothstep(distance(w, w), 1.0, w);
-                go[1] = a + b + d + g + h + abs(w);
+                vec4 c = vec4(w, f);
+                vec3 x = max(w, vec3(f).x);
+                vec4 y = step(vec4(c.x).w, c);
+                go[1] = a + b + d + g + h + x + y.xyz + abs(w);
                 gu[1] = min(u, -1);
             }
         }
@@ -329,6 +333,8 @@ def test_wgsl_codegen_replicates_scalar_builtin_call_arguments(tmp_path):
         "var h: vec3<f32> = smoothstep(vec3<f32>(distance(w, w)), vec3<f32>(1.0), w);"
         in generated
     )
+    assert "var x: vec3<f32> = max(w, vec3<f32>(vec3<f32>(f).x));" in generated
+    assert "var y: vec4<f32> = step(vec4<f32>(vec4<f32>(c.x).w), c);" in generated
     assert "abs(w)" in generated
     assert "gu[1] = min(u, vec3<u32>(u32(-1i)));" in generated
     validate_wgsl_with_naga(tmp_path, generated)
