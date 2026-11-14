@@ -1367,7 +1367,7 @@ class VulkanToCrossGLConverter:
             "GlobalInvocationId": "gl_GlobalInvocationID",
             "HelperInvocation": "gl_HelperInvocation",
             "InstanceId": "gl_InstanceID",
-            "InstanceIndex": "gl_InstanceID",
+            "InstanceIndex": "gl_InstanceIndex",
             "InvocationId": "gl_InvocationID",
             "Layer": "gl_Layer",
             "LocalInvocationId": "gl_LocalInvocationID",

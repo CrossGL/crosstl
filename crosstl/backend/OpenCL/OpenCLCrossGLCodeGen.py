@@ -23,6 +23,11 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..assignment_operands import grouped_operand
+from ..no_contraction import (
+    PRECISE_FUNCTION_ATTRIBUTE,
+    FpContractState,
+    function_requires_no_contraction,
+)
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
@@ -434,7 +439,13 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             self.opencl_workgroup_pointer_helper_params = {}
         self.emit("// OpenCL to CrossGL conversion")
 
+        fp_contract = FpContractState()
+        self.fp_contract_file_scope_off = False
         for stmt in node.statements:
+            if fp_contract.update(stmt):
+                # Functions defined while the pragma is OFF are marked @precise.
+                self.fp_contract_file_scope_off = fp_contract.off
+                continue
             if isinstance(stmt, KernelNode) or (
                 isinstance(stmt, FunctionNode)
                 and "__global__" in getattr(stmt, "qualifiers", [])
@@ -621,6 +632,10 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
 
     def visit_kernel_as_compute_shader(self, kernel):
         self.emit("@compute")
+        if function_requires_no_contraction(
+            kernel, file_scope_off=self.fp_contract_file_scope_off
+        ):
+            self.emit(PRECISE_FUNCTION_ATTRIBUTE)
         self.emit(self.opencl_workgroup_size_attribute(kernel))
 
         params = []

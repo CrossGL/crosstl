@@ -14497,6 +14497,7 @@ class VulkanSPIRVCodeGen(
             "gl_frontfacing",
             "gl_globalinvocationid",
             "gl_instanceid",
+            "gl_instanceindex",
             "gl_invocationid",
             "gl_localinvocationid",
             "gl_localinvocationindex",
@@ -19763,7 +19764,18 @@ class VulkanSPIRVCodeGen(
                 runtime_parameters, execution_model_hint
             )
 
-        self.process_statements(function_node.body)
+        # A precise function evaluates all of its floating-point arithmetic as written.
+        precise_function = self.has_attribute(
+            function_node, "precise"
+        ) or "precise" in {
+            str(qualifier).lower()
+            for qualifier in getattr(function_node, "qualifiers", None) or ()
+        }
+        self.precise_expression_depth += precise_function
+        try:
+            self.process_statements(function_node.body)
+        finally:
+            self.precise_expression_depth -= precise_function
         self.process_tessellation_patch_constant_function(function_node)
 
         if not self.current_block_has_terminator():
@@ -30860,7 +30872,7 @@ class VulkanSPIRVCodeGen(
             "SV_VERTEXID": "gl_VertexID",
             "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
-            "GL_INSTANCEINDEX": "gl_InstanceID",
+            "GL_INSTANCEINDEX": "gl_InstanceIndex",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
@@ -30959,6 +30971,13 @@ class VulkanSPIRVCodeGen(
                 {"Vertex"},
             ),
             "gl_InstanceID": (
+                "uint",
+                "InstanceIndex",
+                "Input",
+                {"Vertex"},
+            ),
+            # Base-inclusive; lower_spirv_instance_ids spells gl_InstanceID as this minus BaseInstance.
+            "gl_InstanceIndex": (
                 "uint",
                 "InstanceIndex",
                 "Input",

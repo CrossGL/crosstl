@@ -19,6 +19,10 @@ from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
+from ..no_contraction import (
+    PRECISE_FUNCTION_ATTRIBUTE,
+    function_requires_no_contraction,
+)
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -82,6 +86,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
     IMPORT_REFUSAL_TYPE = HipImportRefused
 
     SOURCE_LANGUAGE_NAME = "HIP"
+    # Whether a file-scope FP_CONTRACT OFF pragma is in effect (crosstl/backend/no_contraction.py).
+    fp_contract_file_scope_off = False
     ERASE_CONCRETE_TYPE_ALIASES = True
     RECORD_SEMANTIC_ERROR = HipRecordSemanticError
 
@@ -5265,6 +5271,10 @@ class HipToCrossGLConverter(ImportRefusalMixin):
 
             param_str = ", ".join(params)
             function_name = self.format_function_declaration_name(node.name)
+            if function_requires_no_contraction(
+                node, file_scope_off=self.fp_contract_file_scope_off
+            ):
+                self.emit(PRECISE_FUNCTION_ATTRIBUTE)
             self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
@@ -5321,6 +5331,10 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 self.emit(f"// HIP AMDGPU flat work group size: ({bounds})")
 
         self.emit("@compute")
+        if function_requires_no_contraction(
+            kernel, file_scope_off=self.fp_contract_file_scope_off
+        ):
+            self.emit(PRECISE_FUNCTION_ATTRIBUTE)
         self.emit("@stage_entry")
         self.emit(
             kernel_workgroup_size_attribute(self.threadgroup_size, whole_groups=True)

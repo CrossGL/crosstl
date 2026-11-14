@@ -1279,8 +1279,13 @@ class HipParser:
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
 
+        token_type = (
+            self.current_token.type
+            if self.current_token is not None
+            else "end of input"
+        )
         raise self.syntax_error(
-            f"Expected declaration after template prefix, got {self.current_token.type}"
+            f"Expected declaration after template prefix, got {token_type}"
         )
 
     def parse_explicit_template_instantiation(self):

@@ -127,6 +127,28 @@ def test_opencl_template_argument_list_cut_off_by_the_end_of_input_is_rejected(
     assert "Unterminated template argument list" in str(error)
 
 
+def test_mojo_range_inside_square_type_arguments_is_rejected(tmp_path):
+    # ``DType..float32`` parses as a range, which has no spelling as a type argument.
+    source = tmp_path / "k.mojo"
+    source.write_text(
+        "fn main():\n    var v = SIMD[DType..float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+    )
+    error = finishes(
+        lambda: crosstl.translate(str(source), backend="cgl", format_output=False)
+    )
+    assert isinstance(error, SyntaxError), repr(error)
+    assert getattr(error, "project_diagnostic_code", None), repr(error)
+    assert "RangeNode cannot be a type argument" in str(error)
+
+
+def test_mojo_square_type_arguments_still_import(tmp_path):
+    source = tmp_path / "k.mojo"
+    source.write_text(
+        "fn main():\n    var v = SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+    )
+    assert crosstl.translate(str(source), backend="cgl", format_output=False)
+
+
 def test_directx_stray_hash_after_tokens_is_rejected(tmp_path):
     source = tmp_path / "stray.hlsl"
     source.write_text(

@@ -35,6 +35,10 @@ from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
+from .compute_entry_resources import (
+    ComputeEntryResourceError,
+    hoist_compute_entry_resources,
+)
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_buffer_layouts import hoist_constant_buffer_layouts
 from .constant_buffer_size import (
@@ -174,6 +178,7 @@ from .shader_records import (
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instance_ids import InstanceIdUnsupportedError, lower_spirv_instance_ids
 from .spirv_instructions import (
     SpirvOperationUnsupportedError,
     refuse_spirv_instructions,
@@ -249,6 +254,7 @@ __all__ = [
     "BindingIndexUnresolvedError",
     "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
+    "ComputeEntryResourceError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
     "DevicePrivateGlobalUnsupportedError",
@@ -284,6 +290,7 @@ __all__ = [
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
     "RelativeVertexIdUnsupportedError",
+    "InstanceIdUnsupportedError",
     "RuleInexpressibleError",
     "RowMajorMemberError",
     "RuleReport",
@@ -500,6 +507,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
     lower_relative_vertex_ids(program, report.target)
+    lower_spirv_instance_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
@@ -546,6 +554,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
+    hoist_compute_entry_resources(program, report.target)
     adopt_module_stage_outputs(program, report.target)
     convert_signed_builtin_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)

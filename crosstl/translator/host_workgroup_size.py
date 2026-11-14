@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from .refusals import MetadataContractError
+from .refusals import CrossGLRefusal, MetadataContractError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 __all__ = [
@@ -352,6 +352,43 @@ def workgroup_size_dependence(shader: Any, stage: Any) -> str | None:
     )
 
 
+def padded_workgroup_size_arguments(name: Any, arguments: list, unit) -> list:
+    """The arguments of a source attribute, with the dimensions a workgroup-size attribute leaves out made 1.
+
+    CrossGL spells a workgroup size as the WGSL ``workgroup_size`` attribute does: ``@ workgroup_size(x)`` and
+    ``@ workgroup_size(x, y)`` mean ``(x, 1, 1)`` and ``(x, y, 1)``, so every consumer of the AST reads three
+    dimensions. ``unit`` makes one literal ``1``. Other attributes keep their arguments.
+    """
+    if str(name).lower() not in _EXPLICIT_LIST_KEYS:
+        return arguments
+    if not 1 <= len(arguments) <= 3:
+        raise CrossGLRefusal(
+            f"@ {name} takes one, two or three dimensions, got {len(arguments)}"
+        )
+    return list(arguments) + [unit() for _ in range(3 - len(arguments))]
+
+
+def explicit_workgroup_size(attributes: Iterable[Any], render) -> tuple | None:
+    """The ``(x, y, z)`` source texts of the first ``@ workgroup_size``, ``@ numthreads`` or ``@ local_size``.
+
+    As in WGSL, an attribute may name one, two or three dimensions; the dimensions it leaves out are 1. An
+    attribute with no dimension or more than three names no workgroup size, so it is refused rather than ignored.
+    ``render`` turns one attribute argument into its source text.
+    """
+    for attribute in attributes:
+        name = str(getattr(attribute, "name", "")).lower()
+        if name not in _EXPLICIT_LIST_KEYS:
+            continue
+        arguments = list(getattr(attribute, "arguments", None) or [])
+        if not 1 <= len(arguments) <= 3:
+            raise CrossGLRefusal(
+                f"@ {name} takes one, two or three dimensions, got {len(arguments)}"
+            )
+        sizes = [render(argument) for argument in arguments]
+        return tuple(sizes + ["1"] * (3 - len(sizes)))
+    return None
+
+
 def host_workgroup_size_attribute_text(size: tuple[int, int, int] | None) -> str:
     """The CrossGL mark of a kernel whose host chooses its size, naming that size when it is known."""
     if size is None:
@@ -439,12 +476,9 @@ def _resolve_function_entries(shader: Any, render) -> None:
             continue
         attributes = list(getattr(function, "attributes", None) or [])
         config: dict = {}
-        for attribute in attributes:
-            name = str(getattr(attribute, "name", "")).lower()
-            arguments = list(getattr(attribute, "arguments", None) or [])
-            if name in _EXPLICIT_LIST_KEYS and len(arguments) == 3:
-                config["numthreads"] = tuple(render(item) for item in arguments)
-                break
+        size = explicit_workgroup_size(attributes, render)
+        if size is not None:
+            config["numthreads"] = size
         mark = host_workgroup_size_mark(attributes, render)
         if mark is not None:
             function.attributes = [

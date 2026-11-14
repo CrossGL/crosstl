@@ -17,6 +17,7 @@ from .blocks import WEBGL as _BLOCKS
 from .booleans import WEBGL as _BOOLEANS
 from .calls import WEBGL as _CALLS
 from .columns import WEBGL as _COLUMNS
+from .components import ELSEWHERE as _COMPONENTS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .draws import WEBGL as _DRAWS
@@ -148,6 +149,7 @@ WEBGL = {
     **_RAYS,
     **_BINDINGS,
     **_INTERLOCKS,
+    **_COMPONENTS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,
