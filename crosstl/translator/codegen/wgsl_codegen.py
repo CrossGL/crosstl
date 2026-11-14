@@ -1456,10 +1456,38 @@ class WGSLCodeGen(
                     "entry_point": lowered,
                 }
                 continue
-            if output_variable is None or entry_point is None:
+            if entry_point is None:
                 continue
             if not self.is_void_type(getattr(entry_point, "return_type", None)):
                 continue
+            builtin_local = None
+            if output_variable is not None:
+                source_name = output_variable.name
+                member_type = output_variable.var_type
+            else:
+                # Importers such as Vulkan GLSL emit a void entry point that
+                # writes the position builtin directly (gl_Position = ...) with
+                # no output variable. WGSL has no writable position global, so
+                # the builtin is lowered to a @builtin(position) field of a
+                # synthesized output struct. Any other stage builtin is refused
+                # with a typed error rather than emitted as an undefined name.
+                source_name = self.vertex_position_builtin_write_name(
+                    stage_node, entry_point
+                )
+                if source_name is None:
+                    continue
+                unsupported = self.unsupported_vertex_builtin_references(entry_point)
+                if unsupported:
+                    raise WGSLRefusal(
+                        "WGSL target does not support vertex builtin "
+                        "identifier(s): "
+                        + ", ".join(unsupported)
+                        + "; only the position builtin is lowered to the stage "
+                        "output. Model the rest as entry-point parameters or "
+                        "return values."
+                    )
+                member_type = VectorType(PrimitiveType("float"), 4)
+                builtin_local = source_name
             struct_name = self.unique_stage_output_struct_name(
                 "VertexOutput", used_struct_names
             )
@@ -1470,18 +1498,24 @@ class WGSLCodeGen(
                 [
                     StructMemberNode(
                         field_name,
-                        output_variable.var_type,
+                        member_type,
                         attributes=[AttributeNode("gl_Position")],
                     )
                 ],
             )
-            lowerings[id(stage_node)] = {
-                "source_name": output_variable.name,
+            lowering = {
+                "source_name": source_name,
                 "field_name": field_name,
                 "local_name": self.unique_stage_output_local_name(entry_point),
                 "struct_name": struct_name,
                 "struct": struct_node,
             }
+            if builtin_local is not None:
+                lowering["builtin_local"] = builtin_local
+                lowering["position_local_name"] = self.position_local_name_for(
+                    entry_point, builtin_local
+                )
+            lowerings[id(stage_node)] = lowering
         return lowerings
 
     def module_declaration_names(self, ast):
@@ -1760,6 +1794,8 @@ class WGSLCodeGen(
         return lowered
 
     def rewrite_stage_output_body(self, body, lowering):
+        if lowering.get("builtin_local"):
+            return self.rewrite_stage_output_builtin_local(body, lowering)
         rewritten = []
         saw_return = False
         for statement in self.block_statements(body):
@@ -1775,6 +1811,152 @@ class WGSLCodeGen(
             lowering["local_name"], NamedType(lowering["struct_name"])
         )
         return BlockNode([output_declaration, *rewritten])
+
+    def vertex_position_builtin_write_name(self, stage_node, entry_point):
+        """The name a vertex entry point writes the position builtin through, if any.
+
+        Importers that target GLSL/HLSL-style stages emit ``gl_Position = ...``
+        (or an SV_Position alias) directly in a void ``main`` with no output
+        variable. WGSL cannot write such a global, so the caller lowers the
+        write to a stage output. Returns the identifier used, or None.
+        """
+        if normalize_stage_name(getattr(stage_node, "stage", None)) != "vertex":
+            return None
+        body = getattr(entry_point, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return None
+        for node in body.walk():
+            if not isinstance(node, AssignmentNode):
+                continue
+            target = getattr(node, "target", None)
+            if target is None:
+                target = getattr(node, "left", None)
+            if isinstance(target, IdentifierNode) and self.is_position_builtin_name(
+                target.name
+            ):
+                return target.name
+        return None
+
+    def is_position_builtin_name(self, name):
+        return (
+            self.BUILTIN_IDENTIFIER_ALIASES.get(name) == "position"
+            or self.BUILTIN_SEMANTICS.get(self.semantic_key(name)) == "position"
+        )
+
+    def unsupported_vertex_builtin_references(self, entry_point):
+        """Vertex builtins other than position that WGSL will not model here.
+
+        The position builtin becomes the stage output. Every other ``gl_``/
+        ``sv_`` builtin (gl_PointSize, gl_ClipDistance, gl_VertexIndex, ...) has
+        no lowering on this path, so it is reported and refused rather than
+        emitted as an undefined identifier. ``gl_`` and ``sv_`` are reserved
+        prefixes, so user identifiers never collide with this check.
+        """
+        body = getattr(entry_point, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return []
+        found = []
+        seen = set()
+        for node in body.walk():
+            if not isinstance(node, IdentifierNode) or node.name in seen:
+                continue
+            name = node.name
+            semantic = self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
+            if semantic == "position":
+                continue
+            lowered = name.lower()
+            if (
+                semantic is not None
+                or lowered.startswith("gl_")
+                or lowered.startswith("sv_")
+            ):
+                seen.add(name)
+                found.append(name)
+        return sorted(found)
+
+    def position_local_name_for(self, entry_point, builtin):
+        """A plain local name, free of the body's identifiers, to hold the position value."""
+        used = set()
+        body = getattr(entry_point, "body", None)
+        if body is not None and hasattr(body, "walk"):
+            for node in body.walk():
+                if isinstance(node, IdentifierNode):
+                    used.add(node.name)
+        base = "clip_position"
+        name = base
+        index = 2
+        while name in used:
+            name = f"{base}{index}"
+            index += 1
+        return name
+
+    def rewrite_stage_output_builtin_local(self, body, lowering):
+        """Lower a direct position-builtin write to the stage output struct.
+
+        The position builtin is renamed to a plain local vec4 so every
+        reference shape keeps working (a whole write ``gl_Position = v``, a
+        component write ``gl_Position.y = ...``, a read of ``gl_Position.z``),
+        and the local is copied into the output struct's position field at
+        each return and at the fall-through end of the body.
+        """
+        builtin = lowering["builtin_local"]
+        local = lowering["position_local_name"]
+        output_name = lowering["local_name"]
+        field_name = lowering["field_name"]
+
+        body = copy.deepcopy(body)
+        for node in body.walk():
+            if isinstance(node, IdentifierNode) and node.name == builtin:
+                node.name = local
+                if hasattr(node, "identifier"):
+                    node.identifier = local
+
+        def copy_then_return():
+            return [
+                ExpressionStatementNode(
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode(output_name), field_name),
+                        IdentifierNode(local),
+                    )
+                ),
+                ReturnNode(IdentifierNode(output_name)),
+            ]
+
+        def rewrite(statement):
+            if isinstance(statement, ReturnNode) and statement.value is None:
+                return BlockNode(copy_then_return())
+            if isinstance(statement, BlockNode):
+                return BlockNode(
+                    [
+                        rewrite(child)
+                        for child in getattr(statement, "statements", []) or []
+                    ]
+                )
+            if isinstance(statement, IfNode):
+                rewritten = copy.copy(statement)
+                rewritten.then_branch = rewrite(statement.then_branch)
+                if statement.else_branch is not None:
+                    rewritten.else_branch = rewrite(statement.else_branch)
+                rewritten.if_body = rewritten.then_branch
+                rewritten.else_body = rewritten.else_branch
+                return rewritten
+            if isinstance(statement, (ForNode, WhileNode, DoWhileNode, LoopNode)):
+                rewritten = copy.copy(statement)
+                rewritten.body = rewrite(statement.body)
+                return rewritten
+            return statement
+
+        statements = self.block_statements(body)
+        rewritten = [rewrite(statement) for statement in statements]
+        if not (rewritten and self.statement_definitely_returns(rewritten[-1])):
+            rewritten.extend(copy_then_return())
+        position_declaration = VariableNode(
+            local, VectorType(PrimitiveType("float"), 4)
+        )
+        output_declaration = VariableNode(
+            output_name, NamedType(lowering["struct_name"])
+        )
+        return BlockNode([position_declaration, output_declaration, *rewritten])
 
     def rewrite_stage_output_statement(self, statement, lowering):
         if isinstance(statement, ExpressionStatementNode):
