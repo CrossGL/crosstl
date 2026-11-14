@@ -10,6 +10,7 @@ from crosstl.translator import parse
 from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.registry import BackendRegistry, BackendSpec
 from crosstl.translator.codegen.SPIRV_codegen import SPIRVBuiltinLoweringError
+from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -71,6 +72,50 @@ shader main {
     }
 }
 """
+
+# CUDA and HIP declare only __global__ kernels: they refuse the graphics stages of
+# SMOKE_SHADER and ADVANCED_SMOKE_SHADER and are smoke-tested with a kernel.
+KERNEL_ONLY_BACKENDS = frozenset({"cuda", "hip"})
+
+KERNEL_SMOKE_SHADER = """
+shader main {
+    struct Sample {
+        vec2 texCoord;
+    };
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        buffer Sample* samples;
+        buffer vec4* colors;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            colors[i] = vec4(samples[i].texCoord, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+ADVANCED_KERNEL_SMOKE_SHADER = """
+shader main {
+    struct Payload {
+        vec3 color;
+    };
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            Payload payload;
+            visible_function_table vft;
+            indirect_command_buffer icb;
+            vft[0](payload);
+            icb.reset();
+        }
+    }
+}
+"""
+
+
+def _smoke_shader(backend, graphics_shader, kernel_shader):
+    return kernel_shader if backend in KERNEL_ONLY_BACKENDS else graphics_shader
+
 
 TRANSLATE_API_ROUNDTRIP_BACKENDS = (
     "metal",
@@ -585,7 +630,7 @@ def test_each_backend_has_codegen_tests():
 
 @pytest.mark.parametrize("backend", codegen.backend_names())
 def test_backend_codegen_smoke(backend):
-    ast = parse(SMOKE_SHADER)
+    ast = parse(_smoke_shader(backend, SMOKE_SHADER, KERNEL_SMOKE_SHADER))
     generator = codegen.get_codegen(backend)
     generated = generator.generate(ast)
     assert isinstance(generated, str)
@@ -616,7 +661,9 @@ ADVANCED_SMOKE_REFUSALS = {
 
 @pytest.mark.parametrize("backend", codegen.backend_names())
 def test_backend_codegen_advanced_smoke(backend):
-    ast = parse(ADVANCED_SMOKE_SHADER)
+    ast = parse(
+        _smoke_shader(backend, ADVANCED_SMOKE_SHADER, ADVANCED_KERNEL_SMOKE_SHADER)
+    )
     generator = codegen.get_codegen(backend)
     if backend in ADVANCED_SMOKE_REFUSALS:
         error_type, message = ADVANCED_SMOKE_REFUSALS[backend]
@@ -641,8 +688,24 @@ def test_translate_api_roundtrip(tmp_path, backend):
     import crosstl
 
     cgl_file = tmp_path / "test_shader.cgl"
-    cgl_file.write_text(SMOKE_SHADER, encoding="utf-8")
+    cgl_file.write_text(
+        _smoke_shader(backend, SMOKE_SHADER, KERNEL_SMOKE_SHADER), encoding="utf-8"
+    )
 
     output = crosstl.translate(str(cgl_file), backend=backend)
     assert isinstance(output, str)
     assert len(output) > 50, f"{backend} output too small: {len(output)}"
+
+
+@pytest.mark.parametrize("backend", sorted(KERNEL_ONLY_BACKENDS))
+@pytest.mark.parametrize(
+    ("shader", "stages"),
+    [(SMOKE_SHADER, ("fragment", "vertex")), (ADVANCED_SMOKE_SHADER, ("vertex",))],
+)
+def test_kernel_only_backends_refuse_graphics_stages(backend, shader, stages):
+    with pytest.raises(StageUnsupportedError) as raised:
+        codegen.get_codegen(backend).generate(parse(shader))
+    assert raised.value.stages == stages
+    assert raised.value.missing_capabilities == tuple(
+        f"{backend}.stage.{stage}" for stage in stages
+    )

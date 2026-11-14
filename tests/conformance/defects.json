@@ -817,7 +817,7 @@
       "class": "invalid",
       "component": "CUDA and HIP emitters",
       "summary": "a graphics entry point emitted as a __device__ function instead of a refusal",
-      "status": "open",
+      "status": "refused",
       "probes": [
         {
           "source": "V11.frag",
@@ -830,7 +830,12 @@
           "expect": "refused"
         }
       ],
-      "note": "A GLSL fragment shader still translates to CUDA and HIP without a kernel."
+      "note": "CUDA and HIP declare only __global__ kernels; vertex, fragment, geometry, tessellation, mesh, task and ray-tracing entries are refused with StageUnsupportedError instead of becoming __device__ functions or no-op placeholder hooks.",
+      "tests": [
+        "tests/test_translator/test_codegen/test_backend_registry.py::test_kernel_only_backends_refuse_graphics_stages",
+        "tests/test_translator/test_translation_pipeline.py::test_native_graphics_sources_are_refused_on_kernel_only_targets",
+        "tests/test_examples_contract.py::test_graphics_examples_are_refused_on_kernel_only_targets"
+      ]
     },
     {
       "id": "V12",

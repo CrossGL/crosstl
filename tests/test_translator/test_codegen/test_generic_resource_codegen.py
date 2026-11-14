@@ -48,7 +48,11 @@ shader main {
     ],
 )
 def test_generic_resource_types_preserve_element_type(codegen_cls, expected):
-    ast = parse(RESOURCE_SHADER)
+    shader = RESOURCE_SHADER
+    if codegen_cls in (CudaCodeGen, HipCodeGen):
+        # CUDA and HIP declare only kernels.
+        shader = shader.replace("vertex {", "compute {")
+    ast = parse(shader)
 
     generated_code = codegen_cls().generate(ast)
 
