@@ -249,7 +249,8 @@ jobs:
               python -m pytest -q -n auto -p no:cacheprovider `
                 --basetemp="$output/pytest" --junitxml="$output/results.xml" `
                 tests/test_translator/test_directx_partial_wave_controls.py `
-                tests/test_translator/test_directx_multiwave_reduction.py 2>&1 |
+                tests/test_translator/test_directx_multiwave_reduction.py `
+                tests/test_translator/test_multiwave_index_ties.py 2>&1 |
               Tee-Object -FilePath "$output/pytest.log"
             $runs += @{ version = $version; dllSHA256 = $digest; exitCode = $LASTEXITCODE }
           }
@@ -913,6 +914,7 @@ jobs:
               --basetemp=.mlx-metal-host/multiwave-reductions/pytest \
               --junitxml=.mlx-metal-host/multiwave-reductions/results.xml \
               tests/test_translator/test_directx_multiwave_reduction.py \
+              tests/test_translator/test_multiwave_index_ties.py \
               2>&1 | tee .mlx-metal-host/multiwave-reductions.log
       - name: Checkout pinned upstream MLX
         run: |

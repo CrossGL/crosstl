@@ -152,6 +152,7 @@ def test_the_mlx_gate_requires_the_reference_library_to_pass_the_reproducer():
     for path in (
         "tests/test_translator/test_directx_partial_wave_controls.py",
         "tests/test_translator/test_directx_multiwave_reduction.py",
+        "tests/test_translator/test_multiwave_index_ties.py",
     ):
         assert path in execute
     summary = steps["Summarize the conformance matrix"]["run"]
