@@ -90,6 +90,7 @@ from .gpu_subgroup_builtins import (
     reserved_builtin_reason,
     subgroup_builtin_expression,
 )
+from .kernel_only_stages import NON_KERNEL_STAGES, refuse_non_kernel_stages
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -595,7 +596,7 @@ class CudaCodeGen(
                 )
 
     def unsupported_stage_types(self):
-        return set()
+        return NON_KERNEL_STAGES
 
     def cuda_ray_stage_names(self):
         return {
@@ -1049,11 +1050,7 @@ class CudaCodeGen(
                 ):
                     unsupported_stages.add(stage_name)
 
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise CudaRefusal(
-                f"CUDA output does not support stage type(s): {stage_list}"
-            )
+        refuse_non_kernel_stages("cuda", "CUDA", unsupported_stages)
 
     def visit(self, node):
         """Dispatch an AST node to its CUDA visitor method."""

@@ -15,6 +15,7 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
+from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -161,6 +162,18 @@ WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS = frozenset({"cuda", "hip", "opencl", "v
 WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS = frozenset(
     {"cuda_header", "cuda_long", "opencl_long"}
 )
+# CUDA and HIP declare only __global__ kernels, so graphics entry points are refused there.
+KERNEL_ONLY_TARGETS = ("cuda", "hip")
+KERNEL_ONLY_GRAPHICS_SOURCE_STAGES = {
+    "directx": "fragment",
+    "metal": "fragment",
+    "opengl": "fragment",
+    "slang": "fragment",
+}
+KERNEL_ONLY_GRAPHICS_EXTENSION_ALIAS_STAGES = {
+    "metal_msl": "fragment",
+    "slang_header": "fragment",
+}
 NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES = tuple(
     (source_name, target_backend)
     for source_name in sorted(NATIVE_SOURCE_SNIPPETS)
@@ -168,6 +181,10 @@ NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES = tuple(
     if not (
         target_backend == "webgl"
         and source_name in WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS
+    )
+    and not (
+        target_backend in KERNEL_ONLY_TARGETS
+        and source_name in KERNEL_ONLY_GRAPHICS_SOURCE_STAGES
     )
 )
 NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES = tuple(
@@ -177,6 +194,10 @@ NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES = tuple(
     if not (
         target_backend == "webgl"
         and alias_name in WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS
+    )
+    and not (
+        target_backend in KERNEL_ONLY_TARGETS
+        and alias_name in KERNEL_ONLY_GRAPHICS_EXTENSION_ALIAS_STAGES
     )
 )
 
@@ -2266,6 +2287,46 @@ def test_native_compute_extension_aliases_report_webgl_diagnostics(
         match="WebGL target does not support shader stage\\(s\\): compute",
     ):
         crosstl.translate(str(source_path), backend="webgl", format_output=False)
+
+
+def _assert_kernel_only_refusal(source_path, target_backend, stages):
+    with pytest.raises(StageUnsupportedError) as raised:
+        crosstl.translate(
+            str(source_path),
+            backend=target_backend,
+            format_output=False,
+            source_options=_host_size_options(source_path.name),
+        )
+    assert raised.value.code == f"project.translate.{target_backend}-stage-unsupported"
+    assert f"does not support shader stage(s): {stages}" in str(raised.value)
+
+
+@pytest.mark.parametrize("target_backend", KERNEL_ONLY_TARGETS)
+@pytest.mark.parametrize("source_name", sorted(KERNEL_ONLY_GRAPHICS_SOURCE_STAGES))
+def test_native_graphics_sources_are_refused_on_kernel_only_targets(
+    tmp_path, source_name, target_backend
+):
+    filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    _assert_kernel_only_refusal(
+        _write_source(tmp_path, filename, source),
+        target_backend,
+        KERNEL_ONLY_GRAPHICS_SOURCE_STAGES[source_name],
+    )
+
+
+@pytest.mark.parametrize("target_backend", KERNEL_ONLY_TARGETS)
+@pytest.mark.parametrize(
+    "alias_name", sorted(KERNEL_ONLY_GRAPHICS_EXTENSION_ALIAS_STAGES)
+)
+def test_native_graphics_extension_aliases_are_refused_on_kernel_only_targets(
+    tmp_path, alias_name, target_backend
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
+    _assert_kernel_only_refusal(
+        _write_source(tmp_path, filename, source),
+        target_backend,
+        KERNEL_ONLY_GRAPHICS_EXTENSION_ALIAS_STAGES[alias_name],
+    )
 
 
 def test_metal_template_placeholder_scan_ignores_comments():
