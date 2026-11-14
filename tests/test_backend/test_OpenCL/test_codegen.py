@@ -176,6 +176,46 @@ def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
     assert "out[gid] = (_saxpy_Args.a * x[gid]);" in wgsl
 
 
+def test_opencl_vector_component_names_become_crossgl_swizzles(tmp_path):
+    source = """
+        kernel void probe(global float *outp, global int *iin, global float *fin) {
+            uint i = get_global_id(0);
+            float4 v = (float4)(fin[i], 1.0f, 2.0f, 3.0f);
+            float2 h = v.hi;
+            float2 e = v.even;
+            float s = v.odd.hi;
+            v.lo = v.odd;
+            v.even = (float2)((float)iin[i], 5.0f);
+            float2 a = v.s01;
+            float2 b = v.s32;
+            v.s13 = (float2)((float)iin[i], 5.0f);
+            v.S2 = v.s0 + 4.0f;
+            outp[i] = h.y + e.x + s + a.y + b.x + v.s1 + v.S2 + v.s3;
+        }
+    """
+
+    crossgl = generate_crossgl(source)
+
+    for expected in (
+        "v.zw",
+        "v.xz",
+        "v.yw.y",
+        "v.xy = v.yw",
+        "v.xy",
+        "v.wz",
+        "v.yw =",
+        "v.z = (v.x + 4.0f)",
+    ):
+        assert expected in crossgl
+    for opencl_component in (".hi", ".lo", ".even", ".odd", ".s0", ".s1", ".s3", ".S2"):
+        assert opencl_component not in crossgl
+
+    path = tmp_path / "components.cl"
+    path.write_text(source, encoding="utf-8")
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+
 def test_opencl_saxpy_fma_lowers_to_directx_mad(tmp_path):
     source = """
         kernel void saxpy(global float *y, global const float *x, const float a) {
