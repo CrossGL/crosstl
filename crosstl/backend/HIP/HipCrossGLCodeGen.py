@@ -10496,8 +10496,12 @@ class HipToCrossGLConverter:
 
         if self.is_decltype_type_name(hip_type):
             return "auto"
-
-        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            return self.sanitize_identifier_name(hip_type)
+        if hip_type in _CROSSGL_ALL_KEYWORDS and hip_type in self.record_definitions:
+            # A struct/enum/alias whose name is any CrossGL keyword is declared under
+            # its sanitized name.  Value identifiers use the narrower
+            # CROSSGL_RESERVED_IDENTIFIERS, so only record names need the full set.
+            return self.sanitize_crossgl_type_identifier(hip_type)
             # A struct named after a CrossGL keyword is declared under its renamed name.
             return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)

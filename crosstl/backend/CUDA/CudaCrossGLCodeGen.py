@@ -6921,9 +6921,13 @@ class CudaToCrossGLConverter:
             return scoped_type
         if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
             # A struct named after a CrossGL keyword is declared under its renamed name.
+        if cuda_type in _CROSSGL_ALL_KEYWORDS and cuda_type in self.cuda_record_names:
+            # A struct/enum/alias named after any CrossGL keyword is declared under
+            # its renamed name.  Value identifiers (locals, params) use the narrower
+            # CROSSGL_RESERVED_IDENTIFIERS checked via sanitize_identifier_name.
+            return unused_identifier_name(cuda_type, self.source_identifier_names)
+        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
             return self.sanitize_identifier_name(cuda_type)
-        return cuda_type
-
     def unqualified_leading_cuda_std_type_name(self, cuda_type):
         normalized_type = str(cuda_type)
         prefix = "::cuda::std::"
