@@ -43,16 +43,13 @@ from .HipAst import (
 )
 
 
-class HipRecordSemanticError(ValueError):
-    """Raised when used C++ record semantics cannot survive CrossGL lowering."""
-
-    project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
-
-
 _CROSSGL_ALL_KEYWORDS = frozenset(CROSSGL_KEYWORDS)
 
 
 class HipRecordSemanticError(ValueError):
+    """Raised when used C++ record semantics cannot survive CrossGL lowering."""
+
+    project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
     missing_capabilities = ("hip.record-lifecycle-layout-lowering",)
 
     def __init__(self, feature, record_name, context):
