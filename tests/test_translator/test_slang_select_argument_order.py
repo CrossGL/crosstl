@@ -26,12 +26,12 @@ def generate(statement, helper=""):
 
 def test_scalar_condition_is_reordered():
     generated = generate("output[1] = select(10.0, 20.0, b);")
-    assert "select(10.0, 20.0, b)" not in generated
+    assert "(b ? 20.0 : 10.0)" in generated
 
 
 def test_scalar_condition_with_vector_values_is_reordered():
     generated = generate("vec3 v = select(vec3(1.0), vec3(2.0), b); output[1] = v.x;")
-    assert "select(float3(1.0), float3(2.0), b)" not in generated
+    assert "(b ? float3(2.0) : float3(1.0))" in generated
 
 
 def test_bvec_mask_is_reordered():
