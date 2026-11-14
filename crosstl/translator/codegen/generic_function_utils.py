@@ -534,7 +534,7 @@ def reject_unresolved_generic_function_call(generator, func_name, target_name):
 def generic_function_value_arguments(generator, func_name, args):
     """Return value arguments after any leading explicit generic type arguments."""
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
-    func = definitions.get(func_name)
+    overloads = definitions.get(func_name)
     if func is None:
         return list(args or [])
 
