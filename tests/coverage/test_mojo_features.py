@@ -1,6 +1,7 @@
 """The Mojo feature list, read from the standard library packages."""
 
 from tools.coverage import probes
+from tools.coverage.execution import THREADS
 from tools.coverage.features import mojo
 from tools.coverage.model import (
     VOID,
@@ -412,3 +413,256 @@ def test_mojo_probes_import_the_gpu_module_they_call():
     crossgl = probes.build(features["warp.shuffle_down"], "crossgl").source
     assert "subgroupShuffleDown(" in crossgl
     assert "import" not in crossgl
+
+
+# Excerpts of MAX 26.7.0's max/gpu/primitives/block.mojo and id.mojo, Mojo 1.2.0's std/_gpu/primitives/id.mojo, and
+# std/atomic/__init__.mojo and atomic.mojo.
+MAX_BLOCK = """
+from max.gpu.primitives import warp
+
+
+def _block_reduce[dtype: DType](val: Scalar[dtype]) -> Scalar[dtype]:
+    return val
+
+
+def sum[
+    dtype: DType,
+    width: SIMDLength,
+    //,
+    *,
+    block_size: Int,
+    broadcast: Bool = True,
+](val: SIMD[dtype, width]) -> SIMD[dtype, width]:
+    return val
+"""
+
+MAX_ID = """
+from max.gpu.globals import WARP_SIZE
+
+
+@__doc_inline
+from std._gpu.primitives.id import (
+    block_dim,
+    global_idx,
+    lane_id,
+    thread_idx,
+)
+
+
+@inline(.nodebug)
+def warp_id[*, broadcast: Bool = False]() -> Int:
+    return 0
+
+
+@inline(.nodebug)
+def sm_id() -> Int:
+    return 0
+"""
+
+MOJO_LANES = """
+comptime thread_idx = _ThreadIdx()
+comptime global_idx = _GlobalIdx()
+
+
+@inline(.nodebug)
+def lane_id() -> Int:
+    return _lane_id()
+
+
+@inline(.nodebug)
+def _lane_id() -> Int:
+    return 0
+"""
+
+MOJO_ATOMIC_INIT = """
+from .atomic import Atomic, Ordering, fence
+"""
+
+MOJO_ATOMIC = """
+comptime _DEFAULT_MEMORY_ORDERING = Ordering.SEQUENTIAL
+
+
+struct Ordering(Equatable):
+    def __init__(out self, value: Int):
+        pass
+
+
+@inline(.nodebug)
+def fence[
+    ordering: Ordering = _DEFAULT_MEMORY_ORDERING,
+    *,
+    scope: StaticString = "",
+]():
+    pass
+
+
+struct Atomic[T: Deinitable & Movable, *, scope: StaticString = ""]:
+    var _value: Self.T
+
+    @inline(.always)
+    def __init__(out self, var value: Self.T):
+        self._value = value^
+
+    @staticmethod
+    @inline(.nodebug)
+    def load[
+        dtype: DType,
+        //,
+        *,
+        ordering: Ordering = _DEFAULT_MEMORY_ORDERING,
+    ](ptr: ImmPointer[Scalar[dtype], _, address_space=_]) -> Scalar[
+        dtype
+    ] where (Self.T == Scalar[dtype]):
+        return ptr[]
+
+    @inline(.nodebug)
+    def load[*, ordering: Ordering = _DEFAULT_MEMORY_ORDERING](self) -> Self.T:
+        return self._value
+
+    @staticmethod
+    @inline(.always)
+    def fetch_add[
+        dtype: DType, //, *, ordering: Ordering = _DEFAULT_ARITHMETIC_ORDERING
+    ](
+        ptr: MutPointer[Scalar[dtype], _, address_space=_],
+        rhs: Scalar[dtype],
+    ) -> Scalar[dtype] where (Self.T == Scalar[dtype]):
+        return rhs
+
+    @staticmethod
+    @inline(.always)
+    def _xchg[
+        dtype: DType, //, *, ordering: Ordering = _DEFAULT_MEMORY_ORDERING
+    ](
+        ptr: MutPointer[Scalar[dtype], _, address_space=_],
+        value: Scalar[dtype],
+    ) -> Scalar[dtype] where (Self.T == Scalar[dtype]):
+        return value
+
+    @inline(.always)
+    def fetch_sub[
+        *, ordering: Ordering = _DEFAULT_ARITHMETIC_ORDERING
+    ](mut self, rhs: Self.T) -> Self.T:
+        return rhs
+
+    @staticmethod
+    @inline(.always)
+    def max[
+        dtype: DType, //, *, ordering: Ordering = _DEFAULT_COMPARISON_ORDERING
+    ](
+        ptr: MutPointer[Scalar[dtype], _, address_space=_],
+        rhs: Scalar[dtype],
+    ) where (Self.T == Scalar[dtype]):
+        pass
+
+
+def _helper():
+    pass
+"""
+
+
+def _all_features():
+    return by_name(
+        mojo.parse(
+            MOJO_MATH_INIT,
+            MOJO_MATH,
+            MOJO_NUMERICS,
+            MOJO_BIT_INIT,
+            MOJO_BIT,
+            warp=MAX_WARP,
+            block=MAX_BLOCK,
+            sync_init=MAX_SYNC_INIT,
+            sync=MAX_SYNC,
+            ids=MAX_ID,
+            lanes=MOJO_LANES,
+            atomic_init=MOJO_ATOMIC_INIT,
+            atomic=MOJO_ATOMIC,
+        )
+    )
+
+
+def test_mojo_reads_block_reductions_and_probes_them_over_one_workgroup():
+    features = _all_features()
+    assert {name for name, f in features.items() if f.group == "block"} == {"block.sum"}
+    block_sum = features["block.sum"]
+    assert block_sum.extension == mojo.BLOCK
+    # block_size is keyword-only and required; the probe passes the invocations of one subgroup probe's workgroup.
+    assert block_sum.spelling == f"block.sum[block_size={THREADS}]"
+    assert block_sum.signature == Signature(Type("float"), (Param(Type("float")),))
+    assert block_sum.crossgl == ""
+    assert block_sum.note == (
+        "CrossGL reduces, scans and broadcasts over a subgroup only, not over a workgroup"
+    )
+
+
+def test_mojo_reads_the_gpu_index_functions_but_not_the_index_values():
+    features = _all_features()
+    # lane_id is re-exported from std._gpu, where thread_idx and global_idx are values rather than functions.
+    assert {name for name, f in features.items() if f.group == "id"} == {
+        "lane_id",
+        "warp_id",
+        "sm_id",
+    }
+    assert features["lane_id"].extension == "max.gpu.lane_id"
+    assert features["lane_id"].signature == Signature(Type("int64"), ())
+    assert features["lane_id"].crossgl == "int64(gl_SubgroupInvocationID)"
+    assert features["warp_id"].crossgl == (
+        "int64(gl_LocalInvocationID.x / gl_SubgroupSize)"
+    )
+    source = probes.build(features["lane_id"], "mojo").source
+    assert "from max.gpu import lane_id\n" in source
+    assert "    var r: Int = lane_id()\n" in source
+
+
+def test_mojo_reads_atomic_static_methods_and_lists_value_methods_untested():
+    features = _all_features()
+    atomic = {name for name, f in features.items() if f.group == "atomic"}
+    # Private methods are skipped, and a name with a static and a value overload is probed through the static one.
+    assert atomic == {
+        "Atomic.load",
+        "Atomic.fetch_add",
+        "Atomic.fetch_sub",
+        "Atomic.max",
+        "fence",
+    }
+    fetch_add = features["Atomic.fetch_add"]
+    assert fetch_add.extension == "std.atomic.Atomic std.atomic.Ordering"
+    assert fetch_add.spelling == "Atomic.fetch_add[ordering=Ordering.RELAXED]"
+    # The pointer is the buffer element the atomic operation updates.
+    assert fetch_add.signature == Signature(
+        Type("int"), (Param(Type("int"), "inout"), Param(Type("int")))
+    )
+    assert fetch_add.crossgl == "atomicAdd"
+    assert features["Atomic.max"].signature.result == VOID
+    assert features["Atomic.load"].counterpart == Signature(
+        Type("int"), (Param(Type("int"), "inout"),)
+    )
+    fetch_sub = features["Atomic.fetch_sub"]
+    assert fetch_sub.signature is None
+    assert fetch_sub.note == (
+        "a method of an Atomic value only, and the probes call Atomic's static methods on a buffer element"
+    )
+    assert features["fence"].extension == "std.atomic.fence"
+    assert features["fence"].crossgl == "memoryBarrier"
+
+
+def test_mojo_atomic_probes_pass_the_buffer_element_and_discard_the_result():
+    features = _all_features()
+    source = probes.build(features["Atomic.fetch_add"], "mojo").source
+    assert "from std.atomic import Atomic\nfrom std.atomic import Ordering\n" in source
+    assert (
+        "    _ = Atomic.fetch_add[ordering=Ordering.RELAXED](outp + i, a1)\n" in source
+    )
+    source = probes.build(features["Atomic.max"], "mojo").source
+    assert "    Atomic.max[ordering=Ordering.RELAXED](outp + i, a1)\n" in source
+    crossgl = probes.build(features["Atomic.fetch_add"], "crossgl").source
+    assert "atomicAdd(outp[i], a1);" in crossgl
+    assert "import" not in crossgl
+
+
+def test_mojo_splits_a_default_at_the_top_level_equals_sign():
+    assert mojo._default("ptr: MutPointer[Scalar[dtype], _, address_space=_]") == (
+        "ptr: MutPointer[Scalar[dtype], _, address_space=_]",
+        "",
+    )
+    assert mojo._default("mask: Int = -1") == ("mask: Int ", " -1")

@@ -310,10 +310,15 @@ COUNTERPARTS = {
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
-    # Mojo returns both parts of frexp and modf as a tuple.
+    # Mojo returns both parts of frexp and modf as a tuple. std.atomic's static load and store are CrossGL's relaxed
+    # atomicLoad and atomicStore, and its max and min return nothing.
     "mojo": {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
+        "Atomic.load": "int atomicLoad(inout int)",
+        "Atomic.store": "void atomicStore(inout int, int)",
+        "Atomic.max": "void atomicMax(inout int, int)",
+        "Atomic.min": "void atomicMin(inout int, int)",
     },
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
@@ -600,6 +605,14 @@ OTHER_NAMES = {
         "warp.vote": "subgroupBallot({0}).x",
         "warp.match_any": "__match_any_sync(4294967295u, {0})",
         "syncwarp": "subgroupBarrier",
+        # max.gpu's lane_id is the invocation's index in its warp, and warp_id divides the x index in the block by the
+        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced.
+        "lane_id": "int64(gl_SubgroupInvocationID)",
+        "warp_id": "int64(gl_LocalInvocationID.x / gl_SubgroupSize)",
+        "Atomic.fetch_add": "atomicAdd",
+        # std.atomic's fence is sequentially consistent by default (atomic.mojo, _DEFAULT_MEMORY_ORDERING), as CUDA's
+        # __threadfence is.
+        "fence": "memoryBarrier",
         "mulwide": "(uint64({0}) * uint64({1}))",
         "align_down": (
             "(({0} / {1} - ({0} != {0} / {1} * {1} && ({0} < 0) != ({1} < 0) ? 1 : 0)) * {1})"

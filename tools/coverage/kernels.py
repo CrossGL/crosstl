@@ -153,10 +153,25 @@ class Mojo(Dialect):
         return expression
 
     def enable(self, extension: str) -> list[str]:
-        # A Mojo feature's extension is what the probe imports: the module ``warp`` for max.gpu.primitives.warp, or
-        # the function ``barrier`` for max.gpu.sync.barrier.
-        package, _, name = extension.rpartition(".")
-        return [f"from {package} import {name}"]
+        # A Mojo feature's extension is what the probe imports, one name or more: the module ``warp`` for
+        # max.gpu.primitives.warp, the function ``barrier`` for max.gpu.sync.barrier, or the types of
+        # ``std.atomic.Atomic std.atomic.Ordering``.
+        lines = []
+        for imported in extension.split():
+            package, _, name = imported.rpartition(".")
+            lines.append(f"from {package} import {name}")
+        return lines
+
+    def inout_argument(self) -> str:
+        # An atomic operation takes a pointer to the output buffer's element.
+        return "outp + i"
+
+    def discard(self, expression: str) -> str:
+        return f"_ = {expression}"
+
+    def address(self, name: str) -> str:
+        # A ``mut`` argument is passed by reference without an operator.
+        return name
 
     def active(self, body: list[str], skipped: int) -> list[str]:
         return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]
