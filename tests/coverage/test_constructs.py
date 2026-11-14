@@ -101,6 +101,22 @@ def test_pointer_probes_are_absent_where_the_language_has_no_pointers():
     assert "q = q + i;" in arithmetic.source
 
 
+def test_only_the_kernel_languages_list_a_device_global():
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if "device-global" in {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"cuda", "hip", "opencl"}
+    opencl = probes.build(construct_feature("opencl", "device-global"), "opencl")
+    assert "__global float acc[64] = {1.0f, 2.0f, 4.0f};" in opencl.source
+    # The declaration precedes the kernel, and each invocation rewrites only its own element.
+    assert opencl.source.index("__global float acc") < opencl.source.index("__kernel")
+    assert "acc[i & 63] = acc[i & 63] * 2.0f + fin[i];" in opencl.source
+    crossgl_probe = probes.build(construct_feature("cuda", "device-global"), "crossgl")
+    assert "device float acc[64] = {1.0, 2.0, 4.0};" in crossgl_probe.source
+
+
 def test_only_opencl_lists_its_vector_component_names():
     names = {"vector-halves", "numeric-components"}
     listing = {
