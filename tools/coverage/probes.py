@@ -114,6 +114,8 @@ class _Builder:
         self.shared: list[str] = []
         # Uniforms that hold pointers to device memory, for a parameter that takes one.
         self.pointers: list[str] = []
+        # Variables in constant memory, for a parameter that takes the address of one.
+        self.constants: list[str] = []
         # What the arguments the dialect makes itself declare before the entry point (Dialect.handle).
         self.handles: list[str] = []
         # Fragment-shader inputs as ``(type spelling, name)``.
@@ -160,6 +162,7 @@ class _Builder:
             + self.uniforms.declarations
             + self.shared
             + self.pointers
+            + self.constants
             + self.handles
         )
 
@@ -297,6 +300,13 @@ class _Builder:
                 else:
                     self.lines.append(f"{local} = {self.value(param.type)};")
                 arguments.append(dialect.workgroup_argument(local))
+            elif param.direction == "workgroup address":
+                self.shared.append(dialect.workgroup(param.type, local))
+                self.lines.append(f"{local} = {self.value(param.type)};")
+                arguments.append(dialect.address(local))
+            elif param.direction == "constant address":
+                self.constants.append(dialect.constant_memory(param.type, local))
+                arguments.append(dialect.address(local))
             elif param.direction == "pointer":
                 self.pointers.append(dialect.pointer(param.type, local))
                 arguments.append(local)

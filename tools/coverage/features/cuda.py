@@ -49,14 +49,27 @@ _PUBLIC = (
     (re.compile(r"__match(?:32|64)_(any|all)_sync"), r"__match_\1_sync"),
     (re.compile(r"__nv_(cvta_\w+)_impl"), r"__\1"),
 )
+# An address space conversion ``__cvta_generic_to_<space>`` takes a generic pointer into the space it names and
+# returns that space's address (CUDA C++ Programming Guide, "Address Space Conversion Functions"). A probe passes it a
+# pointer of the kind its space holds: the input buffer for global memory, or the address of a local, a __shared__ or
+# a __constant__ variable.
+_GENERIC_TO = re.compile(r"__cvta_generic_to_(global|shared|constant|local)")
+_SPACES = {
+    "global": "buffer",
+    "shared": "workgroup address",
+    "constant": "constant address",
+    "local": "address",
+}
 _INLINE = re.compile(
     r"(?:inline\s+__device__|__device__\s+inline)\s+([^;{}()#]*?)\b(\w+)\s*\(([^)]*)\)\s*\{"
 )
 _TYPE_WORDS = frozenset(
     "const unsigned signed long short int char float double bool void".split()
 )
-# ``long`` is 64 bits wide in device code on Linux, where the headers are read and nvcc validates the probes.
+# ``long``, and so ``size_t``, is 64 bits wide in device code on Linux, where the headers are read and nvcc validates
+# the probes.
 _SCALARS = {
+    "size_t": "uint64",
     "bool": "bool",
     "int": "int",
     "unsigned int": "uint",
@@ -182,6 +195,10 @@ def intrinsics(text: str) -> list[tuple[str, str, Signature, str]]:
             cuda_type(result),
             tuple(parameter(p, False, i == 0) for i, p in enumerate(parts)),
         )
+        space = _GENERIC_TO.fullmatch(public)
+        if space:
+            pointer = Param(Type("float"), _SPACES[space.group(1)])
+            signature = Signature(signature.result, (pointer,))
         if public not in found or (
             _opaque(found[public][2]) and not _opaque(signature)
         ):
