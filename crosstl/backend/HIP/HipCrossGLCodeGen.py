@@ -654,6 +654,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.refuse_incomplete_record_values(ast_node)
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
@@ -708,6 +709,100 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     statement
                 )
                 self.register_function_return_nodes(statement)
+
+    def refuse_incomplete_record_values(self, ast_node):
+        """Refuse a by-value use of a record that is declared without a body but not yet completed.
+
+        A record is incomplete from ``struct Never;`` until its closing brace (C11 6.7.2.3), so a member,
+        local, global or function parameter of that type that comes before the body, or in a program that
+        never gives one, has no size and the C family compilers reject it. A pointer or reference to it, and
+        the parameter of a prototype, are fine.
+        """
+        forward_declared = set()
+        completed = set()
+        # Records whose body is being walked: a record is incomplete until its own closing brace too.
+        open_bodies = set()
+        words_to_skip = {
+            "const",
+            "volatile",
+            "struct",
+            "union",
+            "class",
+            "private",
+            "__private",
+        }
+
+        def incomplete_record(vtype):
+            if not isinstance(vtype, str):
+                return None
+            compact = vtype.replace(" ", "")
+            if any(mark in compact for mark in ("*", "&", "ptr<")):
+                return None
+            words = [
+                word
+                for word in re.split(r"[\s\[]", vtype.split("[", 1)[0])
+                if word and word not in words_to_skip
+            ]
+            if len(words) != 1:
+                return None
+            if words[0] in open_bodies or words[0] in forward_declared - completed:
+                return words[0]
+            return None
+
+        def refuse(record, name, owner):
+            context = f"the declaration of '{name}'"
+            if owner:
+                context += f" in '{owner}'"
+            raise self.RECORD_SEMANTIC_ERROR("incomplete record type", record, context)
+
+        def visit(current, owner):
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    visit(item, owner)
+                return
+            if not hasattr(current, "__dict__") or isinstance(
+                current, (str, int, float, bool)
+            ):
+                return
+            if isinstance(current, StructNode):
+                name = current.name
+                if not getattr(current, "has_body", True):
+                    if name and name not in completed:
+                        forward_declared.add(name)
+                    return
+                opened = bool(name) and name not in open_bodies
+                if opened:
+                    open_bodies.add(name)
+                for member in current.members or []:
+                    visit(member, name or owner)
+                if opened:
+                    open_bodies.discard(name)
+                if name:
+                    completed.add(name)
+                return
+            if isinstance(current, FunctionNode):
+                owner = current.name or owner
+                # A method body sees its record complete.
+                enclosing = set(open_bodies)
+                open_bodies.clear()
+                if current.body is not None:
+                    for param in current.params or []:
+                        if isinstance(param, dict):
+                            record = incomplete_record(param.get("type"))
+                            if record is not None:
+                                refuse(record, param.get("name"), owner)
+                visit(current.body, owner)
+                open_bodies.update(enclosing)
+                return
+            if isinstance(current, VariableNode):
+                record = incomplete_record(current.vtype)
+                if record is not None:
+                    refuse(record, current.name, owner)
+            for value in vars(current).values():
+                if isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+                    visit(value, owner)
+
+        visit(getattr(ast_node, "statements", ast_node), None)
 
     def materialized_record_type_names(self):
         return {
@@ -10825,7 +10920,14 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             "exp2f": "exp2",
             "fabsf": "abs",
             "rsqrtf": "inversesqrt",
-            "roundf": "round",
+            # C11 7.12.9.6 round rounds halfway cases away from zero, which the round_away rule carries;
+            # rint and nearbyint round to nearest even in the default rounding mode (7.12.9.3-4).
+            "roundf": "__cgl_round_away",
+            "round": "__cgl_round_away",
+            "rintf": "roundEven",
+            "rint": "roundEven",
+            "nearbyintf": "roundEven",
+            "nearbyint": "roundEven",
             "truncf": "trunc",
             "atan2f": "atan2",
             "fmaf": "fma",
