@@ -804,6 +804,24 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def scalar_boolean_builtin_result_type(self, func_name, raw_args):
+        """``bool`` for ``any``/``all`` and for ``isnan``/``isinf`` of a floating scalar, else ``None``.
+
+        A ``mix`` whose selector is one of these calls then selects (lower_bool_scalar_mix_operation) instead of
+        blending, as GLSL's ``mix(x, y, bool)`` does.
+        """
+        if len(raw_args) != 1 or self.is_user_defined_function(func_name):
+            return None
+        if func_name in {"any", "all"}:
+            return "bool"
+        if func_name in {"isnan", "isinf"}:
+            argument_type = self.expression_result_type(raw_args[0])
+            if self.vector_type_info(argument_type) is None and (
+                self.scalar_component_type(argument_type) in {"float", "double"}
+            ):
+                return "bool"
+        return None
+
     def lower_bool_scalar_mix_operation(
         self,
         x_node,

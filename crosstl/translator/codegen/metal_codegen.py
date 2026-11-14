@@ -123,6 +123,7 @@ from .buffer_length import COUNTED_BUFFERS, BufferLengthUnsupportedError
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS, member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
+    boolean_builtin_result_type,
     component_access_type,
     inferred_value_type,
 )
@@ -11308,6 +11309,13 @@ class MetalCodeGen(
                 return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
+            boolean_type = boolean_builtin_result_type(
+                func_name,
+                [self.expression_result_type(arg) for arg in args or ()],
+                C_FAMILY,
+            )
+            if boolean_type is not None:
+                return boolean_type
             aggregate_constructor = self.metal_aggregate_constructor_name(func_name)
             if aggregate_constructor is not None:
                 return aggregate_constructor
