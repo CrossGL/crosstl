@@ -234,13 +234,6 @@ _COMPONENT_WISE_NUMERIC_BUILTINS = frozenset(
         "trunc",
         "max",
         "min",
-        "clamp",
-        "smoothstep",
-        "step",
-        "lerp",
-        "mix",
-    }
-)
 
 
 class WGSLAggregateInitializerError(ValueError):
