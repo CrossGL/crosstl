@@ -1367,8 +1367,9 @@ class VulkanToCrossGLConverter:
             "GlobalInvocationId": "gl_GlobalInvocationID",
             "HelperInvocation": "gl_HelperInvocation",
             "InstanceId": "gl_InstanceID",
-            "InstanceIndex": "gl_InstanceID",
-            "InvocationId": "gl_InvocationID",
+            "InstanceId": "gl_InstanceID",
+            # BuiltIn InstanceIndex is Vulkan's base-inclusive instance index (gl_InstanceIndex); InstanceId is OpenGL-style.
+            "InstanceIndex": "gl_InstanceIndex",
             "Layer": "gl_Layer",
             "LocalInvocationId": "gl_LocalInvocationID",
             "LocalInvocationIndex": "gl_LocalInvocationIndex",
@@ -1389,8 +1390,10 @@ class VulkanToCrossGLConverter:
             "TessLevelInner": "gl_TessLevelInner",
             "TessLevelOuter": "gl_TessLevelOuter",
             "VertexId": "gl_VertexID",
-            "VertexIndex": "gl_VertexID",
-            "ViewportIndex": "gl_ViewportIndex",
+            # BuiltIn VertexId is the OpenGL-style (identical semantics to gl_VertexID).
+            # BuiltIn VertexIndex is Vulkan's base-inclusive vertex index (gl_VertexIndex).
+            "VertexId": "gl_VertexID",
+            "VertexIndex": "gl_VertexIndex",
             "ViewIndex": "gl_ViewIndex",
             "WorkgroupId": "gl_WorkGroupID",
             "WorkgroupSize": "gl_WorkGroupSize",

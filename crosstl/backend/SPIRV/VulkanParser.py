@@ -197,7 +197,8 @@ class VulkanParser:
         "GlobalInvocationId": "gl_GlobalInvocationID",
         "HelperInvocation": "gl_HelperInvocation",
         "InstanceId": "gl_InstanceID",
-        "InstanceIndex": "gl_InstanceID",
+        # BuiltIn InstanceIndex is Vulkan's base-inclusive instance index (gl_InstanceIndex); InstanceId is OpenGL-style.
+        "InstanceIndex": "gl_InstanceIndex",
         "InvocationId": "gl_InvocationID",
         "Layer": "gl_Layer",
         "LocalInvocationId": "gl_LocalInvocationID",
@@ -217,8 +218,10 @@ class VulkanParser:
         "TessCoord": "gl_TessCoord",
         "TessLevelInner": "gl_TessLevelInner",
         "TessLevelOuter": "gl_TessLevelOuter",
+        # BuiltIn VertexId is the OpenGL-style (identical semantics to gl_VertexID).
+        # BuiltIn VertexIndex is Vulkan's base-inclusive vertex index (gl_VertexIndex).
         "VertexId": "gl_VertexID",
-        "VertexIndex": "gl_VertexID",
+        "VertexIndex": "gl_VertexIndex",
         "ViewportIndex": "gl_ViewportIndex",
         "ViewIndex": "gl_ViewIndex",
         "WorkgroupId": "gl_WorkGroupID",
