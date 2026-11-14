@@ -1,6 +1,10 @@
 """spirv_std's image types, ``Image`` and ``SampledImage``, through whose methods a rust-gpu shader samples, fetches,
-reads, writes and queries textures, and its ``ByteAddressableBuffer``, through which it loads and stores words of an
-untyped storage buffer.
+reads, writes and queries textures, its ``ByteAddressableBuffer``, through which it loads and stores words of an
+untyped storage buffer, its ``RuntimeArray``, an array of unknown length, and its ``debug_printf!`` macros.
+
+spirv_std's ``CooperativeMatrix`` is not read here. No feature list measures cooperative matrices yet, in any language,
+and they are to be added to all of them at once, so that the CrossGL IR row compares like with like. rust-gpu 0.11.0
+also does not compile ``CooperativeMatrix::length`` ("cannot use a dynamic value as an instruction type").
 
 ``image.rs`` gives ``Image`` its methods in ``impl`` blocks that fix some of the type's constant parameters, such as
 a sampled or a storage image, and leave the others generic. A ``where Self: HasGather`` bound limits a method further,
@@ -20,7 +24,8 @@ from __future__ import annotations
 
 import re
 
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import STRING, VOID, Feature, Param, Signature, Type
+from ..spellings import SUBSCRIPT
 from .common import prototype
 from .rust import enclosed, header, separated
 
@@ -260,7 +265,113 @@ def images(text: str) -> list[Feature]:
                     method,
                 )
             )
+    for head, body in blocks:
+        if re.match(r"ImageWithMethods\s*<", head):
+            features += _with_features(body)
     return sorted(features, key=lambda f: f.name)
+
+
+# ImageWithMethods gives an image the ``*_with`` forms of its methods, which take the image operands that the functions
+# of ``image/sample_with.rs`` make: a bias, a level of detail, gradients or a sample index. A form is one feature per
+# operand that SPIR-V lets its instruction take (SPIR-V 1.6, section 3.14, Image Operands): Bias with an implicit
+# level of detail, Lod and Grad with an explicit one, Lod also with OpImageFetch, and Sample with OpImageFetch from a
+# multisampled image. ``gather_with`` has none: OpImageGather takes none of them without
+# SPV_AMD_texture_gather_bias_lod, and without operands it is ``gather``.
+_WITH = re.compile(r"^    fn (\w+_with)\b", re.M)
+_OPERANDS = {
+    "OpImageFetch": ("lod", "sample_index"),
+    "OpImageSample": ("bias", "lod", "grad"),
+}
+# The opaque argument :class:`..kernels.Rust` makes for each operand: a fetch takes an integer level of detail.
+SAMPLE_PARAMS = "SampleParams({})"
+_WITH_COUNTERPARTS = {
+    ("fetch_with", "lod"): "vec4 texelFetch(sampler2D, ivec2, int)",
+    ("fetch_with", "sample_index"): "vec4 texelFetch(sampler2DMS, ivec2, int)",
+    ("sample_with", "bias"): "vec4 texture(sampler2D, vec2, float)",
+    ("sample_with", "lod"): "vec4 textureLod(sampler2D, vec2, float)",
+    ("sample_with", "grad"): "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
+    (
+        "sample_depth_reference_with",
+        "bias",
+    ): "float texture(sampler2DShadow, vec3, float)",
+    (
+        "sample_depth_reference_with",
+        "lod",
+    ): "float textureLod(sampler2DShadow, vec3, float)",
+    (
+        "sample_depth_reference_with",
+        "grad",
+    ): "float textureGrad(sampler2DShadow, vec3, vec2, vec2)",
+    (
+        "sample_with_project_coordinate_with",
+        "bias",
+    ): "vec4 textureProj(sampler2D, vec3, float)",
+    (
+        "sample_with_project_coordinate_with",
+        "lod",
+    ): "vec4 textureProjLod(sampler2D, vec3, float)",
+    (
+        "sample_with_project_coordinate_with",
+        "grad",
+    ): "vec4 textureProjGrad(sampler2D, vec3, vec2, vec2)",
+    (
+        "sample_depth_reference_with_project_coordinate_with",
+        "bias",
+    ): "float textureProj(sampler2DShadow, vec4, float)",
+    (
+        "sample_depth_reference_with_project_coordinate_with",
+        "lod",
+    ): "float textureProjLod(sampler2DShadow, vec4, float)",
+    (
+        "sample_depth_reference_with_project_coordinate_with",
+        "grad",
+    ): "float textureProjGrad(sampler2DShadow, vec4, vec2, vec2)",
+}
+
+
+def _with_features(body: str) -> list[Feature]:
+    """The ``*_with`` methods of the ImageWithMethods implementation ``body``, one feature per image operand."""
+    features = []
+    for match in _WITH.finditer(body):
+        _, end = enclosed(body, body.index("(", match.end()))
+        method, _ = enclosed(body, _opening(body, end))
+        instruction = re.search(r"\b(OpImageFetch|OpImageSample)", method)
+        parsed = header(body, match.end())
+        depth = "depth_reference" in parsed[1]
+        for operand in _OPERANDS[instruction.group(1)] if instruction else ():
+            fixed = {"Multisampled": "True"} if operand == "sample_index" else {}
+            found = _signature(parsed, _image(fixed, depth))
+            kind = (
+                "integer lod"
+                if (operand, instruction.group(1)) == ("lod", "OpImageFetch")
+                else operand
+            )
+            params = tuple(
+                (
+                    Param(Type.other(SAMPLE_PARAMS.format(kind)))
+                    if p.type.opaque == "SampleParams"
+                    else p
+                )
+                for p in found.params
+            )
+            spelled, counterpart = prototype(
+                _WITH_COUNTERPARTS[(match.group(1), operand)]
+            )
+            features.append(
+                Feature(
+                    "rust",
+                    "function",
+                    f"Image::{match.group(1)}({operand})",
+                    Signature(found.result, params),
+                    group="image",
+                    crossgl=spelled,
+                    # A bias scales an implicit level of detail, which needs derivatives.
+                    stage="fragment" if operand == "bias" else "compute",
+                    spelling=f".{match.group(1)}",
+                    counterpart=counterpart,
+                )
+            )
+    return features
 
 
 def _feature(
@@ -369,3 +480,63 @@ def _byte_feature(name: str, unsafe: bool, receiver: str) -> Feature:
         spelling=spelling,
         counterpart=counterpart,
     )
+
+
+# RuntimeArray indexes an array of unknown length without a bounds check, and returns a reference to the element. A
+# probe indexes a storage buffer of u32 words, which CrossGL declares as an unsized buffer and subscripts, and reads
+# the word the reference refers to (:class:`..kernels.Rust` reads a ``&u32`` through ``*``).
+RUNTIME_ARRAY = "RuntimeArray<u32>"
+MUTABLE_RUNTIME_ARRAY = "&mut RuntimeArray<u32>"
+
+
+def runtime_arrays(text: str) -> list[Feature]:
+    """The methods of ``RuntimeArray`` in ``runtime_array.rs``."""
+    text = clean(text)
+    features: list[Feature] = []
+    for match in re.finditer(r"^impl<T> RuntimeArray<T> \{", text, re.M):
+        body, _ = enclosed(text, match.end() - 1)
+        for method in _METHOD.finditer(body):
+            bare = method.group(2)
+            mutable = bare.endswith("_mut")
+            receiver = Param(
+                Type.other(MUTABLE_RUNTIME_ARRAY if mutable else RUNTIME_ARRAY)
+            )
+            reference = Type.other("&mut u32" if mutable else "&u32")
+            features.append(
+                Feature(
+                    "rust",
+                    "function",
+                    f"RuntimeArray::{bare}",
+                    Signature(reference, (receiver, Param(Type("usize")))),
+                    group="runtime_array",
+                    crossgl=SUBSCRIPT,
+                    spelling=f"{'unsafe ' if method.group(1) else ''}.{bare}",
+                    counterpart=Signature(
+                        Type("uint"), (receiver, Param(Type("uint")))
+                    ),
+                )
+            )
+    return features
+
+
+# The debug_printf! macros write a Vulkan debug printf (NonSemantic.DebugPrintf), as CrossGL's printf does. A probe
+# prints the empty format string; debug_printfln! appends a newline to it.
+_PRINTF = re.compile(r"^#\[proc_macro\]\npub fn (debug_printf\w*)\(", re.M)
+_PRINTF_CROSSGL = {"debug_printf": "printf", "debug_printfln": 'printf("\\n")'}
+
+
+def debug_printf(text: str) -> list[Feature]:
+    """The ``debug_printf`` macros of spirv-std's macro crate, ``macros/src/lib.rs``."""
+    return [
+        Feature(
+            "rust",
+            "function",
+            f"{match.group(1)}!",
+            Signature(VOID, (Param(STRING, "const"),)),
+            group="debug_printf",
+            crossgl=_PRINTF_CROSSGL.get(match.group(1), ""),
+            note="" if match.group(1) in _PRINTF_CROSSGL else "no CrossGL spelling",
+            spelling=f"unsafe spirv_std::{match.group(1)}!",
+        )
+        for match in _PRINTF.finditer(text)
+    ]
