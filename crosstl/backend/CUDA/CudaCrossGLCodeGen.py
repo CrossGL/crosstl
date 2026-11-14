@@ -264,7 +264,7 @@ class CudaToCrossGLConverter:
     # local/parameter names by the CrossGL parser. The full keyword set is only
     # used for record names (checked in convert_cuda_type_to_crossgl).
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
-
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "let", "match", "precision", "var"}
     def __init__(self, threadgroup_size=None):
         # The host picks a CUDA kernel's block size at launch time; this option names it.
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
