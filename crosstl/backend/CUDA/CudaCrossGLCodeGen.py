@@ -26,8 +26,8 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
-from .keyword_renames import source_identifier_names, unused_identifier_name
 from .directed_rounding import refuse_directed_rounding
+from .keyword_renames import source_identifier_names, unused_identifier_name
 from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 

@@ -1,3 +1,6 @@
+import pytest
+
+from crosstl.backend.CUDA.directed_rounding import DirectedRoundingUnsupportedError
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
@@ -2416,14 +2419,16 @@ def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
     # as __fdividef, rounded arithmetic aliases, and __saturatef.
+    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) have no CrossGL
+    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float normalized_weight(float weight, float normalizer, float bias) {
         float scaled = __fdividef(weight, normalizer);
         float rounded = __fdiv_rn(weight, normalizer);
-        float adjusted = __fadd_rd(scaled, bias);
-        float centered = __fsub_rz(adjusted, rounded);
-        float product = __fmul_ru(centered, __fadd_rn(weight, bias));
-        float reciprocal = __frcp_rn(__fadd_rz(normalizer, 1.0f));
+        float adjusted = __fadd_rn(scaled, bias);
+        float centered = __fsub_rn(adjusted, rounded);
+        float product = __fmul_rn(centered, __fadd_rn(weight, bias));
+        float reciprocal = __frcp_rn(__fadd_rn(normalizer, 1.0f));
         return __saturatef(__fmul_rn(product, reciprocal));
     }
     """
@@ -2433,9 +2438,9 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
 
     assert body[0].value.name == "__fdividef"
     assert body[1].value.name == "__fdiv_rn"
-    assert body[2].value.name == "__fadd_rd"
-    assert body[3].value.name == "__fsub_rz"
-    assert body[4].value.name == "__fmul_ru"
+    assert body[2].value.name == "__fadd_rn"
+    assert body[3].value.name == "__fsub_rn"
+    assert body[4].value.name == "__fmul_rn"
     assert body[5].value.name == "__frcp_rn"
     assert body[6].value.name == "__saturatef"
     assert "var scaled: f32 = (weight / normalizer);" in crossgl
@@ -2448,16 +2453,24 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     for raw_name in (
         "__fdividef",
         "__fdiv_rn",
-        "__fadd_rd",
         "__fadd_rn",
-        "__fadd_rz",
-        "__fsub_rz",
-        "__fmul_ru",
+        "__fsub_rn",
         "__fmul_rn",
         "__frcp_rn",
         "__saturatef",
     ):
         assert raw_name not in crossgl
+
+    for directed in (
+        "__fadd_rd(a, b)",
+        "__fsub_rz(a, b)",
+        "__fmul_ru(a, b)",
+        "__fadd_rz(a, b)",
+    ):
+        with pytest.raises(DirectedRoundingUnsupportedError):
+            assert_crossgl_reparses(
+                f"__device__ float f(float a, float b) {{ return {directed}; }}"
+            )
 
 
 def test_external_hip_fp16_scalar_conversion_codegen_reparse():

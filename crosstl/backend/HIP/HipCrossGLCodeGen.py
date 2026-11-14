@@ -11,8 +11,8 @@ from ...translator.integer_literals import (
 )
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
-from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.directed_rounding import refuse_directed_rounding
+from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..namespace_constants import is_c_family_namespace_constant

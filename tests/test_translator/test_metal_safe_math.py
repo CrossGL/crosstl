@@ -85,7 +85,9 @@ def test_cuda_hip_and_opencl_define_fp_ieee_and_every_target_discharges_it():
 def test_cuda_to_metal_selects_safe_math_and_precise_functions(tmp_path):
     metal = _translate(tmp_path, "k.cu", CUDA, "metal")
 
-    assert metal.lstrip().startswith(METAL_SAFE_MATH_PRAGMA + "\n#include <metal_stdlib>")
+    assert metal.lstrip().startswith(
+        METAL_SAFE_MATH_PRAGMA + "\n#include <metal_stdlib>"
+    )
     body = _body(metal)
     for name in ("sin", "fmod", "atan2", "fmax"):
         assert f"metal::precise::{name}(" in body, name

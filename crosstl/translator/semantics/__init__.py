@@ -142,6 +142,7 @@ from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
     RelativeVertexIdUnsupportedError,
@@ -154,7 +155,6 @@ from .row_major_struct_members import (
     orient_row_major_buffer_struct_members,
     orient_row_major_struct_members,
 )
-from .program_families import discharge_program_families
 from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES, source_families
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
