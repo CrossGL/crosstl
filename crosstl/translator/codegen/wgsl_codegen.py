@@ -131,6 +131,8 @@ from .wgsl_integer_operands import (
     MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
     mixed_integer_call_is_unsigned,
+    mixed_integer_call_type,
+    unsigned_bitwise_operand_types,
     wgsl_bitwise_operands,
     wgsl_mixed_integer_call_arguments,
     wgsl_mixed_integer_operands,
@@ -3283,7 +3285,7 @@ class WGSLCodeGen(
         value_type = self.expression_type(node.value)
         value_shape = self.vector_shape(value_type)
         if (
-            node.operator[:-1] in MIXED_INTEGER_OPERATORS
+            node.operator[:-1] in MIXED_INTEGER_OPERATORS | BITWISE_OPERATORS
             and target_shape is not None
             and target_shape[0] == "u32"
             and value_shape == ("i32", target_shape[1])
@@ -4847,7 +4849,9 @@ class WGSLCodeGen(
         value_expr = self.generate_expression(node.arguments[0])
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
-        if vector_type_name is None:
+        if vector_type_name is None or mixed_integer_call_is_unsigned(
+            self, node.arguments
+        ):
             args = wgsl_mixed_integer_call_arguments(self, node.arguments)
             return f"clamp({', '.join(args)})"
         lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
@@ -8029,7 +8033,7 @@ class WGSLCodeGen(
                 and mixed_integer_call_is_unsigned(self, expr.arguments)
             ):
                 # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
-                return "u32"
+                return mixed_integer_call_type(self, expr.arguments)
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
@@ -8095,7 +8099,7 @@ class WGSLCodeGen(
             # WGSL's bitwise operators need both operands of one type; a scalar is
             # replicated at rendering, so the result is the type the sides share.
             return self._common_value_type(
-                self.expression_type(expr.left), self.expression_type(expr.right)
+                *unsigned_bitwise_operand_types(self, expr.left, expr.right)
             )
         if expr.operator not in {"+", "-", "*", "/", "%"}:
             return None
