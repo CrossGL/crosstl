@@ -119,9 +119,9 @@ def test_a_geometry_stage_with_its_primitives_keeps_them(tmp_path):
     output = crosstl.translate(
         write(tmp_path, GEOMETRY.replace("LAYOUTS", COMPLETE)), backend="vulkan"
     )
-    assert "OpExecutionMode %2 Triangles" in output
-    assert "OpExecutionMode %2 OutputTriangleStrip" in output
-    assert "OpExecutionMode %2 OutputVertices 3" in output
+    # Result ids depend on whether SPIR-V Tools reformatted the module.
+    for mode in ("Triangles", "OutputTriangleStrip", "OutputVertices 3"):
+        assert re.search(rf"OpExecutionMode %\w+ {mode}\n", output), mode
 
 
 @pytest.mark.parametrize(
