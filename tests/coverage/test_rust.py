@@ -382,7 +382,9 @@ def test_rust_probes_pass_arrays_and_slices():
     sliced = features["Vec3::from_slice"]
     source = probes.build(sliced, "rust").source
     assert "let r: Vec3 = Vec3::from_slice(fin);" in source
-    assert "vec3 r = vec3(a0, a1, a2);" in probes.build(sliced, "crossgl").source
+    # Every invocation reads the slice's first elements, so CrossGL reads them from the buffer too.
+    crossgl = probes.build(sliced, "crossgl").source
+    assert "vec3 r = vec3(fin[0], fin[1], fin[2]);" in crossgl
     # An array result is stored through its first element.
     source = probes.build(features["Vec3::to_array"], "rust").source
     assert "let r: [f32; 3] = a0.to_array();" in source

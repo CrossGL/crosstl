@@ -172,6 +172,7 @@ class _Builder:
             bool(self.receiver and self.receiver.takes(kind))
             or self.uniforms.takes(kind)
             or self.dialect.handle(kind, "") is not None
+            or self.dialect.making(kind.opaque) is not None
         )
 
     def _attributes(self, param: Param) -> bool:
@@ -244,6 +245,13 @@ class _Builder:
                 self.lines += handle.lines
                 self.handles += handle.declarations
                 arguments.append(handle.argument)
+            elif made := dialect.making(param.type.opaque):
+                kind, make = made
+                self.lines.append(dialect.declare(kind, local, self.value(kind)))
+                argument = make.format(local)
+                if param.direction == "address":
+                    argument = dialect.address(argument)
+                arguments.append(argument)
             elif param.type.opaque in _RAY_DESCRIPTIONS:
                 self.lines += self._ray(local)
                 arguments.append(local)

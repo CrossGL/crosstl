@@ -193,6 +193,11 @@ class Dialect:
         with ``{}`` for the call, or ``None`` when the probe only makes the call."""
         return None
 
+    def making(self, opaque: str) -> tuple[Type, str] | None:
+        """How a probe makes an argument of the opaque type ``opaque`` from a value it reads: the value's type and an
+        expression with ``{}`` for it, or ``None`` when the probe cannot."""
+        return None
+
     def stored(self, kind: Type, value: str) -> str:
         """``value``, of type ``kind``, as the output buffer's element type holds it."""
         return value

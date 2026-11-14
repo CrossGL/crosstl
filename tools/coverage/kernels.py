@@ -202,7 +202,7 @@ class Rust(Dialect):
         "uint64": "u64",
         "usize": "usize",
     }
-    # spirv-std's glam has 32-bit integer vectors only (features/rust.py, _GLAM_FEATURES).
+    # spirv-std's glam has 32-bit integer vectors only (features/rust.py, GLAM_FEATURES).
     _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
     _INTEGERS = frozenset(
         {"int", "uint", "int16", "uint16", "int64", "uint64", "usize"}
@@ -214,6 +214,16 @@ class Rust(Dialect):
     _CONVERTED = {
         "FpCategory": (Type("uint"), "({}) as u32"),
         "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
+        "Mat3A": (Type("float", (3, 3)), "Mat3::from({})"),
+        "Quat": (Type("float", (4,)), "Vec4::from({})"),
+        "DQuat": (Type("double", (4,)), "DVec4::from({})"),
+    }
+    # Arguments of glam's types that no buffer holds, made from the values glam converts them from.
+    _MADE = {
+        "Vec3A": (Type("float", (3,)), "Vec3A::from({})"),
+        "Mat3A": (Type("float", (3, 3)), "Mat3A::from({})"),
+        "Quat": (Type("float", (4,)), "Quat::from_vec4({})"),
+        "DQuat": (Type("double", (4,)), "DQuat::from_vec4({})"),
     }
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
@@ -223,10 +233,16 @@ class Rust(Dialect):
         numeric = {
             spelled for scalar, spelled in self._SCALARS.items() if scalar != "bool"
         }
+        if kind.opaque == "EulerRot":
+            # A probe converts Euler angles in the order x, then y, then z.
+            return Handle("EulerRot::XYZ")
         if not closure or closure.group(1) not in numeric:
             return None
         # The closure doubles its argument, so a translation that drops the call computes something else.
         return Handle(f"|x: {closure.group(1)}| x + x")
+
+    def making(self, opaque: str) -> tuple[Type, str] | None:
+        return self._MADE.get(opaque)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         if opaque in self._CONVERTED:
@@ -236,12 +252,14 @@ class Rust(Dialect):
             return None
         spelled = held.group(1) or held.group(2)
         scalars = {name: scalar for scalar, name in self._SCALARS.items()}
-        vector = re.fullmatch(r"([DIUB]?)Vec([234])", spelled)
+        glam = re.fullmatch(r"([DIUB]?)(Vec|Mat)([234])", spelled)
         if spelled in scalars:
             kind = Type(scalars[spelled])
-        elif vector:
+        elif glam:
             prefixes = {prefix: scalar for scalar, prefix in self._GLAM.items()}
-            kind = Type(prefixes[vector.group(1)], (int(vector.group(2)),))
+            size = int(glam.group(3))
+            shape = (size, size) if glam.group(2) == "Mat" else (size,)
+            kind = Type(prefixes[glam.group(1)], shape)
         else:
             return None
         return kind, "{}.0" if held.group(1) else "{}.unwrap_or_default()"
@@ -314,6 +332,9 @@ class Rust(Dialect):
 
     def out_argument(self, name: str) -> str:
         return f"&mut {name}"
+
+    def address(self, name: str) -> str:
+        return f"&{name}"
 
     def inout_argument(self) -> str:
         return "&mut outp[i]"

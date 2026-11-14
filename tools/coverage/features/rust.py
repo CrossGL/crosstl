@@ -1,8 +1,10 @@
-"""Rust GPU functions: ``spirv_std::arch``, the ``num_traits::Float`` methods and glam's ``Vec3`` methods.
+"""Rust GPU functions: ``spirv_std::arch``, ``spirv_std::float``, the ``num_traits::Float`` methods and glam's
+``Vec3`` methods.
 
-rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch``, do scalar math through the ``num_traits::Float``
-trait ``spirv_std`` re-exports, and vector math through glam's methods, ``Vec3`` among them. The lists are read from
-the sources of the versions rust-gpu's lock file resolves. ``spirv_std::arch`` defines some functions with
+rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch`` and the packing functions of ``spirv_std::float``, do
+scalar math through the ``num_traits::Float`` trait ``spirv_std`` re-exports, and vector math through glam's methods,
+``Vec3`` among them; :mod:`.glam` reads glam's other types. The lists are read from the sources of the versions
+rust-gpu's lock file resolves. ``spirv_std::arch`` defines some functions with
 ``macro_rules!`` macros, which are expanded here. A function generic over a numeric trait is probed with the scalar
 type :data:`_BOUNDS` names for the trait; constant generic parameters take the values of :data:`_CONSTANTS`.
 """
@@ -43,7 +45,7 @@ _GLAM = {"": "float", "D": "double", "I": "int", "U": "uint", "B": "bool"}
 # The cargo features spirv-std 0.11 enables on its glam 0.34 dependency (crates/spirv-std/Cargo.toml). glam puts its
 # other vector widths behind features, so a method such as ``Vec3::as_i16vec3`` is absent from the glam a rust-gpu
 # shader links, and is not a rust-gpu feature.
-_GLAM_FEATURES = frozenset({"f64", "i32", "libm", "u32"})
+GLAM_FEATURES = frozenset({"f64", "i32", "libm", "u32"})
 _GATED = re.compile(
     r'#\[cfg\(feature = "([\w-]+)"\)\]\s*(?:#\[[^\]]*\]\s*)*pub (?:const )?(?:unsafe )?fn (\w+)'
 )
@@ -268,6 +270,10 @@ def rust_type(
     glam = re.fullmatch(r"([DIUB]?)Vec([234])", spelling)
     if glam:
         return Type(_GLAM[glam.group(1)], (int(glam.group(2)),))
+    matrix = re.fullmatch(r"(D?)Mat([234])", spelling)
+    if matrix:
+        size = int(matrix.group(2))
+        return Type(_GLAM[matrix.group(1)], (size, size))
     vector = re.fullmatch(r"impl\s+Vector<\s*(\w+)\s*,\s*\w+\s*>", spelling)
     if vector:
         element = rust_type(vector.group(1), generics, self_type)
@@ -276,7 +282,8 @@ def rust_type(
     array = re.fullmatch(r"\[(.+);\s*(\d+)\]", spelling)
     if array:
         element = rust_type(array.group(1), generics, self_type, aliases)
-        if not element.opaque:
+        # An array of arrays stays opaque: a probe passes arrays of values only.
+        if not element.opaque and not element.count:
             return Type(element.scalar, element.shape, count=int(array.group(2)))
     # A tuple or an option stays opaque, spelled with the types it holds so that a probe can read its first value.
     held = re.fullmatch(r"\((.+)\)|Option<(.+)>", spelling)
@@ -297,7 +304,8 @@ def _spelling(kind: Type) -> str:
         return kind.opaque
     if kind.shape:
         prefixes = {scalar: prefix for prefix, scalar in _GLAM.items()}
-        return f"{prefixes.get(kind.scalar, kind.scalar)}Vec{kind.shape[0]}"
+        family = "Mat" if len(kind.shape) == 2 else "Vec"
+        return f"{prefixes.get(kind.scalar, kind.scalar)}{family}{kind.shape[0]}"
     return {scalar: name for name, scalar in _SCALARS.items()}[kind.scalar]
 
 
@@ -331,9 +339,16 @@ def signature(
             array = Type(element.scalar, element.shape, count=self_type.shape[0])
             params.append(Param(array, "out"))
             continue
+        mutable = bool(re.match(r"&\s*mut\b", kind))
         if kind.startswith("&"):
             direction, kind = "inout", re.sub(r"^&\s*(?:mut\s+)?", "", kind)
-        params.append(Param(rust_type(kind, types, self_type, aliases), direction))
+        found = rust_type(kind, types, self_type, aliases)
+        # A shared reference to a vector, a matrix, an array or a glam type is a value the function only reads, which
+        # the probe passes by reference; one to a scalar is an atomic operand, and one to a payload is the payload.
+        if direction == "inout" and not mutable and found.opaque != "udt":
+            if found.shape or found.count or found.opaque:
+                direction = "address"
+        params.append(Param(found, direction))
     # A function that never returns (``-> !``) is called as a statement, like one that returns nothing.
     returned = (
         rust_type(result, types, self_type, aliases)
@@ -518,6 +533,23 @@ def _feature(
     )
 
 
+def packing(text: str, glsl_names: set[str] | frozenset[str]) -> list[Feature]:
+    """The top-level functions of ``spirv_std::float``, which pack floats into integers and unpack them. A probe
+    names them by their path, since the probes import ``spirv_std::arch`` only. The module's ``powi`` methods of
+    ``f32`` and ``f64`` are what a ``Float::powi`` probe already calls: Rust picks an inherent method over a trait's.
+    """
+    text = clean(text)
+    features = []
+    for match in _FUNCTION.finditer(text):
+        name = match.group(2)
+        found, _, note = signature(name, header(text, match.end()))
+        path = f"spirv_std::float::{name}"
+        features.append(
+            _feature(name, "packing", found, path, note, "compute", glsl_names)
+        )
+    return features
+
+
 def parse(
     modules: dict[str, str],
     num_traits_float: str,
@@ -541,6 +573,6 @@ def parse(
         Type("float", (3,)),
         "vec3",
         glsl_names,
-        _GLAM_FEATURES,
+        GLAM_FEATURES,
     )
     return sorted(features, key=lambda f: (f.group, f.name))
