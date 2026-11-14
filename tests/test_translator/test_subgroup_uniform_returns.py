@@ -13,6 +13,7 @@ from crosstl.project import (
 )
 from crosstl.translator import parse
 from crosstl.translator.ast import (
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     NamedType,
@@ -756,6 +757,39 @@ def test_read_only_resource_effects_follow_bodies(body, helpers, expected, point
         assert (
             analysis.read_only_resource_parameter(functions["inspect"], 0) is expected
         )
+
+
+@pytest.mark.parametrize(
+    "dead,expected",
+    [
+        # Without a reachability proof an unresolved use fails closed.
+        (None, False),
+        # The target proved the loop dead, so its unresolved call cannot run.
+        ("for", True),
+        # A walker that keeps every node changes nothing.
+        ("", False),
+    ],
+)
+def test_read_only_resource_proofs_follow_reachable_code(dead, expected):
+    ast = parse(
+        "shader Effect { uint inspect(StructuredBuffer<uint> values) {"
+        " uint total = values[0];"
+        " for (uint i = 0u; i < 0u; i++) { total += unknown(values); }"
+        " return total; } }"
+    )
+    (function,) = ast.functions
+
+    def reachable(root):
+        loops = [
+            node for node in root.walk() if isinstance(node, ForNode) and dead == "for"
+        ]
+        hidden = {id(child) for loop in loops for child in loop.body.walk()}
+        return [node for node in root.walk() if id(node) not in hidden]
+
+    analysis = UniformReturnAnalysis(
+        {}, set(), reachable=None if dead is None else reachable
+    )
+    assert analysis.read_only_resource_parameter(function, 0) is expected
 
 
 @pytest.mark.parametrize(

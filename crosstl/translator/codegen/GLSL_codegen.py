@@ -1467,6 +1467,7 @@ class GLSLCodeGen(
             self.glsl_software_subgroup_uniform_call_ids,
             self.structs_by_name,
             storage_loads,
+            reachable=self.glsl_software_subgroup_reachable_nodes,
         )
         self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {

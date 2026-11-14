@@ -249,6 +249,39 @@ def test_refuses_reference_results_from_unproven_lanes(
     assert _refused(report, target), report.to_json()["diagnostics"]
 
 
+# A helper the entry passes its immutable storage to after scheduling. Its
+# loop runs N / 8 times, so for N = 4 the body is proven dead code.
+PEEK = """METAL_FUNC int read_at(const device int* data, int index) {
+  return data[index];
+}
+
+template <int N>
+METAL_FUNC int peek(const device int* data, int base) {
+  int total = data[base];
+  for (int i = 0; i < N / 8; i++) {
+    total += read_at(data, base + i);
+  }
+  return total;
+}
+
+"""
+PEEK_CALL = "total += peek<TRIPS>(offsets, 0) * 0;"
+
+
+@pytest.mark.parametrize("target", ("opengl",))
+@pytest.mark.parametrize("trips", (4, 8))
+def test_storage_read_proofs_skip_proven_dead_code(tmp_path, target, trips):
+    # For 4 trips the loop's call is dead code the target never resolves; it
+    # must not make the scheduling helper's storage, and so its exit, vary.
+    source = _kernel(consumer=PEEK_CALL.replace("TRIPS", str(trips))).replace(
+        "template <int BM>\n", PEEK + "template <int BM>\n", 1
+    )
+    report = _report(tmp_path, target, source)
+    assert _codes(report) == [], report.to_json()["diagnostics"]
+    (artifact,) = report.to_json()["artifacts"]
+    _compile((tmp_path / artifact["path"]).read_text(), target, tmp_path)
+
+
 @pytest.mark.parametrize(
     ("threads", "accepted"), [((32, 4, 1), True), ((48, 1, 1), False)]
 )
