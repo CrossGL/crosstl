@@ -15,6 +15,16 @@ move, a lost or torn workgroup store or a wrong comparison is attributable
 from the readback alone. The pairs carry ``uint``, ``float`` and ``half``
 values; a ``half`` member is narrower than the ``uint`` beside it in workgroup
 memory.
+
+The DirectX translation runs on hardware waves of exactly 32 lanes
+(``[WaveSize(32)]``) and lowers ``simd_shuffle_down`` to ``WaveReadLaneAt``
+with an in-range per-lane index, which DXC itself lowers to a SPIR-V
+``OpGroupNonUniformShuffle``. No WARP release executes it: the system
+library rejects the pipeline, 1.0.13 writes nothing, 1.0.14 to 1.0.18 remove
+the device during the dispatch, and 1.0.19 and 1.0.21 return, for lanes 0 to 15 only, pairs of lanes below the
+reader, which no shuffle down can reach, while lanes 16 to 31 stay exact. The
+executions on a Direct3D device therefore remain opt-in, and the Metal host
+requires them.
 """
 
 import json
@@ -422,10 +432,8 @@ def test_index_ties_are_required_with_the_multiwave_controls():
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text(encoding="utf-8")
-    for job, step in (
-        ("warp-conformance", "Execute the controls on every WARP library"),
-        ("metal-host", "Validate multi-wave workgroup reductions"),
-    ):
-        text = workflow_text.workflow_job_step_section(workflow, job, step)
-        assert "tests/test_translator/test_multiwave_index_ties.py" in text
-        assert "if:" not in text and "continue-on-error" not in text
+    text = workflow_text.workflow_job_step_section(
+        workflow, "metal-host", "Validate multi-wave workgroup reductions"
+    )
+    assert "tests/test_translator/test_multiwave_index_ties.py" in text
+    assert "if:" not in text and "continue-on-error" not in text
