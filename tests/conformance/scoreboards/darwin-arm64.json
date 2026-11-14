@@ -5701,16 +5701,6 @@
       "sourceSHA256": "eb8d1a29c6d9c1d1f5d5747a9bf640b435822b6979695c12debaaf06c198df1c"
     }
   },
-  "counts": {
-    "compiled-only": 204,
-    "diverged": 56,
-    "driver-rejected": 8,
-    "interface-changed": 4,
-    "invalid": 8,
-    "observed": 40,
-    "preserved": 804,
-    "refused": 16
-  },
   "keys": [
     "case",
     "language",

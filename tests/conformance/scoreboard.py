@@ -77,13 +77,22 @@ def snapshot(records):
         }
         if record.get("constantsSHA256"):
             cells[identity]["constantsSHA256"] = record["constantsSHA256"]
-    counts = dict(sorted(Counter(record["outcome"] for record in records).items()))
     return {
         "schemaVersion": SCHEMA,
         "keys": list(KEYS),
         "cells": dict(sorted(cells.items())),
-        "counts": counts,
     }
+
+
+def counts(scoreboard):
+    """Outcome totals of ``scoreboard``'s cells.
+
+    The totals are derived rather than stored: a stored summary changes with every cell, so two pull requests that
+    touch unrelated cells would always conflict on it.
+    """
+    return dict(
+        sorted(Counter(cell["outcome"] for cell in scoreboard["cells"].values()).items())
+    )
 
 
 def in_scope(identity, scope):
@@ -142,13 +151,10 @@ def merge(baseline, records, scope):
     fresh = snapshot(records)["cells"]
     if set(kept) & set(fresh):
         raise ValueError("The run produced cells outside its declared scope")
-    cells = dict(sorted({**kept, **fresh}.items()))
-    counts = dict(sorted(Counter(cell["outcome"] for cell in cells.values()).items()))
     return {
         "schemaVersion": SCHEMA,
         "keys": list(KEYS),
-        "cells": cells,
-        "counts": counts,
+        "cells": dict(sorted({**kept, **fresh}.items())),
     }
 
 
@@ -179,9 +185,9 @@ def main(argv=None):
     records = [record for path in args.results for record in read_results(path)]
     scope = results_scope(records)
     baseline = json.loads(args.write.read_text()) if args.write.is_file() else {}
-    args.write.write_text(
-        json.dumps(merge(baseline, records, scope), indent=2, sort_keys=True) + "\n"
-    )
+    merged = merge(baseline, records, scope)
+    args.write.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(counts(merged), sort_keys=True))
     return 0
 
 
