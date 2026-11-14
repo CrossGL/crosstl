@@ -19763,7 +19763,18 @@ class VulkanSPIRVCodeGen(
                 runtime_parameters, execution_model_hint
             )
 
-        self.process_statements(function_node.body)
+        # A precise function evaluates all of its floating-point arithmetic as written.
+        precise_function = self.has_attribute(
+            function_node, "precise"
+        ) or "precise" in {
+            str(qualifier).lower()
+            for qualifier in getattr(function_node, "qualifiers", None) or ()
+        }
+        self.precise_expression_depth += precise_function
+        try:
+            self.process_statements(function_node.body)
+        finally:
+            self.precise_expression_depth -= precise_function
         self.process_tessellation_patch_constant_function(function_node)
 
         if not self.current_block_has_terminator():
