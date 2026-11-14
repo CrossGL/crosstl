@@ -2213,6 +2213,120 @@ def test_wgsl_codegen_converts_mixed_integer_vector_compound_operands(tmp_path):
         validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_mixed_integer_bitwise_operands(tmp_path):
+    # GLSL converts the int operand of &, | and ^ beside a uint one; WGSL needs the
+    # conversion, and a scalar beside a vector is replicated as well (#4492).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        buffer uint* so;
+        buffer int* si;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                uint s = so[0];
+                int t = si[0];
+                uvec2 a = u & k;
+                uvec2 b = u | k.y;
+                uvec2 c = k ^ s;
+                uvec2 d = (u ^ k) & (k | 1u);
+                uvec2 e = u & -1;
+                uint f = s & t;
+                uint g = t | s;
+                ivec2 h = k & t;
+                uo[1] = a + b + c + d + e;
+                so[1] = f + g;
+                io[1] = h;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<u32> = (u & vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = (u | vec2<u32>(u32(k.y)));" in generated
+    assert "var c: vec2<u32> = (vec2<u32>(k) ^ vec2<u32>(s));" in generated
+    assert (
+        "var d: vec2<u32> = ((u ^ vec2<u32>(k)) & (vec2<u32>(k) | vec2<u32>(1u)));"
+        in generated
+    )
+    assert "var e: vec2<u32> = (u & vec2<u32>(u32(-1i)));" in generated
+    assert "var f: u32 = (s & u32(t));" in generated
+    assert "var g: u32 = (u32(t) | s);" in generated
+    assert "var h: vec2<i32> = (k & vec2<i32>(t));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_compound_bitwise(tmp_path):
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                u |= k;
+                u &= k;
+                u ^= k.x;
+                uo[1] = u;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "u |= vec2<u32>(k);" in generated
+    assert "u &= vec2<u32>(k);" in generated
+    assert "u ^= vec2<u32>(u32(k.x));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_vector_min_max_clamp(tmp_path):
+    # Vector min, max and clamp convert signed vectors to vecN<u32> beside a uint
+    # argument, and replicate scalar arguments to the vector type (#4492).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        buffer uint* so;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                uint s = so[0];
+                uvec2 a = max(u, k);
+                uvec2 b = min(k, u);
+                uvec2 c = max(k, s);
+                uvec2 d = clamp(u, k, uvec2(9u));
+                uvec2 e = clamp(u, k.x, 9u);
+                uvec2 f = clamp(k, 1u, u);
+                uo[1] = a + b + c + d + e + f;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var a: vec2<u32> = max(u, vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = min(vec2<u32>(k), u);" in generated
+    assert "var c: vec2<u32> = max(vec2<u32>(k), vec2<u32>(s));" in generated
+    assert "var d: vec2<u32> = clamp(u, vec2<u32>(k), vec2<u32>(9u));" in generated
+    assert (
+        "var e: vec2<u32> = clamp(u, vec2<u32>(u32(k.x)), vec2<u32>(9u));" in generated
+    )
+    assert "var f: vec2<u32> = clamp(vec2<u32>(k), vec2<u32>(1u), u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
     # Built-ins min, max and clamp convert signed arguments to u32 when combined with uint (#3628).
     shader = """
