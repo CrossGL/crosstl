@@ -12,7 +12,7 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
 
-def to_crossgl(body, globals_=""):
+def to_crossgl(body, globals_="", matrix_packing=None):
     source = textwrap.dedent(globals_) + textwrap.dedent("""
         RWStructuredBuffer<float> o : register(u0);
         [numthreads(1, 1, 1)]
@@ -20,7 +20,7 @@ def to_crossgl(body, globals_=""):
         %s
         }
         """) % textwrap.indent(textwrap.dedent(body), "    ")
-    output = HLSLToCrossGLConverter().generate(
+    output = HLSLToCrossGLConverter(matrix_packing=matrix_packing).generate(
         HLSLParser(HLSLLexer(source).tokenize()).parse()
     )
     Parser(Lexer(output).get_tokens()).parse()
@@ -425,3 +425,177 @@ def test_unrepresentable_matrix_forms_are_refused(statement, reason):
         """,
             "int next() { return 1; }\n",
         )
+
+
+@pytest.mark.parametrize(
+    "call, hlsl_type, crossgl_type",
+    [
+        ("ObjectToWorld()", "float3x4", "mat4x3"),
+        ("ObjectToWorld3x4()", "float3x4", "mat4x3"),
+        ("ObjectToWorld4x3()", "float4x3", "mat3x4"),
+        ("WorldToObject()", "float3x4", "mat4x3"),
+        ("WorldToObject3x4()", "float3x4", "mat4x3"),
+        ("WorldToObject4x3()", "float4x3", "mat3x4"),
+        ("hlsl::ObjectToWorld3x4()", "float3x4", "mat4x3"),
+    ],
+)
+def test_raytracing_transform_intrinsics_import_as_matrices(
+    call, hlsl_type, crossgl_type
+):
+    source = textwrap.dedent(f"""
+        struct [raypayload] Payload {{
+            float4 color : read(caller) : write(anyhit, closesthit);
+        }};
+        RWStructuredBuffer<float> outp : register(u0);
+        [shader("closesthit")]
+        void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {{
+            {hlsl_type} r = {call};
+            outp[0] = dot(r[0], {call}[0]) + {call}[0].y + {call}[1][2];
+        }}
+    """)
+    rendered_call = call.removeprefix("hlsl::")
+    output = HLSLToCrossGLConverter().generate(
+        HLSLParser(HLSLLexer(source).tokenize()).parse()
+    )
+    Parser(Lexer(output).get_tokens()).parse()
+    assert f"{crossgl_type} r = {rendered_call};" in output
+    assert f"dot(transpose(r)[0], transpose({rendered_call})[0])" in output
+    assert f"{rendered_call}[1][0]" in output
+    assert f"{rendered_call}[2][1]" in output
+
+
+@pytest.mark.parametrize(
+    "method, hlsl_type, crossgl_type",
+    [
+        ("CandidateObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("CandidateObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("CandidateWorldToObject3x4", "float3x4", "mat4x3"),
+        ("CandidateWorldToObject4x3", "float4x3", "mat3x4"),
+        ("CommittedObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("CommittedObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("CommittedWorldToObject3x4", "float3x4", "mat4x3"),
+        ("CommittedWorldToObject4x3", "float4x3", "mat3x4"),
+    ],
+)
+def test_ray_query_transform_methods_import_as_matrices(
+    method, hlsl_type, crossgl_type
+):
+    output = to_crossgl(f"""
+        RayQuery<RAY_FLAG_NONE> obj;
+        {hlsl_type} r = obj.{method}();
+        float2x2 s = obj.{method}()[0][0];
+        o[0] = dot(r[0], r[0]) + r[0].y + s[0][0];
+    """)
+    assert f"{crossgl_type} r = obj.{method}();" in output
+    assert "dot(transpose(r)[0], transpose(r)[0])" in output
+    assert "r[1][0]" in output
+    assert (
+        f"mat2 s = mat2(vec2(obj.{method}()[0][0]), vec2(obj.{method}()[0][0]));"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "method, hlsl_type, crossgl_type",
+    [
+        ("GetObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("GetObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("GetWorldToObject3x4", "float3x4", "mat4x3"),
+        ("GetWorldToObject4x3", "float4x3", "mat3x4"),
+    ],
+)
+def test_hit_object_transform_methods_import_as_matrices(
+    method, hlsl_type, crossgl_type
+):
+    source = textwrap.dedent(f"""
+        RWStructuredBuffer<float> outp : register(u0);
+        [shader("raygeneration")]
+        void main() {{
+            dx::HitObject obj;
+            {hlsl_type} r = obj.{method}();
+            {hlsl_type} c = dx::HitObject::MakeNop().{method}();
+            outp[0] = dot(r[0], c[0]) + r[0].y + c[0].y;
+        }}
+    """)
+    output = HLSLToCrossGLConverter().generate(
+        HLSLParser(HLSLLexer(source).tokenize()).parse()
+    )
+    Parser(Lexer(output).get_tokens()).parse()
+    assert f"{crossgl_type} r = obj.{method}();" in output
+    assert f"{crossgl_type} c = dx::HitObject::MakeNop().{method}();" in output
+    assert "dot(transpose(r)[0], transpose(c)[0])" in output
+    assert "r[1][0]) + c[1][0]" in output
+
+
+def test_raytracing_matrix_operations_casts_and_row_major_packing():
+    output = to_crossgl(
+        """
+        Query rq;
+        float3x3 upper = (float3x3)rq.CommittedObjectToWorld3x4();
+        float3x4 prod = rq.CandidateObjectToWorld3x4() * rq.CommittedWorldToObject3x4();
+        float3 transformed = mul(rq.CommittedObjectToWorld3x4(), float4(1.0, 2.0, 3.0, 1.0));
+        float elem = rq.CommittedObjectToWorld3x4()._m12;
+        o[0] = upper[0][0] + prod[0][0] + transformed.x + elem;
+    """,
+        "typedef RayQuery<RAY_FLAG_NONE> Query;\n",
+    )
+    assert "mat3 upper = mat3(rq.CommittedObjectToWorld3x4());" in output
+    assert (
+        "mat4x3 prod = matrixCompMult(rq.CandidateObjectToWorld3x4(), rq.CommittedWorldToObject3x4());"
+        in output
+    )
+    assert (
+        "vec3 transformed = (rq.CommittedObjectToWorld3x4() * vec4(1.0, 2.0, 3.0, 1.0));"
+        in output
+    )
+    assert "float elem = rq.CommittedObjectToWorld3x4()[2][1];" in output
+
+    row_major = to_crossgl(
+        """
+        RayQuery<RAY_FLAG_NONE> rq;
+        float3x4 r = rq.CommittedObjectToWorld3x4();
+        float3 v = mul(r, float4(1.0, 2.0, 3.0, 1.0));
+        o[0] = r[0].x + v.x;
+    """,
+        matrix_packing="row_major",
+    )
+    assert "mat3x4 r = transpose(rq.CommittedObjectToWorld3x4());" in row_major
+    assert "vec3 v = (vec4(1.0, 2.0, 3.0, 1.0) * r);" in row_major
+
+
+def test_user_struct_method_named_like_hit_object_method_keeps_its_own_type():
+    output = to_crossgl(
+        """
+        Custom s;
+        s.v = o[0];
+        float2x2 m = s.GetObjectToWorld3x4();
+        o[0] = m[0][0];
+    """,
+        """
+        struct Custom {
+            float v;
+            float GetObjectToWorld3x4() { return v; }
+        };
+        """,
+    )
+    assert (
+        "mat2 m = mat2(vec2(Custom_GetObjectToWorld3x4(s)), vec2(Custom_GetObjectToWorld3x4(s)));"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float3x4 m = unknown_matrix_call();",
+        "float3x4 m = mystery.GetObjectToWorld3x4();",
+        "float3x4 m = mystery.CommittedObjectToWorld3x4();",
+        "RayQuery<RAY_FLAG_NONE> rq; float3x4 m = rq.GetObjectToWorld3x4();",
+        "dx::HitObject hit; float3x4 m = hit.CommittedObjectToWorld3x4();",
+        "float3x4 m = ObjectToWorld3x4(1);",
+        "RayQuery<RAY_FLAG_NONE> rq; float3x4 m = rq.CommittedObjectToWorld3x4(1);",
+    ],
+)
+def test_unknown_or_mismatched_matrix_calls_remain_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(statement + "\no[0] = m[0][0];")
