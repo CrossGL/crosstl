@@ -1646,6 +1646,14 @@ class VectorArithmeticMixin:
             helper_name += "_scalar"
         elif operand_shape == "scalar_left":
             helper_name = f"cgl_scalar_{operation_name}_{vector_info['type']}"
+        # A precisely evaluated function calls helpers that keep its arithmetic uncontracted (precise_evaluation).
+        precise_hook = getattr(self, "precise_vector_helper", None)
+        format_component = self.format_vector_binary_component
+        prologue = ""
+        if precise_hook is not None and precise_hook(vector_info, operator):
+            helper_name += "_precise"
+            format_component = self.format_precise_vector_component
+            prologue = self.precise_helper_prologue()
 
         if helper_name in self.helper_functions:
             return helper_name
@@ -1658,7 +1666,7 @@ class VectorArithmeticMixin:
         if operand_shape == "vector":
             params = f"{vector_type} lhs, {vector_type} rhs"
             args = [
-                self.format_vector_binary_component(
+                format_component(
                     vector_info["component_type"],
                     operator,
                     f"lhs.{component}",
@@ -1669,7 +1677,7 @@ class VectorArithmeticMixin:
         elif operand_shape == "scalar_right":
             params = f"{vector_type} lhs, {scalar_type} rhs"
             args = [
-                self.format_vector_binary_component(
+                format_component(
                     vector_info["component_type"],
                     operator,
                     f"lhs.{component}",
@@ -1680,7 +1688,7 @@ class VectorArithmeticMixin:
         else:
             params = f"{scalar_type} lhs, {vector_type} rhs"
             args = [
-                self.format_vector_binary_component(
+                format_component(
                     vector_info["component_type"],
                     operator,
                     "lhs",
@@ -1692,6 +1700,7 @@ class VectorArithmeticMixin:
         helper = (
             f"__device__ inline {vector_type} {helper_name}({params})\n"
             "{\n"
+            f"{prologue}"
             f"    return {constructor}({', '.join(args)});\n"
             "}"
         )
