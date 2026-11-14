@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 
 from .dialect import Buffer, Dialect, Handle, ProbeError
-from .model import Type
+from .model import STRING, Type
 
 
 class CUDA(Dialect):
@@ -206,6 +206,8 @@ class Rust(Dialect):
     language = "rust"
     suffix = ".rs"
     one = "1"
+    # A format string, which the debug_printf macros take as a literal.
+    string = "&str"
     entry = "probe"
     # rustgpu.CAPABILITIES enables Int16 and Int64 for every probe.
     wide_integers = True
@@ -243,6 +245,9 @@ class Rust(Dialect):
         "CandidateIntersection": (Type("uint"), "({}) as u32"),
         "CommittedIntersection": (Type("uint"), "({}) as u32"),
         "RayFlags": (Type("uint"), "({}).bits()"),
+        # A runtime array's element, read through the reference indexing returns (features/spirv_std.py).
+        "&u32": (Type("uint"), "*({})"),
+        "&mut u32": (Type("uint"), "*({})"),
         "Matrix4x3": (Type("float", (3,)), "({}).w_axis"),
         "[Vec3; 3]": (Type("float", (3,)), "({})[0]"),
     }
@@ -257,6 +262,25 @@ class Rust(Dialect):
         "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
         # A byte-address buffer's index, four times a word index (features/spirv_std.py, BYTE_INDEX).
         "ByteIndex": (Type("uint"), "{} * 4"),
+        # The image operands of an ImageWithMethods form (features/spirv_std.py, SAMPLE_PARAMS); gradients come from
+        # one vector, the x gradient first.
+        "SampleParams(bias)": (
+            Type("float"),
+            "spirv_std::image::sample_with::bias({})",
+        ),
+        "SampleParams(lod)": (Type("float"), "spirv_std::image::sample_with::lod({})"),
+        "SampleParams(integer lod)": (
+            Type("int"),
+            "spirv_std::image::sample_with::lod({})",
+        ),
+        "SampleParams(grad)": (
+            Type("float", (4,)),
+            "spirv_std::image::sample_with::grad({0}.xy(), {0}.zw())",
+        ),
+        "SampleParams(sample_index)": (
+            Type("int"),
+            "spirv_std::image::sample_with::sample_index({})",
+        ),
         # A ray's flags keep the word's bits, as HLSL and GLSL pass them: from_bits_truncate would mask them, and the
         # mask would join the semantic id of the call that takes them.
         "RayFlags": (
@@ -341,6 +365,8 @@ class Rust(Dialect):
         return f"[{', '.join(parts)}]"
 
     def literal(self, kind: Type) -> str:
+        if kind == STRING:
+            return '""'
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
         if kind.scalar == "bool":
@@ -361,9 +387,10 @@ class Rust(Dialect):
         ("Sampler", "use spirv_std::Sampler;"),
         ("SampledImage<", "use spirv_std::image::SampledImage;"),
         ("AccelerationStructure", "use spirv_std::ray_tracing::AccelerationStructure;"),
+        ("RuntimeArray<", "use spirv_std::RuntimeArray;"),
     )
-    # What a probe needs for a spirv_std macro it calls: ray_query! names RayQuery unqualified, and expands to inline
-    # assembly, which the crate has to enable for the SPIR-V target.
+    # What a probe needs for a spirv_std macro or trait it calls: ray_query! names RayQuery unqualified, and it and the
+    # debug_printf macros expand to inline assembly, which the crate has to enable for the SPIR-V target.
     _MACRO_PRELUDES = (
         (
             "spirv_std::ray_query!",
@@ -371,6 +398,12 @@ class Rust(Dialect):
                 "#![feature(asm_experimental_arch)]",
                 "use spirv_std::ray_tracing::RayQuery;",
             ),
+        ),
+        ("spirv_std::debug_printf", ("#![feature(asm_experimental_arch)]",)),
+        # The *_with forms of the image methods are ImageWithMethods' methods.
+        (
+            "spirv_std::image::sample_with::",
+            ("use spirv_std::image::ImageWithMethods;",),
         ),
     )
 

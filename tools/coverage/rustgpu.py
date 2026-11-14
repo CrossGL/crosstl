@@ -97,6 +97,8 @@ EXTENSIONS = (
     "SPV_KHR_shader_clock",
     "SPV_KHR_fragment_shader_barycentric",
     "SPV_EXT_shader_stencil_export",
+    # debug_printf! writes NonSemantic.DebugPrintf instructions.
+    "SPV_KHR_non_semantic_info",
 )
 MESH_CAPABILITIES = ("MeshShadingEXT",)
 MESH_EXTENSIONS = ("SPV_EXT_mesh_shader",)
