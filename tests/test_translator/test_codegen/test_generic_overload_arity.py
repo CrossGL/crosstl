@@ -227,20 +227,21 @@ shader P {
 """
 
 
-# ``sel(Foo, f)`` has two arguments and ``sel<T>(T a)`` has one parameter, so
 @pytest.mark.parametrize("backend", C_STYLE_TARGETS)
-    tmp_path, backend
-):
+def test_struct_type_as_leading_argument_selects_one_parameter_overload(tmp_path, backend):
+    # ``sel(Foo, f)`` has two arguments and ``sel<T>(T a)`` has one parameter, so
+    # the extra leading argument names the type: ``sel(Foo, f)`` means ``sel<Foo>(f)``.
+    # The two-parameter overload ``sel<T>(T a, T b)`` must not consume ``Foo`` as a value.
     code = translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG, backend)
     # The one-parameter overload specialized for Foo must appear.
     assert "sel_Foo" in code
     # The two-parameter overload must NOT be selected: its specialization name
     # would contain "overload1" and the call would pass the type as a value.
     assert "sel_Foo_overload1" not in code
-    "backend", C_STYLE_TARGETS
-def test_struct_type_as_leading_argument_does_not_emit_type_as_value(tmp_path, backend):
+
 
 @pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_argument_does_not_emit_type_as_value(tmp_path, backend):
     code = translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG, backend)
     # The call must not pass the type name as a value argument.
     assert re.search(r"sel_Foo\w*\(\s*Foo\s*,", code) is None
