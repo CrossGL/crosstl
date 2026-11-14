@@ -629,6 +629,7 @@ from .resource_arrays import (
 from .resource_helper_calls import is_read_only_helper_expression
 from .sampler_pairs import (
     COMBINED_SAMPLER_PAIRS,
+    SEPARATE_SAMPLER_PRESERVATION,
     lower_combined_sampler_pairs,
     with_combined_sampler_header,
 )
@@ -1750,6 +1751,10 @@ class GLSLCodeGen(
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
     # Desktop GLSL converts integer literals to float and uint implicitly.
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
+    # Desktop GLSL keeps a separately-declared texture apart from its sampler and pairs them at the sample
+    # site (issue #3931); targets that map separate textures to combined samplers at declaration time set
+    # this False and keep the combined lowering.
+    GLSL_PRESERVE_SEPARATE_SAMPLERS = True
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_UNAVAILABLE_FUNCTION_PATTERNS = ()
     LOWERING_REFUSAL_TYPE = OpenGLLoweringRefused
@@ -9068,7 +9073,9 @@ class GLSLCodeGen(
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
-            ast, self.LOWERING_REFUSAL_TYPE.label
+            ast,
+            self.LOWERING_REFUSAL_TYPE.label,
+            preserve_separate_samplers=self.GLSL_PRESERVE_SEPARATE_SAMPLERS,
         )
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
@@ -9206,6 +9213,7 @@ class GLSLCodeGen(
         self.glsl_generic_helper_refusals = {}
         self.glsl_generic_helper_code = {}
         self.collect_preserved_nonuniform_sampler_resources(ast, functions)
+        self.merge_separate_sampler_preservation(ast)
         self.validate_glsl_tessellation_control_barriers(ast, target_stage, functions)
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
@@ -47472,6 +47480,16 @@ complex64_t crossgl_complex64_mod_assign(
             return None
 
         texture_name = self.generate_expression(args[0])
+        if explicit_sampler:
+            # A separately-declared texture pairs with its sampler at the sample site, as
+            # ``sampler2D(tex, smp)`` (issue #3931); a combined texture drops the sampler argument instead.
+            declared_texture_type = self.texture_declared_resource_type(args[0])
+            if self.is_separate_texture_object_type(declared_texture_type):
+                sampled_type = self.resource_base_type(
+                    self.sampled_image_type(declared_texture_type)
+                )
+                sampler_name = self.generate_expression(args[1])
+                texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         coord = self.generate_expression(args[coord_index])
         extra_args = args[coord_index + 1 :]
         return texture_name, coord, extra_args
@@ -51042,13 +51060,8 @@ complex64_t crossgl_complex64_mod_assign(
         if parts is None:
             return None
         texture_name, coord, extra_args = parts
-        sampler_name = self.generate_expression(args[1])
         declared_texture_type = self.texture_declared_resource_type(args[0])
-        if self.is_separate_texture_object_type(declared_texture_type):
-            sampled_type = self.sampled_image_type(declared_texture_type)
-            sampled_type = self.resource_base_type(sampled_type)
-            texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
-        else:
+        if not self.is_separate_texture_object_type(declared_texture_type):
             self.record_glsl_combined_sampler_use(args[0], args[1])
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
@@ -51227,6 +51240,34 @@ complex64_t crossgl_complex64_mod_assign(
         self.preserved_sampler_parameters = {
             func_name: names for func_name, names in preserved_params.items() if names
         }
+
+    def merge_separate_sampler_preservation(self, ast):
+        """Declare the samplers a preserved separate texture names (issue #3931).
+
+        The lowering keeps a ``texture2D`` sampled only through explicit samplers apart from them; those
+        samplers must be emitted as ``uniform sampler`` declarations, like the non-uniform ones above, or the
+        ``sampler2D(tex, smp)`` pairs at the sample sites would name an undeclared uniform. Targets that map
+        separate textures to combined samplers at declaration time do not preserve them, so they declare no
+        samplers here either.
+        """
+        if not self.GLSL_PRESERVE_SEPARATE_SAMPLERS:
+            return
+        preservation = (getattr(ast, "annotations", None) or {}).get(
+            SEPARATE_SAMPLER_PRESERVATION
+        )
+        if not isinstance(preservation, dict):
+            return
+        self.preserved_sampler_variables |= {
+            name for name in preservation.get("globals", ()) if isinstance(name, str)
+        }
+        for func_name, names in (preservation.get("parameters", {}) or {}).items():
+            if not isinstance(names, (list, tuple, set)):
+                continue
+            kept = {name for name in names if isinstance(name, str)}
+            if kept:
+                self.preserved_sampler_parameters.setdefault(func_name, set()).update(
+                    kept
+                )
 
     def collect_resource_array_size_hints(self, ast):
         texture_globals = self.collect_unsized_sampled_texture_globals(ast)

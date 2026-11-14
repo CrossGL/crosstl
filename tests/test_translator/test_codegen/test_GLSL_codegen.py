@@ -46380,6 +46380,141 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
     assert "sampleState" not in generated_code
 
 
+def test_opengl_shared_sampler_stays_separate():
+    """Two textures sharing one sampler keep that sampler (issue #3931)."""
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            uniform texture2D texa;
+            uniform texture2D texb;
+            uniform sampler smp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = textureLod(texa, smp, vec2(0.5), 0.0).x + textureLod(texb, smp, vec2(0.5), 0.0).y;
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform texture2D texa;" in generated_code
+    assert "layout(binding = 1) uniform texture2D texb;" in generated_code
+    assert "layout(binding = 0) uniform sampler smp;" in generated_code
+    assert "textureLod(sampler2D(texa, smp), vec2(0.5), 0.0)" in generated_code
+    assert "textureLod(sampler2D(texb, smp), vec2(0.5), 0.0)" in generated_code
+    assert "crosstl-combined-samplers" not in generated_code
+    assert "sampler2D texa" not in generated_code
+    assert "sampler2D texb" not in generated_code
+
+
+def test_opengl_separate_texture_pairs_each_sampler_at_its_site():
+    """One texture sampled through two samplers pairs each site with its own sampler."""
+    shader = """
+    shader OneTexTwoSamplers {
+        fragment {
+            uniform texture2D texa;
+            uniform sampler pointSmp;
+            uniform sampler linearSmp;
+            vec4 main() @ gl_FragColor {
+                return texture(texa, pointSmp, vec2(0.5)) + texture(texa, linearSmp, vec2(0.25));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform texture2D texa;" in generated_code
+    assert "uniform sampler pointSmp;" in generated_code
+    assert "uniform sampler linearSmp;" in generated_code
+    assert "texture(sampler2D(texa, pointSmp), vec2(0.5))" in generated_code
+    assert "texture(sampler2D(texa, linearSmp), vec2(0.25))" in generated_code
+    assert "texa_pointSmp" not in generated_code
+    assert "texa_linearSmp" not in generated_code
+
+
+def test_opengl_separate_texture_without_sampler_still_combines():
+    """A texture sampled through its own state still becomes a combined sampler."""
+    shader = """
+    shader OwnState {
+        fragment {
+            uniform texture2D texa;
+            vec4 main() @ gl_FragColor {
+                return texture(texa, vec2(0.5));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform sampler2D texa;" in generated_code
+    assert "texture(texa, vec2(0.5))" in generated_code
+
+
+def test_opengl_separate_texture_through_helper_still_combines():
+    """A texture passed to a helper still takes the combined lowering."""
+    shader = """
+    shader Helper {
+        fragment {
+            uniform texture2D texa;
+            uniform sampler smp;
+            vec4 sampleTex(texture2D tex, sampler s, vec2 uv) {
+                return texture(tex, s, uv);
+            }
+            vec4 main() @ gl_FragColor {
+                return sampleTex(texa, smp, vec2(0.5));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform sampler2D texa;" in generated_code
+    assert "vec4 sampleTex(sampler2D tex, vec2 uv)" in generated_code
+    assert "sampleTex(texa, vec2(0.5))" in generated_code
+
+
+def test_opengl_glsl_input_shared_sampler_round_trip(tmp_path):
+    """A Vulkan GLSL program sampling sampler2D(tex, smp) round-trips apart (issue #3931)."""
+    source_path = tmp_path / "shared.glsl"
+    source_path.write_text(
+        """
+        #version 450
+        layout(set = 0, binding = 0) uniform texture2D texa;
+        layout(set = 0, binding = 1) uniform texture2D texb;
+        layout(set = 0, binding = 2) uniform sampler smp;
+        layout(set = 0, binding = 3, std430) buffer Out { float outp[]; };
+        layout(local_size_x = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = textureLod(sampler2D(texa, smp), vec2(0.5), 0.0).x + textureLod(sampler2D(texb, smp), vec2(0.5), 0.0).y;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(source_path),
+        backend="opengl",
+        format_output=False,
+    )
+
+    assert "layout(binding = 0) uniform texture2D texa;" in generated_code
+    assert "layout(binding = 1) uniform texture2D texb;" in generated_code
+    assert "layout(binding = 2) uniform sampler smp;" in generated_code
+    assert "textureLod(sampler2D(texa, smp), vec2(0.5), 0.0)" in generated_code
+    assert "textureLod(sampler2D(texb, smp), vec2(0.5), 0.0)" in generated_code
+
+
 def test_opengl_struct_member_sampler_expression_is_dropped():
     shader = """
     shader StructSamplerExpression {

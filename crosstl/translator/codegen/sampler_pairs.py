@@ -62,8 +62,13 @@ from .lowering_refusals import refuse_unsupported
 # Annotation of a lowered AST: every pair, for records that name the uniforms a sampler state reaches.
 COMBINED_SAMPLER_PAIRS = "combined_sampler_pairs"
 
+# Annotation of a lowered AST: the sampler globals a texture kept separate from names, so the emitter declares
+# them instead of combining them into the texture (issue #3931). ``{"globals": [...], "parameters": {...}}``.
+SEPARATE_SAMPLER_PRESERVATION = "separate_sampler_preservation"
+
 __all__ = [
     "COMBINED_SAMPLER_PAIRS",
+    "SEPARATE_SAMPLER_PRESERVATION",
     "canonicalize_separate_textures",
     "lower_combined_sampler_pairs",
     "with_combined_sampler_header",
@@ -110,6 +115,19 @@ _FILTERABLE = (
     | set(_PLAIN_OF)
     | {"sampler3D"}
 )
+
+# Separate texture shapes the GLSL emitter can pair with a sampler at a sample site (``sampler2D(tex, smp)``):
+# the plain shapes its ``is_separate_texture_object_type`` knows. Shadow, integer and multisample shapes keep
+# the combined lowering, which retypes them to the sampler type the operation needs.
+_PRESERVABLE_SEPARATE_TEXTURES = {
+    "texture1D",
+    "texture1DArray",
+    "texture2D",
+    "texture2DArray",
+    "texture3D",
+    "textureCube",
+    "textureCubeArray",
+}
 _SAMPLER_TYPES = {
     "sampler",
     "comparison_sampler",
@@ -290,9 +308,12 @@ class _Resource:
 
 
 class _Lowering:
-    def __init__(self, ast, target):
+    def __init__(self, ast, target, preserve_separate_samplers=True):
         self.ast = ast
         self.target = target
+        # Whether a separately-declared texture may stay apart from its sampler (issue #3931). Targets that
+        # map separate textures to combined samplers at declaration time keep the combined lowering.
+        self.preserve_separate_samplers = preserve_separate_samplers
         self.functions = []
         self.function_ids = set()
         self.scopes = {}  # id(function) -> {name: _Resource}
@@ -302,6 +323,10 @@ class _Lowering:
         # Every (uniform, texture, sampler) pair, also of textures that keep one uniform.
         self.pairs = []
         self.taken_names = set()
+        # Sampler globals a preserved separate texture names, for the emitter to declare (issue #3931).
+        self.separate_sampler_globals = set()
+        # Containers of module and stage resources; entry parameters are not among them.
+        self.global_containers = set()
         self.site_calls = (
             {}
         )  # id(call.args) -> call, to keep a call's ``arguments`` alias in step
@@ -329,8 +354,11 @@ class _Lowering:
 
     def collect(self):
         module = self.resources(self.ast.global_variables, self.ast.global_variables)
+        self.global_containers.add(id(self.ast.global_variables))
         entries = []
         for stage in getattr(self.ast, "stages", {}).values():
+            if stage.local_variables is not None:
+                self.global_containers.add(id(stage.local_variables))
             stage_scope = dict(module)
             stage_scope.update(
                 self.resources(stage.local_variables, stage.local_variables)
@@ -688,8 +716,66 @@ class _Lowering:
         for key, _operands, _slot in resource.sites:
             resource.add_key(key)
 
+    def preserve_separate_texture(self, resource):
+        """Keep a separately-declared texture apart from its sampler (issue #3931).
+
+        A module or stage ``texture2D`` sampled only through explicit root samplers stays ``texture2D``; the
+        emitter pairs it at each sample site as ``sampler2D(tex, smp)`` and declares the samplers it names, so
+        two textures sharing one sampler keep that sampler instead of each absorbing a copy of it. Texel fetches
+        need no sampler state, so they do not block the separate form. Anything the separate form cannot spell
+        — a texture sampled through its own state, a depth comparison, a sampler array chosen at run time
+        through a helper, or a texture passed to a helper, whose parameter the lowering would retype — falls
+        back to the combined lowering.
+        """
+        if (
+            not self.preserve_separate_samplers
+            or not resource.is_root
+            or id(resource.container) not in self.global_containers
+            or resource.base_type not in _PRESERVABLE_SEPARATE_TEXTURES
+            or not resource.keys
+        ):
+            return False
+        for scope in self.scopes.values():
+            for other in scope.values():
+                if (
+                    other.kind == "texture"
+                    and not other.is_root
+                    and resource in other.arguments
+                ):
+                    return False
+        samplers = set()
+        for key in resource.keys:
+            source, shadow = key
+            if source == _FETCH:
+                continue
+            if shadow:
+                return False
+            if (
+                not isinstance(source, tuple)
+                or not source
+                or not isinstance(source[0], _Resource)
+            ):
+                return False
+            sampler_resource = source[0]
+            if (
+                not sampler_resource.is_root
+                or id(sampler_resource.container) not in self.global_containers
+                or sampler_resource.base_type != "sampler"
+            ):
+                return False
+            if len(source) == 2 and source[1] not in (_PARALLEL, _SELECTED):
+                if not isinstance(source[1], int):
+                    return False
+            samplers.add(sampler_resource.name)
+        if not samplers:
+            return False
+        self.separate_sampler_globals.update(samplers)
+        return True
+
     def lower_texture(self, resource):
         self.normalize_keys(resource)
+        if self.preserve_separate_texture(resource):
+            return
         filtered = [key for key in resource.keys if key[0] != _FETCH]
         several = [source[1] for source, _ in filtered if source[0] == "several"]
         if several:
@@ -874,16 +960,20 @@ class _Lowering:
         return record
 
 
-def lower_combined_sampler_pairs(ast, target):
+def lower_combined_sampler_pairs(ast, target, preserve_separate_samplers=True):
     """Return ``(ast, records)``: ``ast`` with one combined uniform per (texture, sampler state) pair.
 
     ``target`` is the label refusals are reported under (``"OpenGL"``, ``"WebGL"``). The caller's AST is not
     mutated. ``records`` describe the uniforms of every texture that was split, for
     :func:`with_combined_sampler_header`.
+
+    ``preserve_separate_samplers`` keeps a separately-declared texture apart from the samplers it is sampled
+    through (issue #3931) instead of combining them; targets that map separate textures to combined samplers
+    at declaration time pass ``False`` and keep the combined lowering.
     """
     if not isinstance(ast, ASTNode) or not hasattr(ast, "global_variables"):
         return ast, []
-    survey = _Lowering(ast, target)
+    survey = _Lowering(ast, target, preserve_separate_samplers)
     survey.collect()
     if not survey.has_separate_resources():
         if not _has_separate_types(ast, _MEMBER_TYPE):
@@ -891,7 +981,7 @@ def lower_combined_sampler_pairs(ast, target):
         ast = deepcopy(ast)
         _combine_remaining_separate_types(ast, _MEMBER_TYPE)
         return ast, []
-    lowering = _Lowering(deepcopy(ast), target)
+    lowering = _Lowering(deepcopy(ast), target, preserve_separate_samplers)
     lowering.collect()
     lowering.scan()
     lowering.propagate()
@@ -903,6 +993,11 @@ def lower_combined_sampler_pairs(ast, target):
     annotations = getattr(lowered, "annotations", None)
     if isinstance(annotations, dict):
         annotations[COMBINED_SAMPLER_PAIRS] = list(lowering.pairs)
+        if lowering.separate_sampler_globals:
+            annotations[SEPARATE_SAMPLER_PRESERVATION] = {
+                "globals": sorted(lowering.separate_sampler_globals),
+                "parameters": {},
+            }
     return lowered, lowering.records
 
 

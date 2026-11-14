@@ -1659,13 +1659,13 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
     assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
-    # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
-    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
+    # GLSL 450 keeps a separately-declared texture apart from its sampler and pairs them where it samples:
+    # the texture stays texture1D on its binding, the sampler stays a sampler uniform on its own binding,
+    # and the sample pairs them as sampler1D(g_tTex1, g_sSamp1) (issue #3931).
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
-    assert "texture(g_tTex1, 0.1)" in glsl
-    assert "g_sSamp1" not in glsl
-    assert "texture1D" not in glsl
+    assert "layout(binding = 1) uniform texture1D g_tTex1;" in glsl
+    assert "layout(binding = 0) uniform sampler g_sSamp1;" in glsl
+    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
     validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515

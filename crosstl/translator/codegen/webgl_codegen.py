@@ -97,6 +97,9 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = False
+    # WebGL maps separate textures to combined samplers at declaration time (see map_image_base_type_with_format
+    # below), so it keeps the combined lowering and declares no separate samplers.
+    GLSL_PRESERVE_SEPARATE_SAMPLERS = False
     GLSL_UNAVAILABLE_BUILTINS = WEBGL_UNAVAILABLE_BUILTINS
     GLSL_UNAVAILABLE_FUNCTION_PATTERNS = WEBGL_UNAVAILABLE_FUNCTION_PATTERNS
     webgl_program_identifier_names = frozenset()
