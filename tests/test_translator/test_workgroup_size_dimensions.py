@@ -62,8 +62,6 @@ def _translate(tmp_path, source, backend):
 )
 @pytest.mark.parametrize("backend", sorted(SPELLINGS))
 def test_omitted_dimensions_are_one(tmp_path, template, attribute, size, backend):
-    if template is ENTRY and backend == "slang":
-        pytest.skip("the Slang generator does not lower top-level entry functions")
     code = _translate(tmp_path, template.format(attribute=attribute), backend)
     x, y, z = size
     assert re.search(SPELLINGS[backend].format(x=x, y=y, z=z), code), code

@@ -35,6 +35,10 @@ from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
+from .compute_entry_resources import (
+    ComputeEntryResourceError,
+    hoist_compute_entry_resources,
+)
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_buffer_layouts import hoist_constant_buffer_layouts
 from .constant_buffer_size import (
@@ -249,6 +253,7 @@ __all__ = [
     "BindingIndexUnresolvedError",
     "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
+    "ComputeEntryResourceError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
     "DevicePrivateGlobalUnsupportedError",
@@ -546,6 +551,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
+    hoist_compute_entry_resources(program, report.target)
     adopt_module_stage_outputs(program, report.target)
     convert_signed_builtin_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)

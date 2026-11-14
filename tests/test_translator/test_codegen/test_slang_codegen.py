@@ -10499,7 +10499,7 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
         ),
         (
             "compute { void main() @numthreads(8, 4, 2, 1) { } }",
-            "numthreads requires at most three arguments",
+            "numthreads takes one, two or three dimensions, got 4",
         ),
         (
             "compute { void main() @numthreads(0, 1, 1) { } }",
