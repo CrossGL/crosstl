@@ -1851,13 +1851,17 @@ class TestHipCodeGen:
         code = """
         __global__ void shfl_kernel(const float* in, float* out) {
             int i = blockIdx.x * blockDim.x + threadIdx.x;
+            int lane = threadIdx.x % 32;
             float v = in[i];
             float a = __shfl(v, 3);
             float b = __shfl_xor(v, 4);
             float c = __shfl_down(v, 2);
             float d = __shfl_up(v, 1);
             float e = __shfl(v, 3, warpSize);
-            out[i] = a + b + c + d + e;
+            float f = __shfl(v, 3, 16);
+            float g = __shfl_down(v, 2, 16);
+            float h = __shfl(v, lane - 1);
+            out[i] = a + b + c + d + e + f + g + h;
         }
         """
         lexer = HipLexer(code)
@@ -1867,7 +1871,10 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
-        assert "WaveReadLaneAt(v, 3)" in result
+        # HIP masks the source lane with width - 1, so a lane index outside
+        # the wave still reads a lane inside it.
+        assert "WaveReadLaneAt(v, ((3) & (WaveGetLaneCount() - 1)))" in result
+        assert "WaveReadLaneAt(v, (((lane - 1)) & (WaveGetLaneCount() - 1)))" in result
         assert "WaveReadLaneAt(v, (WaveGetLaneIndex() ^ 4))" in result
         assert (
             "(WaveGetLaneIndex() >= (1)) ? "
@@ -1877,6 +1884,17 @@ class TestHipCodeGen:
             "((WaveGetLaneIndex() + (2)) < WaveGetLaneCount()) ? "
             "WaveReadLaneAt(v, (WaveGetLaneIndex() + (2))) : v"
         ) in result
+        # A constant width keeps the offset inside the caller's width-lane
+        # segment (HIP __shfl family).
+        assert (
+            "WaveReadLaneAt(v, ((WaveGetLaneIndex() - "
+            "(WaveGetLaneIndex() % 16)) + ((3) & (16 - 1))))"
+        ) in result
+        assert (
+            "((((WaveGetLaneIndex() % 16) + (2)) < 16) ? "
+            "WaveReadLaneAt(v, (WaveGetLaneIndex() + (2))) : v"
+        ) in result
+        assert "has no CrossGL form" not in result
         assert "__shfl" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
