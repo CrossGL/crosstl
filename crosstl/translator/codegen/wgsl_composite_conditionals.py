@@ -79,6 +79,15 @@ class WGSLCompositeConditionalMixin:
         for arg in value.arguments[:2]:
             if self.matrix_shape(self.expression_type(arg)) is None:
                 return None
+        for arg in value.arguments[:2]:
+            if self.expression_has_side_effect(arg):
+                # WGSL select evaluates both value arguments, while the
+                # if/else this lowers to evaluates only the chosen branch.
+                raise WGSLRefusal(
+                    "WGSL target cannot lower select on matrix operands when "
+                    "a value argument has a side effect: the if/else would "
+                    "skip the branch the condition does not pick"
+                )
         return TernaryOpNode(value.arguments[2], value.arguments[1], value.arguments[0])
 
     def lower_composite_ternary(self, stmt):

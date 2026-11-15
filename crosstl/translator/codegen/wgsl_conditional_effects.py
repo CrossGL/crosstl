@@ -46,7 +46,11 @@ from ..ast import (
 )
 from ..refusals import WGSLRefusal
 
-__all__ = ["WGSLConditionalEffectsMixin", "is_effectful_builtin"]
+__all__ = [
+    "FunctionSideEffectChecker",
+    "WGSLConditionalEffectsMixin",
+    "is_effectful_builtin",
+]
 
 _EFFECT_PREFIXES = ("atomic", "interlocked", "imageatomic", "buffer_append")
 _EFFECT_SUBSTRINGS = ("store", "barrier")
@@ -128,40 +132,57 @@ def _parameter_writes_caller(parameter):
     return bool(qualifiers & _WRITE_QUALIFIERS)
 
 
-class WGSLConditionalEffectsMixin:
-    """Statement lowering for conditionals with side-effecting branches; see the module docstring."""
+class FunctionSideEffectChecker:
+    """Whether calling a shader function can have a side effect, and whether an expression can.
+
+    ``overloads_by_name`` maps a function name to its declarations: one function node, or a list of them when
+    the name is overloaded. ``module_names`` are the module-scope variable names; a local that shares one may
+    be out of scope where it is written, so writes through such a name count as side effects. A call has a
+    side effect when it is a built-in that writes memory, synchronizes, emits or discards (see
+    :func:`is_effectful_builtin`), or a function the shader declares whose body writes anything other than its
+    own locals, writes an ``out`` or ``inout`` parameter, or makes such a call. Reads are not side effects:
+    moving a texture sample into an ``if``/``else`` would only add a uniformity requirement the source does
+    not have. Other backends reuse this for any lowering that evaluates only the branch it picks, such as a
+    matrix ``select`` lowered to a conditional.
+    """
+
+    def __init__(self, overloads_by_name, module_names):
+        self._overloads_by_name = overloads_by_name or {}
+        self._module_names = set(module_names or ())
+        self._cache = {}
 
     def function_has_side_effect(self, name, visiting=None):
         """Whether calling the shader's function ``name`` (any overload) can have a side effect."""
-        cache = self.__dict__.setdefault("_wgsl_function_effects", {})
-        if name in cache:
-            return cache[name]
-        overloads = (getattr(self, "_function_overloads_by_name", None) or {}).get(name)
+        if name in self._cache:
+            return self._cache[name]
+        overloads = self._overloads_by_name.get(name)
         if not overloads:
             return is_effectful_builtin(name)
+        functions = (
+            list(overloads) if isinstance(overloads, (list, tuple)) else [overloads]
+        )
         visiting = set() if visiting is None else visiting
         if name in visiting:
             return True
         visiting.add(name)
         result = any(
             self._function_body_has_side_effect(function, visiting)
-            for function in overloads
+            for function in functions
         )
         visiting.discard(name)
-        cache[name] = result
+        self._cache[name] = result
         return result
 
     def _function_body_has_side_effect(self, function, visiting):
         parameters = list(getattr(function, "parameters", None) or [])
         if any(_parameter_writes_caller(parameter) for parameter in parameters):
             return True
-        module_names = set(getattr(self, "_module_identifier_names", None) or {})
         locals_ = {getattr(parameter, "name", None) for parameter in parameters}
         body = getattr(function, "body", None)
         nodes = list(_nodes(body if not isinstance(body, list) else BlockNode(body)))
         locals_.update(node.name for node in nodes if isinstance(node, VariableNode))
         # A local that shares a module-scope name may be out of scope where it is written.
-        locals_ -= module_names
+        locals_ -= self._module_names
         for node in nodes:
             if self._node_has_side_effect(node, locals_, visiting):
                 return True
@@ -193,6 +214,28 @@ class WGSLConditionalEffectsMixin:
                 if name is None or self.function_has_side_effect(name):
                     return True
         return False
+
+
+class WGSLConditionalEffectsMixin:
+    """Statement lowering for conditionals with side-effecting branches; see the module docstring."""
+
+    def _side_effect_checker(self):
+        checker = self.__dict__.get("_wgsl_side_effect_checker")
+        if checker is None:
+            checker = FunctionSideEffectChecker(
+                getattr(self, "_function_overloads_by_name", None),
+                getattr(self, "_module_identifier_names", None),
+            )
+            self.__dict__["_wgsl_side_effect_checker"] = checker
+        return checker
+
+    def function_has_side_effect(self, name, visiting=None):
+        """Whether calling the shader's function ``name`` (any overload) can have a side effect."""
+        return self._side_effect_checker().function_has_side_effect(name, visiting)
+
+    def expression_has_side_effect(self, expr):
+        """Whether evaluating ``expr`` can call something with a side effect, or itself assigns or updates."""
+        return self._side_effect_checker().expression_has_side_effect(expr)
 
     def effectful_branches(self, expr):
         return isinstance(expr, TernaryOpNode) and (
