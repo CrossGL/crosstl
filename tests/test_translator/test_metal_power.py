@@ -557,7 +557,7 @@ def test_precise_power_runs_the_portable_power_over_the_normal_range(
 
 
 def test_power_support_rejects_unknown_boundaries():
-    with pytest.raises(ValueError, match="boundaries"):
+    with pytest.raises(KeyError, match="flush"):
         binary32_power_support("evaluate", boundaries="flush")
     assert binary32_power_support("evaluate", notice=False).startswith(
         "@source_license(fdlibm)"

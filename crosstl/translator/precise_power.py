@@ -148,6 +148,9 @@ _COMPUTED_BOUNDARIES = {
 }
 
 
+_BOUNDARY_POLICIES = {"native": _NATIVE_BOUNDARIES, "computed": _COMPUTED_BOUNDARIES}
+
+
 def binary32_power_support(name, boundaries="native", notice=True):
     """Render a positive-normal-base, finite-exponent approximation.
 
@@ -159,10 +162,8 @@ def binary32_power_support(name, boundaries="native", notice=True):
     defines a cross-target result flushing policy. ``notice=False`` leaves out
     the fdlibm notice comment when an earlier helper already carries it.
     """
-    if boundaries not in ("native", "computed"):
-        raise ValueError("boundaries must be 'native' or 'computed'")
+    chosen = _BOUNDARY_POLICIES[boundaries]
     text = _POWER_SUPPORT.replace("$evaluate", name)
-    chosen = _NATIVE_BOUNDARIES if boundaries == "native" else _COMPUTED_BOUNDARIES
     for placeholder, replacement in chosen.items():
         text = text.replace(placeholder, replacement)
     if not notice:
