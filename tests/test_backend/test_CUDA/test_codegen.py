@@ -1202,9 +1202,11 @@ class TestCudaCodeGen:
         assert "__ballot_sync(mask, pred)" in result
         assert "not directly supported" not in result
         assert (
-            "(((WaveGetLaneIndex() + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
+            "WaveReadLaneAt(value, (((WaveGetLaneIndex() + (1)) < 32) ? "
+            "(WaveGetLaneIndex() + (1)) : WaveGetLaneIndex()))"
         ) in result
+        assert "? WaveReadLaneAt(" not in result
+        assert ": WaveReadLaneAt(" not in result
         assert "__activemask()" not in result
         assert "__ballot_sync(0xffffffff, pred)" not in result
         assert "__shfl_sync(0xffffffff, value, lane)" not in result
@@ -1250,14 +1252,18 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "WaveReadLaneAt(value, lane)" in result
+        # up/down select the source lane and shuffle in every lane: a shuffle in
+        # one arm of ?: reads lanes that are inactive there (#4569).
         assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+            "WaveReadLaneAt(value, ((WaveGetLaneIndex() >= (delta)) ? "
+            "(WaveGetLaneIndex() - (delta)) : WaveGetLaneIndex()))"
         ) in result
         assert (
-            "((WaveGetLaneIndex() + (delta)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+            "WaveReadLaneAt(value, (((WaveGetLaneIndex() + (delta)) < 32) ? "
+            "(WaveGetLaneIndex() + (delta)) : WaveGetLaneIndex()))"
         ) in result
+        assert "? WaveReadLaneAt(" not in result
+        assert ": WaveReadLaneAt(" not in result
         assert "WaveReadLaneAt(value, (WaveGetLaneIndex() ^ (mask)))" in result
         assert "cuda warp intrinsic __shfl" not in result
         assert "__shfl_" not in result

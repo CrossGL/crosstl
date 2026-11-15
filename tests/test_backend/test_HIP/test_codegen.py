@@ -1841,23 +1841,27 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        # up/down select the source lane and shuffle in every lane: a shuffle in
+        # one arm of ?: reads lanes that are inactive there (#4569).
         assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+            "WaveReadLaneAt(value, ((WaveGetLaneIndex() >= (delta)) ? "
+            "(WaveGetLaneIndex() - (delta)) : WaveGetLaneIndex()))"
         ) in result
         # The default width and an explicit warpSize are both the wavefront width, which is 32 or 64 lanes
         # depending on the device, so neither may become the constant 32.
         assert (
             result.count(
-                "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
-                "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+                "WaveReadLaneAt(value, (((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
+                "(WaveGetLaneIndex() + (delta)) : WaveGetLaneIndex()))"
             )
             == 2
         )
         assert (
-            "(((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value"
+            "WaveReadLaneAt(value, ((((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
+            "(WaveGetLaneIndex() + (1)) : WaveGetLaneIndex()))"
         ) in result
+        assert "? WaveReadLaneAt(" not in result
+        assert ": WaveReadLaneAt(" not in result
         assert "hip warp intrinsic __shfl_up_sync" not in result
         assert "hip warp intrinsic __shfl_down_sync" not in result
         assert "__shfl_up_sync" not in result

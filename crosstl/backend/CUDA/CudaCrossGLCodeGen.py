@@ -5133,17 +5133,20 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             value, lane_or_delta = args[1], args[2]
             if function_name == "__shfl_sync":
                 return f"WaveReadLaneAt({value}, {lane_or_delta})"
+            # Select the source lane first and read in every lane: a shuffle in
+            # one arm of ?: runs only in the lanes that take it, and reads lanes
+            # that are inactive there (#4569).
             if function_name == "__shfl_up_sync":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"((WaveGetLaneIndex() >= ({lane_or_delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane_or_delta}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() - ({lane_or_delta})) : WaveGetLaneIndex()))"
                 )
             if function_name == "__shfl_down_sync":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(((WaveGetLaneIndex() + ({lane_or_delta})) < 32) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane_or_delta}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() + ({lane_or_delta})) : WaveGetLaneIndex()))"
                 )
             return (
                 f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ ({lane_or_delta})))"
