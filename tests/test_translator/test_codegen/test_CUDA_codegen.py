@@ -20885,4 +20885,3 @@ def test_f16vec2_constructor_from_vec2_uses_float22half2_rn():
     ast = Parser(Lexer(source_code).tokens).parse()
     cuda_code = CudaCodeGen().generate(ast)
     assert "__float22half2_rn(v)" in cuda_code
-

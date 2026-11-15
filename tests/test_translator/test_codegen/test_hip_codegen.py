@@ -14904,4 +14904,3 @@ def test_f16vec2_constructor_from_vec2_uses_float22half2_rn_hip():
     """
     hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
     assert "__float22half2_rn(v)" in hip_code
-
