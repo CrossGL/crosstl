@@ -45,7 +45,7 @@ def test_any_condition_is_reordered():
     generated = generate(
         "output[1] = select(10.0, 20.0, any(lessThan(vec2(x), vec2(1.0))));"
     )
-    assert "select(any(float2(x) < float2(1.0)), 20.0, 10.0)" in generated
+    assert "(any(float2(x) < float2(1.0)) ? 20.0 : 10.0)" in generated
 
 
 def test_user_defined_select_is_unchanged():
