@@ -20,7 +20,7 @@ from ..model import (
     slang_literal,
     tuple_element,
 )
-from ..objects import HIT_OBJECT, OBJECTS, VERTEX
+from ..objects import HIT_OBJECT, OBJECTS, STORAGE_BUFFER, VERTEX
 from ..spellings import ELEMENT, SUBSCRIPT
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -76,6 +76,8 @@ class CrossGL(Dialect):
 
     # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        if qualifier == STORAGE_BUFFER:
+            return f"buffer {spelling}* {name};"
         layout = f"layout({qualifier}) " if qualifier else ""
         return f"{layout}uniform {spelling} {name};"
 
@@ -295,6 +297,12 @@ class CrossGL(Dialect):
         if held:
             return f"Tuple<{', '.join([kind.scalar] * held[1])}>"
         return super().type(kind)
+
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        # An array an output parameter fills in, such as a ray query's triangle vertex positions.
+        if kind.count and not value:
+            return f"{self.type(kind.element)} {name}[{kind.count}];"
+        return super().declare(kind, name, value)
 
     def literal(self, kind: Type) -> str:
         return slang_literal(kind) or super().literal(kind)

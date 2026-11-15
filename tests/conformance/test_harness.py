@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from . import runner, runtimes, scoreboard, toolchains, validators
+from . import native, runner, runtimes, scoreboard, toolchains, validators
 from .cases import BY_ID, CASES, CASES_DIR, compare
 from .heldout import heldout_cases
 from .interface import InterfaceChanged, hlsl_reflected_strides, interface
@@ -468,9 +468,21 @@ def test_native_command_configurations_are_retained(tmp_path, recorded):
     validate(source, "spirv", binary, "main", environment="vulkan1.3")
     assert recorded[-1][0] == "spirv-val" and "vulkan1.3" in recorded[-1]
     validate(source, "metal", binary, "main", config="relaxed")
-    assert "-ffast-math" in recorded[-1]
+    assert "-ffast-math" in recorded[-1] and "-std=metal3.1" in recorded[-1]
     with pytest.raises(ValueError):
         validate(source, "metal", binary, "main", config="fast")
+
+
+def test_metal_compiles_name_one_language_version():
+    """The driver compile uses the MSL version the offline check names, never the device's own default."""
+
+    class Bindings:
+        MTLLanguageVersion3_1 = 196609
+
+    assert native.METAL_LANGUAGE_VERSION == (3, 1)
+    assert native.metal_language_version(Bindings) == 196609
+    # Bindings older than the constant fall back to its documented encoding, major << 16 | minor.
+    assert native.metal_language_version(object()) == 3 << 16 | 1
 
 
 def test_unsigned_dxil_is_invalid(tmp_path, recorded, monkeypatch):

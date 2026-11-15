@@ -33,9 +33,19 @@ from crosstl.translator.codegen.hip_codegen import (
     UnsupportedHIPAstNodeError,
 )
 from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
+from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.lowering_refusal_helpers import hip_partial_output
+
+
+def assert_kernel_only_refusal(codegen_class, source):
+    """A graphics or ray-tracing entry has no HIP form and is refused with a typed diagnostic."""
+    with pytest.raises(StageUnsupportedError) as raised:
+        codegen_class().generate(Parser(Lexer(source).tokens).parse())
+    assert raised.value.code == "project.translate.hip-stage-unsupported"
+    assert raised.value.stages
+    assert "compute" not in raised.value.stages
 
 
 def compile_hip_if_hipcc_available(hip_code, tmp_path):
@@ -274,7 +284,7 @@ class TestHipCodeGen:
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {
-            vertex {
+            compute {
                 void main() {
                     int x;
                 }
@@ -291,7 +301,7 @@ class TestHipCodeGen:
 
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "#include <hip/hip_runtime_api.h>" in hip_code
-        assert "__device__ void main()" in hip_code
+        assert "__global__ void compute_main()" in hip_code
 
     def test_global_constants_are_emitted(self):
         source_code = """
@@ -458,8 +468,8 @@ class TestHipCodeGen:
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
-    def test_mesh_task_stages_lower_to_hip_metadata_and_placeholder_hooks(self):
-        """Mesh/task stages lower to deterministic HIP helper representation."""
+    def test_mesh_task_stages_are_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader HipMeshTaskPipeline {
             struct TaskPayload {
@@ -485,24 +495,11 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert "__device__ inline void cgl_hip_set_mesh_output_counts" in hip_code
-        assert "__device__ inline void cgl_hip_dispatch_mesh" in hip_code
-        assert "// CrossGL mesh stage" in hip_code
-        assert "// CrossGL mesh/task numthreads: 4, 2, 1" in hip_code
-        assert "// CrossGL mesh output topology: triangle" in hip_code
-        assert "// CrossGL mesh max_vertices: 3" in hip_code
-        assert "// CrossGL mesh max_primitives: 1" in hip_code
-        assert "__device__ void mesh_main()" in hip_code
-        assert "cgl_hip_set_mesh_output_counts(3, 1);" in hip_code
-        assert "// CrossGL task stage" in hip_code
-        assert "// CrossGL mesh/task numthreads: 2, 1, 1" in hip_code
-        assert "__device__ void task_main()" in hip_code
-        assert "cgl_hip_dispatch_mesh(1, 2, 1, payload);" in hip_code
-
-    def test_mesh_task_stages_validate_hip_metadata_and_intrinsics(self):
+    def test_invalid_mesh_task_stages_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_topology = """
         shader BadHipMeshTopology {
             mesh {
@@ -510,11 +507,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(
-            ValueError, match="outputtopology.*point, line, or triangle"
-        ):
-            HipCodeGen().generate(Parser(Lexer(invalid_topology).tokens).parse())
-
         invalid_numthreads = """
         shader BadHipTaskNumThreads {
             task {
@@ -522,9 +514,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="numthreads y dimension.*positive"):
-            HipCodeGen().generate(Parser(Lexer(invalid_numthreads).tokens).parse())
-
         invalid_set_counts = """
         shader BadHipMeshCounts {
             mesh {
@@ -534,9 +523,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="SetMeshOutputCounts.*two arguments"):
-            HipCodeGen().generate(Parser(Lexer(invalid_set_counts).tokens).parse())
-
         wrong_dispatch_stage = """
         shader BadHipDispatchStage {
             compute {
@@ -546,11 +532,17 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (
+            invalid_topology,
+            invalid_numthreads,
+            invalid_set_counts,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
         with pytest.raises(ValueError, match="DispatchMesh.*task, object"):
             HipCodeGen().generate(Parser(Lexer(wrong_dispatch_stage).tokens).parse())
 
-    def test_geometry_stage_lowers_to_hip_metadata_and_stream_placeholders(self):
-        """Geometry stages lower to deterministic HIP helper representation."""
+    def test_geometry_stage_is_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader HipGeometryExpansion {
             struct GSInput {
@@ -577,25 +569,11 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert "template <typename T>" in hip_code
-        assert "struct CglHipTriangleStream" in hip_code
-        assert "// CrossGL geometry stage: maxvertexcount=3" in hip_code
-        assert "// CrossGL geometry input primitive: triangle:input" in hip_code
-        assert (
-            "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
-            in hip_code
-        )
-        assert "__device__ void geometry_main(" in hip_code
-        assert "GSInput input[3]" in hip_code
-        assert "CglHipTriangleStream<GSOutput>& stream" in hip_code
-        assert "stream.Append(output);" in hip_code
-        assert "stream.RestartStrip();" in hip_code
-
-    def test_tessellation_stages_lower_to_hip_metadata_and_patch_placeholders(self):
-        """Tessellation stages lower to deterministic HIP helper representation."""
+    def test_tessellation_stages_are_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader HipTessellationPipeline {
             struct HSInput {
@@ -635,32 +613,11 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert "template <typename T, int N>" in hip_code
-        assert "struct CglHipInputPatch" in hip_code
-        assert "struct CglHipOutputPatch" in hip_code
-        assert (
-            "// CrossGL tessellation control stage: outputcontrolpoints=3" in hip_code
-        )
-        assert "// CrossGL tessellation domain: tri" in hip_code
-        assert "// CrossGL tessellation partitioning: fractional_odd" in hip_code
-        assert "// CrossGL tessellation output topology: triangle_cw" in hip_code
-        assert "// CrossGL tessellation patch constant function: HSConst" in hip_code
-        assert "// CrossGL tessellation evaluation stage: domain=tri" in hip_code
-        assert (
-            "__device__ HSOutput tessellation_control_main"
-            "(CglHipInputPatch<HSInput, 3> patch)" in hip_code
-        )
-        assert (
-            "__device__ void tessellation_evaluation_main"
-            "(CglHipOutputPatch<HSOutput, 3> patch)" in hip_code
-        )
-        assert "output.position = patch[0].position;" in hip_code
-        assert "float3 position = patch[0].position;" in hip_code
-
-    def test_tessellation_stages_validate_hip_metadata(self):
+    def test_invalid_tessellation_stages_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         missing_control_points = """
         shader MissingHipTessControlPoints {
             tessellation_control {
@@ -668,9 +625,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires outputcontrolpoints"):
-            HipCodeGen().generate(Parser(Lexer(missing_control_points).tokens).parse())
-
         invalid_control_points = """
         shader BadHipTessControlPoints {
             tessellation_control {
@@ -678,9 +632,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
-            HipCodeGen().generate(Parser(Lexer(invalid_control_points).tokens).parse())
-
         missing_domain = """
         shader MissingHipTessDomain {
             tessellation_evaluation {
@@ -688,9 +639,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires domain"):
-            HipCodeGen().generate(Parser(Lexer(missing_domain).tokens).parse())
-
         invalid_domain = """
         shader BadHipTessDomain {
             tessellation_evaluation {
@@ -698,10 +646,16 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="domain.*must be tri"):
-            HipCodeGen().generate(Parser(Lexer(invalid_domain).tokens).parse())
+        for source in (
+            missing_control_points,
+            invalid_control_points,
+            missing_domain,
+            invalid_domain,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-    def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_hip(self):
+    def test_invalid_geometry_stages_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         missing_attribute = """
         shader MissingHipGeometryMax {
             struct GSInput { vec4 position @ gl_Position; };
@@ -715,9 +669,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="requires maxvertexcount"):
-            HipCodeGen().generate(Parser(Lexer(missing_attribute).tokens).parse())
-
         invalid_max = """
         shader BadHipGeometryMax {
             struct GSInput { vec4 position @ gl_Position; };
@@ -731,9 +682,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="maxvertexcount.*positive"):
-            HipCodeGen().generate(Parser(Lexer(invalid_max).tokens).parse())
-
         wrong_arity = """
         shader BadHipGeometryInputArity {
             struct GSInput { vec4 position @ gl_Position; };
@@ -747,9 +695,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
-            HipCodeGen().generate(Parser(Lexer(wrong_arity).tokens).parse())
-
         missing_stream = """
         shader BadHipGeometryStream {
             struct GSInput { vec4 position @ gl_Position; };
@@ -759,10 +704,15 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="must include a PointStream"):
-            HipCodeGen().generate(Parser(Lexer(missing_stream).tokens).parse())
+        for source in (
+            missing_attribute,
+            invalid_max,
+            wrong_arity,
+            missing_stream,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-    def test_mesh_function_stage_qualifier_lowers_hip_metadata(self):
+    def test_mesh_function_stage_qualifier_is_refused(self):
         ast = ShaderNode(
             name="QualifiedHipMeshStage",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
@@ -782,13 +732,14 @@ class TestHipCodeGen:
             ],
         )
 
-        hip_code = HipCodeGen().generate(ast)
+        with pytest.raises(StageUnsupportedError) as raised:
 
-        assert "// CrossGL mesh stage" in hip_code
-        assert "// CrossGL mesh output topology: line" in hip_code
-        assert "__device__ void main()" in hip_code
+            HipCodeGen().generate(ast)
 
-    def test_ray_tracing_stages_emit_hip_metadata_and_hooks(self, tmp_path):
+        assert raised.value.stages == ("mesh",)
+
+    def test_ray_tracing_stages_are_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader HipRayTracingStages {
             struct RayPayload {
@@ -865,43 +816,11 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert (
-            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
-            "set=2 binding=3 binding_source=explicit" in hip_code
-        )
-        assert "struct CglRayTracingAccelerationStructure" in hip_code
-        assert "struct CglRayDesc" in hip_code
-        assert "// CrossGL ray stage: ray_generation" in hip_code
-        assert "// CrossGL ray stage: closest_hit" in hip_code
-        assert "// CrossGL ray stage: any_hit" in hip_code
-        assert "// CrossGL ray stage: miss" in hip_code
-        assert "// CrossGL ray stage: callable" in hip_code
-        assert "// CrossGL ray stage: intersection" in hip_code
-        assert "__device__ void ray_generation_main()" in hip_code
-        assert "__device__ void ray_closest_hit_main(" in hip_code
-        assert "// CrossGL parameter semantic: payload: ray_payload" in hip_code
-        assert "// CrossGL parameter semantic: attributes: hit_attribute" in hip_code
-        assert "// CrossGL parameter semantic: data: callable_data" in hip_code
-        assert "uint3 launch = cgl_ray_launch_id();" in hip_code
-        assert "unsigned int launchWidth = cgl_ray_launch_size().x;" in hip_code
-        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in hip_code
-        assert "cgl_call_shader(0, data);" in hip_code
-        assert "cgl_ignore_hit();" in hip_code
-        assert "cgl_accept_hit_and_end_search();" in hip_code
-        assert "bool accepted = cgl_report_hit(1.0f, 0, attributes);" in hip_code
-        assert (
-            "bool acceptedWithoutAttributes = cgl_report_hit"
-            "(2.0f, 1, CglBuiltInTriangleIntersectionAttributes{});" in hip_code
-        )
-
-        compile_hip_if_hipcc_available(hip_code, tmp_path)
-
-    def test_hip_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
-        self,
-    ):
+    def test_ray_stage_parameter_semantics_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_type = """
         shader InvalidHipRayBuiltinType {
             ray_generation {
@@ -910,9 +829,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
-            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         invalid_stage = """
         shader InvalidHipRayBuiltinStage {
             fragment {
@@ -921,9 +837,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
-            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         duplicate = """
         shader DuplicateHipRayBuiltin {
             ray_generation {
@@ -935,10 +848,12 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(
-            ValueError, match="Duplicate HIP stage parameter semantic launch_id"
+        for source in (
+            invalid_type,
+            invalid_stage,
+            duplicate,
         ):
-            HipCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+            assert_kernel_only_refusal(HipCodeGen, source)
 
     def test_ray_query_methods_lower_to_hip_hooks(self):
         source_code = """
@@ -5701,7 +5616,7 @@ class TestHipCodeGen:
     def test_texture_operations(self):
         source_code = """
         shader TestShader {
-            fragment {
+            compute {
                 void main() {
                     sampler2D tex;
                     vec2 uv = vec2(0.5f, 0.5f);
@@ -13141,12 +13056,12 @@ class TestHipCodeGen:
     def test_multiple_functions(self):
         source_code = """
         shader TestShader {
-            vertex {
+            compute {
                 void vertex_main() {
                     int x;
                 }
             }
-            fragment {
+            compute {
                 void fragment_main() {
                     float y;
                 }
@@ -13918,7 +13833,8 @@ class TestHipCodeGen:
         assert "VertexInput input;" in hip_code
         assert "VertexOutput output;" in hip_code
 
-    def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+    def test_graphics_struct_semantics_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         valid_code = """
         shader HipStructSemantics {
             struct FSOutput {
@@ -13935,12 +13851,6 @@ class TestHipCodeGen:
             }
         }
         """
-        hip_code = HipCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
-
-        assert "float4 color; // CrossGL semantic: target(1)" in hip_code
-        assert "float depth; // CrossGL semantic: depth(any)" in hip_code
-        assert "float2 uv; // CrossGL semantic: texcoord(0)" in hip_code
-
         invalid_type = """
         shader BadHipStructSemanticType {
             struct FSOutput {
@@ -13948,9 +13858,6 @@ class TestHipCodeGen:
             };
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
-            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         invalid_stage = """
         shader BadHipStructSemanticStage {
             struct FSOutput {
@@ -13965,9 +13872,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
-            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_input_only = """
         shader BadHipStructInputOnlySemantic {
             struct VSOutput {
@@ -13982,10 +13886,17 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
-            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+        for source in (
+            valid_code,
+            invalid_stage,
+            invalid_input_only,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
 
-    def test_return_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+    def test_graphics_return_semantics_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_depth_type = """
         shader BadHipDepthType {
             fragment {
@@ -13995,9 +13906,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
-            HipCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
-
         invalid_stage = """
         shader BadHipStage {
             vertex {
@@ -14007,9 +13915,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
-            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_input_only = """
         shader BadHipInputOnlyReturn {
             vertex {
@@ -14019,10 +13924,15 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
-            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+        for source in (
+            invalid_depth_type,
+            invalid_stage,
+            invalid_input_only,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-    def test_direct_return_semantics_emit_metadata_for_hip(self, tmp_path):
+    def test_direct_graphics_return_semantics_are_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         color_code = """
         shader HipDirectReturnSemantics {
             vertex {
@@ -14038,13 +13948,6 @@ class TestHipCodeGen:
             }
         }
         """
-        hip_code = HipCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
-
-        assert "// CrossGL return semantic: position" in hip_code
-        assert "__device__ float4 vertexMain()" in hip_code
-        assert "// CrossGL return semantic: target(0)" in hip_code
-        assert "__device__ float4 fragmentMain()" in hip_code
-
         depth_code = """
         shader HipDepthReturnSemantics {
             fragment {
@@ -14054,16 +13957,14 @@ class TestHipCodeGen:
             }
         }
         """
-        depth_hip_code = HipCodeGen().generate(Parser(Lexer(depth_code).tokens).parse())
+        for source in (
+            color_code,
+            depth_code,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
-        assert "// CrossGL return semantic: depth(any)" in depth_hip_code
-        assert "__device__ float depthMain()" in depth_hip_code
-
-        if shutil.which("hipcc") is not None:
-            compile_hip_if_hipcc_available(hip_code, tmp_path)
-            compile_hip_if_hipcc_available(depth_hip_code, tmp_path)
-
-    def test_stage_parameter_semantics_emit_metadata_for_hip(self, tmp_path):
+    def test_graphics_stage_parameter_semantics_are_refused(self, tmp_path):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         vertex_code = """
         shader HipVertexStageParameterSemantics {
             vertex {
@@ -14076,12 +13977,6 @@ class TestHipCodeGen:
             }
         }
         """
-        vertex_hip = HipCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
-
-        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_hip
-        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_hip
-        assert "__device__ float4 main(unsigned int vertexId" in vertex_hip
-
         fragment_code = """
         shader HipFragmentStageParameterSemantics {
 
@@ -14095,14 +13990,6 @@ class TestHipCodeGen:
             }
         }
         """
-        fragment_hip = HipCodeGen().generate(
-            Parser(Lexer(fragment_code).tokens).parse()
-        )
-
-        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_hip
-        assert "// CrossGL parameter semantic: front: front_facing" in fragment_hip
-        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_hip
-
         compute_code = """
         shader HipComputeStageParameterSemantics {
 
@@ -14119,6 +14006,11 @@ class TestHipCodeGen:
             }
         }
         """
+        for source in (
+            vertex_code,
+            fragment_code,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
         compute_hip = HipCodeGen().generate(Parser(Lexer(compute_code).tokens).parse())
 
         assert (
@@ -14144,11 +14036,10 @@ class TestHipCodeGen:
             "threadIdx.y * blockDim.x + threadIdx.x);"
         ) in compute_hip
         if shutil.which("hipcc") is not None:
-            compile_hip_if_hipcc_available(vertex_hip, tmp_path)
-            compile_hip_if_hipcc_available(fragment_hip, tmp_path)
             compile_hip_if_hipcc_available(compute_hip, tmp_path)
 
-    def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip(self):
+    def test_invalid_graphics_stage_parameters_are_refused_as_stages(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         invalid_stage = """
         shader BadHipStageParameterStage {
             fragment {
@@ -14157,9 +14048,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
-            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
-
         invalid_type = """
         shader BadHipStageParameterType {
             fragment {
@@ -14168,9 +14056,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
-            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
-
         output_only = """
         shader BadHipStageParameterOutputOnly {
             vertex {
@@ -14179,9 +14064,6 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
-            HipCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
-
         duplicate_system_value = """
         shader BadHipStageParameterDuplicate {
             vertex {
@@ -14190,8 +14072,13 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(ValueError, match="Duplicate HIP stage parameter semantic"):
-            HipCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
+        for source in (
+            invalid_stage,
+            invalid_type,
+            output_only,
+            duplicate_system_value,
+        ):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
     def test_stage_parameter_semantics_thread_position_in_grid(self):
         source_code = """
@@ -14238,7 +14125,8 @@ class TestHipCodeGen:
         assert "gl_WorkGroupID" not in hip_code
         assert "gl_WorkGroupSize" not in hip_code
 
-    def test_vertex_stage_with_position_output(self):
+    def test_vertex_stage_is_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader VertexPositionShader {
             vertex {
@@ -14250,20 +14138,8 @@ class TestHipCodeGen:
             }
         }
         """
-
-        lexer = Lexer(source_code)
-        parser = Parser(lexer.tokens)
-        ast = parser.parse()
-
-        hip_code = HipCodeGen().generate(ast)
-
-        assert "__device__ void main()" in hip_code
-        assert "float4 position = make_float4(1.0f, 2.0f, 3.0f, 1.0f);" in hip_code
-        assert "float3 normal = make_float3(0.0f, 1.0f, 0.0f);" in hip_code
-        assert "float2 uv = make_float2(0.5f, 0.5f);" in hip_code
-        assert "vec4" not in hip_code
-        assert "vec3" not in hip_code
-        assert "vec2(" not in hip_code
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
     def test_texture_sampling_with_cubemap_and_1d_types(self):
         source_code = """
@@ -14456,7 +14332,8 @@ class TestHipCodeGen:
         assert "float mass;" in hip_code
         assert "__global__" not in hip_code
 
-    def test_invalid_mixed_stage_vertex_and_compute_still_generates(self):
+    def test_mixed_vertex_and_compute_stages_are_refused(self):
+        """HIP has no graphics or ray-tracing pipeline, so each program is refused."""
         source_code = """
         shader MixedStageShader {
             vertex {
@@ -14471,18 +14348,8 @@ class TestHipCodeGen:
             }
         }
         """
-
-        lexer = Lexer(source_code)
-        parser = Parser(lexer.tokens)
-        ast = parser.parse()
-
-        codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
-
-        assert "__device__" in hip_code
-        assert "__global__" in hip_code
-        assert "int a = 1;" in hip_code
-        assert "int b = 2;" in hip_code
+        for source in (source_code,):
+            assert_kernel_only_refusal(HipCodeGen, source)
 
     def test_match_literals_without_wildcard_emits_no_default(self):
         source_code = """

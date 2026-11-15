@@ -57,6 +57,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     get_array_size_from_node,
 )
+from .char_literals import char_literal_code
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
@@ -99,6 +100,11 @@ from .mojo_exact_lookups import (
     mojo_generic_template_reason,
     mojo_operator,
     mojo_resource_kind_of_spelling,
+)
+from .mojo_integer_promotion import (
+    C_PROMOTING_BINARY_OPERATORS,
+    promoted_operand,
+    promoted_type,
 )
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
@@ -1388,7 +1394,8 @@ class MojoCodeGen:
             "bool": "Bool",
             "string": "String",
             "str": "String",
-            "char": "String",
+            # CrossGL char is a signed 8-bit integer, not text.
+            "char": "Int8",
             **{
                 name: f"SIMD[{dtype}, {storage_width}]"
                 for name, (dtype, _, storage_width, _) in MOJO_VECTOR_TYPES.items()
@@ -8934,6 +8941,9 @@ class MojoCodeGen:
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
+            if op in C_PROMOTING_BINARY_OPERATORS:
+                left = promoted_operand(self, expr.left, left)
+                right = promoted_operand(self, expr.right, right)
             return f"({left} {op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
@@ -15428,6 +15438,8 @@ class MojoCodeGen:
             # A comparison or logical operation on scalars yields a ``Bool``,
             # not a value of its operand type.
             return "bool"
+        left_type = promoted_type(self, mapped_op, left_type)
+        right_type = promoted_type(self, mapped_op, right_type)
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
@@ -15927,6 +15939,8 @@ class MojoCodeGen:
                 return "True"
             if lower_value == "false":
                 return "False"
+        if literal_type == "char":
+            return f"Int8({char_literal_code(value, MojoRefusal, 'Mojo')})"
         if isinstance(value, str):
             escaped = self.escape_literal(value)
             return f'"{escaped}"'

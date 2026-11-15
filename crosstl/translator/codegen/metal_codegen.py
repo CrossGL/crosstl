@@ -189,6 +189,10 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
 )
 from .generic_global_types import metal_generic_global_types
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import (
     build_generic_struct_specialization,
     collect_generic_struct_definitions,
@@ -411,6 +415,10 @@ from .metal_buffer_component_stores import (
     metal_glsl_buffer_component_refusal,
 )
 from .metal_buffer_resource_types import metal_buffer_resource_scope_type
+from .metal_buffer_scalars import (
+    is_metal_buffer_scalar_type_name,
+    metal_buffer_scalar_type,
+)
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
@@ -2138,6 +2146,7 @@ class MetalCodeGen(
 
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
         self.metal_safe_math = metal_safe_math_requested(ast)
@@ -2147,6 +2156,7 @@ class MetalCodeGen(
                 output, self.written_foreign_type_names, "Metal"
             )
             refuse_written_foreign_calls(output, METAL_CALLABLE_FUNCTION_NAMES, "Metal")
+            refuse_written_generic_pointers(output, self.refuse_lowering, "Metal")
         finally:
             self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)
@@ -17667,7 +17677,7 @@ class MetalCodeGen(
         if self.is_raw_buffer_parameter_type(raw_param_type, node):
             return False
         type_name = self.type_name_string(raw_param_type)
-        return is_numeric_scalar_type_name(type_name, self.map_type)
+        return is_metal_buffer_scalar_type_name(type_name, self.map_type)
 
     def is_texture_or_image_resource_type(self, vtype):
         return (
@@ -18193,7 +18203,10 @@ class MetalCodeGen(
                 raw_param_type, name
             )
         if self.is_bound_scalar_value_parameter(raw_param_type, node, shader_type):
-            return f"constant {mapped_type}& {name}"
+            scalar_type = metal_buffer_scalar_type(
+                self.type_name_string(raw_param_type), mapped_type
+            )
+            return f"constant {scalar_type}& {name}"
         address_space_declaration = self.format_address_space_parameter_declaration(
             raw_param_type, mapped_type, name, node, shader_type
         )

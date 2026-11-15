@@ -68,6 +68,9 @@ class Dialect:
     vertex = "emitted"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
+    # The local objects a dialect declares in its own way, by opaque type: the statements that declare ``{name}`` as
+    # one. :data:`.objects.OBJECTS` spells the others.
+    own_objects: dict[str, tuple[str, ...]] = {}
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
     # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, BYTES, PACKED_BYTES and POINTER_SIZED.
     wide_integers = False
@@ -216,6 +219,10 @@ class Dialect:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
 
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        """The declaration of a local that a method changes in place; locals are mutable unless a dialect says."""
+        return self.declare(kind, name, value)
+
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
@@ -224,6 +231,10 @@ class Dialect:
         """The declaration of a GLSL sampler, image or subpass input uniform; ``qualifier`` is the layout qualifier
         it needs besides its binding."""
         raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
+
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        """The argument that passes the uniform ``name`` for a parameter of the opaque type ``opaque``."""
+        return name
 
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
