@@ -94,6 +94,10 @@ class _Pointer:
 
 # CrossGL spellings of the 16-bit floating storage types.
 _NARROW_FLOAT_ELEMENTS = frozenset({"float16", "bfloat16"})
+# Two- and four-lane vectors of those scalars, as workgroup array elements.
+_NARROW_FLOAT_VECTOR_ELEMENTS = frozenset(
+    f"{prefix}{lanes}" for prefix in ("f16vec", "bfloat16vec") for lanes in (2, 4)
+)
 # Other spellings of binary16 that type aliases may name.
 _BINARY16_SPELLINGS = frozenset({"f16", "half"})
 
@@ -633,7 +637,9 @@ class _Lowering:
             numeric = _numeric(element)
             # Binary16 and bfloat16 scalars keep their own element type; the
             # target backends already lay out and convert shared 16-bit arrays.
-            narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
+            narrow_float = _name(element) in (
+                _NARROW_FLOAT_ELEMENTS | _NARROW_FLOAT_VECTOR_ELEMENTS
+            )
             # Padding-free records of one 32-bit scalar type are element types
             # the targets load, store and copy whole.
             lane_record = self.lane_record(element)

@@ -1,0 +1,1 @@
+A record member that points at a `threadgroup` array of `half2` or `half4` now translates to DirectX and OpenGL, and one of `bfloat2` or `bfloat4` to OpenGL. These shared arrays used to stop translation with `workgroup-allocation-layout` (#4576).
