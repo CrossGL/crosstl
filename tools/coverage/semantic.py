@@ -73,10 +73,25 @@ _ALIASES = {
 _CONSTANT_OPERANDS = frozenset(
     {"OpControlBarrier", "OpMemoryBarrier", "OpGroupNonUniformQuadSwap"}
 )
-# The GroupOperation operand tells a reduction from an inclusive or exclusive scan.
-_GROUP_OPERATIONS = frozenset(
-    {"Reduce", "InclusiveScan", "ExclusiveScan", "ClusteredReduce"}
-)
+# The GroupOperation operand tells a reduction from an inclusive or exclusive scan, and one over the invocations of a
+# partition (HLSL's WaveMultiPrefix*, GLSL's subgroupPartitioned*NV) from one over the whole subgroup. SPIRV-Tools
+# releases before the EXT names print the partitioned operations with the NV suffix.
+_GROUP_OPERATIONS = {
+    operation: operation
+    for operation in (
+        "Reduce",
+        "InclusiveScan",
+        "ExclusiveScan",
+        "ClusteredReduce",
+        "PartitionedReduceEXT",
+        "PartitionedInclusiveScanEXT",
+        "PartitionedExclusiveScanEXT",
+    )
+} | {
+    "PartitionedReduceNV": "PartitionedReduceEXT",
+    "PartitionedInclusiveScanNV": "PartitionedInclusiveScanEXT",
+    "PartitionedExclusiveScanNV": "PartitionedExclusiveScanEXT",
+}
 _INSTRUCTION = re.compile(r"^\s*(?:%\w+\s*=\s*)?(Op\w+)(.*)$")
 _IMPORT = re.compile(r'^\s*(%\w+)\s*=\s*OpExtInstImport\s+"([^"]+)"')
 _CONSTANT = re.compile(r"^\s*(%\w+)\s*=\s*OpConstant\s+%\w+\s+(\S+)")
@@ -135,7 +150,9 @@ def _token(
     opcode = _ALIASES.get(opcode, opcode)
     if opcode in _CONSTANT_OPERANDS:
         return f"{opcode}({','.join(constants[w] for w in words if w in constants)})"
-    operation = next((w for w in words if w in _GROUP_OPERATIONS), "")
+    operation = next(
+        (_GROUP_OPERATIONS[w] for w in words if w in _GROUP_OPERATIONS), ""
+    )
     return f"{opcode}.{operation}" if operation else opcode
 
 
