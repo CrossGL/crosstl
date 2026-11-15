@@ -10,6 +10,7 @@ rejects it: ``xcrun metal`` reports ``error: use of undeclared identifier 'dx'``
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.semantics.shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
 )
@@ -58,6 +59,7 @@ void main() {
 """
 
 TARGETS = ["metal", "opengl", "vulkan", "slang", "cuda", "hip", "rust", "mojo"]
+KERNEL_ONLY_TARGETS = {"cuda", "hip"}
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -106,4 +108,9 @@ def test_a_ray_stage_without_reordering_still_translates(tmp_path):
     path.write_text(RAYGEN_PLAIN, encoding="utf-8")
 
     for target in TARGETS:
+        if target in KERNEL_ONLY_TARGETS:
+            # CUDA and HIP have no ray-tracing pipeline to run a ray generation entry.
+            with pytest.raises(StageUnsupportedError):
+                crosstl.translate(str(path), backend=target)
+            continue
         assert crosstl.translate(str(path), backend=target).strip()

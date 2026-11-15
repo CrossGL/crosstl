@@ -318,6 +318,20 @@ SOURCES = {
         "ecfe33226a34b62005ec160623cf396a93d75adb8169cebcd0133b1844a259a2",
         "rust-gpu 0.11.0 spirv_std::ray_tracing RayQuery and AccelerationStructure methods",
     ),
+    "rust-runtime-array": Source(
+        "Rust-GPU/rust-gpu",
+        "62401280ab4b512c734ad1aceee7553385e17418",
+        "crates/spirv-std/src/runtime_array.rs",
+        "bf04833fbb32af3e0e888665cf6cca0e03bfb1ed80a742231801ab3cc90b4c38",
+        "rust-gpu 0.11.0 spirv_std::RuntimeArray methods",
+    ),
+    "rust-macros": Source(
+        "Rust-GPU/rust-gpu",
+        "62401280ab4b512c734ad1aceee7553385e17418",
+        "crates/spirv-std/macros/src/lib.rs",
+        "7ba4af405c9ea061842fdbd41f295a588edec455a6294b07699480c739569f2c",
+        "rust-gpu 0.11.0 spirv_std debug_printf macros",
+    ),
     "rust-float": Source(
         "rust-num/num-traits",
         "7ec3d41d39b28190ec1d42db38021107b3951f3a",

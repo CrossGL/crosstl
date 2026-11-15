@@ -135,6 +135,10 @@ class Uniform:
     binding: int | None = None
 
 
+# The qualifier of a uniform CrossGL declares as an unsized storage buffer of its spelling, ``buffer uint* name;``.
+STORAGE_BUFFER = "buffer"
+
+
 def _same(*names: str) -> dict[str, Uniform]:
     return {name: Uniform(name) for name in names}
 
@@ -183,6 +187,11 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
         **_same("sampler2DArray"),
         **_acceleration_structure("accelerationStructureEXT"),
         **_same("ByteAddressBuffer", "RWByteAddressBuffer", DESCRIPTOR_HANDLE),
+        # rust-gpu's runtime arrays of words, which CrossGL declares as unsized buffers.
+        **{
+            opaque: Uniform("uint", STORAGE_BUFFER)
+            for opaque in ("RuntimeArray<u32>", "&mut RuntimeArray<u32>")
+        },
     },
     "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
     # Slang's cooperative-vector functions load and accumulate through byte-address buffers, and its bindless
@@ -203,8 +212,8 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
     # rust-gpu's images as spirv_std's Image! macro spells them, the 2D ones features/spirv_std.py probes methods on,
     # and its sampler. A subpass input names the attachment it reads. A byte-address buffer, and the slice of words one
-    # is made from, is a storage buffer of u32 (kernels.Rust.uniform_argument). A ray query traces rays through an
-    # acceleration structure.
+    # is made from, is a storage buffer of u32 (kernels.Rust.uniform_argument), as is a runtime array of words. A ray
+    # query traces rays through an acceleration structure.
     "rust": {
         **_same("AccelerationStructure"),
         **{
@@ -214,6 +223,8 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
                 ("ByteAddressableBuffer<&mut [u32]>", "mut [u32]"),
                 ("&[u32]", "[u32]"),
                 ("&mut [u32]", "mut [u32]"),
+                ("RuntimeArray<u32>", "RuntimeArray<u32>"),
+                ("&mut RuntimeArray<u32>", "mut RuntimeArray<u32>"),
             )
         },
         **_same(

@@ -141,6 +141,9 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     }
     OPENCL_LOCAL_QUALIFIERS = {"__shared__", "__local", "__local__", "local"}
     OPENCL_SCALAR_TYPE_MAPPING = {
+        # OpenCL C leaves size_t to the device (32 or 64 bits with CL_DEVICE_ADDRESS_BITS, OpenCL C 6.1.1).
+        # The importer keeps its 32-bit model here; CUDA and HIP, which run only on 64-bit hosts, use u64.
+        "size_t": "u32",
         "signed char": "i8",
         "unsigned char": "u8",
         "uchar": "u8",

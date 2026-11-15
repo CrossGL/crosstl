@@ -325,7 +325,9 @@ def signature(
     for part in separated(parameters):
         if re.fullmatch(r"(?:mut\s+)?&?(?:mut\s+)?self", part):
             method = True
-            params.append(Param(self_type))
+            # ``&mut self`` changes the receiver in place, so the probe declares it mutable and stores it afterwards.
+            changed = bool(re.fullmatch(r"&\s*mut\s+self", part))
+            params.append(Param(self_type, "mutable" if changed else "in"))
             continue
         kind = part.partition(":")[2].strip()
         direction = "in"

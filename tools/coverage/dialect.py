@@ -219,6 +219,10 @@ class Dialect:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
 
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        """The declaration of a local that a method changes in place; locals are mutable unless a dialect says."""
+        return self.declare(kind, name, value)
+
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
