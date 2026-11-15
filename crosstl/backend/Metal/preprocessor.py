@@ -67,7 +67,7 @@ from .deduction_arguments import deduction_argument_type
 from .defaulted_template_arguments import canonical_struct_template_arguments
 from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
-from .floating_point import reject_contraction_tokens
+from .floating_point import NO_CONTRACTION_PRAGMA, contraction_requirement
 from .forwarding_reference_accessors import (
     forwarded_storage_expression,
     selected_constexpr_body,
@@ -1339,14 +1339,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
-        if "contract" in processed or "FP_CONTRACT" in processed:
+        if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
             from .MetalLexer import MetalLexer
 
-            reject_contraction_tokens(
+            # A setting CrossGL cannot express is refused here. A directive that requires @precise functions is
+            # restated at the end of the unit, so the parser still finds it after template rewriting.
+            if contraction_requirement(
                 MetalLexer(processed, preprocess=False).token_generator()
-            )
+            ):
+                processed = (
+                    processed.rstrip("\n") + f"\n#pragma {NO_CONTRACTION_PRAGMA}\n"
+                )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
         # Assertions over constexpr aggregates and operators, such as MLX's

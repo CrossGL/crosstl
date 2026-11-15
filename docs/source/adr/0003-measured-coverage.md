@@ -31,17 +31,17 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to, including the non-uniform instructions that `GL_KHR_shader_subgroup` maps its functions to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
-| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
+| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification, and the subgroup functions of `extensions/khr/GL_KHR_shader_subgroup.txt` |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
 | Metal | The standard-library headers of Apple's Metal toolchain, read once by a script in the repository into `metal.txt`, which records the toolchain and language version |
-| CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h` and `__clang_cuda_device_functions.h` |
-| HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
+| CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h`, `__clang_cuda_device_functions.h` and `__clang_cuda_intrinsics.h`, the last read as a compile for the architecture nvcc validates the probes for |
+| HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h`, `amd_device_functions.h` and `amd_warp_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
-| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
+| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export, and, at the same tag, the warp functions of MAX's `max.gpu.primitives.warp` and the synchronization functions `max.gpu.sync` exports |
 | OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, plus the `as_type` operators and `printf` of `opencl-c-base.h`, the pipe, device-side enqueue and address-space built-ins of `Builtins.def` and the `vec_step` operator of `TokenKinds.def`, at the release of the clang that validates the probes; vendor extensions are left out |
-| Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules of the release that validates the probes; the `num_traits::Float` trait and glam's `Vec3` methods, at the versions its lock file resolves |
+| Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules, the `spirv_std::float` packing functions and the `Image` (with each image operand of its `ImageWithMethods` forms), `SampledImage`, `ByteAddressableBuffer`, `RuntimeArray`, `RayQuery` and `AccelerationStructure` methods and the `debug_printf` macros of the release that validates the probes; the `num_traits::Float` trait and the methods of glam's vectors, matrices and quaternions, each method name once per family, at the versions its lock file resolves |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,

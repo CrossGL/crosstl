@@ -9,6 +9,7 @@ from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLFenceScopeUnsupportedError,
     OpenCLImageReadUnsupportedError,
     OpenCLImageWriteUnsupportedError,
+    OpenCLRecordSemanticError,
     OpenCLToCrossGLConverter,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
@@ -601,7 +602,9 @@ def test_opencl_program_constant_binds_before_kernel_buffers(tmp_path):
     opencl_path.write_text(CONSTANT_TABLE_KERNEL_SOURCE, encoding="utf-8")
     metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
 
-    assert "constant float* coeffs_table [[buffer(0)]]" in metal
+    # The initialized program constant holds its values; it used to become a buffer the host had to fill.
+    assert "constant float coeffs_table[4] = {1.0, 2.0, 3.0, 4.0};" in metal
+    assert "[[buffer(0)]]" not in metal
     assert "device float* out [[buffer(1)]]" in metal
 
 
@@ -773,7 +776,8 @@ def test_opencl_multiline_constant_qualifier_after_static_or_const(
     opencl_path.write_text(source, encoding="utf-8")
     metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
 
-    assert "constant float* table [[buffer(0)]]" in metal
+    assert "constant float table[4] = {1.0, 2.0, 3.0, 4.0};" in metal
+    assert "[[buffer(0)]]" not in metal
     assert "device float* out [[buffer(1)]]" in metal
 
 
@@ -1745,3 +1749,136 @@ def test_opencl_cast_type_qualifier_split_across_lines():
     one_line_source = split_source.replace("const\n", "const ")
 
     assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_struct_keyword_member_names_the_earlier_record():
+    crossgl = generate_crossgl("""
+struct Inner { float x; float y; };
+struct Outer { struct Inner inner; int k; };
+__kernel void probe(__global float* outp) {
+    struct Outer o;
+    o.inner.x = 1.0f; o.inner.y = 2.0f; o.k = 3;
+    outp[get_global_id(0)] = o.inner.y + (float)o.k;
+}
+""")
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "    Inner inner;" in crossgl
+    assert "    i32 k;" in crossgl
+
+
+@pytest.mark.parametrize(
+    "source, record, declared",
+    [
+        (
+            "struct Never;\nstruct Outer { struct Never n; float k; };\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;\n}\n",
+            "Never",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Never;\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Never v; outp[get_global_id(0)] = 1.0f;\n}\n",
+            "Never",
+            "'v' in 'probe'",
+        ),
+        (
+            "struct Later;\nstruct Outer { struct Later n; float k; };\n"
+            "struct Later { float x; };\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;\n}\n",
+            "Later",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Node { struct Node n; float k; };\n"
+            "__kernel void probe(__global float* outp) { outp[0] = 1.0f; }\n",
+            "Node",
+            "'n' in 'Node'",
+        ),
+        (
+            "struct Never;\nfloat use(struct Never n) { return 1.0f; }\n"
+            "__kernel void probe(__global float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'n' in 'use'",
+        ),
+    ],
+)
+def test_opencl_record_without_a_body_is_refused_when_used_by_value(
+    source, record, declared
+):
+    with pytest.raises(OpenCLRecordSemanticError) as raised:
+        generate_crossgl(source)
+
+    assert raised.value.record_name == record
+    assert declared in str(raised.value)
+
+
+def test_opencl_record_completed_before_its_use_is_accepted():
+    crossgl = generate_crossgl("""
+struct Later;
+struct Later { float x; };
+struct Outer { struct Later n; float k; };
+float use(struct Later n);
+__kernel void probe(__global float* outp) {
+    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;
+}
+""")
+
+    assert "struct Outer {" in crossgl
+
+
+def test_opencl_record_without_a_body_stays_accepted_behind_a_pointer():
+    crossgl = generate_crossgl("""
+struct Never;
+struct Outer { struct Never* n; float k; };
+__kernel void probe(__global float* outp) {
+    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;
+}
+""")
+
+    assert "struct Outer {" in crossgl
+
+
+def test_opencl_record_may_point_to_itself():
+    crossgl = generate_crossgl("""
+struct Node { struct Node* next; float k; };
+__kernel void probe(__global float* outp) {
+    struct Node n; n.k = 3.0f; outp[get_global_id(0)] = n.k;
+}
+""")
+
+    assert "struct Node {" in crossgl
+
+
+def test_opencl_function_local_struct_keyword_names_the_earlier_record():
+    crossgl = generate_crossgl("""
+struct Inner { float x; };
+__kernel void probe(__global float* outp) {
+    struct Inner a;
+    a.x = 2.0f;
+    outp[get_global_id(0)] = a.x;
+}
+""")
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "var a: Inner;" in crossgl
+    assert "probe_Inner" not in crossgl
+
+
+def test_opencl_struct_keyword_member_matches_the_typedef_spelling():
+    keyword = generate_crossgl("""
+struct Inner { float x; };
+struct Outer { struct Inner inner; };
+__kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; outp[0] = o.inner.x; }
+""")
+    typedef = generate_crossgl("""
+typedef struct Inner { float x; } Inner;
+struct Outer { Inner inner; };
+__kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; outp[0] = o.inner.x; }
+""")
+
+    assert "    Inner inner;" in keyword
+    assert "    Inner inner;" in typedef

@@ -394,7 +394,7 @@ def test_external_rocprim_enable_if_trailing_return_codegen_reparse():
     assert ast.statements[0].return_type == (
         "std::enable_if_t<rocprim::is_floating_point<T>::value, bool>"
     )
-    assert "void get_safe_maxval(u32 maxval)" in crossgl
+    assert "void get_safe_maxval(u64 maxval)" in crossgl
     assert "std::enable_if_t" not in crossgl
 
 
@@ -485,7 +485,11 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     assert isinstance(global_var, VariableNode)
     assert set(global_var.qualifiers) == {"__device__"}
     assert global_array.vtype == "float[device_array_size]"
-    assert "var global_array: array<f32, device_array_size>;" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> global: f32;" in crossgl
+    assert (
+        "@group(0) @binding(1) var<storage, read_write> global_array: "
+        "array<f32, device_array_size>;" in crossgl
+    )
     assert "var tid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "in_[tid] + global" in crossgl
     assert (
@@ -1224,7 +1228,7 @@ def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse()
 
     _, crossgl = assert_crossgl_reparses(source)
 
-    assert "const u32 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
+    assert "const u64 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
     assert "64ul" not in crossgl
     assert "1024ul" not in crossgl
 
@@ -1945,7 +1949,11 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     assert kernel.params[1]["name"] == "in"
     assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
-    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" in message
+    assert (
+        "WaveReadLaneAt(val, ((((y * width) + x)) & (WaveGetLaneCount() - 1)))"
+        in crossgl
+    )
+    assert "HIP warp intrinsic __shfl(val, ((y * width) + x))" not in message
     assert "HIP warp intrinsic __shfl_sync" in message
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
@@ -2314,7 +2322,10 @@ def test_external_rocm_hip_complex_math_codegen_reparse():
     assert (
         "vec2<f32> accumulateDFT(f32 sample, vec2<f32> sum, " "i32 k, i32 n, i32 N)"
     ) in crossgl
-    assert "var w: vec2<f32> = vec2<f32>(cos(angle), sin(angle));" in crossgl
+    assert (
+        "var w: vec2<f32> = vec2<f32>(__cgl_libm_cos(angle), __cgl_libm_sin(angle));"
+        in crossgl
+    )
     assert (
         "return (sum + vec2<f32>(((x.x * w.x) - (x.y * w.y)), "
         "((x.x * w.y) + (x.y * w.x))));"

@@ -245,6 +245,10 @@ from .generic_global_types import (
     collect_constant_and_cbuffer_member_types,
     glsl_preliminary_global_variable_types,
 )
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -8946,6 +8950,7 @@ class GLSLCodeGen(
         """Render the program and refuse every built-in the target profile does not have."""
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
         try:
@@ -8954,6 +8959,9 @@ class GLSLCodeGen(
                 code,
                 self.written_foreign_type_names,
                 self.LOWERING_REFUSAL_TYPE.label,
+            )
+            refuse_written_generic_pointers(
+                code, self.refuse_lowering, self.LOWERING_REFUSAL_TYPE.label
             )
         finally:
             self.written_foreign_type_names = None
@@ -45079,6 +45087,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[2], element_type)
+            value = self.glsl_precise_stored_value(None, args[2], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )
@@ -45099,6 +45108,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[1], element_type)
+            value = self.glsl_precise_stored_value(None, args[1], value, element_type)
             value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, True
             )

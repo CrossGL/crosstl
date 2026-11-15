@@ -12,7 +12,10 @@ See docs/source/adr/0001-rule-carrying.md.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from .libm_trig import TRIG, libm_trig_support
 
 WRAP = "wrap"
 UDIV_ZERO = "udiv_zero"
@@ -22,7 +25,16 @@ FTOI_NAN = "ftoi_nan"
 # signed zeros are absent, reassociates, or selects approximate implementations of the math functions. The family has
 # no intrinsics: a target discharges it for the whole program (program_families.py).
 FP_IEEE = "fp_ieee"
-FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE)
+# Rounding to an integral value with halfway cases away from zero, keeping the sign of a zero result: C11 7.12.9.6
+# round, which CUDA, HIP and OpenCL C adopt. Sources write the hub intrinsic ``__cgl_round_away``; CrossGL's own
+# ``round`` leaves the direction of halfway cases to the target, as GLSL does.
+ROUND_AWAY = "round_away"
+# The binary32 math functions within the error bound C-family sources document over the whole operand range: sinf and
+# cosf within 2 ulp of the exact result (CUDA and HIP; OpenCL C's 4 ulp is weaker, so its programs are covered), with
+# sin(-0) = -0 and a NaN for infinite and NaN operands. Sources write ``__cgl_libm_sin`` and ``__cgl_libm_cos``;
+# CrossGL's own ``sin`` and ``cos`` have the precision of the target, which graphics targets bound on [-pi, pi] only.
+LIBM = "libm"
+FAMILIES = (WRAP, UDIV_ZERO, CONVERT_SAT, FTOI_NAN, FP_IEEE, ROUND_AWAY, LIBM)
 PROGRAM_FAMILIES = frozenset({FP_IEEE})
 
 
@@ -55,6 +67,15 @@ SOURCE_RULES = {
             "math library (--use_fast_math, which implies --ftz=true, --prec-div=false and --prec-sqrt=false, is "
             "off by default); CUDA Math API: the error bounds of the single-precision functions",
         ),
+        SourceRule(
+            ROUND_AWAY,
+            "CUDA Math API, roundf and round: round to the nearest integer value, with halfway cases rounded away "
+            "from zero (C11 7.12.9.6)",
+        ),
+        SourceRule(
+            LIBM,
+            "CUDA Math API, single-precision mathematical functions: sinf and cosf have a maximum ulp error of 2",
+        ),
     ),
     "hip": (
         SourceRule(
@@ -62,12 +83,30 @@ SOURCE_RULES = {
             "Clang Users Manual: -ffast-math is off by default, so HIP device code keeps NaNs, infinities and "
             "signed zeros and is not reassociated; HIP math API: the ULP bounds of the device functions",
         ),
+        SourceRule(
+            ROUND_AWAY,
+            "HIP math API, roundf and round: halfway cases are rounded away from zero (C11 7.12.9.6)",
+        ),
+        SourceRule(
+            LIBM,
+            "HIP math API, single-precision mathematical functions: sinf and cosf have a maximum error of 2 ulp",
+        ),
     ),
     "opencl": (
         SourceRule(
             FP_IEEE,
             "OpenCL C 3.0 sections 7.2 and 7.4: the full profile's ULP bounds and IEEE 754 edge cases apply unless "
             "the program is built with -cl-fast-relaxed-math or -cl-finite-math-only",
+        ),
+        SourceRule(
+            ROUND_AWAY,
+            "OpenCL C 3.0 section 6.15.2, round: round to integral value (using round to nearest even rounding "
+            "mode) rounding halfway cases away from zero, regardless of the current rounding direction",
+        ),
+        SourceRule(
+            LIBM,
+            "OpenCL C 3.0 section 7.4, ULP values for single-precision built-in math functions: sin and cos are "
+            "within 4 ulp in the full profile",
         ),
     ),
     "metal": (
@@ -367,6 +406,133 @@ TARGET_ENTRIES.update(
     }
 )
 
+# Targets whose ``round`` is not proven to round halfway cases away from zero and keep the sign of a zero result
+# compute the round_away helper from trunc, abs and sign, which every target defines exactly.
+_ROUND_AWAY_POLYFILL = "; the helper rounds with trunc, abs and sign"
+TARGET_ENTRIES.update(
+    {
+        (ROUND_AWAY, "opengl"): TargetEntry(
+            "polyfill",
+            "GLSL 4.60 section 8.3, round: a fractional part of 0.5 rounds in a direction chosen by the "
+            "implementation" + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "webgl"): TargetEntry(
+            "polyfill",
+            "ESSL 3.00 section 8.3, round: a fractional part of 0.5 rounds in a direction chosen by the "
+            "implementation" + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "wgsl"): TargetEntry(
+            "polyfill",
+            "WGSL built-in function round: halfway cases round to the even integer"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "vulkan"): TargetEntry(
+            "polyfill",
+            "GLSL.std.450 Round: the direction of a fractional part of 0.5 is chosen by the implementation"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "metal"): TargetEntry(
+            "polyfill",
+            "MSL 4.1 section 6.5 round rounds halfway cases away from zero, but on Apple GPUs it gives +0.0 for "
+            "negative operands above -0.5, where C11 7.12.9.6 keeps -0.0"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "directx"): TargetEntry(
+            "polyfill",
+            "HLSL round rounds halfway cases to the nearest even integer (DXIL Round_ne)"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "cuda"): TargetEntry(
+            "native",
+            "CUDA Math API: roundf rounds halfway cases away from zero (C11 7.12.9.6)",
+        ),
+        (ROUND_AWAY, "hip"): TargetEntry(
+            "native",
+            "HIP math API: roundf rounds halfway cases away from zero (C11 7.12.9.6)",
+        ),
+        (ROUND_AWAY, "slang"): TargetEntry(
+            "polyfill",
+            "Slang's round follows the target it lowers to, which may round halfway cases to even"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "mojo"): TargetEntry(
+            "polyfill",
+            "the Mojo manual does not state the halfway direction of round on SIMD floats"
+            + _ROUND_AWAY_POLYFILL,
+        ),
+        (ROUND_AWAY, "rust"): TargetEntry(
+            "polyfill",
+            "f32::round rounds halfway cases away from zero, but the Rust output's round is not proven to reach "
+            "it" + _ROUND_AWAY_POLYFILL,
+        ),
+    }
+)
+
+# Targets whose sin and cos are not bounded to 2 ulp over the whole binary32 range evaluate the libm helpers, which
+# compute in 32-bit integer arithmetic and so keep their result under fast math, contraction and flushed subnormals.
+_LIBM_POLYFILL = (
+    "; the helper evaluates the function in 32-bit integer arithmetic (libm_trig.py), and "
+    "tests/conformance/libm_exhaustive.py bounds its error over every binary32 operand"
+)
+TARGET_ENTRIES.update(
+    {
+        (LIBM, "opengl"): TargetEntry(
+            "polyfill",
+            "GLSL 4.60 section 4.7.1: built-in functions that are not listed, the trigonometric functions among "
+            "them, have undefined precision" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "webgl"): TargetEntry(
+            "polyfill",
+            "ESSL 3.00 section 4.5.1 bounds no built-in trigonometric function"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "vulkan"): TargetEntry(
+            "polyfill",
+            "Vulkan 1.3, Precision and Operation of SPIR-V Instructions: GLSL.std.450 Sin and Cos have an absolute "
+            "error of at most 2^-11 inside [-pi, pi] and no bound outside it"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "wgsl"): TargetEntry(
+            "polyfill",
+            "WGSL section 15.7.4, accuracy of built-in functions: sin and cos have an absolute error of at most "
+            "2^-11 inside [-pi, pi] and no bound outside it" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "metal"): TargetEntry(
+            "polyfill",
+            "the MSL 4.1 accuracy tables bound precise::sin and precise::cos at 4 ulp, and the default fast "
+            "versions only inside [-pi, pi]" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "directx"): TargetEntry(
+            "polyfill",
+            "Direct3D 11.3 functional specification, sincos: an absolute error of at most 0.0008 inside "
+            "[-100 pi, 100 pi] and no bound outside it" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "slang"): TargetEntry(
+            "polyfill",
+            "Slang's sin and cos have the precision of the target they lower to"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "mojo"): TargetEntry(
+            "polyfill",
+            "the Mojo manual states no error bound for sin and cos on SIMD floats"
+            + _LIBM_POLYFILL,
+        ),
+        (LIBM, "rust"): TargetEntry(
+            "polyfill",
+            "rust-gpu lowers f32::sin and f32::cos to GLSL.std.450 Sin and Cos, which Vulkan bounds inside "
+            "[-pi, pi] only" + _LIBM_POLYFILL,
+        ),
+        (LIBM, "cuda"): TargetEntry(
+            "native",
+            "CUDA Math API: sinf and cosf have a maximum ulp error of 2, and sin and cos of 2 as well",
+        ),
+        (LIBM, "hip"): TargetEntry(
+            "native",
+            "HIP math API: sinf and cosf have a maximum error of 2 ulp",
+        ),
+    }
+)
+
 # Hub intrinsics of the wrap family: name -> (operator, arity). Statement forms (compound assignment, increment
 # and decrement) reuse the binary templates; see annotate.py and lower.py.
 WRAP_INTRINSICS = {
@@ -405,6 +571,14 @@ CONVERSION_SIGNATURES = {
     "__cgl_nan0_ftoi": ("float", "int"),
     "__cgl_nan0_ftou": ("float", "uint"),
 }
+# Hub intrinsics of the libm family: name -> (the CrossGL function a native entry calls, arity). The helpers take
+# binary32 operands (scalar or vector); lowering refuses others on polyfill targets.
+LIBM_INTRINSICS = {"__cgl_libm_sin": ("sin", 1), "__cgl_libm_cos": ("cos", 1)}
+# The carried bound, in ulps of the exact result.
+LIBM_ULP_BOUND = 2
+# Hub intrinsic of the round_away family: name -> (the CrossGL function a native entry calls, arity). Only binary32
+# operands (scalar or vector) have a helper; lowering widens binary16 operands, which is exact, and refuses others.
+ROUND_AWAY_INTRINSICS = {"__cgl_round_away": ("round", 1)}
 # Generic conversions to ``int`` or ``uint`` written by sources, resolved by operand type (see conversions.py):
 # ``__cgl_convert_<result>[_sat][_<mode>]``, where the optional mode rounds a float operand to an integral value first
 # (``rte`` to nearest even, ``rtz`` toward zero, ``rtp`` up, ``rtn`` down): name -> (result, saturate, mode).
@@ -423,6 +597,8 @@ INTRINSICS = {
     **UDIV_ZERO_INTRINSICS,
     **CONVERT_SAT_INTRINSICS,
     **FTOI_NAN_INTRINSICS,
+    **ROUND_AWAY_INTRINSICS,
+    **LIBM_INTRINSICS,
 }
 INTRINSIC_FAMILY = {
     **{name: WRAP for name in WRAP_INTRINSICS},
@@ -430,6 +606,8 @@ INTRINSIC_FAMILY = {
     **{name: CONVERT_SAT for name in CONVERT_SAT_INTRINSICS},
     **{name: CONVERT_SAT for name in CONVERT_SAT_GENERIC},
     **{name: FTOI_NAN for name in FTOI_NAN_INTRINSICS},
+    **{name: ROUND_AWAY for name in ROUND_AWAY_INTRINSICS},
+    **{name: LIBM for name in LIBM_INTRINSICS},
 }
 BINARY_WRAP_INTRINSIC = {
     "+": "__cgl_wrap_add",
@@ -461,6 +639,8 @@ class Helper:
     body: str
     parameters: tuple[str, ...] | None = None
     result: str | None = None
+    # CrossGL definitions of further reserved functions the body calls, in dependency order (see helpers.py).
+    support: str | None = None
 
     @property
     def parameter_types(self) -> tuple[str, ...]:
@@ -469,6 +649,13 @@ class Helper:
     @property
     def result_type(self) -> str:
         return self.result if self.result is not None else self.scalar
+
+    @property
+    def support_names(self) -> tuple[str, ...]:
+        """The reserved function names ``support`` defines."""
+        if not self.support:
+            return ()
+        return tuple(re.findall(r"^\w+ (cgl_rule_\w+)\(", self.support, re.MULTILINE))
 
 
 # Magnitude bits of a binary32 value, and the bit patterns of 2^31 and 2^32. A conversion helper decides NaN and range
@@ -520,6 +707,25 @@ HELPERS = {
 # The ftoi_nan polyfills are the saturating helpers themselves (one definition per program; see helpers.py).
 HELPERS["__cgl_nan0_ftoi"] = HELPERS["__cgl_sat_ftoi"]
 HELPERS["__cgl_nan0_ftou"] = HELPERS["__cgl_sat_ftou"]
+# x0 - trunc(x0) is exact for every finite binary32 value, and trunc(x0) + sign(x0) is exact wherever the fraction
+# reaches one half (the magnitude is then below 2^23). A zero, NaN or infinite operand keeps trunc(x0), which is the
+# operand itself, so the sign of a zero survives and sign(x0) is only used for nonzero finite values.
+HELPERS["__cgl_round_away"] = Helper(
+    "cgl_rule_round_away",
+    "float",
+    "abs(x0 - trunc(x0)) >= 0.5 ? trunc(x0) + sign(x0) : trunc(x0)",
+    ("float",),
+    "float",
+)
+for _intrinsic, (_function, _) in LIBM_INTRINSICS.items():
+    HELPERS[_intrinsic] = Helper(
+        f"cgl_rule_libm_{_function}",
+        "float",
+        f"{TRIG}(x0, {'true' if _function == 'cos' else 'false'})",
+        ("float",),
+        "float",
+        libm_trig_support(),
+    )
 
 
 def source_families(source: str) -> frozenset:

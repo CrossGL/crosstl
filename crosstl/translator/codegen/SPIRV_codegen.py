@@ -130,6 +130,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .precise_dataflow import declaration_is_precise, precise_contributors
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .specialized_workgroup_size import has_specialized_workgroup_size
@@ -698,6 +699,8 @@ class VulkanSPIRVCodeGen(
         self.uniform_block_wrapped_variables = {}
         self.precise_global_variables = set()
         self.precise_local_variables = set()
+        # Variables of the current function whose values flow into a precise variable (precise_dataflow.py).
+        self.precise_flow_names = frozenset()
         self.no_contraction_ids = set()
         self.precise_expression_depth = 0
         self.non_uniform_ids = set()
@@ -2607,7 +2610,16 @@ class VulkanSPIRVCodeGen(
 
         return self.composite_construct(target_type, values)
 
-    def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
+    def promoted_numeric_type_name(
+        self, type_names: List[str], *, arithmetic: bool = False
+    ) -> Optional[str]:
+        """The common numeric type of ``type_names``, or ``None`` when one is not numeric.
+
+        bfloat16 operands are compared and selected as binary32, which is exact. An ``arithmetic`` result of
+        bfloat16 operands, with no binary32 or binary64 operand, is bfloat16 itself: MSL's ``bfloat`` operators
+        and CUDA's ``__nv_bfloat16`` operators round each result to bfloat16, so ``binary_operation`` computes
+        it in binary32 and rounds it back instead of keeping the binary32 result.
+        """
         numeric_types = {
             "float",
             "double",
@@ -2630,7 +2642,7 @@ class VulkanSPIRVCodeGen(
         if "float" in normalized:
             return "float"
         if self.BFLOAT16_TYPE_NAME in normalized:
-            return "float"
+            return self.BFLOAT16_TYPE_NAME if arithmetic else "float"
         return self.usual_arithmetic_integer_type_name(normalized)
 
     def usual_arithmetic_integer_type_name(self, normalized: List[str]) -> str:
@@ -4525,7 +4537,7 @@ class VulkanSPIRVCodeGen(
             if left_vector[1] != right_vector[1]:
                 return left_type
             component_type = self.promoted_numeric_type_name(
-                [left_vector[0], right_vector[0]]
+                [left_vector[0], right_vector[0]], arithmetic=True
             )
             if component_type is None:
                 return left_type
@@ -4535,7 +4547,7 @@ class VulkanSPIRVCodeGen(
 
         if left_vector is not None:
             component_type = self.promoted_numeric_type_name(
-                [left_vector[0], right_type.type.base_type]
+                [left_vector[0], right_type.type.base_type], arithmetic=True
             )
             if component_type is None:
                 return left_type
@@ -4545,7 +4557,7 @@ class VulkanSPIRVCodeGen(
 
         if right_vector is not None:
             component_type = self.promoted_numeric_type_name(
-                [left_type.type.base_type, right_vector[0]]
+                [left_type.type.base_type, right_vector[0]], arithmetic=True
             )
             if component_type is None:
                 return right_type
@@ -4554,7 +4566,8 @@ class VulkanSPIRVCodeGen(
             )
 
         scalar_type = self.promoted_numeric_type_name(
-            [left_type.type.base_type, right_type.type.base_type]
+            [left_type.type.base_type, right_type.type.base_type],
+            arithmetic=True,
         )
         if scalar_type is None:
             return left_type
@@ -19772,10 +19785,24 @@ class VulkanSPIRVCodeGen(
             for qualifier in getattr(function_node, "qualifiers", None) or ()
         }
         self.precise_expression_depth += precise_function
+        previous_precise_flow_names = self.precise_flow_names
+        self.precise_flow_names = precise_contributors(
+            function_node.body,
+            seeds=sorted(
+                set(self.precise_global_variables)
+                | {
+                    param.name
+                    for param in getattr(function_node, "parameters", None) or ()
+                    if isinstance(getattr(param, "name", None), str)
+                    and declaration_is_precise(param)
+                }
+            ),
+        )
         try:
             self.process_statements(function_node.body)
         finally:
             self.precise_expression_depth -= precise_function
+            self.precise_flow_names = previous_precise_flow_names
         self.process_tessellation_patch_constant_function(function_node)
 
         if not self.current_block_has_terminator():
@@ -20428,7 +20455,9 @@ class VulkanSPIRVCodeGen(
             )
 
         initial_value = getattr(node, "initial_value", None)
-        is_precise = self.has_attribute(node, "precise")
+        is_precise = (
+            declaration_is_precise(node) or node.name in self.precise_flow_names
+        )
         if (
             infer_declared_type
             and initial_value is not None
@@ -20474,14 +20503,11 @@ class VulkanSPIRVCodeGen(
                     if rhs_value is not None:
                         self.store_to_variable(var_id, rhs_value)
                 else:
-                    if is_precise:
-                        rhs_value = self.process_expression_with_precision(
-                            initial_value, is_precise
+                    rhs_value = (
+                        self.process_expression_with_expected_type_and_precision(
+                            initial_value, var_type_name, is_precise
                         )
-                    else:
-                        rhs_value = self.process_expression_with_expected_type(
-                            initial_value, var_type_name
-                        )
+                    )
                     if rhs_value is not None:
                         self.store_to_variable(var_id, rhs_value)
             return
@@ -20501,14 +20527,9 @@ class VulkanSPIRVCodeGen(
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
             else:
-                if is_precise:
-                    rhs_value = self.process_expression_with_precision(
-                        initial_value, is_precise
-                    )
-                else:
-                    rhs_value = self.process_expression_with_expected_type(
-                        initial_value, var_type_name
-                    )
+                rhs_value = self.process_expression_with_expected_type_and_precision(
+                    initial_value, var_type_name, is_precise
+                )
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
 
@@ -21038,10 +21059,10 @@ class VulkanSPIRVCodeGen(
             # of emitting an OpLoad of a runtime variable at constant scope.
             self.emit_named_constant_debug_name(node.name, initializer)
             self.named_constants[node.name] = initializer
-            if self.has_attribute(node, "precise"):
+            if declaration_is_precise(node):
                 self.precise_global_variables.add(node.name)
             return initializer
-        if storage_class == "Private" and not self.has_attribute(node, "precise"):
+        if storage_class == "Private" and not declaration_is_precise(node):
             constant = module_constant(self, node, var_type, initializer)
             if constant is not None:
                 return constant
@@ -21103,7 +21124,7 @@ class VulkanSPIRVCodeGen(
                 self.uniform_buffers.append(var_id)
 
         self.register_global_variable_name(node.name, var_id, storage_class)
-        if self.has_attribute(node, "precise"):
+        if declaration_is_precise(node):
             self.precise_global_variables.add(node.name)
         return var_id
 
@@ -28818,6 +28839,8 @@ class VulkanSPIRVCodeGen(
         return False
 
     def variable_name_is_precise(self, name: str) -> bool:
+        if name in self.precise_flow_names:
+            return True
         if name in self.local_variables:
             return name in self.precise_local_variables
         return name in self.precise_global_variables

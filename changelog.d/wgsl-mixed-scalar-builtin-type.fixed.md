@@ -1,0 +1,1 @@
+WGSL output resolves scalar component-wise built-ins using GLSL's floating-point-only overloads and rejects calls whose argument types cannot be inferred, instead of emitting invalid typed calls (#4508).

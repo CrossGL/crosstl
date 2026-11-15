@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import constructs, execution
+from . import constructs, execution, lanes
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import (
@@ -120,6 +120,8 @@ class _Builder:
         self.inputs: list[Buffer] = []
         # Boolean scalar and vector argument locals, which a baseline probe keeps in use (Dialect.retain).
         self.conditions: list[tuple[Type, str]] = []
+        # The receiver a method changes in place, as ``(type, local)``; a call that returns nothing stores it.
+        self.mutated: tuple[Type, str] | None = None
 
     def element(self, scalar: str) -> str:
         storage = _storage(scalar)
@@ -166,12 +168,13 @@ class _Builder:
     def _resource(self, kind: Type) -> bool:
         if (self.payload or self.tracing) and kind.opaque == "udt":
             return True
-        if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind):
+        if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind, self.dialect):
             return True
         return (
             bool(self.receiver and self.receiver.takes(kind))
             or self.uniforms.takes(kind)
             or self.dialect.handle(kind, "") is not None
+            or self.dialect.making(kind.opaque) is not None
         )
 
     def _attributes(self, param: Param) -> bool:
@@ -228,8 +231,8 @@ class _Builder:
             ):
                 self.traced = True
                 arguments.append(dialect.payload)
-            elif local_object(param.type):
-                self.lines += local_object(param.type, local)
+            elif local_object(param.type, dialect):
+                self.lines += local_object(param.type, dialect, local)
                 arguments.append(local)
             elif self._attributes(param):
                 self.lines += self._hit_attributes(local, param.direction == "in")
@@ -244,6 +247,13 @@ class _Builder:
                 self.lines += handle.lines
                 self.handles += handle.declarations
                 arguments.append(handle.argument)
+            elif made := dialect.making(param.type.opaque):
+                kind, make = made
+                self.lines.append(dialect.declare(kind, local, self.value(kind)))
+                argument = make.format(local)
+                if param.direction == "address":
+                    argument = dialect.address(argument)
+                arguments.append(argument)
             elif param.type.opaque in _RAY_DESCRIPTIONS:
                 self.lines += self._ray(local)
                 arguments.append(local)
@@ -292,6 +302,11 @@ class _Builder:
             elif param.direction == "pointer":
                 self.pointers.append(dialect.pointer(param.type, local))
                 arguments.append(local)
+            elif param.direction == "mutable":
+                value = self.value(param.type)
+                self.lines.append(dialect.declare_mutable(param.type, local, value))
+                arguments.append(local)
+                self.mutated = (param.type, local)
             else:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
@@ -323,6 +338,11 @@ class _Builder:
         elif output is None and held:
             output = Type("uint")
             stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
+        elif output is None and result == VOID and self.mutated:
+            # A method that changes its receiver in place returns nothing, so the probe stores the receiver.
+            kind, local = self.mutated
+            output, kept = self._kept(kind, local)
+            stores = [dialect.statement(call), *kept]
         elif output is not None or result.opaque:
             # An atomic call updates the output buffer itself; the value it returns is dropped.
             dropped = output is not None and result != VOID
@@ -330,15 +350,8 @@ class _Builder:
             if output is None:
                 output = Type("uint")
                 stores.append(dialect.store(dialect.literal(output)))
-        elif result.scalar == "bool":
-            flag = dialect.first("r") if result.shape else "r"
-            stores = [
-                dialect.declare(result, "r", call),
-                dialect.store(dialect.to_int(flag)),
-            ]
-            output = Type("int")
         else:
-            output, stores = self._stored(result, call)
+            output, stores = self._kept(result, call)
         if baseline:
             keep = dialect.keep(atomic)
             stores = []
@@ -347,6 +360,19 @@ class _Builder:
                     stores += dialect.retain(kind, local, keep)
                 stores.append(keep)
         return self.lines + stores, output
+
+    def _kept(self, kind: Type, value: str) -> tuple[Type, list[str]]:
+        """Statements that store ``value``, of type ``kind``, and the output buffer's element type: a boolean as an
+        integer, from its first component, and any other value as :meth:`_stored` does.
+        """
+        if kind.scalar != "bool":
+            return self._stored(kind, value)
+        dialect = self.dialect
+        flag = dialect.first("r") if kind.shape else "r"
+        return Type("int"), [
+            dialect.declare(kind, "r", value),
+            dialect.store(dialect.to_int(flag)),
+        ]
 
     def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:
         """Statements that keep ``value``, of type ``kind``, in a local and store it, and the output buffer's element
@@ -432,9 +458,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     atomic = any(p.direction == "inout" for p in signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
+    extra = {"prelude": dialect.enable(feature.extension)} if feature.extension else {}
     if feature.stage == "fragment":
         source = dialect.fragment(
-            buffers, body, declarations=declarations, inputs=builder.inputs
+            buffers, body, declarations=declarations, inputs=builder.inputs, **extra
         )
         return Probe(
             language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
@@ -458,5 +485,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
             traced=builder.traced,
         )
         return Probe(language, source, dialect.entry, dialect.suffix)
-    source = dialect.kernel(buffers, body, declarations=declarations)
+    if lanes.cooperative(feature):
+        extra["lanes"] = execution.THREADS
+        if lanes.divergent(feature):
+            body = dialect.active(body, lanes.SKIPPED)
+    source = dialect.kernel(buffers, body, declarations=declarations, **extra)
     return Probe(language, source, dialect.entry, dialect.suffix)

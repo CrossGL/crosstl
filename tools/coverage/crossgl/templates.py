@@ -17,6 +17,7 @@ from ..templates.bindings import CROSSGL as BINDINGS
 from ..templates.blocks import CROSSGL as BLOCKS_CROSSGL
 from ..templates.booleans import CROSSGL as BOOLEANS_CROSSGL
 from ..templates.columns import CROSSGL as COLUMNS_CROSSGL
+from ..templates.components import CROSSGL as COMPONENTS
 from ..templates.draws import CROSSGL as DRAWS
 from ..templates.edges import FAMILY as EDGES
 from ..templates.elements import CROSSGL as ELEMENTS_CROSSGL
@@ -54,10 +55,12 @@ from ..templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from ..templates.lexical import CROSSGL_NAMES
 from ..templates.lexical import FAMILY as LEXICAL
 from ..templates.lexical import FILL, SPREAD4, reserved
+from ..templates.memory import CROSSGL as MEMORY
 from ..templates.meshes import CROSSGL as MESHES
 from ..templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from ..templates.packing import CROSSGL as PACKING_CROSSGL
 from ..templates.pipeline import CROSSGL as PIPELINE
+from ..templates.pointers import CROSSGL as POINTERS
 from ..templates.portability import FAMILY as PORTABILITY
 from ..templates.portability import (
     GLSL_ARRAY,
@@ -286,6 +289,9 @@ CONSTRUCTS: dict[str, Template] = {
     **RAYS,
     **BINDINGS,
     **INTERLOCKS,
+    **COMPONENTS,
+    **POINTERS,
+    **MEMORY,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

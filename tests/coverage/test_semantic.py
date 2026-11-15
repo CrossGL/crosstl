@@ -67,6 +67,17 @@ def test_identify_subtracts_the_baseline_and_the_plumbing():
         {"OpLoad": 3, "OpStore": 1, "OpIAdd": 2, "OpKill": 1, "OpUnreachable": 1}
     )
     assert semantic.identify(killed, baseline) == "OpKill"
+    # A switch is control flow too: spirv_std matches the intersection type a ray query returns.
+    matched = Counter(
+        {
+            "OpLoad": 3,
+            "OpStore": 1,
+            "OpIAdd": 2,
+            "OpRayQueryGetIntersectionTypeKHR": 1,
+            "OpSwitch": 1,
+        }
+    )
+    assert semantic.identify(matched, baseline) == "OpRayQueryGetIntersectionTypeKHR"
 
 
 def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeypatch):

@@ -107,14 +107,6 @@ EXPECTED_REJECTIONS = {
     (
         "advanced",
         "GenericPatternMatching",
-        "cuda",
-    ): (
-        "CUDA codegen intentionally rejects generic functions until all generic "
-        "types are lowered to concrete device declarations."
-    ),
-    (
-        "advanced",
-        "GenericPatternMatching",
         "mojo",
     ): (
         "Mojo codegen intentionally rejects generic payload enum specializations "
@@ -155,6 +147,30 @@ EXPECTED_REJECTIONS = {
         "WGSL allows workgroup barriers only in uniform control flow (WGSL "
         "section 15.2), and the warp shuffle inside the divergent branch needs one."
     ),
+    (
+        "gpu_computing",
+        "MatrixMultiplication",
+        "mojo",
+    ): (
+        "The Mojo generator emits each compute invocation as its own function "
+        "with no warp, so a warp shuffle has no other lane to read and is "
+        "refused rather than replaced by a one-lane stand-in."
+    ),
+    # CUDA and HIP declare only __global__ kernels, so a vertex or fragment entry has no form there.
+    **{
+        (category, name, backend): (
+            f"{backend.upper()} has no graphics pipeline: a __global__ kernel is its only "
+            "entry point, so the example's vertex and fragment entries are refused."
+        )
+        for category, name in (
+            ("advanced", "ArrayTest"),
+            ("advanced", "GenericPatternMatching"),
+            ("graphics", "ComplexShader"),
+            ("graphics", "PerlinNoise"),
+            ("graphics", "SimpleShader"),
+        )
+        for backend in ("cuda", "hip")
+    },
 }
 
 

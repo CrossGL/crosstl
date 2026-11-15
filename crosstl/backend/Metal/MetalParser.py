@@ -11,7 +11,7 @@ from .explicit_entry_instantiations import (
     instantiated_entry_name,
     refuse_unmaterialized_entry_instantiations,
 )
-from .floating_point import reject_contraction_tokens
+from .floating_point import contraction_requirement
 from .local_aggregate_declarators import (
     split_block_aggregate_declaration,
     unnamed_aggregate_name,
@@ -613,9 +613,11 @@ class MetalParser:
 
     def parse(self):
         ensure_metal_parse_recursion_limit()
-        reject_contraction_tokens(self.tokens)
+        no_contraction = contraction_requirement(self.tokens)
         try:
             shader = self.parse_shader()
+            # A contraction or reassociation directive makes every function @precise (floating_point.py).
+            shader.no_contraction = no_contraction
             self.expect_end_of_input()
             refuse_unmaterialized_entry_instantiations(
                 self.explicit_entry_instantiations,

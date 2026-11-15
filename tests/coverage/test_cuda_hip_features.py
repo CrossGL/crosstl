@@ -215,3 +215,150 @@ def test_hip_default_compile_drops_opt_in_branches_with_their_nested_blocks():
     )
     kept = [line for line in hip.default_compile(header).splitlines() if "(" in line]
     assert kept == ["int a();", "int e();", "int f();"]
+
+
+CUDA_INTRINSICS = r"""
+#ifndef __CUDA__
+#error "This file is for CUDA compilation only."
+#endif
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 300
+#define __MAKE_SHUFFLES(__FnName, __Mask, __Type)                              \
+  inline __device__ int __FnName(int __val, __Type __offset,                   \
+                                 int __width = warpSize) {                     \
+    return __nvvm_shfl_i32(__val, __offset, __Mask);                           \
+  }
+__MAKE_SHUFFLES(__shfl, 0x1f, int);
+#if CUDA_VERSION >= 9000
+#define __MAKE_SYNC_SHUFFLES(__FnName, __Mask, __Type)                         \
+  inline __device__ float __FnName(unsigned int __mask, float __val,           \
+                                   __Type __offset, int __width = warpSize) {  \
+    return __nvvm_shfl_sync_f32(__mask, __val, __offset, __Mask);              \
+  }                                                                            \
+  inline __device__ int __FnName(unsigned int __mask, int __val,               \
+                                 __Type __offset, int __width = warpSize) {    \
+    return __nvvm_shfl_sync_i32(__mask, __val, __offset, __Mask);              \
+  }
+__MAKE_SYNC_SHUFFLES(__shfl_up_sync, 0, unsigned int);
+inline __device__ void __syncwarp(unsigned int mask = 0xffffffff) {
+  return __nvvm_bar_warp_sync(mask);
+}
+inline __device__ unsigned int __activemask() {
+#if CUDA_VERSION < 9020
+  return __nvvm_vote_ballot(1);
+#else
+  return __nvvm_activemask();
+#endif
+}
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
+inline __device__ unsigned int
+__match32_all_sync(unsigned int mask, unsigned int value, int *pred) {
+  return __nvvm_match_all_sync_i32p(mask, value, pred);
+}
+#endif
+#endif
+#endif
+#define __INTRINSIC_LOAD(__FnName, __AsmOp, __DeclType)                        \
+  inline __device__ __DeclType __FnName(const __DeclType *__ptr) {             \
+    __DeclType __ret;                                                          \
+    __asm__(__AsmOp " %0, [%1];" : "=r"(__ret) : "l"(__ptr));                  \
+    return __ret;                                                              \
+  }
+#define __INTRINSIC_LOAD_FAMILY(__Mode)                                        \
+  __INTRINSIC_LOAD(__ld##__Mode, "ld.global." #__Mode ".s8", char)             \
+  __INTRINSIC_LOAD(__ld##__Mode, "ld.global." #__Mode ".s32", int)
+__INTRINSIC_LOAD_FAMILY(cg)
+#if CUDA_VERSION >= 11000
+extern "C" {
+__device__ inline size_t __nv_cvta_generic_to_global_impl(const void *__ptr) {
+  return (size_t)(void __attribute__((address_space(1))) *)__ptr;
+}
+}
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 800
+__device__ inline unsigned __reduce_add_sync(unsigned __mask, unsigned __value) {
+  return __nvvm_redux_sync_add(__mask, __value);
+}
+#endif
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 900
+__device__ inline unsigned __clusterSizeInBlocks() {
+  return __nvvm_read_ptx_sreg_cluster_nctarank();
+}
+#endif
+#endif
+"""
+
+
+def test_cuda_reads_the_intrinsics_a_compile_for_the_probe_architecture_sees():
+    features = by_name(cuda.parse("", "", frozenset(), CUDA_INTRINSICS))
+    # The pre-Volta __shfl is left out, and sm_90's cluster functions are not compiled for sm_80.
+    assert sorted(features) == [
+        "__activemask",
+        "__cvta_generic_to_global",
+        "__ldcg",
+        "__match_all_sync",
+        "__reduce_add_sync",
+        "__shfl_up_sync",
+        "__syncwarp",
+    ]
+    assert {feature.group for feature in features.values()} == {"intrinsics"}
+    # A macro's overloads are stamped out per type, and the first one whose types CrossGL has is probed.
+    assert features["__shfl_up_sync"].signature == Signature(
+        Type("float"),
+        (
+            Param(Type("uint")),
+            Param(Type("float")),
+            Param(Type("uint")),
+            Param(Type("int")),
+        ),
+    )
+    assert features["__ldcg"].signature == Signature(
+        Type("int"), (Param(Type("int"), "address"),)
+    )
+    # A default argument and a parameter name are not part of the type.
+    assert features["__syncwarp"].signature.params == (Param(Type("uint")),)
+    # Clang's own names become the public functions they implement.
+    assert features["__match_all_sync"].signature.params[2] == Param(Type("int"), "out")
+    assert features["__activemask"].signature == Signature(Type("uint"), ())
+
+
+def test_cuda_intrinsics_compile_for_the_architecture_the_validator_targets():
+    from tools.coverage import validators
+
+    assert cuda.COMPILE["__CUDA_ARCH__"] == int(validators.CUDA_ARCH[3:]) * 10
+
+
+HIP_WARP = """
+static constexpr int warpSize = __AMDGCN_WAVEFRONT_SIZE;
+__device__ static inline unsigned __hip_ds_bpermute(int index, unsigned src) {
+    union { int i; unsigned u; float f; } tmp; tmp.u = src;
+    tmp.i = __builtin_amdgcn_ds_bpermute(index, tmp.i);
+    return tmp.u;
+}
+template <int pattern>
+__device__ static inline unsigned __hip_ds_swizzle_N(unsigned int src) {
+    return src;
+}
+__device__
+inline
+int __shfl(int var, int src_lane, int width = warpSize) {
+    return __builtin_amdgcn_ds_bpermute(src_lane << 2, var);
+}
+__device__
+inline
+float __shfl(float var, int src_lane, int width = warpSize) {
+    return var;
+}
+"""
+
+
+def test_hip_reads_the_warp_shuffles_and_lane_permutes():
+    features = by_name(hip.parse("", "", "", frozenset(), HIP_WARP))
+    # The template behind the __hip_ds_swizzle macro takes its pattern as a template argument, and is left out.
+    assert sorted(features) == ["__hip_ds_bpermute", "__shfl"]
+    assert features["__shfl"].group == "warp"
+    assert features["__shfl"].signature == Signature(
+        Type("int"), (Param(Type("int")), Param(Type("int")), Param(Type("int")))
+    )
+    assert features["__hip_ds_bpermute"].signature.params == (
+        Param(Type("int")),
+        Param(Type("uint")),
+    )

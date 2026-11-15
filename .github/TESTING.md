@@ -57,6 +57,14 @@ The merge queue requires:
 A gating workflow runs on every pull request and uses a planning job, not a
 `paths` filter, to skip work, so its `result` job always reports.
 
+GitHub starts no `pull_request` workflow when the message of the head commit
+contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]` or
+`[actions skip]`. Such a pull request reports none of the required checks and
+cannot join the merge queue. Starting the workflows with `gh workflow run`
+does not help, because a dispatched run does not report into the pull request.
+Push a commit without the marker instead. When the branch is behind `main`,
+`gh pr update-branch <number>` makes one by merging `main` into it.
+
 ## Workflows
 
 | Workflow | Checks |

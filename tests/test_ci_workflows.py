@@ -145,7 +145,11 @@ def test_no_workflow_runs_pull_request_code_with_a_privileged_token():
 def test_the_coverage_comment_runs_only_main_code_on_the_report():
     workflow = _workflows()["coverage-comment.yml"]
     assert workflow[True] == {
-        "workflow_run": {"workflows": ["Coverage"], "types": ["completed"]}
+        "workflow_run": {
+            "workflows": ["Coverage"],
+            "types": ["completed"],
+            "branches-ignore": ["gh-readonly-queue/**"],
+        }
     }
     job = workflow["jobs"]["comment"]
     assert "github.event.workflow_run.event == 'pull_request'" in job["if"]
@@ -502,6 +506,22 @@ def test_cache_paths_have_no_parent_directory_segments():
             continue
         for entry in str((step.get("with") or {}).get("path", "")).split():
             assert ".." not in entry.split("/"), (name, entry)
+
+
+def test_upstream_source_caches_fall_back_to_an_older_cache():
+    # A change to tools/coverage/upstream.py changes every key at once. Without a
+    # fallback, every Coverage job downloads every pinned source from the same host,
+    # and one rate-limited download fails a required check (#4535).
+    keys = []
+    for name, step in _steps():
+        cache = step.get("with") or {}
+        key = str(cache.get("key", ""))
+        if not key.startswith("coverage-upstream-"):
+            continue
+        prefix = key.split("${{ hashFiles(")[0]
+        assert cache.get("restore-keys") == prefix, (name, key)
+        keys.append(key)
+    assert len(keys) == 3
 
 
 def _local_action_text(name):

@@ -137,6 +137,7 @@ from .gpu_subgroup_builtins import (
 )
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
+from .kernel_only_stages import NON_KERNEL_STAGES, refuse_non_kernel_stages
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -145,6 +146,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .precise_evaluation import PreciseEvaluationMixin
 from .relational_builtins import lower_relational_builtins
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
@@ -164,6 +166,7 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .warp_wave_helpers import HIP_WAVEFRONT, wave_first_lane_test, wave_helper_body
 from .written_function_names import (
     CUDA_CALLABLE_FUNCTION_NAMES,
     refuse_written_foreign_calls,
@@ -322,6 +325,7 @@ class UnsupportedHIPAstNodeError(ValueError):
 
 class HipCodeGen(
     LoweringRefusalMixin,
+    PreciseEvaluationMixin,
     CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
@@ -330,6 +334,9 @@ class HipCodeGen(
     """Emit HIP source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = HipLoweringRefused
+    # Clang disables contraction for the compound statement the pragma starts; see precise_evaluation.
+    PRECISE_BODY_PRAGMA = "#pragma clang fp contract(off)"
+    PRECISE_TARGET_LABEL = "HIP"
 
     resource_diagnostic_backend = "HIP"
     struct_constructor_uses_braces = True
@@ -1118,7 +1125,7 @@ class HipCodeGen(
         return member_types
 
     def unsupported_stage_types(self):
-        return set()
+        return NON_KERNEL_STAGES
 
     def hip_ray_stage_names(self):
         return {
@@ -1529,9 +1536,7 @@ class HipCodeGen(
                 ):
                     unsupported_stages.add(stage_name)
 
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise HipRefusal(f"HIP output does not support stage type(s): {stage_list}")
+        refuse_non_kernel_stages("hip", "HIP", unsupported_stages)
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""
@@ -2309,6 +2314,9 @@ class HipCodeGen(
             self.add_line(signature)
             self.add_line("{")
             self.indent_level += 1
+            precise_state = self.enter_precise_evaluation(node)
+            for line in self.precise_body_prologue():
+                self.add_line(line)
             for statement in value_array_copy_statements:
                 self.add_line(statement)
             fragment_output_name = None
@@ -2333,7 +2341,10 @@ class HipCodeGen(
             for local_var in getattr(self, "current_stage_local_variables", []) or []:
                 if self.is_hip_shared_variable(local_var):
                     self.visit(local_var)
-            self.emit_body(body)
+            try:
+                self.emit_body(body)
+            finally:
+                self.leave_precise_evaluation(precise_state)
             if fragment_output_name is not None and not self.statement_body_terminates(
                 body
             ):
@@ -4167,6 +4178,9 @@ class HipCodeGen(
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        precise = self.precise_binary_operation(node, left, right, operator)
+        if precise is not None:
+            return precise
 
         logical = self.lower_vector_logical_operation(
             node.left,
@@ -5184,7 +5198,7 @@ class HipCodeGen(
             # Warps are formed from linear thread IDs, so a block of more than one dimension needs all three.
             return warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return f"({warp_lane_index_expression()} == 0)"
+            return wave_first_lane_test(HIP_WAVEFRONT, warp_lane_index_expression())
 
         diagnostic = self.wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -5304,10 +5318,19 @@ class HipCodeGen(
             f"{arg_type} {parameter_name}"
             for parameter_name, arg_type in zip(parameter_names, arg_types)
         ]
+        body = wave_helper_body(
+            HIP_WAVEFRONT,
+            operation,
+            result_type,
+            arg_types[0] if arg_types else result_type,
+            warp_lane_index_expression(),
+        )
+        if body is None:
+            raise HipRefusal(f"Unsupported HIP wave intrinsic {operation}")
         helper = (
             f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
             "{\n"
-            f"    return {self.wave_helper_return_expression(operation, result_type)};\n"
+            f"{body}"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -5367,25 +5390,6 @@ class HipCodeGen(
         if operation == "WaveMultiPrefixCountBits":
             return ["predicate", "mask"]
         return ["value", "mask"]
-
-    def wave_helper_return_expression(self, operation, result_type):
-        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            return "predicate"
-        if operation == "WaveActiveAllEqual":
-            return "true"
-        if operation in {
-            "WaveActiveCountBits",
-            "WavePrefixCountBits",
-            "WaveMultiPrefixCountBits",
-        }:
-            return "(predicate ? 1u : 0u)"
-        if operation == "WaveActiveBallot":
-            return "make_uint4((predicate ? 1u : 0u), 0u, 0u, 0u)"
-        if operation == "WaveMatch":
-            return "make_uint4(0u, 0u, 0u, 0u)"
-        if result_type == "bool":
-            return "false"
-        return "value"
 
     def generate_lambda_expression(self, args):
         """Render CrossGL's pseudo-lambda as a HIP device lambda."""
@@ -10672,6 +10676,11 @@ class HipCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            scalar_boolean_type = self.scalar_boolean_builtin_result_type(
+                func_name, raw_args
+            )
+            if scalar_boolean_type is not None:
+                return scalar_boolean_type
             if func_name in self.HIP_SHADER_CLOCK_RESULT_TYPES:
                 return self.HIP_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (

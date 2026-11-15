@@ -232,8 +232,9 @@ class Param:
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
     value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
     a uniform, ``workgroup``, a variable the compute workgroup shares, ``buffer``, a runtime-sized array, for which
-    the probe passes its input buffer of the parameter's type, or ``condition``, a constant the compiler checks, for
-    which the probe passes true.
+    the probe passes its input buffer of the parameter's type, ``condition``, a constant the compiler checks, for
+    which the probe passes true, or ``mutable``, a receiver the method changes in place, which the probe stores after
+    the call.
     """
 
     type: Type
@@ -265,7 +266,9 @@ class Feature:
     CrossGL probe calls when CrossGL's operation takes other arguments than the feature, as a WGSL texture function
     does: it takes a texture and a sampler where CrossGL takes one GLSL sampler. ``target`` is the compiler target
     probes are checked for when it is not the language's usual one, as ``hlsl`` for a Slang function that SPIR-V
-    lacks or ``vulkan`` for a GLSL function that only GLSL for Vulkan has.
+    lacks or ``vulkan`` for a GLSL function that only GLSL for Vulkan has. ``extension`` is the language extension a
+    probe in the feature's own language enables to call it, as ``GL_KHR_shader_subgroup_ballot`` for GLSL's
+    ``subgroupBallot``, or the module or function a Mojo probe imports, as ``max.gpu.primitives.warp``.
     """
 
     language: str
@@ -279,6 +282,7 @@ class Feature:
     spelling: str = ""
     counterpart: Signature | None = None
     target: str = ""
+    extension: str = ""
 
     @property
     def key(self) -> str:

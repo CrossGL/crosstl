@@ -90,6 +90,7 @@ from .gpu_subgroup_builtins import (
     reserved_builtin_reason,
     subgroup_builtin_expression,
 )
+from .kernel_only_stages import NON_KERNEL_STAGES, refuse_non_kernel_stages
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -98,6 +99,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .precise_evaluation import PreciseEvaluationMixin
 from .relational_builtins import lower_relational_builtins
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
@@ -117,6 +119,7 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .warp_wave_helpers import CUDA_WARP, wave_first_lane_test, wave_helper_body
 from .written_function_names import (
     CUDA_CALLABLE_FUNCTION_NAMES,
     refuse_written_foreign_calls,
@@ -258,6 +261,7 @@ def _refuse_buffer_counter(reason):
 
 class CudaCodeGen(
     LoweringRefusalMixin,
+    PreciseEvaluationMixin,
     CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
@@ -266,6 +270,13 @@ class CudaCodeGen(
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = CudaLoweringRefused
+    # nvcc never merges these into a multiply-add (CUDA Math API); see precise_evaluation.
+    PRECISE_MULTIPLY_INTRINSICS = {
+        "float": "__fmul_rn",
+        "double": "__dmul_rn",
+        "half": "__hmul_rn",
+    }
+    PRECISE_TARGET_LABEL = "CUDA"
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
@@ -585,7 +596,7 @@ class CudaCodeGen(
                 )
 
     def unsupported_stage_types(self):
-        return set()
+        return NON_KERNEL_STAGES
 
     def cuda_ray_stage_names(self):
         return {
@@ -1039,11 +1050,7 @@ class CudaCodeGen(
                 ):
                     unsupported_stages.add(stage_name)
 
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise CudaRefusal(
-                f"CUDA output does not support stage type(s): {stage_list}"
-            )
+        refuse_non_kernel_stages("cuda", "CUDA", unsupported_stages)
 
     def visit(self, node):
         """Dispatch an AST node to its CUDA visitor method."""
@@ -1698,7 +1705,11 @@ class CudaCodeGen(
             if self.is_cuda_shared_variable(local_var):
                 self.visit(local_var)
 
-        self.emit_body(body)
+        precise_state = self.enter_precise_evaluation(node)
+        try:
+            self.emit_body(body)
+        finally:
+            self.leave_precise_evaluation(precise_state)
         if fragment_output_name is not None and not self.statement_body_terminates(
             body
         ):
@@ -3196,6 +3207,11 @@ class CudaCodeGen(
         )
         if remainder is not None:
             return self.format_assignment_expression(remainder)
+        precise_product = self.precise_multiply_assignment(
+            node, node.target, node.value, operator
+        )
+        if precise_product is not None:
+            return self.format_assignment_expression(precise_product)
         swizzle_assignment = self.format_swizzle_assignment_expression(
             node.target,
             node.value,
@@ -3325,6 +3341,9 @@ class CudaCodeGen(
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        precise = self.precise_binary_operation(node, left, right, operator)
+        if precise is not None:
+            return precise
         logical = self.lower_vector_logical_operation(
             node.left,
             left,
@@ -4221,7 +4240,9 @@ class CudaCodeGen(
         if operation == "WaveGetLaneIndex":
             return self.cuda_warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return f"({self.cuda_warp_lane_index_expression()} == 0)"
+            return wave_first_lane_test(
+                CUDA_WARP, self.cuda_warp_lane_index_expression()
+            )
 
         diagnostic = self.cuda_wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -4245,7 +4266,15 @@ class CudaCodeGen(
             f"{arg_type} {parameter_name}"
             for parameter_name, arg_type in zip(parameter_names, arg_types)
         ]
-        body = self.wave_helper_body(operation, result_type)
+        body = wave_helper_body(
+            CUDA_WARP,
+            operation,
+            result_type,
+            arg_types[0] if arg_types else result_type,
+            self.cuda_warp_lane_index_expression(),
+        )
+        if body is None:
+            raise CudaRefusal(f"Unsupported CUDA wave intrinsic {operation}")
         helper = (
             f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
             "{\n"
@@ -4568,221 +4597,6 @@ class CudaCodeGen(
         if operation == "WaveMultiPrefixCountBits":
             return ["predicate", "mask"]
         return ["value", "mask"]
-
-    def wave_helper_body(self, operation, result_type):
-        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            vote = "__all_sync" if operation == "WaveActiveAllTrue" else "__any_sync"
-            return (
-                "    unsigned int mask = __activemask();\n"
-                f"    return ({vote}(mask, predicate) != 0);\n"
-            )
-
-        if operation == "WaveActiveAllEqual":
-            return (
-                "    unsigned int mask = __activemask();\n"
-                f"    {result_type} first = __shfl_sync(mask, value, 0);\n"
-                "    return (__all_sync(mask, value == first) != 0);\n"
-            )
-
-        if operation == "WaveActiveBallot":
-            return (
-                "    unsigned int bits = __ballot_sync(__activemask(), predicate);\n"
-                "    return make_uint4(bits, 0u, 0u, 0u);\n"
-            )
-
-        if operation == "WaveActiveCountBits":
-            return (
-                "    unsigned int bits = __ballot_sync(__activemask(), predicate);\n"
-                "    return static_cast<uint>(__popc(bits));\n"
-            )
-
-        if operation in {
-            "WaveActiveSum",
-            "WaveActiveProduct",
-            "WaveActiveBitAnd",
-            "WaveActiveBitOr",
-            "WaveActiveBitXor",
-            "WaveActiveMin",
-            "WaveActiveMax",
-        }:
-            return self.wave_active_reduction_helper_body(operation, result_type)
-
-        if operation in {"WavePrefixSum", "WavePrefixProduct"}:
-            return self.wave_prefix_reduction_helper_body(operation, result_type)
-
-        if operation == "WavePrefixCountBits":
-            return self.wave_prefix_count_bits_helper_body()
-
-        if operation == "WaveReadLaneAt":
-            return "    return __shfl_sync(__activemask(), value, static_cast<int>(lane));\n"
-
-        if operation == "WaveReadLaneFirst":
-            return (
-                "    unsigned int mask = __activemask();\n"
-                "    int first_lane = __ffs(mask) - 1;\n"
-                "    return __shfl_sync(mask, value, first_lane);\n"
-            )
-
-        if operation in {
-            "QuadReadAcrossX",
-            "QuadReadAcrossY",
-            "QuadReadAcrossDiagonal",
-        }:
-            lane_mask = {
-                "QuadReadAcrossX": "1",
-                "QuadReadAcrossY": "2",
-                "QuadReadAcrossDiagonal": "3",
-            }[operation]
-            return f"    return __shfl_xor_sync(__activemask(), value, {lane_mask});\n"
-
-        if operation == "QuadReadLaneAt":
-            lane_index = self.cuda_warp_lane_index_expression()
-            return (
-                f"    uint lane_index = {lane_index};\n"
-                "    uint source_lane = (lane_index & ~3u) | (lane & 3u);\n"
-                "    return __shfl_sync(\n"
-                "        __activemask(), value, static_cast<int>(source_lane));\n"
-            )
-
-        if operation == "WaveMatch":
-            return self.wave_match_helper_body(result_type)
-
-        if operation in {
-            "WaveMultiPrefixSum",
-            "WaveMultiPrefixProduct",
-            "WaveMultiPrefixBitAnd",
-            "WaveMultiPrefixBitOr",
-            "WaveMultiPrefixBitXor",
-        }:
-            return self.wave_multi_prefix_helper_body(operation, result_type)
-
-        if operation == "WaveMultiPrefixCountBits":
-            return self.wave_multi_prefix_count_bits_helper_body()
-
-        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            return "    return predicate;\n"
-        if result_type == "bool":
-            return "    return false;\n"
-        return "    return value;\n"
-
-    def wave_active_reduction_helper_body(self, operation, result_type):
-        combine = self.wave_combine_expression(operation, "result", "other")
-        return (
-            "    unsigned int mask = __activemask();\n"
-            f"    {result_type} result = value;\n"
-            "    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {\n"
-            f"        {result_type} other = __shfl_down_sync(mask, result, offset);\n"
-            f"        result = {combine};\n"
-            "    }\n"
-            "    return result;\n"
-        )
-
-    def wave_prefix_reduction_helper_body(self, operation, result_type):
-        identity = self.wave_identity_expression(operation, result_type)
-        combine_running = self.wave_combine_expression(operation, "running", "other")
-        combine_result = self.wave_combine_expression(operation, "result", "other")
-        lane_index = self.cuda_warp_lane_index_expression()
-        return (
-            "    unsigned int mask = __activemask();\n"
-            f"    uint lane_index = {lane_index};\n"
-            f"    {result_type} running = value;\n"
-            f"    {result_type} result = {identity};\n"
-            "    for (int offset = 1; offset < warpSize; offset <<= 1) {\n"
-            f"        {result_type} other = __shfl_up_sync(mask, running, offset);\n"
-            "        if (lane_index >= static_cast<uint>(offset)) {\n"
-            f"            result = {combine_result};\n"
-            f"            running = {combine_running};\n"
-            "        }\n"
-            "    }\n"
-            "    return result;\n"
-        )
-
-    def wave_prefix_count_bits_helper_body(self):
-        lane_index = self.cuda_warp_lane_index_expression()
-        return (
-            "    unsigned int mask = __activemask();\n"
-            f"    uint lane_index = {lane_index};\n"
-            "    unsigned int bits = __ballot_sync(mask, predicate);\n"
-            "    unsigned int lower_mask =\n"
-            "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"
-            "    return static_cast<uint>(__popc(bits & lower_mask));\n"
-        )
-
-    def wave_match_helper_body(self, _result_type):
-        return (
-            "    unsigned int active = __activemask();\n"
-            "    unsigned int matching = 0u;\n"
-            "    for (int candidate = 0; candidate < warpSize; ++candidate) {\n"
-            "        auto other = __shfl_sync(active, value, candidate);\n"
-            "        if (value == other) {\n"
-            "            matching |= (1u << candidate);\n"
-            "        }\n"
-            "    }\n"
-            "    return make_uint4(matching, 0u, 0u, 0u);\n"
-        )
-
-    def wave_multi_prefix_helper_body(self, operation, result_type):
-        identity = self.wave_identity_expression(operation, result_type)
-        combine = self.wave_combine_expression(operation, "result", "other")
-        lane_index = self.cuda_warp_lane_index_expression()
-        return (
-            "    unsigned int active = __activemask();\n"
-            "    unsigned int partition = mask.x & active;\n"
-            f"    uint lane_index = {lane_index};\n"
-            f"    {result_type} result = {identity};\n"
-            "    for (int candidate = 0; candidate < warpSize; ++candidate) {\n"
-            "        auto other = __shfl_sync(active, value, candidate);\n"
-            "        if (candidate < static_cast<int>(lane_index) &&\n"
-            "            (partition & (1u << candidate)) != 0u) {\n"
-            f"            result = {combine};\n"
-            "        }\n"
-            "    }\n"
-            "    return result;\n"
-        )
-
-    def wave_multi_prefix_count_bits_helper_body(self):
-        lane_index = self.cuda_warp_lane_index_expression()
-        return (
-            "    unsigned int active = __activemask();\n"
-            "    unsigned int partition = mask.x & active;\n"
-            f"    uint lane_index = {lane_index};\n"
-            "    unsigned int bits = __ballot_sync(active, predicate);\n"
-            "    unsigned int lower_mask =\n"
-            "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"
-            "    return static_cast<uint>(__popc(bits & partition & lower_mask));\n"
-        )
-
-    def wave_identity_expression(self, operation, result_type):
-        if operation in {"WaveActiveBitAnd", "WaveMultiPrefixBitAnd"}:
-            return f"static_cast<{result_type}>(~0ull)"
-        if operation in {
-            "WaveActiveProduct",
-            "WavePrefixProduct",
-            "WaveMultiPrefixProduct",
-        }:
-            return f"static_cast<{result_type}>(1)"
-        return f"static_cast<{result_type}>(0)"
-
-    def wave_combine_expression(self, operation, left, right):
-        if operation in {"WaveActiveSum", "WavePrefixSum", "WaveMultiPrefixSum"}:
-            return f"({left} + {right})"
-        if operation in {
-            "WaveActiveProduct",
-            "WavePrefixProduct",
-            "WaveMultiPrefixProduct",
-        }:
-            return f"({left} * {right})"
-        if operation in {"WaveActiveBitAnd", "WaveMultiPrefixBitAnd"}:
-            return f"({left} & {right})"
-        if operation in {"WaveActiveBitOr", "WaveMultiPrefixBitOr"}:
-            return f"({left} | {right})"
-        if operation in {"WaveActiveBitXor", "WaveMultiPrefixBitXor"}:
-            return f"({left} ^ {right})"
-        if operation == "WaveActiveMin":
-            return f"(({right}) < ({left}) ? ({right}) : ({left}))"
-        if operation == "WaveActiveMax":
-            return f"(({right}) > ({left}) ? ({right}) : ({left}))"
-        return left
 
     def struct_constructor_arguments(self, struct_name, raw_args, args):
         """Expand struct constructors with resource-member metadata sidecars."""
@@ -8068,6 +7882,11 @@ class CudaCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            scalar_boolean_type = self.scalar_boolean_builtin_result_type(
+                func_name, raw_args
+            )
+            if scalar_boolean_type is not None:
+                return scalar_boolean_type
             if func_name in self.CUDA_SHADER_CLOCK_RESULT_TYPES:
                 return self.CUDA_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (

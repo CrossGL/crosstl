@@ -4,6 +4,8 @@ import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
+from ..bfloat16_conversions import format_bfloat16_conversion
+from ..device_globals import device_memory_declaration, is_device_memory
 from ..import_refusals import CudaImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..no_contraction import (
@@ -35,6 +37,7 @@ from .directed_rounding import refuse_directed_rounding
 from .keyword_renames import source_identifier_names, unused_identifier_name
 from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
+from .sizeof_operands import sizeof_type_operand
 
 
 class CudaToCrossGLConverter(ImportRefusalMixin):
@@ -4442,6 +4445,22 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        if (
+            self.namespace_scope_variable
+            and is_device_memory(node)
+            and not self.is_namespace_scope_constant(node)
+        ):
+            declaration = device_memory_declaration(
+                self,
+                node,
+                output_name,
+                var_type,
+                self.allocate_global_resource_binding(),
+                "CUDA",
+            )
+            if declaration is not None:
+                self.emit(declaration)
+            return
         dim3_value = self.format_cuda_dim3_initializer(node)
         if dim3_value is not None:
             self.register_warp_mask_value(node.name, output_name, None)
@@ -4899,7 +4918,10 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         args = [self.visit(arg) for arg in node.args]
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
             # The type operand of ``sizeof(let)`` names the struct as its declaration does.
-            args = [self.rename_keyword_record_names(args[0])]
+            args = [
+                sizeof_type_operand(node.args[0], self.convert_cuda_type_to_crossgl)
+                or self.rename_keyword_record_names(args[0])
+            ]
         args_str = ", ".join(args)
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
@@ -4949,6 +4971,9 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             return warp_intrinsic
 
         refuse_directed_rounding(raw_name)
+        bfloat16_conversion = format_bfloat16_conversion(raw_name, args)
+        if bfloat16_conversion is not None:
+            return bfloat16_conversion
         fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
         if fp16_intrinsic is not None:
             return fp16_intrinsic
@@ -5298,35 +5323,35 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
 
         conversion_intrinsics = {
             "__float2int_rd": ("i32", "floor"),
-            "__float2int_rn": ("i32", "round"),
+            "__float2int_rn": ("i32", "roundEven"),
             "__float2int_ru": ("i32", "ceil"),
             "__float2int_rz": ("i32", None),
             "__float2uint_rd": ("u32", "floor"),
-            "__float2uint_rn": ("u32", "round"),
+            "__float2uint_rn": ("u32", "roundEven"),
             "__float2uint_ru": ("u32", "ceil"),
             "__float2uint_rz": ("u32", None),
             "__float2ll_rd": ("i64", "floor"),
-            "__float2ll_rn": ("i64", "round"),
+            "__float2ll_rn": ("i64", "roundEven"),
             "__float2ll_ru": ("i64", "ceil"),
             "__float2ll_rz": ("i64", None),
             "__float2ull_rd": ("u64", "floor"),
-            "__float2ull_rn": ("u64", "round"),
+            "__float2ull_rn": ("u64", "roundEven"),
             "__float2ull_ru": ("u64", "ceil"),
             "__float2ull_rz": ("u64", None),
             "__double2int_rd": ("i32", "floor"),
-            "__double2int_rn": ("i32", "round"),
+            "__double2int_rn": ("i32", "roundEven"),
             "__double2int_ru": ("i32", "ceil"),
             "__double2int_rz": ("i32", None),
             "__double2uint_rd": ("u32", "floor"),
-            "__double2uint_rn": ("u32", "round"),
+            "__double2uint_rn": ("u32", "roundEven"),
             "__double2uint_ru": ("u32", "ceil"),
             "__double2uint_rz": ("u32", None),
             "__double2ll_rd": ("i64", "floor"),
-            "__double2ll_rn": ("i64", "round"),
+            "__double2ll_rn": ("i64", "roundEven"),
             "__double2ll_ru": ("i64", "ceil"),
             "__double2ll_rz": ("i64", None),
             "__double2ull_rd": ("u64", "floor"),
-            "__double2ull_rn": ("u64", "round"),
+            "__double2ull_rn": ("u64", "roundEven"),
             "__double2ull_ru": ("u64", "ceil"),
             "__double2ull_rz": ("u64", None),
         }
@@ -6878,11 +6903,12 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "half": "f16",
             "__half": "f16",
             "__half2": "vec2<f16>",
-            "__nv_bfloat16": "f16",
-            "__nv_bfloat162": "vec2<f16>",
+            "__nv_bfloat16": "bfloat16",
+            "__nv_bfloat162": "vec2<bfloat16>",
             "float": "f32",
             "double": "f64",
-            "size_t": "u32",
+            "size_t": "u64",
+            "ptrdiff_t": "i64",
             **self.VECTOR1_TYPE_MAPPING,
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",
@@ -7279,8 +7305,10 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
         function_mapping = {
             "sqrtf": "sqrt",
             "powf": "pow",
-            "sinf": "sin",
-            "cosf": "cos",
+            # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
+            # carries; CrossGL's sin and cos have the precision of the target.
+            "sinf": "__cgl_libm_sin",
+            "cosf": "__cgl_libm_cos",
             "tanf": "tan",
             "sinhf": "sinh",
             "coshf": "cosh",
@@ -7295,9 +7323,12 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "exp2f": "exp2",
             "fabsf": "abs",
             "rsqrtf": "inversesqrt",
-            "roundf": "round",
-            "rintf": "round",
-            "nearbyintf": "round",
+            # C11 7.12.9.6 round rounds halfway cases away from zero, which the round_away rule carries;
+            # rint and nearbyint round to nearest even in CUDA's only rounding mode (7.12.9.3-4).
+            "roundf": "__cgl_round_away",
+            "round": "__cgl_round_away",
+            "rintf": "roundEven",
+            "nearbyintf": "roundEven",
             "truncf": "trunc",
             "atan2f": "atan2",
             "fmaf": "fma",
@@ -7309,15 +7340,15 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "ceilf": "ceil",
             "sqrt": "sqrt",
             "pow": "pow",
-            "sin": "sin",
-            "cos": "cos",
+            "sin": "__cgl_libm_sin",
+            "cos": "__cgl_libm_cos",
             "tan": "tan",
             "log": "log",
             "exp": "exp",
             "fabs": "abs",
             "rsqrt": "inversesqrt",
-            "rint": "round",
-            "nearbyint": "round",
+            "rint": "roundEven",
+            "nearbyint": "roundEven",
             "fmod": "fmod",
             "fmin": "fmin",
             "fmax": "fmax",
@@ -7345,11 +7376,12 @@ class CudaToCrossGLConverter(ImportRefusalMixin):
             "half": "f16",
             "__half": "f16",
             "__half2": "vec2<f16>",
-            "__nv_bfloat16": "f16",
-            "__nv_bfloat162": "vec2<f16>",
+            "__nv_bfloat16": "bfloat16",
+            "__nv_bfloat162": "vec2<bfloat16>",
             "float": "f32",
             "double": "f64",
-            "size_t": "u32",
+            "size_t": "u64",
+            "ptrdiff_t": "i64",
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",
         }

@@ -155,6 +155,28 @@ class HLSLPreciseFunctionMixin:
             )
         return self.hlsl_precise_capture(rendered, mapped, "crossglPreciseValue")
 
+    def hlsl_precise_buffer_store_value(self, value, rendered_value):
+        """Capture a value the current precise function writes through a buffer intrinsic.
+
+        Returns the rendered capture, or ``rendered_value`` when no capture is needed. The capture holds the
+        value in its own type; the intrinsic converts it to the element type as it did the uncaptured value.
+        """
+        if not self.current_hlsl_precise_function or self.hlsl_precise_captures is None:
+            return rendered_value
+        if rendered_value is not None or not self.hlsl_expression_has_float_arithmetic(
+            value
+        ):
+            return rendered_value
+        mapped = self.hlsl_precise_expression_type(value)
+        if mapped is None:
+            self.raise_hlsl_precise_refusal(
+                "a buffer value of a type that has no precise HLSL local"
+            )
+        rendered = self.generate_expression_with_expected(
+            value, self.expression_result_type(value)
+        )
+        return self.hlsl_precise_capture(rendered, mapped, "crossglPreciseValue")
+
     def hlsl_precise_expression_type(self, value):
         try:
             mapped = self.map_type(self.expression_result_type(value))

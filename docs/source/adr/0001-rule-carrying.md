@@ -95,7 +95,9 @@ The table is Python data in `crosstl/translator/semantics/rule_table.py`:
   lowering pass replaces the operation with a call of the reserved function `name` (`cgl_rule_` prefix), which
   evaluates each operand once, and injects the function's definition ahead of the program's functions
   (`crosstl/translator/semantics/helpers.py`). A vector operation calls a per-lane lift named `name` followed by the
-  lane count. A program that defines a reserved helper name itself is refused.
+  lane count. A program that defines a reserved helper name itself is refused. A helper whose body calls further
+  functions lists their CrossGL definitions in `support`; they also take reserved names, for their locals too, and
+  are injected once per program ahead of every helper.
 
 Every (family, target) pair for every registered backend must have an entry; a missing entry is a test failure, not
 a default.
@@ -134,6 +136,16 @@ which bit-blasting two 32-bit dividers does not prove within the timeout. Each t
 
 A CI job runs the checker on every pull request and fails on any satisfiable query (an unsound entry), on any entry
 it cannot model, and on any table pair without an entry.
+
+The `libm` family is the exception to the SMT query. Its rule is an error bound: C-family `sinf` and `cosf` stay
+within 2 ulp of the exact result over the whole binary32 range. A bound on a transcendental function is out of reach
+of a bit-vector query, but its domain is finite. Its helpers (`crosstl/translator/semantics/libm_trig.py`) compute in
+unsigned 32-bit arithmetic only, so a target's fast math, contraction or flushing cannot change them, and
+`tests/conformance/libm_exhaustive.py` evaluates their parsed CrossGL text for all 2^32 operands, with integer
+semantics, refusing any floating-point operation and any shift of 32 or more. It records the largest error, and the
+sha256 of the text it evaluated, in `tests/conformance/libm_proofs.json`. The rule table check accepts a polyfill
+entry only with a certificate for the current text within the bound, and evaluates a stratified sample again on each
+run. A native entry (CUDA, HIP) rests on the vendor's documented bound, which is part of the trusted base.
 
 ### 6. Hooks
 
