@@ -144,10 +144,36 @@ def test_double_and_half_vectors(tmp_path, backend):
     assert "uchar3 a = cgl_double3_isnan(d);" in lines
     assert "uchar2 b = cgl_half2_isinf(h);" in lines
     assert "return make_uchar3(isnan(value.x), isnan(value.y), isnan(value.z));" in code
+    # Native half2 lanes are raw bits on HIP, so the helper must use the low/high conversion.
     assert (
-        "return make_uchar2(isinf(__half2float(value.x)), isinf(__half2float(value.y)));"
+        "return make_uchar2(isinf(__low2float(value)), isinf(__high2float(value)));"
         in code
     )
+    assert "__half2float(value.x)" not in code
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_struct_backed_half_vectors_widen_each_member(tmp_path, backend):
+    source = """shader NarrowStructs {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float data[];
+        void main() {
+            vec4 v = vec4(data[0], data[1], data[2], data[3]);
+            f16vec3 h3 = f16vec3(v.xyz);
+            f16vec4 h4 = f16vec4(v);
+            bvec3 a = isnan(h3);
+            bvec4 b = isinf(h4);
+            data[4] = (a.x || b.w) ? 1.0 : 0.0;
+        }
+    }
+}
+"""
+    code = translate(tmp_path, backend, source)
+
+    assert "isnan(__half2float(value.z))" in code
+    assert "isinf(__half2float(value.w))" in code
+    assert "__low2float" not in code
 
 
 def _compile(command, code):

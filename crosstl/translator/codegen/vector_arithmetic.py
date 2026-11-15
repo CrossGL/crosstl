@@ -2343,9 +2343,14 @@ class VectorArithmeticMixin:
         helper_name = f"cgl_{vector_type}_{func_name}"
         if helper_name not in self.helper_functions:
             components = []
+            # HIP declares the lanes of native half2 as raw unsigned short bits, so read them with
+            # __low2float/__high2float, which convert correctly in both CUDA and HIP.
+            native_half2_lanes = {"x": "__low2float(value)", "y": "__high2float(value)"}
             for component in vector_info["components"]:
                 value = f"value.{component}"
-                if vector_info["component_type"] == "half":
+                if vector_type == "half2":
+                    value = native_half2_lanes[component]
+                elif vector_info["component_type"] == "half":
                     # __half has no isnan/isinf overload in every toolkit; widening keeps NaN and infinity.
                     value = f"__half2float({value})"
                 components.append(f"{func_name}({value})")
