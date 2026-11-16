@@ -8,9 +8,9 @@ runs the same validation right after the Metal parse (issue #4525), raising
 the exact typed error the late check raises.
 """
 
-import crosstl
 import pytest
 
+import crosstl
 from crosstl.backend.Metal.early_union_layout import (
     refuse_unsupported_metal_union_layouts,
 )
