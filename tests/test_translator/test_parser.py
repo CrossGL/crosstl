@@ -58,6 +58,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.ast_text_leaks import GeneratedAstTextError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError, Parser
+from crosstl.translator.refusals import CrossGLSyntaxError
 
 
 def tokenize_code(code: str) -> List:
