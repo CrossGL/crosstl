@@ -4920,6 +4920,17 @@ class HLSLCodeGen(
             else:
                 var_name = f"var{i}"
 
+            if "device" in {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }:
+                self.refuse_lowering(
+                    "device-global declaration: "
+                    f"'{var_name}' uses mutable program-scope device memory, "
+                    "which HLSL cannot represent"
+                )
+                continue
+
             if id(node) in self.directx_omitted_compile_time_global_node_ids:
                 continue
 
