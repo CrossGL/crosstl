@@ -328,6 +328,19 @@ def _translate_with_codegen(
         source_options=source_options,
     )
 
+    if source_spec.name == "metal":
+        # Refuse word-based targets that cannot store a source union now,
+        # before reverse translation and the semantics passes burn minutes
+        # on a file the target generator would refuse anyway (issue #4525:
+        # such files timed out the 120s corpus worker instead of refusing).
+        # The check only refuses provably unrepresentable unions; anything
+        # it cannot prove is left for the late union-layout check.
+        from .backend.Metal.early_union_layout import (
+            refuse_unsupported_metal_union_layouts,
+        )
+
+        refuse_unsupported_metal_union_layouts(ast, normalized_backend)
+
     if source_spec.name == "cgl":
         if normalized_backend in ["cgl", "crossgl"]:
             generated_code = shader_code
