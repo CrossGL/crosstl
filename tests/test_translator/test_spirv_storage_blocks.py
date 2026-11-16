@@ -177,3 +177,107 @@ def test_hlsl_buffer_dimensions_of_a_byte_address_buffer_is_refused():
         """)
     with pytest.raises(BufferLengthUnsupportedError, match="element count"):
         HLSLCodeGen().generate(program)
+
+
+# slangc names the block of every RWStructuredBuffer<T> after the resource type (#4531):
+# ``RWStructuredBuffer<float> outp; [numthreads(1, 1, 1)] void main(uint3 id :
+# SV_DispatchThreadID) { outp[id.x] = 1.0; }`` disassembled (``slangc min.slang -target spirv``).
+# ``{block}`` is the block's OpName and type id; the second parameter covers the read-only spelling.
+RWSTRUCTUREDBUFFER_BLOCK_SPIRV = """; SPIR-V
+; Version: 1.6
+; Generator: Slang; 1
+; Bound: 20
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %outp %gl_GlobalInvocationID
+               OpExecutionMode %main LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %{block} "{block}"
+               OpMemberName %{block} 0 "__member0"
+               OpName %outp "outp"
+               OpName %main "main"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_ptr_StorageBuffer_float ArrayStride 4
+               OpDecorate %_runtimearr_float ArrayStride 4
+               OpDecorate %{block} Block
+               OpMemberDecorate %{block} 0 Offset 0
+               OpDecorate %outp Binding 0
+               OpDecorate %outp DescriptorSet 0{extra}
+               %void = OpTypeVoid
+                  %3 = OpTypeFunction %void
+               %uint = OpTypeInt 32 0
+             %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+                %int = OpTypeInt 32 1
+             %int_0 = OpConstant %int 0
+              %float = OpTypeFloat 32
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+   %_runtimearr_float = OpTypeRuntimeArray %float
+%{block} = OpTypeStruct %_runtimearr_float
+%_ptr_StorageBuffer_{block} = OpTypePointer StorageBuffer %{block}
+            %float_1 = OpConstant %float 1
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+               %outp = OpVariable %_ptr_StorageBuffer_{block} StorageBuffer
+               %main = OpFunction %void None %3
+                  %4 = OpLabel
+                  %7 = OpLoad %v3uint %gl_GlobalInvocationID
+                 %10 = OpCompositeExtract %uint %7 0
+                 %15 = OpAccessChain %_ptr_StorageBuffer_float %outp %int_0 %10
+               OpStore %15 %float_1
+               OpReturn
+               OpFunctionEnd
+"""
+
+
+def _rw_block_source(tmp_path, block_name, extra=""):
+    source = tmp_path / "min.spvasm"
+    source.write_text(
+        RWSTRUCTUREDBUFFER_BLOCK_SPIRV.format(block=block_name, extra=extra)
+    )
+    return source
+
+
+@pytest.mark.parametrize("block_name", ["RWStructuredBuffer", "StructuredBuffer"])
+@pytest.mark.parametrize("target", ["hlsl", "spirv", "metal", "wgsl"])
+def test_spirv_block_named_like_a_resource_type_translates(
+    tmp_path, block_name, target
+):
+    # The block name is only an OpName, so it must not change what is imported: the variable stays a
+    # structured buffer of the runtime array's element, never a buffer of the block struct.
+    code = translate(_rw_block_source(tmp_path, block_name), target)
+    assert f"{block_name}<{block_name}>" not in code
+    if target == "hlsl":
+        assert re.search(r"\bRWStructuredBuffer<float> outp\b", code)
+    if target == "wgsl":
+        assert "var<storage, read_write> outp: array<f32>;" in code
+    check_natively(tmp_path, target, code)
+
+
+def test_spirv_block_named_like_a_resource_type_is_renamed_in_crossgl(tmp_path):
+    code = crosstl.translate(
+        str(_rw_block_source(tmp_path, "RWStructuredBuffer")), backend="cgl"
+    )
+    assert "RWStructuredBuffer<RWStructuredBuffer>" not in code
+    assert "RWStructuredBuffer<RWStructuredBuffer_outp>" in code
+    assert "struct RWStructuredBuffer_outp" in code
+
+
+@pytest.mark.parametrize("target", ["cgl", "hlsl"])
+def test_spirv_readonly_block_named_like_a_resource_type_translates(tmp_path, target):
+    # The same collision on the read-only side: a read-only block is declared as StructuredBuffer<B>, so a
+    # block named ``StructuredBuffer`` used to become ``StructuredBuffer<StructuredBuffer> outp``. Only the
+    # CrossGL and HLSL forms are checked here: the reproducer stores to the buffer, which the SPIR-V, Metal
+    # and WGSL generators refuse for a read-only buffer.
+    source = _rw_block_source(
+        tmp_path,
+        "StructuredBuffer",
+        extra="\n               OpDecorate %outp NonWritable",
+    )
+    code = crosstl.translate(str(source), backend=target)
+    assert "StructuredBuffer<StructuredBuffer>" not in code
+    if target == "cgl":
+        assert "StructuredBuffer<StructuredBuffer_outp>" in code
+    if target == "hlsl":
+        assert re.search(r"\bStructuredBuffer<float> outp\b", code)
