@@ -20,6 +20,7 @@ from crosstl.backend.OpenCL.target_lowering import (
     validate_opencl_intermediate_for_target,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -68,6 +69,24 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var gid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
+
+
+def test_opencl_program_scope_global_keeps_device_memory():
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        __global float acc[64] = {1.0f, 2.0f, 4.0f};
+        kernel void probe(global float *outp) {
+            uint i = get_global_id(0);
+            acc[i & 63] = acc[i & 63] * 2.0f;
+            outp[i] = acc[i & 63];
+        }
+        """)
+
+    assert "var<device> acc: array<f32, 64> = {1.0f, 2.0f, 4.0f};" in crossgl
+    with pytest.raises(
+        DirectXLoweringRefused,
+        match="device-global declaration.*acc.*HLSL cannot represent",
+    ):
+        HLSLCodeGen().generate(cgl_ast)
 
 
 def test_opencl_explicit_atomics_drop_memory_order_and_scope():
