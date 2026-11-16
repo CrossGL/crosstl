@@ -10644,13 +10644,17 @@ class GLSLCodeGen(
             reject("invalid-arity")
         if any(item is None for item in types):
             reject("unresolved-operand-type")
-        if (
-            func_name == "select"
-            and self.is_matrix_value_type(self.map_type(types[0]))
-            and self.map_type(types[0]) == self.map_type(types[1])
-            and self.map_type(types[2]) == "bool"
-        ):
+        if func_name == "select" and self.is_matrix_value_type(self.map_type(types[0])):
+            if self.map_type(types[0]) != self.map_type(types[1]):
+                reject("matrix-operand-type-mismatch")
+            if self.map_type(types[2]) != "bool":
+                reject("matrix-condition-not-scalar-bool")
             false_value, true_value, condition = args
+            if not all(
+                self.glsl_side_effect_free_expression(value)
+                for value in (false_value, true_value)
+            ):
+                reject("matrix-select-evaluates-both-value-arguments")
             return (
                 f"({self.generate_glsl_boolean_context(condition)} ? "
                 f"{self.generate_expression(true_value)} : "

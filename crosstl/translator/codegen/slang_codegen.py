@@ -1435,6 +1435,15 @@ class SlangCodeGen(
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            if func_name == "select" and len(raw_args) == 3:
+                false_type = self.expression_result_type(raw_args[1])
+                true_type = self.expression_result_type(raw_args[2])
+                if (
+                    false_type is not None
+                    and self.convert_type(false_type) == self.convert_type(true_type)
+                    and self.is_matrix_type(false_type)
+                ):
+                    return false_type
             ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
             if ray_transform_type is not None:
                 return ray_transform_type

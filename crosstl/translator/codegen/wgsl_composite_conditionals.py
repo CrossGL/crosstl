@@ -31,6 +31,7 @@ from ..ast import (
     IfNode,
     SwizzleNode,
     TernaryOpNode,
+    UnaryOpNode,
     VariableNode,
 )
 from ..refusals import WGSLRefusal
@@ -119,7 +120,29 @@ class WGSLCompositeConditionalMixin:
         ):
             return expression
         false_value, true_value, condition = arguments
+        if self.boolean_expression_width(condition) != 1:
+            raise WGSLRefusal("WGSL matrix select condition must be a scalar bool")
+        if any(
+            self.composite_select_value_has_side_effects(value)
+            for value in (false_value, true_value)
+        ):
+            raise WGSLRefusal(
+                "WGSL matrix select evaluates both value arguments, but if/else "
+                "lowering would skip one side-effecting argument"
+            )
         return TernaryOpNode(condition, true_value, false_value)
+
+    @staticmethod
+    def composite_select_value_has_side_effects(expression):
+        return any(
+            isinstance(node, (FunctionCallNode, AssignmentNode))
+            or (
+                isinstance(node, UnaryOpNode)
+                and str(getattr(node, "operator", getattr(node, "op", "")))
+                in {"++", "--"}
+            )
+            for node in expression.walk()
+        )
 
     def require_select_operands(self, expr):
         """Refuse the conditional ``expr`` when ``select`` cannot take its branches."""
