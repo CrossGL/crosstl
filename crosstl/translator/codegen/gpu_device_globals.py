@@ -27,6 +27,7 @@ import re
 EXECUTION_SPACES = ("__device__", "__constant__", "__shared__", "__managed__")
 # Qualifiers that make a CrossGL declaration a storage resource whatever its type: `buffer float* values;`.
 STORAGE_QUALIFIERS = frozenset({"buffer", "storage"})
+DEVICE_QUALIFIERS = frozenset({"device"})
 # The constructors of CUDA's and HIP's built-in vector types. half2 and bfloat162 are classes, not aggregates.
 VECTOR_CONSTRUCTOR = re.compile(
     r"\bmake_(?:u?char|u?short|u?int|u?long|u?longlong|float|double)[1-4]\("
@@ -49,6 +50,14 @@ def is_storage_declaration(node) -> bool:
     """Whether a CrossGL variable is a storage buffer by qualifier (``buffer float* values;``)."""
     return any(
         str(qualifier).lower() in STORAGE_QUALIFIERS
+        for qualifier in getattr(node, "qualifiers", None) or []
+    )
+
+
+def is_device_declaration(node) -> bool:
+    """Whether a CrossGL variable explicitly names device-global memory."""
+    return any(
+        str(qualifier).lower() in DEVICE_QUALIFIERS
         for qualifier in getattr(node, "qualifiers", None) or []
     )
 
@@ -139,7 +148,7 @@ def file_scope_placement(codegen, node, metadata_comment: str = ""):
     """
     if not at_file_scope(codegen):
         return _unchanged
-    if metadata_comment or is_storage_declaration(node):
+    if metadata_comment or is_storage_declaration(node) or is_device_declaration(node):
         return in_device_memory
     if is_constant_declaration(node):
         return constant_in_device_memory
