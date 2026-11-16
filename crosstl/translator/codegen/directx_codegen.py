@@ -4920,10 +4920,21 @@ class HLSLCodeGen(
             else:
                 var_name = f"var{i}"
 
-            if "device" in {
-                str(qualifier).lower()
-                for qualifier in getattr(node, "qualifiers", []) or []
-            }:
+            if (
+                "device" in {
+                    str(qualifier).lower()
+                    for qualifier in getattr(node, "qualifiers", []) or []
+                }
+                and not isinstance(
+                    getattr(node, "var_type", None), (PointerType, ReferenceType)
+                )
+                and not (
+                    self.is_resource_parameter_type(vtype)
+                    or self.is_hlsl_readonly_buffer_type(vtype)
+                    or self.is_hlsl_uav_buffer_type(vtype)
+                    or self.is_hlsl_constant_buffer_type(vtype)
+                )
+            ):
                 self.refuse_lowering(
                     "device-global declaration: "
                     f"'{var_name}' uses mutable program-scope device memory, "
