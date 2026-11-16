@@ -12926,6 +12926,21 @@ class MetalCodeGen(
                 )
             ):
                 false_value, true_value, condition = expr.args
+                condition_type = self.map_type(self.expression_result_type(condition))
+                if condition_type != "bool":
+                    return self.refuse_lowering(
+                        "matrix select condition must be a scalar bool",
+                        self.generate_expression(false_value),
+                    )
+                if not all(
+                    self.metal_expression_is_side_effect_free(value)
+                    for value in (false_value, true_value)
+                ):
+                    return self.refuse_lowering(
+                        "matrix select evaluates both value arguments, but a "
+                        "conditional expression would skip one side-effecting argument",
+                        self.generate_expression(false_value),
+                    )
                 return (
                     f"({self.generate_expression(condition)} ? "
                     f"{self.generate_expression(true_value)} : "
