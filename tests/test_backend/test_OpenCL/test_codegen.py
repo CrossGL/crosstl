@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl
@@ -11,6 +13,7 @@ from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLImageWriteUnsupportedError,
     OpenCLRecordSemanticError,
     OpenCLToCrossGLConverter,
+    OpenCLVectorComponentUnsupportedError,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
@@ -1882,3 +1885,105 @@ __kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; ou
 
     assert "    Inner inner;" in keyword
     assert "    Inner inner;" in typedef
+
+
+def test_opencl_vector_component_forms_lower_to_crossgl_swizzles():
+    crossgl = generate_crossgl("""
+        __attribute__((reqd_work_group_size(1, 1, 1)))
+        __kernel void probe(__global const float4* src, __global float2* dst) {
+            size_t i = get_global_id(0);
+            float4 v = src[i];
+            dst[i] = v.hi + v.lo + v.even + v.odd + v.s01 + v.s32;
+            float2 upper = v.S01 + v.S32;
+            dst[i] += upper;
+        }
+        """)
+
+    assert "dst[i] = (v.zw + v.xy + v.xz + v.yw + v.xy + v.wz);" in crossgl
+    assert "var upper: vec2<f32> = (v.xy + v.wz);" in crossgl
+    for form in (".hi", ".lo", ".even", ".odd", ".s01", ".s32", ".S01", ".S32"):
+        assert form not in crossgl
+
+
+def test_opencl_vector_component_forms_on_float2_and_float3():
+    crossgl = generate_crossgl("""
+        kernel void probe(global float2 *a, global float3 *b, global float *out) {
+            uint i = get_global_id(0);
+            float2 v2 = a[i];
+            float3 v3 = b[i];
+            float s2 = v2.lo + v2.hi + v2.even + v2.odd + v2.s0 + v2.s1;
+            float s3 = v3.odd + v3.s2;
+            float2 t3 = v3.lo + v3.even + v3.s01;
+            out[i] = s2 + s3 + t3.x;
+        }
+        """)
+
+    assert "v2.x + v2.y + v2.x + v2.y + v2.x + v2.y" in crossgl
+    assert "v3.y + v3.z" in crossgl
+    assert "((v3.xy + v3.xz) + v3.xy)" in crossgl
+    for form in (".lo", ".hi", ".even", ".odd", ".s0", ".s1", ".s2", ".s01"):
+        assert form not in crossgl
+
+
+def test_opencl_vector_component_forms_as_assignment_targets():
+    crossgl = generate_crossgl("""
+        kernel void probe(global float4 *v, global float2 *out) {
+            uint i = get_global_id(0);
+            float4 w = v[i];
+            w.hi = (float2)(1.0f, 2.0f);
+            w.lo = (float2)(3.0f, 4.0f);
+            w.s01 = (float2)(5.0f, 6.0f);
+            v[i].hi = (float2)(7.0f, 8.0f);
+            out[i] = w.even + w.odd;
+        }
+        """)
+
+    assert "w.zw = vec2<f32>(1.0f, 2.0f);" in crossgl
+    assert "w.xy = vec2<f32>(3.0f, 4.0f);" in crossgl
+    assert "w.xy = vec2<f32>(5.0f, 6.0f);" in crossgl
+    assert "v[i].zw = vec2<f32>(7.0f, 8.0f);" in crossgl
+    assert "w.xz + w.yw" in crossgl
+    for form in (".hi", ".lo", ".even", ".odd", ".s01"):
+        assert form not in crossgl
+
+
+@pytest.mark.parametrize(
+    "source, reason",
+    [
+        (
+            "dst[i] = v.s7;",
+            "component index 7 is outside the vector",
+        ),
+        (
+            "dst[i] = v.s4;",
+            "component index 4 is outside the vector",
+        ),
+        (
+            "dst[i] = v2.s2;",
+            "component index 2 is outside the vector",
+        ),
+        (
+            "dst[i] = v3.hi;",
+            "undefined fourth component",
+        ),
+        (
+            "dst[i] = v3.s3;",
+            "undefined fourth component",
+        ),
+    ],
+)
+def test_opencl_vector_component_out_of_range_is_refused(source, reason):
+    with pytest.raises(
+        OpenCLVectorComponentUnsupportedError, match=re.escape(reason)
+    ) as raised:
+        generate_crossgl(f"""
+            kernel void probe(global float4 *a, global float3 *b,
+                              global float2 *dst) {{
+                uint i = get_global_id(0);
+                float4 v = a[i];
+                float2 v2 = (float2)(1.0f, 2.0f);
+                float3 v3 = b[i];
+                {source}
+            }}
+            """)
+    assert raised.value.code == "project.translate.opencl-vector-component-unsupported"

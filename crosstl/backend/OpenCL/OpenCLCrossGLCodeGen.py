@@ -108,6 +108,18 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
+class OpenCLVectorComponentUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C vector component form (``.hi``/``.lo``/``.even``/``.odd``/``.sN``) with no CrossGL swizzle.
+
+    CrossGL swizzles only name the ``xyzw`` components, so a form that reads a
+    component the vector does not have -- a ``.sN`` index past the vector, or
+    the undefined fourth component a 3-component vector pretends to have for
+    ``.hi``/``.s3`` -- cannot be spelled in CrossGL at all.
+    """
+
+    code = CODE_PREFIX + "opencl-vector-component-unsupported"
+
+
 class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
@@ -1347,6 +1359,88 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             r"-?\d+[uU]?", text
         ):
             return "int"
+        return None
+
+    def visit_MemberAccessNode(self, node):
+        swizzle = self.opencl_vector_component_swizzle(node)
+        if swizzle is None:
+            return super().visit_MemberAccessNode(node)
+        return f"{self.visit(node.object)}.{swizzle}"
+
+    def opencl_vector_component_swizzle(self, node):
+        """CrossGL swizzle for an OpenCL vector component form, or ``None``.
+
+        OpenCL C 3.0, "Vector Components", spells a vector's components as
+        ``.sN``/``.SN`` (digits ``0``-``3``), ``.lo``/``.hi`` (lower/upper
+        half) and ``.even``/``.odd``. CrossGL only knows the ``xyzw`` spelling,
+        so the importer rewrites the form when the base is a vector. Any other
+        member -- including the same spellings on a record -- is left to the
+        HIP parent unchanged. A form that reads a component the vector does
+        not have raises :class:`OpenCLVectorComponentUnsupportedError`.
+        """
+        member = getattr(node, "member", "")
+        if not isinstance(member, str):
+            return None
+        if member in {"hi", "lo", "even", "odd"}:
+            form = member
+        elif re.fullmatch(r"[sS][0-9a-fA-F]+", member):
+            form = "s"
+        else:
+            return None
+        width = self.opencl_vector_component_width(node.object)
+        if width is None:
+            return None
+        if form == "s":
+            indices = [int(char, 16) for char in member[1:]]
+        elif form in {"lo", "hi"}:
+            # Both halves hold ceil(width / 2) components; a 3-component
+            # vector reads its .hi as (z, undefined), per the spec.
+            half = (width + 1) // 2
+            indices = list(range(half)) if form == "lo" else list(range(half, 2 * half))
+        elif form == "even":
+            indices = list(range(0, width, 2))
+        else:  # "odd"
+            indices = list(range(1, width, 2))
+        for index in indices:
+            if index >= width:
+                if width == 3 and index == 3:
+                    reason = (
+                        "it reads the undefined fourth component of a "
+                        "3-component vector"
+                    )
+                else:
+                    reason = (
+                        f"component index {index} is outside the vector "
+                        f"(valid components are 0-{width - 1})"
+                    )
+                raise OpenCLVectorComponentUnsupportedError(
+                    f"OpenCL vector component '.{member}' on a {width}-component "
+                    f"vector has no CrossGL swizzle: {reason}"
+                )
+        return "".join("xyzw"[index] for index in indices)
+
+    def opencl_vector_component_width(self, expression):
+        """Component count (2, 3 or 4) of an OpenCL vector expression, or ``None``.
+
+        The declared type is the CrossGL spelling (``vec4<f32>``) for locals
+        and kernel parameters and the OpenCL spelling (``float4``) for casts
+        and calls, so both are accepted. Wider vectors (``float8``/``float16``)
+        lower to CrossGL arrays, which have no swizzle, and return ``None``.
+        """
+        type_name = self.expression_declared_type(expression)
+        if not isinstance(type_name, str):
+            return None
+        text = self.strip_type_qualifiers(type_name).strip()
+        match = re.fullmatch(r"vec([234])<[^>]+>", text)
+        if match is not None:
+            return int(match.group(1))
+        match = re.fullmatch(
+            r"(?:char|uchar|short|ushort|int|uint|long|ulong|float|double|half)"
+            r"([234])",
+            text,
+        )
+        if match is not None:
+            return int(match.group(1))
         return None
 
     def emit_statement(self, stmt):
