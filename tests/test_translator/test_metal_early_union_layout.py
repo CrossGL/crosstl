@@ -31,13 +31,13 @@ kernel void k(device uint *out [[buffer(0)]], uint id [[thread_position_in_grid]
 }
 """
 
-FOUR_BYTE_UNION = TWO_BYTE_UNION.replace(
-    "typedef union { half f16; uint16_t u16; } scale_t;",
-    "typedef union { float f32; uint32_t u32; } scale_t;",
-).replace(
-    "s.u16 = uint16_t(id);", "s.u32 = uint32_t(id);"
-).replace(
-    "uint(s.f16)", "uint(s.f32)"
+FOUR_BYTE_UNION = (
+    TWO_BYTE_UNION.replace(
+        "typedef union { half f16; uint16_t u16; } scale_t;",
+        "typedef union { float f32; uint32_t u32; } scale_t;",
+    )
+    .replace("s.u16 = uint16_t(id);", "s.u32 = uint32_t(id);")
+    .replace("uint(s.f16)", "uint(s.f32)")
 )
 
 MISMATCHED_UNION = TWO_BYTE_UNION.replace(
