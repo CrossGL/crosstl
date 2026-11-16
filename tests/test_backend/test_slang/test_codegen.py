@@ -451,6 +451,27 @@ def test_non_main_graphics_shader_entries_preserve_stage_entry():
     assert parsed.stages[ShaderStage.FRAGMENT].entry_point.name == "fsMain"
 
 
+def test_explicit_stage_attribute_keeps_result_semantic_helper_local():
+    code = """
+    float4 shade(float4 color) : SV_Target {
+        return color;
+    }
+
+    [shader("fragment")]
+    float4 fsMain() : SV_Target {
+        return shade(float4(1.0));
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("fragment {") == 1
+    assert "vec4 shade(vec4 color) @ gl_FragColor @ stage_entry" not in generated_code
+    assert "vec4 fsMain() @ gl_FragColor @ stage_entry" in generated_code
+    parsed = cgl_translator.parse(generated_code)
+    assert parsed.stages[ShaderStage.FRAGMENT].entry_point.name == "fsMain"
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty

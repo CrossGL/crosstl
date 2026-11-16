@@ -1802,6 +1802,7 @@ EXTERNAL_FIXTURES = [
         """
         ),
         "crossgl": True,
+        # https://github.com/CrossGL/crosstl/issues/4552 tracks representing this nested stage interface.
         "crossgl_refused": (
             "Missing cross-stage interface output from vertex to fragment for "
             "semantic texcoord0"
