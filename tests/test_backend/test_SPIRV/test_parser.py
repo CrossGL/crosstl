@@ -4,6 +4,7 @@ import pytest
 
 from crosstl.backend.common_ast import InitializerListNode
 from crosstl.backend.SPIRV import VulkanParser
+from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
 from crosstl.backend.SPIRV.VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -29,7 +30,6 @@ from crosstl.backend.SPIRV.VulkanAst import (
     WhileNode,
 )
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
-from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
 from crosstl.backend.SPIRV.workgroup_size_import import WorkgroupDimension
 
 
