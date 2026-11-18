@@ -24594,11 +24594,22 @@ class MetalCodeGen(
 
     @staticmethod
     def metal_atomic_scalar_type(component_type, bitwise_float=False):
+        """Map a scalar to the element type of Metal's ``atomic_<T>``.
+
+        Unknown scalars are refused, never passed through verbatim: an
+        unmapped name would be emitted as ``atomic_<name>``, which no Metal
+        compiler accepts, so the translator must say so instead of writing
+        output it cannot stand behind. Both callers gate on
+        ``buffer_atomic_supports_scalar_type`` first, so this is a backstop.
+        """
         if bitwise_float:
             return "uint"
-        return MetalCodeGen._METAL_ATOMIC_SCALAR_TYPES.get(
-            component_type, component_type
-        )
+        mapped = MetalCodeGen._METAL_ATOMIC_SCALAR_TYPES.get(component_type)
+        if mapped is None:
+            raise MetalRefusal(
+                "unsupported Metal atomic scalar type: " f"{component_type!r}"
+            )
+        return mapped
 
     @staticmethod
     def buffer_atomic_supports_scalar_type(operation, component_type):

@@ -18,6 +18,8 @@ compare-exchange, so those stay refused too.
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.refusals import MetalRefusal
 
 PROBE = """shader Probe {
     compute {
@@ -202,3 +204,16 @@ def test_64_bit_atomic_add_and_load_stay_refused(tmp_path):
             tmp_path,
             _with_buffers("uint64_t v = atomicLoad(outp[i]); outp[i] = v;"),
         )
+
+
+def test_unmapped_atomic_scalar_type_is_refused_not_passed_through():
+    # Regression test for the fail-closed gate: the scalar mapping used to
+    # fall back to the input name verbatim (``.get(name, name)``), which
+    # would have emitted e.g. ``atomic_long`` — a type Metal does not have.
+    # Metal has no atomic_long, so a signed 64-bit scalar (and anything else
+    # unmapped) must be refused.
+    for scalar in ("long", "int64_t", "double"):
+        with pytest.raises(MetalRefusal, match="unsupported Metal atomic scalar type"):
+            MetalCodeGen.metal_atomic_scalar_type(scalar)
+    assert MetalCodeGen.metal_atomic_scalar_type("uint64_t") == "ulong"
+    assert MetalCodeGen.metal_atomic_scalar_type("float", bitwise_float=True) == "uint"
