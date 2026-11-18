@@ -11,7 +11,6 @@ must write the conversion itself (issue #2384).
 import shutil
 import subprocess
 
-import pytest
 
 import crosstl
 
