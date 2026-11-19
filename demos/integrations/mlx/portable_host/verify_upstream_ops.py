@@ -941,9 +941,11 @@ GROUPS = {
     group: tuple(name for name in UPSTREAM_TESTS if _group_of(name) == group)
     for group in ("operations", *GROUP_PREFIXES, *GROUP_TESTS)
 }
-# The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
-# native run also translates its lazy vectors and kernels.
-TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
+# The CI step bounds a group's workers and its audit at 8,000 seconds; a cold
+# native run also translates its lazy vectors and kernels. The blas-gather
+# group's native worker takes about 5,000 s on Windows, where
+# test_segmented_mm alone ran 4,044 s through 16,699 dispatches.
+TIMEOUTS = {"cpu": 300, "native": 7400, "missing": 60}
 # The native worker checks each dispatch record whole as it is written and
 # keeps it only in this compact form; its per-record audit (TraceAudit) and
 # the full records' count, size and SHA-256 go to TRACE_AUDIT.

@@ -54,12 +54,25 @@ import hashlib
 # 70 among them), and the CPU 2 of 100 (6 and 98, both at line 2707). Run
 # seed 0 passes on both, with its largest error at 0.51 of the bound on
 # Metal and 0.42 on the CPU.
+#
+# test_quantized's test_gather_matmul_grad compares the float32 sums of
+# gather_mm over dequantized weights and of gather_qmm, 6,144 outputs of
+# 256-term products each, under atol 1e-4 and rtol 1e-5. The CPU backend
+# adds the two in different orders, so the sums differ by up to 2.2e-3
+# (median 4.9e-4 over 400 run seeds), which can exceed the bound of 1e-4
+# plus 1e-5 of the sum wherever the sum is under about 200. Stock CPU fails
+# the first assertion (line 1713) for 14 of 400 run seeds (9 and 77 among
+# them) and 58 of the next 2,000, and the Windows CPU worker failed run seed
+# 6158642934431059529 in merge-queue run 43632540672. Stock Metal fails none
+# of 2,400 and its two sums agree exactly. Run seed 0 passes both; its sum
+# is -1581.85, and its CPU error is 0.015 of the bound.
 FIXED_RUN_SEEDS = {
     "test_ops.TestOps.test_softmax": 0,
     "test_blas.TestBlas.test_segmented_mm": 1,
     "test_blas.TestBlas.test_block_masked_matmul": 2,
     "test_ops.TestOps.test_divmod": 0,
     "test_ops.TestOps.test_scans": 0,
+    "test_quantized.TestQuantized.test_gather_matmul_grad": 0,
 }
 
 

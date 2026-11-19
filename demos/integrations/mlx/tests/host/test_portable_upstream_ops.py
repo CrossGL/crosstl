@@ -500,6 +500,7 @@ def test_fixed_input_tests_draw_the_inputs_of_their_recorded_run_seed():
         "test_blas.TestBlas.test_block_masked_matmul": 2,
         "test_ops.TestOps.test_divmod": 0,
         "test_ops.TestOps.test_scans": 0,
+        "test_quantized.TestQuantized.test_gather_matmul_grad": 0,
     }
     assert set(seeds.FIXED_RUN_SEEDS) <= set(ops.upstream_tests("metal"))
     assert seeds.test_seed(0, "test_ops.TestOps.test_softmax") == 13239174713553859637

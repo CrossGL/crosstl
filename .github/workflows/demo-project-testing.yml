@@ -2909,30 +2909,35 @@ jobs:
       - name: Build adapted upstream MLX
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX upstream op host build" -- \
+          # The build took at most 526 s, on Windows, in merge-queue run 43632540672.
+          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX upstream op host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-upstream-ops/build.log
       - name: Translate the upstream op package families
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX random packages" -- \
+          # Where these bounds were lowered they stay at least three times the
+          # slowest of the 108 legs of merge-queue run 43632540672, a Windows leg
+          # each time. The column reductions, which took up to 519 s of 600 s,
+          # get more. The time freed goes to the upstream op verification step.
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "MLX random packages" -- \
             python -m demos.integrations.mlx.portable_host.random_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --output-dir .mlx-portable-upstream-ops/random-packages \
               2>&1 | tee .mlx-portable-upstream-ops/random-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX bitwise translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX bitwise translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family bitwise --jobs 4 --output-dir .mlx-portable-upstream-ops/bitwise-packages \
               2>&1 | tee .mlx-portable-upstream-ops/bitwise-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX selection translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "MLX selection translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family selection --jobs 4 --output-dir .mlx-portable-upstream-ops/selection-packages \
               2>&1 | tee .mlx-portable-upstream-ops/selection-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX absolute translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "MLX absolute translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-upstream-ops/absolute-packages \
               2>&1 | tee .mlx-portable-upstream-ops/absolute-translation.log
-          # The integer64 family took 98 to 135 s on all three platforms in one
-          # merge-queue run; the bound leaves the lazy vectors room in the job.
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX integer64 translation" -- \
+          # The integer64 family took at most 196 s, on Windows, in merge-queue
+          # run 43632540672; the bound leaves the lazy vectors room in the job.
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX integer64 translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
               2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
@@ -2951,11 +2956,11 @@ jobs:
       - name: Configure the upstream op reductions
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX initialization translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX initialization translation" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family init --jobs 4 --output-dir .mlx-portable-upstream-ops/init-packages \
               2>&1 | tee .mlx-portable-upstream-ops/init-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX on-demand reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 60 --label "MLX on-demand reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family all --on-demand --output-dir .mlx-portable-upstream-ops/all-reductions \
               2>&1 | tee .mlx-portable-upstream-ops/all-reductions.log
@@ -2963,7 +2968,7 @@ jobs:
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family row --on-demand --output-dir .mlx-portable-upstream-ops/row-reductions \
               2>&1 | tee .mlx-portable-upstream-ops/row-reductions.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX column reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX column reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family column --jobs 4 --output-dir .mlx-portable-upstream-ops/column-reductions \
               2>&1 | tee .mlx-portable-upstream-ops/column-reductions.log
@@ -2987,7 +2992,8 @@ jobs:
         if: startsWith(matrix.group, 'blas')
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 2100 --label "MLX upstream BLAS matrix translation" -- \
+          # It took up to 1,550 s, on Linux, in merge-queue run 43632540672.
+          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX upstream BLAS matrix translation" -- \
             python -m demos.integrations.mlx.portable_host.upstream_matrix_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages --group "${{ matrix.group }}" \
               --jobs ${{ matrix.target == 'metal' && 3 || 4 }} --budget-seconds 1800 \
@@ -3012,7 +3018,10 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 5000 --label "MLX upstream op verification" -- \
+          # The blas-gather group's native worker needs about 5,000 s on Windows:
+          # test_segmented_mm alone ran 4,044 s through 16,699 dispatches there
+          # and did not finish within the former 4,400 s bound.
+          python tools/run_bounded_command.py --timeout-seconds 8000 --label "MLX upstream op verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
               --packages .mlx-portable-upstream-ops/base/packages --random .mlx-portable-upstream-ops/random-packages \
               --bitwise .mlx-portable-upstream-ops/bitwise-packages --selection .mlx-portable-upstream-ops/selection-packages \
