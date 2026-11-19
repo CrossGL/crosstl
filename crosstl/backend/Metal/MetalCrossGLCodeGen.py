@@ -63,6 +63,7 @@ from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
 from .buffer_layout_import import MetalBufferLayoutImport
+from .builtin_operator_operands import operands_have_no_class_type
 from .call_template_deduction import (
     TemplateDeductionConflict,
     deduce_omitted_template_arguments,
@@ -15795,6 +15796,9 @@ class MetalToCrossGLConverter(
             # Pointer +/- integral is a native built-in expression even when the
             # pointee is an aggregate. Unrelated aggregate value overloads are
             # not candidates for this operation and must not intercept it.
+            return None
+        if operands_have_no_class_type(self, arguments, argument_types):
+            # [over.match.oper]/1: the built-in operator (builtin_operator_operands).
             return None
         ranked = []
         for function in candidates:
