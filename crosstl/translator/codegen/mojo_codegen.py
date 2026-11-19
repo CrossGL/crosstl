@@ -57,6 +57,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     get_array_size_from_node,
 )
+from .char_literals import char_literal_code
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
@@ -99,6 +100,11 @@ from .mojo_exact_lookups import (
     mojo_generic_template_reason,
     mojo_operator,
     mojo_resource_kind_of_spelling,
+)
+from .mojo_integer_promotion import (
+    C_PROMOTING_BINARY_OPERATORS,
+    promoted_operand,
+    promoted_type,
 )
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
@@ -1089,49 +1095,6 @@ MOJO_WAVE_OP_ARITIES = {
     "WaveMultiPrefixBitXor": 2,
 }
 
-MOJO_WAVE_HELPERS = {
-    "WaveGetLaneCount": "_crossgl_wave_get_lane_count",
-    "WaveGetLaneIndex": "_crossgl_wave_get_lane_index",
-    "WaveIsFirstLane": "_crossgl_wave_is_first_lane",
-    "WaveActiveSum": "_crossgl_wave_active_sum",
-    "WaveActiveProduct": "_crossgl_wave_active_product",
-    "WaveActiveBitAnd": "_crossgl_wave_active_bit_and",
-    "WaveActiveBitOr": "_crossgl_wave_active_bit_or",
-    "WaveActiveBitXor": "_crossgl_wave_active_bit_xor",
-    "WaveActiveMin": "_crossgl_wave_active_min",
-    "WaveActiveMax": "_crossgl_wave_active_max",
-    "WaveActiveAllTrue": "_crossgl_wave_active_all_true",
-    "WaveActiveAnyTrue": "_crossgl_wave_active_any_true",
-    "WaveActiveAllEqual": "_crossgl_wave_active_all_equal",
-    "WaveActiveBallot": "_crossgl_wave_active_ballot",
-    "WaveActiveCountBits": "_crossgl_wave_active_count_bits",
-    "WaveReadLaneAt": "_crossgl_wave_read_lane_at",
-    "WaveReadLaneFirst": "_crossgl_wave_read_lane_first",
-    "WavePrefixSum": "_crossgl_wave_prefix_sum",
-    "WavePrefixProduct": "_crossgl_wave_prefix_product",
-    "WavePrefixCountBits": "_crossgl_wave_prefix_count_bits",
-    "QuadReadAcrossX": "_crossgl_quad_read_across_x",
-    "QuadReadAcrossY": "_crossgl_quad_read_across_y",
-    "QuadReadAcrossDiagonal": "_crossgl_quad_read_across_diagonal",
-    "QuadReadLaneAt": "_crossgl_quad_read_lane_at",
-    "WaveMatch": "_crossgl_wave_match",
-    "WaveMultiPrefixSum": "_crossgl_wave_multi_prefix_sum",
-    "WaveMultiPrefixCountBits": "_crossgl_wave_multi_prefix_count_bits",
-    "WaveMultiPrefixProduct": "_crossgl_wave_multi_prefix_product",
-    "WaveMultiPrefixBitAnd": "_crossgl_wave_multi_prefix_bit_and",
-    "WaveMultiPrefixBitOr": "_crossgl_wave_multi_prefix_bit_or",
-    "WaveMultiPrefixBitXor": "_crossgl_wave_multi_prefix_bit_xor",
-}
-
-MOJO_WAVE_PREDICATE_ARGUMENT_OPS = {
-    "WaveActiveAllTrue",
-    "WaveActiveAnyTrue",
-    "WaveActiveBallot",
-    "WaveActiveCountBits",
-    "WavePrefixCountBits",
-    "WaveMultiPrefixCountBits",
-}
-
 MOJO_WAVE_UINT_RESULT_OPS = {
     "WaveGetLaneCount",
     "WaveGetLaneIndex",
@@ -1363,7 +1326,6 @@ class MojoCodeGen:
         self.required_reinterpret_helpers = set()
         self.required_bit_imports = set()
         self.required_sync_helpers = set()
-        self.required_wave_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -1432,7 +1394,8 @@ class MojoCodeGen:
             "bool": "Bool",
             "string": "String",
             "str": "String",
-            "char": "String",
+            # CrossGL char is a signed 8-bit integer, not text.
+            "char": "Int8",
             **{
                 name: f"SIMD[{dtype}, {storage_width}]"
                 for name, (dtype, _, storage_width, _) in MOJO_VECTOR_TYPES.items()
@@ -1644,7 +1607,6 @@ class MojoCodeGen:
         self.required_reinterpret_helpers = set()
         self.required_bit_imports = set()
         self.required_sync_helpers = set()
-        self.required_wave_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -8979,6 +8941,9 @@ class MojoCodeGen:
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
+            if op in C_PROMOTING_BINARY_OPERATORS:
+                left = promoted_operand(self, expr.left, left)
+                right = promoted_operand(self, expr.right, right)
             return f"({left} {op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
@@ -10120,36 +10085,21 @@ class MojoCodeGen:
                 f"argument{'s' if expected_count != 1 else ''}, got {len(args)}"
             )
 
-        helper_name = MOJO_WAVE_HELPERS[operation]
-        arg_types = tuple(
-            self.mojo_wave_argument_mojo_type(operation, index, arg)
-            for index, arg in enumerate(args)
+        raise MojoRefusal(
+            f"Mojo wave intrinsic {operation}: the Mojo generator has no lowering to "
+            "Mojo's warp operations, and a single-lane stand-in computes another "
+            "result whenever a wave has more than one active lane"
         )
-        return_type = self.map_type(self.mojo_wave_result_type(operation, args))
-        self.required_wave_helpers.add((helper_name, arg_types, return_type, operation))
-
-        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"{helper_name}({generated_args})"
 
     def generate_cuda_shuffle_down_call(self, args):
         if len(args) != 3:
             raise MojoRefusal(
                 f"Mojo __shfl_down_sync requires 3 arguments, got {len(args)}"
             )
-
-        value_type = self.map_type(self.expression_result_type(args[1]) or "float")
-        offset_type = self.map_type(self.expression_result_type(args[2]) or "int")
-        helper_name = "_crossgl_cuda_shfl_down_sync"
-        self.required_wave_helpers.add(
-            (
-                helper_name,
-                ("Int", value_type, offset_type),
-                value_type,
-                "__shfl_down_sync",
-            )
+        raise MojoRefusal(
+            "Mojo __shfl_down_sync: the Mojo generator has no lowering to Mojo's warp "
+            "shuffles, and returning the lane's own value computes another result"
         )
-        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"{helper_name}({generated_args})"
 
     def mojo_wave_result_type(self, operation, args):
         if operation in MOJO_WAVE_UINT_RESULT_OPS:
@@ -10161,18 +10111,6 @@ class MojoCodeGen:
         if args:
             return self.expression_result_type(args[0]) or "uint"
         return "uint"
-
-    def mojo_wave_argument_mojo_type(self, operation, index, arg):
-        if index == 0 and operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
-            return self.map_type("bool")
-        if index == 1 and operation.startswith("WaveMultiPrefix"):
-            return self.map_type("uvec4")
-        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
-            arg_type = self.expression_result_type(arg)
-            if self.type_name(arg_type) in MOJO_INTEGER_INDEX_TYPES:
-                return self.map_type(arg_type)
-            return self.map_type("uint")
-        return self.map_type(self.expression_result_type(arg) or "uint")
 
     def generate_ray_tracing_op(self, expr):
         return self.generate_ray_tracing_call_expression(
@@ -13030,7 +12968,6 @@ class MojoCodeGen:
             and not self.required_mesh_helpers
             and not self.required_reinterpret_helpers
             and not self.required_sync_helpers
-            and not self.required_wave_helpers
             and not self.required_ray_helpers
             and not self.required_builtin_placeholders
             and not self.required_gpu_builtin_placeholders
@@ -13207,12 +13144,6 @@ class MojoCodeGen:
             code += "# CrossGL synchronization placeholders\n"
             for helper_name in sorted(self.required_sync_helpers):
                 code += self.generate_sync_helper(helper_name)
-            code += "\n"
-
-        if self.required_wave_helpers:
-            code += "# CrossGL wave/subgroup placeholders\n"
-            for helper in sorted(self.required_wave_helpers):
-                code += self.generate_wave_helper(helper)
             code += "\n"
 
         if self.required_ray_helpers:
@@ -13417,53 +13348,6 @@ class MojoCodeGen:
 
     def generate_sync_helper(self, helper_name):
         return f"fn {helper_name}():\n    pass\n\n"
-
-    def generate_wave_helper(self, helper):
-        helper_name, arg_types, return_type, operation = helper
-        parameter_names = self.wave_helper_parameter_names(operation, len(arg_types))
-        params = [
-            f"{parameter_name}: {arg_type}"
-            for parameter_name, arg_type in zip(parameter_names, arg_types)
-        ]
-        code = f"fn {helper_name}({', '.join(params)}) -> {return_type}:\n"
-        code += f"    return {self.wave_helper_return_expression(operation, return_type)}\n\n"
-        return code
-
-    def wave_helper_parameter_names(self, operation, arg_count):
-        if arg_count == 0:
-            return []
-        if operation == "__shfl_down_sync":
-            return ["mask", "value", "delta"]
-        if arg_count == 1:
-            if operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
-                return ["predicate"]
-            return ["value"]
-        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
-            return ["value", "lane"]
-        if operation == "WaveMultiPrefixCountBits":
-            return ["predicate", "mask"]
-        return ["value", "mask"]
-
-    def wave_helper_return_expression(self, operation, return_type):
-        if operation == "WaveGetLaneCount":
-            return "1"
-        if operation == "WaveGetLaneIndex":
-            return "0"
-        if operation == "WaveIsFirstLane":
-            return "True"
-        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            return "predicate"
-        if operation == "WaveActiveAllEqual":
-            return "True"
-        if operation in {
-            "WaveActiveCountBits",
-            "WavePrefixCountBits",
-            "WaveMultiPrefixCountBits",
-            "WaveActiveBallot",
-            "WaveMatch",
-        }:
-            return self.zero_mojo_value(return_type)
-        return "value"
 
     def resource_requirements_use_concrete_bindings(self, resource_types):
         if not set(resource_types).issubset(MOJO_CONCRETE_RESOURCE_TYPES):
@@ -15554,6 +15438,8 @@ class MojoCodeGen:
             # A comparison or logical operation on scalars yields a ``Bool``,
             # not a value of its operand type.
             return "bool"
+        left_type = promoted_type(self, mapped_op, left_type)
+        right_type = promoted_type(self, mapped_op, right_type)
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
@@ -16053,6 +15939,8 @@ class MojoCodeGen:
                 return "True"
             if lower_value == "false":
                 return "False"
+        if literal_type == "char":
+            return f"Int8({char_literal_code(value, MojoRefusal, 'Mojo')})"
         if isinstance(value, str):
             escaped = self.escape_literal(value)
             return f'"{escaped}"'

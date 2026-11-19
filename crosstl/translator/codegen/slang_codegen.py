@@ -70,7 +70,11 @@ from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .buffer_length import HlslBufferLength
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
-from .builtin_result_types import C_FAMILY, builtin_call_result_type
+from .builtin_result_types import (
+    C_FAMILY,
+    boolean_builtin_result_type,
+    builtin_call_result_type,
+)
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
     c_family_comma_expression,
@@ -119,6 +123,10 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_array_values import (
@@ -196,6 +204,7 @@ from .slang_exact_lookups import (
     slang_shader_stage,
 )
 from .slang_numeric_types import slang_unrepresentable_type_reason
+from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
@@ -495,9 +504,17 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
         try:
-            return self.refusals.run(self.generate_program, ast)
+            return self.refusals.run(self.generate_checked_program, ast)
         finally:
             self._generating = False
+
+    def generate_checked_program(self, ast):
+        """Generate the program with its generic pointers specialized, refusing any the output still spells."""
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
+        refuse_slang_pointer_declarations(ast, self.refuse_lowering)
+        code = self.generate_program(ast)
+        refuse_written_generic_pointers(code, self.refuse_lowering, "Slang")
+        return code
 
     def generate_program(self, ast):
         outermost = not self._generating
@@ -7934,6 +7951,26 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             "IgnoreHit": "void",
         }.get(operation)
 
+    def slang_ray_transform_call_type(self, func_name, args):
+        """The matrix type of a DXR transform call such as ``ObjectToWorld3x4()``, or ``None``.
+
+        Slang declares these as HLSL does (DXR spec, "ObjectToWorld3x4"): the unsuffixed names are aliases of the
+        ``3x4`` ones. Knowing the type lets ``ObjectToWorld3x4() * p`` become ``mul(...)`` and an element index on
+        the call swap to Slang's row-first order, as they do on a local of the same type.
+        """
+        if args or not isinstance(func_name, str):
+            return None
+        if func_name in self.user_function_names:
+            return None
+        return {
+            "ObjectToWorld": "float3x4",
+            "ObjectToWorld3x4": "float3x4",
+            "ObjectToWorld4x3": "float4x3",
+            "WorldToObject": "float3x4",
+            "WorldToObject3x4": "float3x4",
+            "WorldToObject4x3": "float4x3",
+        }.get(func_name)
+
     def slang_ray_tracing_expected_target_type(self):
         expected_type = self.type_name_string(self.current_expression_expected_type)
         if not expected_type:
@@ -9623,6 +9660,9 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
+            if ray_transform_type is not None:
+                return ray_transform_type
             if isinstance(func_name, str) and "::" in func_name:
                 enum_name, _variant_name = func_name.split("::", 1)
                 if func_name in self.enum_variant_constructor_fields:
@@ -9797,6 +9837,14 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
 
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
+
+        boolean_type = boolean_builtin_result_type(
+            func_name,
+            [self.type_name_string(self.expression_result_type(a)) for a in args],
+            C_FAMILY,
+        )
+        if boolean_type is not None:
+            return boolean_type
 
         if func_name in {"transpose", "inverse"}:
             return builtin_call_result_type(

@@ -116,7 +116,8 @@ def test_a_parameter_binding_a_taken_slot_is_refused(tmp_path):
         _translate(tmp_path, source)
 
 
-def test_bound_storage_that_is_no_array_is_refused(tmp_path):
+def test_bound_storage_that_is_no_array_is_a_one_element_buffer(tmp_path):
+    # semantics/storage_variables.py binds a storage parameter holding one value as a buffer of one element.
     source = """
 struct Params { float scale; };
 @compute
@@ -125,8 +126,9 @@ fn k(@group(0) @binding(0) var<storage, read_write> p: Params) {
     p.scale = 1.0;
 }
 """
-    with pytest.raises(ComputeEntryResourceError, match="runtime-sized array"):
-        _translate(tmp_path, source)
+    code = _translate(tmp_path, source)
+    assert re.search(r"RWStructuredBuffer<Params> p : register\(u0", code)
+    assert "p[0].scale = 1.0;" in code
 
 
 @pytest.mark.skipif(_slangc() is None, reason="slangc is not available")

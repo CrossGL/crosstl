@@ -68,6 +68,9 @@ class Dialect:
     vertex = "emitted"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
+    # The local objects a dialect declares in its own way, by opaque type: the statements that declare ``{name}`` as
+    # one. :data:`.objects.OBJECTS` spells the others.
+    own_objects: dict[str, tuple[str, ...]] = {}
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
     # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, BYTES, PACKED_BYTES and POINTER_SIZED.
     wide_integers = False
@@ -193,6 +196,11 @@ class Dialect:
         with ``{}`` for the call, or ``None`` when the probe only makes the call."""
         return None
 
+    def making(self, opaque: str) -> tuple[Type, str] | None:
+        """How a probe makes an argument of the opaque type ``opaque`` from a value it reads: the value's type and an
+        expression with ``{}`` for it, or ``None`` when the probe cannot."""
+        return None
+
     def stored(self, kind: Type, value: str) -> str:
         """``value``, of type ``kind``, as the output buffer's element type holds it."""
         return value
@@ -211,6 +219,10 @@ class Dialect:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
 
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        """The declaration of a local that a method changes in place; locals are mutable unless a dialect says."""
+        return self.declare(kind, name, value)
+
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
@@ -219,6 +231,10 @@ class Dialect:
         """The declaration of a GLSL sampler, image or subpass input uniform; ``qualifier`` is the layout qualifier
         it needs besides its binding."""
         raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
+
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        """The argument that passes the uniform ``name`` for a parameter of the opaque type ``opaque``."""
+        return name
 
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
@@ -250,6 +266,11 @@ class Dialect:
     def workgroup_argument(self, name: str) -> str:
         """The workgroup variable ``name``, for a parameter that takes one."""
         return name
+
+    def constant_memory(self, kind: Type, name: str) -> str:
+        """The declaration of a variable ``name`` in constant memory, which the host sets, for a parameter that takes
+        its address."""
+        raise ProbeError(f"no probe declares {self.language} constant memory yet")
 
     def handle(self, kind: Type, name: str) -> Handle | None:
         """How a probe makes an argument of the opaque type ``kind`` in a local ``name``, or ``None`` when the
@@ -291,12 +312,25 @@ class Dialect:
         """How a fragment shader reads its input ``name``, which :meth:`fragment` declares from ``inputs``."""
         return name
 
+    def enable(self, extension: str) -> list[str]:
+        """The prelude lines that enable the language extension ``extension``; none where the language has no such
+        directive."""
+        return []
+
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        """``body`` run only by the invocations whose index is not a multiple of ``skipped``."""
+        return [
+            f"if (i % {skipped}u != 0u) {{",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A compute kernel that runs ``body`` once per invocation, with ``i`` the invocation's index.
 
         ``parts`` may add ``prelude`` lines (extensions, enable directives, or for CrossGL shader-level declarations),
         ``declarations`` that precede the entry point and, for languages that pass them as entry-point parameters,
-        ``params``.
+        ``params``. ``lanes`` is the workgroup size, 1 unless given, for languages that declare it in the kernel.
         """
         raise NotImplementedError
 

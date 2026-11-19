@@ -204,6 +204,7 @@ from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
 )
+from .storage_variables import StorageVariableUnsupportedError, lower_storage_variables
 from .struct_constructor_conversions import convert_struct_constructor_arguments
 from .struct_declarations import (
     ConflictingConstantError,
@@ -229,6 +230,7 @@ from .texture_residency import declare_hlsl_residency_status, refuse_texture_res
 from .texture_swizzles import canonicalize_texture_swizzles
 from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
+from .uniform_variables import lower_uniform_variables
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
     UnsizedArrayUnsupportedError,
@@ -307,6 +309,7 @@ __all__ = [
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "StorageBufferParameterUnsupportedError",
+    "StorageVariableUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -527,6 +530,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    lower_storage_variables(program, report.target)
+    lower_uniform_variables(program, report.target)
     orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)

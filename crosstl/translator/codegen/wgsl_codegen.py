@@ -5184,6 +5184,8 @@ class WGSLCodeGen(
         "notEqual",
         "not",
     }
+    BOOLEAN_CLASSIFICATION_FUNCTIONS = {"isnan", "isinf"}
+    BOOLEAN_REDUCTION_FUNCTIONS = {"any", "all"}
 
     def boolean_expression_width(self, expr):
         """Component count of a ``bool`` or ``vecN<bool>`` expression, else ``None``."""
@@ -5212,6 +5214,19 @@ class WGSLCodeGen(
             and not self.is_user_function_name(expr.function.name)
         ):
             return self.vector_component_count(self.expression_type(expr.arguments[0]))
+        if (
+            isinstance(expr, FunctionCallNode)
+            and isinstance(expr.function, IdentifierNode)
+            and len(expr.arguments) == 1
+            and not self.is_user_function_name(expr.function.name)
+        ):
+            if expr.function.name in self.BOOLEAN_REDUCTION_FUNCTIONS:
+                return 1
+            if expr.function.name in self.BOOLEAN_CLASSIFICATION_FUNCTIONS:
+                argument_type = self.expression_type(expr.arguments[0])
+                if argument_type is None:
+                    return None
+                return self.vector_component_count(argument_type) or 1
         return None
 
     def replicate_scalar_call_arguments(

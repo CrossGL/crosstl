@@ -25,6 +25,7 @@ from .rule_table import (
     HELPERS,
     INTRINSIC_FAMILY,
     INTRINSICS,
+    LIBM_INTRINSICS,
     POLYFILLS,
     ROUND_AWAY_INTRINSICS,
     target_entry,
@@ -48,6 +49,9 @@ _KIND_NAMES = {
     "u": "unsigned integer",
     "b": "boolean",
 }
+
+# Intrinsics whose helpers take binary32 operands only.
+_BINARY32_HELPERS = frozenset(ROUND_AWAY_INTRINSICS) | frozenset(LIBM_INTRINSICS)
 
 # Annotation on the read of the target that rewriting a compound assignment ``t op= v`` as ``t = f(t, v)`` adds.
 COMPOUND_TARGET_READ = "cgl_compound_target_read"
@@ -151,7 +155,7 @@ class Lowerer:
                 "cannot be chosen",
                 target=self.target,
             )
-        if intrinsic in ROUND_AWAY_INTRINSICS and (
+        if intrinsic in _BINARY32_HELPERS and (
             result_type.kind,
             result_type.bits,
         ) != (
@@ -160,7 +164,7 @@ class Lowerer:
         ):
             raise RuleInexpressibleError(
                 f"{intrinsic} on a {result_type.bits}-bit {_KIND_NAMES.get(result_type.kind, 'value')} operand has "
-                f"no helper for {self.target}: the helper rounds binary32 values only",
+                f"no helper for {self.target}: the helper takes binary32 values only",
                 target=self.target,
             )
         return self.helpers.call(intrinsic, result_type.lanes, operands)
@@ -253,7 +257,7 @@ def _native(node, operator, arguments):
         origin.operand = arguments[0]
         return origin
     if operator.isidentifier():
-        # A function-call family (round_away): the native entry is the target's own built-in.
+        # A function-call family (round_away, libm): the native entry is the target's own built-in.
         return call(operator, arguments)
     if len(arguments) == 1:
         return A.UnaryOpNode(operator, arguments[0])

@@ -145,7 +145,11 @@ def test_no_workflow_runs_pull_request_code_with_a_privileged_token():
 def test_the_coverage_comment_runs_only_main_code_on_the_report():
     workflow = _workflows()["coverage-comment.yml"]
     assert workflow[True] == {
-        "workflow_run": {"workflows": ["Coverage"], "types": ["completed"]}
+        "workflow_run": {
+            "workflows": ["Coverage"],
+            "types": ["completed"],
+            "branches-ignore": ["gh-readonly-queue/**"],
+        }
     }
     job = workflow["jobs"]["comment"]
     assert "github.event.workflow_run.event == 'pull_request'" in job["if"]

@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 
 from .dialect import Buffer, Dialect, Handle, ProbeError
-from .model import Type
+from .model import GENERIC_POINTER, STRING, Type
 
 
 class CUDA(Dialect):
@@ -47,6 +47,17 @@ class CUDA(Dialect):
 
     def inout_argument(self) -> str:
         return "&outp[i]"
+
+    def workgroup(self, kind: Type, name: str) -> str:
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"__shared__ {self.type(kind.element)} {name}{count};"
+
+    def constant_memory(self, kind: Type, name: str) -> str:
+        return f"__constant__ {self.type(kind)} {name};"
+
+    def holding(self, opaque: str) -> str:
+        # A generic pointer, which the address space conversions return.
+        return "void*" if opaque == GENERIC_POINTER else ""
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = [f"{kind}* {name}" for kind, name in buffers]
@@ -152,6 +163,30 @@ class Mojo(Dialect):
     def statement(self, expression: str) -> str:
         return expression
 
+    def enable(self, extension: str) -> list[str]:
+        # A Mojo feature's extension is what the probe imports, one name or more: the module ``warp`` for
+        # max.gpu.primitives.warp, the function ``barrier`` for max.gpu.sync.barrier, or the types of
+        # ``std.atomic.Atomic std.atomic.Ordering``.
+        lines = []
+        for imported in extension.split():
+            package, _, name = imported.rpartition(".")
+            lines.append(f"from {package} import {name}")
+        return lines
+
+    def inout_argument(self) -> str:
+        # An atomic operation takes a pointer to the output buffer's element.
+        return "outp + i"
+
+    def discard(self, expression: str) -> str:
+        return f"_ = {expression}"
+
+    def address(self, name: str) -> str:
+        # A ``mut`` argument is passed by reference without an operator.
+        return name
+
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = [
             f"{name}: UnsafePointer[{kind}, MutAnyOrigin]" for kind, name in buffers
@@ -182,6 +217,8 @@ class Rust(Dialect):
     language = "rust"
     suffix = ".rs"
     one = "1"
+    # A format string, which the debug_printf macros take as a literal.
+    string = "&str"
     entry = "probe"
     # rustgpu.CAPABILITIES enables Int16 and Int64 for every probe.
     wide_integers = True
@@ -199,7 +236,7 @@ class Rust(Dialect):
         "uint64": "u64",
         "usize": "usize",
     }
-    # spirv-std's glam has 32-bit integer vectors only (features/rust.py, _GLAM_FEATURES).
+    # spirv-std's glam has 32-bit integer vectors only (features/rust.py, GLAM_FEATURES).
     _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
     _INTEGERS = frozenset(
         {"int", "uint", "int16", "uint16", "int64", "uint64", "usize"}
@@ -211,7 +248,59 @@ class Rust(Dialect):
     _CONVERTED = {
         "FpCategory": (Type("uint"), "({}) as u32"),
         "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
+        "Mat3A": (Type("float", (3, 3)), "Mat3::from({})"),
+        "Quat": (Type("float", (4,)), "Vec4::from({})"),
+        "DQuat": (Type("double", (4,)), "DVec4::from({})"),
+        # A ray query's intersection kinds as their discriminants and its ray flags as their bits; an object-to-world
+        # matrix as its translation, and a triangle's vertex positions as its first vertex (features/ray_query.py).
+        "CandidateIntersection": (Type("uint"), "({}) as u32"),
+        "CommittedIntersection": (Type("uint"), "({}) as u32"),
+        "RayFlags": (Type("uint"), "({}).bits()"),
+        # A runtime array's element, read through the reference indexing returns (features/spirv_std.py).
+        "&u32": (Type("uint"), "*({})"),
+        "&mut u32": (Type("uint"), "*({})"),
+        "Matrix4x3": (Type("float", (3,)), "({}).w_axis"),
+        "[Vec3; 3]": (Type("float", (3,)), "({})[0]"),
     }
+    # Arguments of glam's types that no buffer holds, made from the values glam converts them from. A projective depth
+    # comparison's coordinate and depth reference come from one vector in GLSL's order, the depth reference third
+    # (features/spirv_std.py, PROJECTIVE_DEPTH); the argument is two arguments.
+    _MADE = {
+        "Vec3A": (Type("float", (3,)), "Vec3A::from({})"),
+        "Mat3A": (Type("float", (3, 3)), "Mat3A::from({})"),
+        "Quat": (Type("float", (4,)), "Quat::from_vec4({})"),
+        "DQuat": (Type("double", (4,)), "DQuat::from_vec4({})"),
+        "ProjectiveDepth": (Type("float", (4,)), "{0}.xyw(), {0}.z"),
+        # A byte-address buffer's index, four times a word index (features/spirv_std.py, BYTE_INDEX).
+        "ByteIndex": (Type("uint"), "{} * 4"),
+        # The image operands of an ImageWithMethods form (features/spirv_std.py, SAMPLE_PARAMS); gradients come from
+        # one vector, the x gradient first.
+        "SampleParams(bias)": (
+            Type("float"),
+            "spirv_std::image::sample_with::bias({})",
+        ),
+        "SampleParams(lod)": (Type("float"), "spirv_std::image::sample_with::lod({})"),
+        "SampleParams(integer lod)": (
+            Type("int"),
+            "spirv_std::image::sample_with::lod({})",
+        ),
+        "SampleParams(grad)": (
+            Type("float", (4,)),
+            "spirv_std::image::sample_with::grad({0}.xy(), {0}.zw())",
+        ),
+        "SampleParams(sample_index)": (
+            Type("int"),
+            "spirv_std::image::sample_with::sample_index({})",
+        ),
+        # A ray's flags keep the word's bits, as HLSL and GLSL pass them: from_bits_truncate would mask them, and the
+        # mask would join the semantic id of the call that takes them.
+        "RayFlags": (
+            Type("uint"),
+            "spirv_std::ray_tracing::RayFlags::from_bits_retain({})",
+        ),
+    }
+    # spirv_std makes a ray query with a macro, which declares a reference to it.
+    own_objects = {"RayQuery": ("spirv_std::ray_query!(let mut {name});",)}
     # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
     _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
 
@@ -220,10 +309,16 @@ class Rust(Dialect):
         numeric = {
             spelled for scalar, spelled in self._SCALARS.items() if scalar != "bool"
         }
+        if kind.opaque == "EulerRot":
+            # A probe converts Euler angles in the order x, then y, then z.
+            return Handle("EulerRot::XYZ")
         if not closure or closure.group(1) not in numeric:
             return None
         # The closure doubles its argument, so a translation that drops the call computes something else.
         return Handle(f"|x: {closure.group(1)}| x + x")
+
+    def making(self, opaque: str) -> tuple[Type, str] | None:
+        return self._MADE.get(opaque)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         if opaque in self._CONVERTED:
@@ -233,12 +328,14 @@ class Rust(Dialect):
             return None
         spelled = held.group(1) or held.group(2)
         scalars = {name: scalar for scalar, name in self._SCALARS.items()}
-        vector = re.fullmatch(r"([DIUB]?)Vec([234])", spelled)
+        glam = re.fullmatch(r"([DIUB]?)(Vec|Mat)([234])", spelled)
         if spelled in scalars:
             kind = Type(scalars[spelled])
-        elif vector:
+        elif glam:
             prefixes = {prefix: scalar for scalar, prefix in self._GLAM.items()}
-            kind = Type(prefixes[vector.group(1)], (int(vector.group(2)),))
+            size = int(glam.group(3))
+            shape = (size, size) if glam.group(2) == "Mat" else (size,)
+            kind = Type(prefixes[glam.group(1)], shape)
         else:
             return None
         return kind, "{}.0" if held.group(1) else "{}.unwrap_or_default()"
@@ -279,16 +376,75 @@ class Rust(Dialect):
         return f"[{', '.join(parts)}]"
 
     def literal(self, kind: Type) -> str:
+        if kind == STRING:
+            return '""'
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
         if kind.scalar == "bool":
             return "false"
         return "0" if kind.scalar in self._INTEGERS else "0.0"
 
+    def constant(self, kind: Type) -> str:
+        # glam's zero vectors are constants.
+        if len(kind.shape) == 1:
+            return f"{self.type(kind)}::ZERO"
+        return super().constant(kind)
+
+    # rust-gpu takes a shader's resources as parameters of its entry point, which _entry moves these declarations to.
+    _RESOURCE = "#[spirv("
+    # The spirv_std items a resource's type names.
+    _RESOURCE_IMPORTS = (
+        ("Image!", "use spirv_std::Image;"),
+        ("Sampler", "use spirv_std::Sampler;"),
+        ("SampledImage<", "use spirv_std::image::SampledImage;"),
+        ("AccelerationStructure", "use spirv_std::ray_tracing::AccelerationStructure;"),
+        ("RuntimeArray<", "use spirv_std::RuntimeArray;"),
+    )
+    # What a probe needs for a spirv_std macro or trait it calls: ray_query! names RayQuery unqualified, and it and the
+    # debug_printf macros expand to inline assembly, which the crate has to enable for the SPIR-V target.
+    _MACRO_PRELUDES = (
+        (
+            "spirv_std::ray_query!",
+            (
+                "#![feature(asm_experimental_arch)]",
+                "use spirv_std::ray_tracing::RayQuery;",
+            ),
+        ),
+        ("spirv_std::debug_printf", ("#![feature(asm_experimental_arch)]",)),
+        # The *_with forms of the image methods are ImageWithMethods' methods.
+        (
+            "spirv_std::image::sample_with::",
+            ("use spirv_std::image::ImageWithMethods;",),
+        ),
+    )
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        attributes = [qualifier] if qualifier else []
+        attributes += ["descriptor_set = 0", f"binding = {binding}"]
+        return f"{self._RESOURCE}{', '.join(attributes)})] {name}: &{spelling}"
+
+    # A method takes a sampler by value, which the entry point takes a reference to, and a byte-address buffer is made
+    # from the storage buffer of words the entry point takes.
+    _UNIFORM_ARGUMENTS = {
+        "Sampler": "*{}",
+        "ByteAddressableBuffer<&[u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_slice({})"
+        ),
+        "ByteAddressableBuffer<&mut [u32]>": (
+            "spirv_std::ByteAddressableBuffer::from_mut_slice({})"
+        ),
+    }
+
+    def uniform_argument(self, opaque: str, name: str) -> str:
+        return self._UNIFORM_ARGUMENTS.get(opaque, "{}").format(name)
+
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         if not value:
             return f"let mut {name}: {self.type(kind)} = Default::default();"
         return f"let {name}: {self.type(kind)} = {value};"
+
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        return f"let mut {name}: {self.type(kind)} = {value};"
 
     def retain(self, kind: Type, name: str, statement: str) -> list[str]:
         # rust-gpu removes values nothing uses. A baseline that only declared a boolean argument would lose the
@@ -312,6 +468,9 @@ class Rust(Dialect):
     def out_argument(self, name: str) -> str:
         return f"&mut {name}"
 
+    def address(self, name: str) -> str:
+        return f"&{name}"
+
     def inout_argument(self) -> str:
         return "&mut outp[i]"
 
@@ -332,9 +491,12 @@ class Rust(Dialect):
             return f"{value}.extend({self.literal(Type(kind.scalar))})"
         return value
 
+    def active(self, body: list[str], skipped: int) -> list[str]:
+        return [f"if i % {skipped} != 0 {{", *(f"    {line}" for line in body), "}"]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         entry = (
-            "#[spirv(compute(threads(1)))]",
+            f"#[spirv(compute(threads({parts.get('lanes', 1)})))]",
             "#[spirv(global_invocation_id)] id: UVec3",
         )
         return self._entry(entry, buffers, ["let i = id.x as usize;", *body], parts)
@@ -414,11 +576,22 @@ class Rust(Dialect):
             params.append(
                 f"#[spirv(storage_buffer, descriptor_set = 0, binding = {binding})] {name}: {access}[{kind}]"
             )
+        declarations = list(parts.get("declarations", ()))
+        resources = [line for line in declarations if line.startswith(self._RESOURCE)]
+        declarations = [line for line in declarations if line not in resources]
+        params += resources
         params += parts.get("params", ())
         prelude = list(parts.get("prelude", ()))
+        for macro, lines in self._MACRO_PRELUDES:
+            if any(macro in line for line in body):
+                prelude += lines
+        prelude += [
+            line
+            for name, line in self._RESOURCE_IMPORTS
+            if any(name in resource.partition(":")[2] for resource in resources)
+        ]
         # Crate attributes (``#![feature(f16)]``) have to precede every item.
         attributes = [line for line in prelude if line.startswith("#!")]
-        declarations = list(parts.get("declarations", ()))
         if declarations:
             declarations.append("")
         lines = [

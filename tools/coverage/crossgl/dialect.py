@@ -12,6 +12,7 @@ from ..dialect import (
 )
 from ..model import (
     COOP_COLUMNS,
+    GENERIC_POINTER,
     SLANG_ENUMERATORS,
     WIDE_INTEGERS,
     Type,
@@ -20,7 +21,7 @@ from ..model import (
     slang_literal,
     tuple_element,
 )
-from ..objects import HIT_OBJECT, OBJECTS, VERTEX
+from ..objects import HIT_OBJECT, OBJECTS, STORAGE_BUFFER, VERTEX
 from ..spellings import ELEMENT, SUBSCRIPT
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -76,6 +77,8 @@ class CrossGL(Dialect):
 
     # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        if qualifier == STORAGE_BUFFER:
+            return f"buffer {spelling}* {name};"
         layout = f"layout({qualifier}) " if qualifier else ""
         return f"{layout}uniform {spelling} {name};"
 
@@ -84,7 +87,7 @@ class CrossGL(Dialect):
         lines += [f"    {line}" for line in parts.get("prelude", ())]
         lines += [
             "    compute {",
-            "        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
+            f"        layout(local_size_x = {parts.get('lanes', 1)}, local_size_y = 1, local_size_z = 1) in;",
         ]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
         lines += [f"        {line}" for line in parts.get("declarations", ())]
@@ -296,6 +299,12 @@ class CrossGL(Dialect):
             return f"Tuple<{', '.join([kind.scalar] * held[1])}>"
         return super().type(kind)
 
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        # An array an output parameter fills in, such as a ray query's triangle vertex positions.
+        if kind.count and not value:
+            return f"{self.type(kind.element)} {name}[{kind.count}];"
+        return super().declare(kind, name, value)
+
     def literal(self, kind: Type) -> str:
         return slang_literal(kind) or super().literal(kind)
 
@@ -305,6 +314,10 @@ class CrossGL(Dialect):
     def pointer(self, kind: Type, name: str) -> str:
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
+
+    def constant_memory(self, kind: Type, name: str) -> str:
+        # The CUDA and HIP generators write a uniform as a __constant__ variable.
+        return f"uniform {self.type(kind)} {name};"
 
     def assignment(
         self, name: str, kind: Type, arguments: list[str]
@@ -332,8 +345,10 @@ class CrossGL(Dialect):
         held = tuple_element(opaque)
         return (held[0], "{}._0") if held else descriptor_reading(opaque)
 
-    # CrossGL spells Direct3D's hit object as HLSL does.
+    # CrossGL spells Direct3D's hit object as HLSL does, and a pointer to any memory as ptr<void>.
     def holding(self, opaque: str) -> str:
+        if opaque == GENERIC_POINTER:
+            return "ptr<void>"
         return OBJECTS[HIT_OBJECT].spelling if opaque == HIT_OBJECT else ""
 
 

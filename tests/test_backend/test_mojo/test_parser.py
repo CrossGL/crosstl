@@ -44,6 +44,7 @@ from crosstl.backend.Mojo.MojoAst import (
 )
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
+from crosstl.translator.refusals import MojoSyntaxError
 
 
 def parse_code(tokens: List):
@@ -4592,6 +4593,68 @@ def test_rejects_unexpected_top_level_tokens(code):
 def test_rejects_trailing_tokens_after_simple_statement(code):
     with pytest.raises(SyntaxError, match="Expected end of statement"):
         parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        """
+        fn main():
+            var v = SIMD[DType..float32, 4](0.0, 0.0, 0.0, 0.0)
+        """,
+        """
+        fn main():
+            var v = SIMD[DType.float32, 0..4](0.0)
+        """,
+        """
+        fn main():
+            var v = SIMD[.float32, 4](0.0, 0.0, 0.0, 0.0)
+        """,
+        """
+        fn main():
+            var v = SIMD[DType., 4](0.0, 0.0, 0.0, 0.0)
+        """,
+        """
+        fn main():
+            var v = SIMD[DType...float32, 4](0.0, 0.0, 0.0, 0.0)
+        """,
+        """
+        fn main():
+            var v = SIMD[DType....float32, 4](0.0, 0.0, 0.0, 0.0)
+        """,
+        """
+        fn main():
+            var v: SIMD[DType..float32, 4]
+        """,
+        """
+        fn f[x: DType..float32]():
+            pass
+        """,
+        """
+        struct Bad[T: DType..float32]:
+            pass
+        """,
+        """
+        struct Bad(Trait[DType..float32]):
+            pass
+        """,
+        """
+        fn main():
+            var x = DType..float32
+        """,
+        """
+        fn main():
+            var x = 0..4
+        """,
+    ],
+)
+def test_rejects_malformed_dots_and_ranges_in_generic_and_type_arguments(code):
+    with pytest.raises(MojoSyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert (
+        exc_info.value.project_diagnostic_code == "project.translate.mojo-syntax-error"
+    )
 
 
 if __name__ == "__main__":

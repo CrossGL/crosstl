@@ -23,6 +23,8 @@ GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arit
 probe, or a translation that it compiles at a lower version than the translation declares, both probes run again as
 the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
 
+Each probe runs :data:`THREADS` invocations, each in a workgroup of its own, except a subgroup operation's, which
+runs them as one workgroup (:mod:`.lanes`).
 The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
 A SPIR-V module's names are debug information without semantic impact, which a producer may drop (SPIR-V 1.6,
 section 3.42.2, ``OpName``), and CrossTL's generator renames a buffer block's member. So the inputs of a SPIR-V
@@ -44,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import lowering, validators
+from . import lanes, lowering, validators
 from .model import Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
@@ -139,7 +141,7 @@ def _spirv_inputs(assembly: str) -> tuple[str, ...]:
     the instruction that declares any other element type."""
     defined = {}
     for line in assembly.splitlines():
-        found = _DEFINITION.match(line)
+        found = lowering.DEFINITION.match(line)
         if found:
             defined[found[1]] = (found[2], found[3].split())
 
@@ -198,94 +200,10 @@ def as_spirv(language: str, source: str) -> str:
     )
     assembly, _ = lowering.lower(language, source, entry, keep_bindings=True)
     if language == "hlsl":
-        return without_unused_counters(assembly)
+        return lowering.without_unused_counters(assembly)
     if language == "rust" and assembly:
-        return without_unused_capabilities(assembly)
+        return lowering.without_unused_capabilities(assembly)
     return assembly
-
-
-_CAPABILITY = re.compile(r"^[ \t]*OpCapability (\w+)[ \t]*\n", re.M)
-
-
-def without_unused_capabilities(assembly: str) -> str:
-    """``assembly`` without each capability that spirv-val accepts it without.
-
-    rust-gpu compiles every probe with all of ``rustgpu.CAPABILITIES`` enabled and removes only the ones it knows how
-    to prove unused. A Vulkan module may only declare capabilities the device enables (Vulkan 1.4,
-    VUID-VkShaderModuleCreateInfo-pCode-08740), and lavapipe will not create a pipeline from one that declares more.
-    spirv-val requires every capability an instruction, type, decoration or built-in of the module needs, so what it
-    accepts is what the module uses.
-    """
-    target = validators.spirv_environment([assembly])
-    assemble, validate = validators.command("spirv-as"), validators.command("spirv-val")
-    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-
-        def valid(text: str) -> bool:
-            Path(scratch, "probe.spvasm").write_text(text)
-            steps = (
-                [*assemble, "--target-env", target, "probe.spvasm", "-o", "probe.spv"],
-                [*validate, "--target-env", target, "probe.spv"],
-            )
-            return all(validators.run(step, scratch).accepted for step in steps)
-
-        # Removing a later line leaves the offsets of the earlier ones in place.
-        for found in reversed(list(_CAPABILITY.finditer(assembly))):
-            trimmed = assembly[: found.start()] + assembly[found.end() :]
-            if found[1] != "Shader" and valid(trimmed):
-                assembly = trimmed
-    return assembly
-
-
-# DXC declares a counter buffer, of this type, for every RWStructuredBuffer a function takes as a parameter, and
-# -fspv-preserve-bindings keeps it, with a binding of its own, when nothing uses it.
-_COUNTER = re.compile(r'^\s*OpName (%\S+) "type\.ACSBuffer\.counter"$', re.M)
-_DEFINITION = re.compile(r"^\s*(%\S+) = (Op\w+)((?: \S+)*)\s*$")
-# Instructions that name or decorate an id without using it.
-_ANNOTATIONS = frozenset({"OpName", "OpDecorate"})
-
-
-def without_unused_counters(assembly: str) -> str:
-    """``assembly`` without the counter buffers DXC declares that nothing uses.
-
-    The source declares no such buffer and the shader never reads it, so it is no resource the host binds.
-    """
-    types = set(_COUNTER.findall(assembly))
-    if not types:
-        return assembly
-    lines = assembly.splitlines(keepends=True)
-    defined = [_DEFINITION.match(line) for line in lines]
-    pointers = {
-        found[1]
-        for found in defined
-        if found and found[2] == "OpTypePointer" and found[3].split()[-1] in types
-    }
-    counters = {
-        found[1]
-        for found in defined
-        if found and found[2] == "OpVariable" and found[3].split()[0] in pointers
-    }
-    used = set()
-    for line, found in zip(lines, defined):
-        words = line.split()
-        if (found and found[1] in counters) or words[:1] == ["OpEntryPoint"]:
-            continue
-        used |= counters.intersection(words[2:] if _annotates(words) else words)
-    unused = counters - used
-    kept = []
-    for line, found in zip(lines, defined):
-        words = line.split()
-        if (found and found[1] in unused) or (_annotates(words) and words[1] in unused):
-            continue
-        if words[:1] == ["OpEntryPoint"]:
-            line = re.sub(
-                r"[ \t]+(%\S+)", lambda m: "" if m[1] in unused else m[0], line
-            )
-        kept.append(line)
-    return "".join(kept)
-
-
-def _annotates(words: list[str]) -> bool:
-    return bool(words) and words[0] in _ANNOTATIONS
 
 
 def inputs(buffer: str):
@@ -318,7 +236,9 @@ def difference(native, translated) -> str:
     )
 
 
-def _case(identity: str, path: Path, language: str, data, constants, capture):
+def _case(
+    identity: str, path: Path, language: str, data, constants, capture, group: int
+):
     import numpy as np
 
     from tests.conformance.cases import Case
@@ -335,7 +255,7 @@ def _case(identity: str, path: Path, language: str, data, constants, capture):
         inputs=data,
         out_dtype=np.uint32,
         threads=THREADS,
-        group=1,
+        group=group,
         out_count=THREADS * WORDS,
         check=check,
         constants=constants,
@@ -422,9 +342,19 @@ def _execute(
             paths.append(path)
         block = declares_constants(runs_as, paths[0], input_count=len(data))
         constants = CONSTANTS if block else None
+        # A subgroup operation's probes run as one workgroup (:mod:`.lanes`), every other probe one per invocation.
+        group = THREADS if lanes.cooperative(result.feature) else 1
         for role, path in zip(("native", "translated"), paths):
             cases.append(
-                _case(f"{index:05d}-{role}", path, runs_as, data, constants, outputs)
+                _case(
+                    f"{index:05d}-{role}",
+                    path,
+                    runs_as,
+                    data,
+                    constants,
+                    outputs,
+                    group,
+                )
             )
         rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:

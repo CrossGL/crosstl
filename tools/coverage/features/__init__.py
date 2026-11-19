@@ -7,15 +7,19 @@ from ..model import Feature
 from ..upstream import fetch
 from . import (
     cuda,
+    glam,
     glsl,
+    glsl_subgroup,
     hip,
     hlsl,
     metal,
     mojo,
     opencl,
+    ray_query,
     rust,
     slang,
     spirv,
+    spirv_std,
     webgl,
     wgsl,
 )
@@ -30,11 +34,18 @@ def _cuda(offline: bool) -> list[Feature]:
         fetch("cuda", offline=offline),
         fetch("cuda-device", offline=offline),
         _glsl_names(offline),
+        fetch("cuda-intrinsics", offline=offline),
     )
 
 
+def _subgroup(offline: bool) -> list[str]:
+    return [fetch(source, offline=offline) for source in glsl_subgroup.SOURCES]
+
+
 def _glsl(offline: bool) -> list[Feature]:
-    return glsl.parse(fetch("glsl", offline=offline))
+    return glsl.parse(fetch("glsl", offline=offline)) + glsl_subgroup.parse(
+        *_subgroup(offline)
+    )
 
 
 def _hip(offline: bool) -> list[Feature]:
@@ -43,6 +54,7 @@ def _hip(offline: bool) -> list[Feature]:
         fetch("hip-atomic", offline=offline),
         fetch("hip-device", offline=offline),
         _glsl_names(offline),
+        fetch("hip-warp", offline=offline),
     )
 
 
@@ -62,6 +74,14 @@ def _mojo(offline: bool) -> list[Feature]:
         fetch("mojo-bit-exports", offline=offline),
         fetch("mojo-bit", offline=offline),
         _glsl_names(offline),
+        warp=fetch("mojo-gpu-warp", offline=offline),
+        block=fetch("mojo-gpu-block", offline=offline),
+        sync_init=fetch("mojo-gpu-sync-exports", offline=offline),
+        sync=fetch("mojo-gpu-sync", offline=offline),
+        ids=fetch("mojo-gpu-id", offline=offline),
+        lanes=fetch("mojo-gpu-lanes", offline=offline),
+        atomic_init=fetch("mojo-atomic-exports", offline=offline),
+        atomic=fetch("mojo-atomic", offline=offline),
     )
 
 
@@ -90,12 +110,24 @@ RUST_ARCH = (
 
 
 def _rust(offline: bool) -> list[Feature]:
-    return rust.parse(
+    glsl_names = _glsl_names(offline)
+    features = rust.parse(
         {module: fetch(f"rust-{module}", offline=offline) for module in RUST_ARCH},
         fetch("rust-float", offline=offline),
         fetch("rust-vec3", offline=offline),
-        _glsl_names(offline),
+        glsl_names,
     )
+    features += rust.packing(fetch("rust-packing", offline=offline), glsl_names)
+    features += spirv_std.images(fetch("rust-image", offline=offline))
+    features += spirv_std.byte_buffers(fetch("rust-byte-buffer", offline=offline))
+    features += ray_query.parse(fetch("rust-ray-query", offline=offline))
+    features += spirv_std.runtime_arrays(fetch("rust-runtime-array", offline=offline))
+    features += spirv_std.debug_printf(fetch("rust-macros", offline=offline))
+    features += glam.parse(
+        {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
+        glsl_names,
+    )
+    return sorted(features, key=lambda f: (f.group, f.name))
 
 
 def _slang(offline: bool) -> list[Feature]:
@@ -109,7 +141,9 @@ def _slang(offline: bool) -> list[Feature]:
 def _spirv(offline: bool) -> list[Feature]:
     glsl_text = fetch("glsl", offline=offline)
     return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
-        fetch("spirv-core", offline=offline), glsl_text
+        fetch("spirv-core", offline=offline),
+        glsl_text,
+        *_subgroup(offline),
     )
 
 

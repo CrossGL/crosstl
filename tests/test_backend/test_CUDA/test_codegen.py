@@ -5,6 +5,7 @@ from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
+from crosstl.backend.import_refusals import CudaImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 from crosstl.translator.semantics.declared_functions import UndeclaredFunctionError
@@ -280,11 +281,12 @@ class TestCudaCodeGen:
         parser = CudaParser(tokens)
         ast = parser.parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
-
-        assert "var g_uids: i32 = 0;" in result
-        assert "var grid_dot_result: f64 = 0.0;" in result
+        # An initialized __device__ variable is device memory the module load fills, which no buffer the host
+        # binds carries; it used to import as a per-invocation private variable.
+        with pytest.raises(CudaImportRefused) as raised:
+            CudaToCrossGLConverter().generate(ast)
+        assert "'g_uids' has an initializer" in str(raised.value)
+        assert "'grid_dot_result' has an initializer" in str(raised.value)
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
@@ -7951,7 +7953,7 @@ class TestCudaCodeGen:
 
         assert "void prepare(inout std::vector<float> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(std::vector<float> h) {" in result
+        assert "u64 count(std::vector<float> h) {" in result
         assert "return h.size();" in result
 
     def test_multi_declarator_host_setup_conversion(self):

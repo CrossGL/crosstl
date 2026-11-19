@@ -62,6 +62,24 @@ _DECLARATION = re.compile(
 )
 # Enumerations a probe passes as a constant; :class:`~tools.coverage.languages.Metal` names the enumerator.
 ENUMS = ("memory_order", "mem_flags")
+# The SIMD-group and quad-group permutes whose lane, delta or mask, their last parameter, "needs to be the same for all
+# threads" of the group (MSL 4.1, sections 6.10.2 and 6.10.3, tables 6.14 and 6.17). Only simd_shuffle and
+# quad_shuffle read a lane that may differ between threads. A probe passes that argument as a constant, the same in
+# every thread of the workgroup its subgroup operations run in (:mod:`..lanes`).
+UNIFORM = frozenset(
+    f"{group}_{operation}"
+    for group in ("simd", "quad")
+    for operation in (
+        "broadcast",
+        "shuffle_and_fill_down",
+        "shuffle_and_fill_up",
+        "shuffle_down",
+        "shuffle_up",
+        "shuffle_rotate_down",
+        "shuffle_rotate_up",
+        "shuffle_xor",
+    )
+)
 # The masks a ballot returns. A probe reads one as its ``vote_t`` integer, which Metal converts it to explicitly.
 VOTES = ("simd_vote", "quad_vote")
 _ATOMIC = re.compile(r"_atomic\s*<\s*T\b[^>]*>")
@@ -338,10 +356,10 @@ def parse(
         signature = None
         if declared != "-":
             result, params = re.fullmatch(r"(\w+)\((.*)\)", declared).groups()
-            signature = Signature(
-                metal_type(result),
-                tuple(_param(p) for p in params.split(",") if p.strip()),
-            )
+            parameters = [_param(p) for p in params.split(",") if p.strip()]
+            if name in UNIFORM:
+                parameters[-1] = Param(parameters[-1].type, "const")
+            signature = Signature(metal_type(result), tuple(parameters))
         spelling, counterpart = spellings.spelling("metal", name, glsl_names), None
         note = "" if signature else "no overload takes only value types"
         if name in spellings.COUNTERPARTS["metal"]:

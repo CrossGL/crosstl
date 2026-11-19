@@ -89,8 +89,10 @@ def test_cuda_to_metal_selects_safe_math_and_precise_functions(tmp_path):
         METAL_SAFE_MATH_PRAGMA + "\n#include <metal_stdlib>"
     )
     body = _body(metal)
-    for name in ("sin", "fmod", "atan2", "fmax"):
+    for name in ("fmod", "atan2", "fmax"):
         assert f"metal::precise::{name}(" in body, name
+    # precise::sin is bounded at 4 ulp; CUDA's 2 ulp sinf is carried by the libm rule's helper.
+    assert "cgl_rule_libm_sin(" in body and "metal::precise::sin(" not in body
 
 
 def test_half_and_integer_operands_keep_the_plain_call(tmp_path):
@@ -107,7 +109,7 @@ def test_opencl_to_metal_selects_safe_math(tmp_path):
 
     assert METAL_SAFE_MATH_PRAGMA in metal
     body = _body(metal)
-    assert "metal::precise::sin(" in body and "metal::precise::sqrt(" in body
+    assert "cgl_rule_libm_sin(" in body and "metal::precise::sqrt(" in body
 
 
 @pytest.mark.parametrize(
@@ -125,7 +127,7 @@ def test_the_crossgl_of_a_cuda_program_carries_fp_ieee(tmp_path):
     crossgl = _translate(tmp_path, "k.cu", CUDA, "cgl")
 
     # The pragma lists every rule family CUDA defines.
-    assert crossgl.startswith("#pragma cgl_rules(fp_ieee, round_away)\n")
+    assert crossgl.startswith("#pragma cgl_rules(fp_ieee, libm, round_away)\n")
     saved = tmp_path / "saved.cgl"
     saved.write_text(crossgl)
     carried = crosstl.translate(str(saved), backend="metal", format_output=False)

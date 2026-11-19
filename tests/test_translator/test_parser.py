@@ -5,12 +5,15 @@ from typing import List
 
 import pytest
 
+import crosstl
 from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayType,
     AssignmentNode,
     BinaryOpNode,
+    CastNode,
+    CommaExpressionNode,
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
@@ -45,14 +48,17 @@ from crosstl.translator.ast import (
     ShaderNode,
     ShaderStage,
     StructPatternNode,
+    SwizzleNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
     WaveOpNode,
 )
+from crosstl.translator.codegen.ast_text_leaks import GeneratedAstTextError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError, Parser
+from crosstl.translator.refusals import CrossGLSyntaxError
 
 
 def tokenize_code(code: str) -> List:
@@ -7628,6 +7634,147 @@ def test_unsigned_integer_literals_parse_as_uint_nodes():
     assert [arg.value for arg in args] == [7, 15, 5, 15]
     assert all(isinstance(arg, LiteralNode) for arg in args)
     assert all(arg.literal_type.name == "uint" for arg in args)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float c = a[b..c, 4];",
+        "float c = a[b..=c, 4];",
+        "float c = a[(b..c).x, 4];",
+        "float c = a[b..c](1);",
+        "Foo<b..c> x;",
+        "Bar<Foo<b..c>> x;",
+        "Foo[b..c, 4] x;",
+        "float c = obj.f<b..c>(1);",
+        "auto m = CooperativeMatrix<b..c, 4, 4, Subgroup, MatrixA>(0.0);",
+    ],
+)
+def test_range_in_type_arguments_raises_typed_syntax_error(statement):
+    code = f"""
+    shader main {{
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        (CrossGLSyntaxError, CrossGLFunctionBodyParseError),
+        match="RangeNode cannot be a type argument",
+    ) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert isinstance(exc_info.value, SyntaxError)
+    assert getattr(exc_info.value, "project_diagnostic_code", None) in {
+        "project.translate.crossgl-syntax-error",
+        "project.translate.crossgl-function-body-parse-failed",
+    }
+
+
+def test_translate_crossgl_range_in_square_type_arguments_raises_typed_syntax_error(
+    tmp_path,
+):
+    source = tmp_path / "range.cgl"
+    source.write_text(
+        "shader main {\n"
+        "    compute {\n"
+        "        void main() {\n"
+        "            float c = a[b..c, 4];\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    with pytest.raises(
+        CrossGLFunctionBodyParseError,
+        match="RangeNode cannot be a type argument",
+    ) as exc_info:
+        crosstl.translate(str(source), backend="cgl", format_output=False)
+
+    assert (
+        exc_info.value.project_diagnostic_code
+        == "project.translate.crossgl-function-body-parse-failed"
+    )
+
+
+def test_format_type_argument_formats_references_and_rejects_unspellable_ast_nodes():
+    parser = Parser(tokenize_code("shader main { compute { void main() {} } }"))
+
+    assert (
+        parser.format_type_argument(
+            ReferenceType(PrimitiveType("float"), is_mutable=False)
+        )
+        == "float&"
+    )
+    assert (
+        parser.format_type_argument(
+            ReferenceType(PrimitiveType("float"), is_mutable=True)
+        )
+        == "float&mut"
+    )
+
+    unspellable_nodes = [
+        NamedType(None),
+        PrimitiveType(None),
+        IdentifierNode(None),
+        RangeNode(IdentifierNode("b"), IdentifierNode("c")),
+        PointerAccessNode(IdentifierNode("p"), "x"),
+        CommaExpressionNode([IdentifierNode("a"), IdentifierNode("b")]),
+        SwizzleNode(IdentifierNode("v"), "xy"),
+        CastNode(PrimitiveType("float"), IdentifierNode("x")),
+        ConstructorNode(NamedType("Foo"), [IdentifierNode("x")], {}),
+    ]
+    for node in unspellable_nodes:
+        with pytest.raises(CrossGLSyntaxError, match="cannot be a type argument"):
+            parser.format_type_argument(node)
+
+
+def test_single_index_and_expression_ranges_still_parse_and_refuse_at_codegen(tmp_path):
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float indexed = a[b..c];
+                int plain = b..c;
+                float called = f(b..c);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+    indexed_decl, plain_decl, called_decl = statements
+
+    assert isinstance(indexed_decl.initial_value, ArrayAccessNode)
+    assert isinstance(indexed_decl.initial_value.index, RangeNode)
+    assert isinstance(plain_decl.initial_value, RangeNode)
+    assert isinstance(called_decl.initial_value, FunctionCallNode)
+    assert isinstance(called_decl.initial_value.arguments[0], RangeNode)
+
+    single_index_source = tmp_path / "single_index.cgl"
+    single_index_source.write_text(
+        "shader main {\n"
+        "    compute {\n"
+        "        void main() {\n"
+        "            int a[4];\n"
+        "            int b = 0;\n"
+        "            int c = 2;\n"
+        "            int x = a[b..c];\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    assert "a[b..c]" in crosstl.translate(
+        str(single_index_source), backend="cgl", format_output=False
+    )
+    with pytest.raises(GeneratedAstTextError, match="RangeNode"):
+        crosstl.translate(
+            str(single_index_source), backend="opengl", format_output=False
+        )
 
 
 if __name__ == "__main__":

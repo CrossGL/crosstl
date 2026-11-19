@@ -67,6 +67,17 @@ def test_identify_subtracts_the_baseline_and_the_plumbing():
         {"OpLoad": 3, "OpStore": 1, "OpIAdd": 2, "OpKill": 1, "OpUnreachable": 1}
     )
     assert semantic.identify(killed, baseline) == "OpKill"
+    # A switch is control flow too: spirv_std matches the intersection type a ray query returns.
+    matched = Counter(
+        {
+            "OpLoad": 3,
+            "OpStore": 1,
+            "OpIAdd": 2,
+            "OpRayQueryGetIntersectionTypeKHR": 1,
+            "OpSwitch": 1,
+        }
+    )
+    assert semantic.identify(matched, baseline) == "OpRayQueryGetIntersectionTypeKHR"
 
 
 def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeypatch):
@@ -142,6 +153,26 @@ def test_instructions_keep_the_operands_that_change_the_operation():
     assert found["OpControlBarrier(2,2,264)"] == 1
     assert found["OpGroupNonUniformIAdd.ExclusiveScan"] == 1
     assert found["OpGroupNonUniformAll"] == 1
+
+
+# HLSL's WaveMultiPrefixSum and GLSL's subgroupPartitionedAddNV, as DXC and glslang write them; an older SPIRV-Tools
+# prints the group operation with the NV suffix.
+PARTITIONED = """
+          %4 = OpFunction %3 None %5
+         %30 = OpGroupNonUniformFAdd %float %20 PartitionedExclusiveScanEXT %31 %32
+         %33 = OpGroupNonUniformFAdd %float %20 PartitionedReduceNV %31 %32
+         %34 = OpGroupNonUniformFAdd %float %20 Reduce %31
+               OpFunctionEnd
+"""
+
+
+def test_a_partitioned_operation_is_not_the_one_over_the_whole_subgroup():
+    found = semantic.instructions(PARTITIONED)
+    assert sorted(token for token in found if "NonUniform" in token) == [
+        "OpGroupNonUniformFAdd.PartitionedExclusiveScanEXT",
+        "OpGroupNonUniformFAdd.PartitionedReduceEXT",
+        "OpGroupNonUniformFAdd.Reduce",
+    ]
 
 
 def slang(name, result, *params):

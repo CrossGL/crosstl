@@ -243,6 +243,31 @@ SEPARATE_TEXTURE_PROGRAM = """shader main {
 """
 
 
+# CUDA and HIP declare only kernels, so they read the same texture from a compute stage.
+SEPARATE_TEXTURE_KERNEL = """shader main {
+    TEXTURE_TYPE albedo;
+    sampler linearSampler;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer vec4* colors;
+        void main() {
+            vec2 position = vec2(gl_GlobalInvocationID.xy);
+            ivec2 size = textureSize(albedo, 0);
+            int width = textureSize(albedo, 0).x;
+            colors[0] = textureLod(albedo, linearSampler, position, 0.0)
+                + texelFetch(albedo, ivec2(0, 0), 0) + vec4(size, width, 0);
+        }
+    }
+}
+"""
+
+
+def _separate_texture_program(backend):
+    if backend in ("cuda", "hip"):
+        return SEPARATE_TEXTURE_KERNEL
+    return SEPARATE_TEXTURE_PROGRAM
+
+
 @pytest.mark.parametrize(
     "backend",
     ["directx", "metal", "opengl", "slang", "rust", "mojo", "cuda", "hip", "wgsl"],
@@ -252,13 +277,13 @@ def test_targets_declare_a_separate_texture_like_an_explicitly_sampled_one(
 ):
     separate = _translate(
         tmp_path,
-        SEPARATE_TEXTURE_PROGRAM.replace("TEXTURE_TYPE", "texture2D"),
+        _separate_texture_program(backend).replace("TEXTURE_TYPE", "texture2D"),
         ".cgl",
         backend,
     )
     combined = _translate(
         tmp_path,
-        SEPARATE_TEXTURE_PROGRAM.replace("TEXTURE_TYPE", "sampler2D"),
+        _separate_texture_program(backend).replace("TEXTURE_TYPE", "sampler2D"),
         ".cgl",
         backend,
     )
@@ -286,7 +311,7 @@ def test_wgsl_declares_an_integer_hlsl_texture(tmp_path):
 def test_cuda_texture_size_infers_its_vector_result(tmp_path):
     code = _translate(
         tmp_path,
-        SEPARATE_TEXTURE_PROGRAM.replace("TEXTURE_TYPE", "sampler2D"),
+        SEPARATE_TEXTURE_KERNEL.replace("TEXTURE_TYPE", "sampler2D"),
         ".cgl",
         "cuda",
     )

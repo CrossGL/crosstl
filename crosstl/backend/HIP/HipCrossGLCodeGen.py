@@ -17,6 +17,7 @@ from ..CUDA.directed_rounding import refuse_directed_rounding
 from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..device_globals import device_memory_declaration, is_device_memory
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..namespace_constants import is_c_family_namespace_constant
 from ..no_contraction import (
@@ -514,6 +515,9 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         "uint64": 8,
         "int64_t": 8,
         "uint64_t": 8,
+        # HIP runs only on 64-bit hosts (LP64 and LLP64 alike), where both are 64-bit.
+        "size_t": 8,
+        "ptrdiff_t": 8,
         "double": 8,
         "float64_t": 8,
         "f64": 8,
@@ -673,8 +677,9 @@ class HipToCrossGLConverter(ImportRefusalMixin):
 
     def is_global_resource_declaration(self, statement):
         """Whether a top-level declaration imports as a resource with a binding."""
-        return isinstance(statement, VariableNode) and "__constant__" in set(
-            getattr(statement, "qualifiers", []) or []
+        return isinstance(statement, VariableNode) and (
+            "__constant__" in set(getattr(statement, "qualifiers", []) or [])
+            or is_device_memory(statement)
         )
 
     def global_resource_binding_for(self, node):
@@ -6206,8 +6211,24 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 )
             return
 
-        if "__managed__" in qualifiers:
-            self.emit(f"// HIP managed memory: {output_name}")
+        if (
+            self.namespace_scope_variable
+            and is_device_memory(node)
+            and not self.is_namespace_scope_constant(node)
+        ):
+            declaration = device_memory_declaration(
+                self,
+                node,
+                output_name,
+                var_type,
+                self.global_resource_binding_for(node),
+                "HIP",
+            )
+            if declaration is not None:
+                if "__managed__" in qualifiers:
+                    self.emit(f"// HIP managed memory: {output_name}")
+                self.emit(declaration)
+            return
 
         dim3_default_value = self.format_hip_dim3_default_initializer(node)
         if dim3_default_value is not None:
@@ -8230,13 +8251,20 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
 
         if function_name == "__shfl_sync":
+            width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
             if (
                 len(args) not in {3, 4}
                 or not self.is_full_or_active_warp_mask(args[0])
-                or self.hip_warp_shuffle_width_limit(args[3:] or None) is None
+                or width_limit is None
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
-            return f"WaveReadLaneAt({args[1]}, {args[2]})"
+            if width_limit == "WaveGetLaneCount()":
+                return f"WaveReadLaneAt({args[1]}, {args[2]})"
+            # HIP reads lane srcLane & (width - 1) of the caller's width-lane segment (HIP __shfl).
+            return (
+                f"WaveReadLaneAt({args[1]}, ((WaveGetLaneIndex() - "
+                f"(WaveGetLaneIndex() % {width_limit})) + (({args[2]}) & ({width_limit} - 1))))"
+            )
 
         if function_name in {"__shfl_up_sync", "__shfl_down_sync"}:
             width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
@@ -8247,34 +8275,125 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             value, delta = args[1], args[2]
+            # Lanes shift within their width-lane segment; a source lane outside it keeps the caller's value.
+            segment_lane = (
+                "WaveGetLaneIndex()"
+                if width_limit == "WaveGetLaneCount()"
+                else f"(WaveGetLaneIndex() % {width_limit})"
+            )
             if function_name == "__shfl_up_sync":
                 return (
-                    f"((WaveGetLaneIndex() >= ({delta})) ? "
+                    f"(({segment_lane} >= ({delta})) ? "
                     f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({delta}))) "
                     f": {value})"
                 )
             return (
-                f"(((WaveGetLaneIndex() + ({delta})) < {width_limit}) ? "
+                f"((({segment_lane} + ({delta})) < {width_limit}) ? "
                 f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({delta}))) "
                 f": {value})"
             )
 
         if function_name == "__shfl_xor_sync":
+            width_limit = self.hip_warp_shuffle_width_limit(args[3:] or None)
             if (
                 len(args) not in {3, 4}
                 or not self.is_full_or_active_warp_mask(args[0])
-                or self.hip_warp_shuffle_width_limit(args[3:] or None) is None
+                or width_limit is None
             ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
-            return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
+            if width_limit == "WaveGetLaneCount()":
+                return (
+                    f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
+                )
+            # HIP __shfl_xor: a partner beyond the caller's width-lane segment reads the caller's own lane.
+            partner = f"(WaveGetLaneIndex() ^ {args[2]})"
+            segment_end = (
+                f"((WaveGetLaneIndex() - (WaveGetLaneIndex() % {width_limit})) "
+                f"+ {width_limit})"
+            )
+            return (
+                f"WaveReadLaneAt({args[1]}, (({partner} < {segment_end}) ? "
+                f"{partner} : WaveGetLaneIndex()))"
+            )
 
-        if function_name in {
-            "__ballot",
-            "__shfl",
-            "__shfl_up",
-            "__shfl_down",
-            "__shfl_xor",
-        }:
+        if function_name in {"__shfl", "__shfl_up", "__shfl_down", "__shfl_xor"}:
+            # HIP's own (non-``_sync``) shuffle family takes the same
+            # (value, lane/delta[, width]) arguments minus the mask. hipcc
+            # 5.7.1 does not declare the ``_sync`` forms at all, so these are
+            # the ones real kernels compile against.
+            width_limit = self.hip_warp_shuffle_segment_width(args[2:] or None)
+            if len(args) not in {2, 3} or width_limit is None:
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            value, lane = args[0], args[1]
+            if width_limit == "WaveGetLaneCount()":
+                if function_name == "__shfl":
+                    # HIP reads lane src & (width - 1), so a negative or
+                    # out-of-range source lane still reads inside the wave
+                    # (HIP __shfl). Handing the raw index to WaveReadLaneAt is
+                    # undefined outside the subgroup.
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"(({lane}) & (WaveGetLaneCount() - 1)))"
+                    )
+                if function_name == "__shfl_xor":
+                    # The partner lane may leave the wave (HIP __shfl_xor
+                    # returns the caller's own value there), so the index is
+                    # selected before the read; ROCm returns 0 for a disabled
+                    # source lane and the partner is inactive when it leaves.
+                    partner = f"(WaveGetLaneIndex() ^ {lane})"
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"(({partner} < WaveGetLaneCount()) ? {partner} "
+                        f": WaveGetLaneIndex()))"
+                    )
+                # Select the source index first and read in every lane: the
+                # shuffle must not sit in a branch, because the source lane is
+                # inactive in the lanes that take the other arm.
+                if function_name == "__shfl_up":
+                    return (
+                        f"WaveReadLaneAt({value}, "
+                        f"((WaveGetLaneIndex() >= ({lane})) ? "
+                        f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
+                    )
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"(((WaveGetLaneIndex() + ({lane})) < WaveGetLaneCount()) ? "
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
+                )
+            # A width splits the wave into width-lane segments: __shfl reads
+            # the same offset inside the caller's segment, and the up/down/xor
+            # forms return the caller's own value when the source lane leaves
+            # it (HIP __shfl family). These are the same expressions the _sync
+            # family uses.
+            segment_lane = f"(WaveGetLaneIndex() % {width_limit})"
+            segment_base = (
+                f"(WaveGetLaneIndex() - (WaveGetLaneIndex() % {width_limit}))"
+            )
+            if function_name == "__shfl":
+                return (
+                    f"WaveReadLaneAt({value}, ({segment_base} + "
+                    f"(({lane}) & ({width_limit} - 1))))"
+                )
+            if function_name == "__shfl_up":
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"(({segment_lane} >= ({lane})) ? "
+                    f"(WaveGetLaneIndex() - ({lane})) : WaveGetLaneIndex()))"
+                )
+            if function_name == "__shfl_down":
+                return (
+                    f"WaveReadLaneAt({value}, "
+                    f"((({segment_lane} + ({lane})) < {width_limit}) ? "
+                    f"(WaveGetLaneIndex() + ({lane})) : WaveGetLaneIndex()))"
+                )
+            partner = f"(WaveGetLaneIndex() ^ {lane})"
+            segment_end = f"({segment_base} + {width_limit})"
+            return (
+                f"WaveReadLaneAt({value}, (({partner} < {segment_end}) ? "
+                f"{partner} : WaveGetLaneIndex()))"
+            )
+
+        if function_name == "__ballot":
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
         return None
@@ -8288,9 +8407,42 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         if len(width_args) != 1:
             return None
         normalized = self.normalize_warp_mask_expression(width_args[0])
-        if normalized in {"32", "32u", "64", "64u"}:
+        # HIP widths are powers of two up to warpSize; shuffles work inside width-lane segments.
+        if normalized.rstrip("u") in {"1", "2", "4", "8", "16", "32", "64"}:
             return normalized.rstrip("u")
-        if normalized in {"warpsize", "warp_size", "warp_full_width"}:
+        # warpSize arrives already imported as int(gl_SubgroupSize) (visit_HipBuiltinNode).
+        if normalized in {
+            "warpsize",
+            "warp_size",
+            "warp_full_width",
+            "gl_subgroupsize",
+            "int(gl_subgroupsize)",
+        }:
+            return "WaveGetLaneCount()"
+        return None
+
+    def hip_warp_shuffle_segment_width(self, width_args):
+        # HIP's mask-less shuffles take any power-of-two width up to warpSize
+        # and work inside width-lane segments (HIP programming guide, "Warp
+        # cross-lane functions"), so the narrow widths must import too. Kept
+        # apart from hip_warp_shuffle_width_limit so widening it here does not
+        # also accept those widths for the _sync family, whose lowering does
+        # not segment yet.
+        if not width_args:
+            return "WaveGetLaneCount()"
+        if len(width_args) != 1:
+            return None
+        normalized = self.normalize_warp_mask_expression(width_args[0])
+        constant_width = normalized.rstrip("u")
+        if constant_width in {"1", "2", "4", "8", "16", "32", "64"}:
+            return constant_width
+        if normalized in {
+            "warpsize",
+            "warp_size",
+            "warp_full_width",
+            "gl_subgroupsize",
+            "int(gl_subgroupsize)",
+        }:
             return "WaveGetLaneCount()"
         return None
 
@@ -10225,12 +10377,14 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         return ", ".join(formatted)
 
     def visit_HipBuiltinNode(self, node):
+        # HIP's warpSize is the device's wavefront width, 32 or 64 lanes (HIP programming guide, "Warp
+        # cross-lane functions"), not a constant: it is the subgroup size of the target, as an int.
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
             "blockIdx": "gl_WorkGroupID",
             "gridDim": "gl_NumWorkGroups",
             "blockDim": "gl_WorkGroupSize",
-            "warpSize": "32",
+            "warpSize": "int(gl_SubgroupSize)",
         }
 
         # The parser builds this node only for the five built-ins builtin_map covers, flat ones included.
@@ -10589,7 +10743,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             "hipDoubleComplex": "vec2<f64>",
             "float": "f32",
             "double": "f64",
-            "size_t": "u32",
+            "size_t": "u64",
+            "ptrdiff_t": "i64",
             "hipArray": "ptr<void>",
             "hipArray_t": "ptr<void>",
             "hipTextureObject_t": "sampler",
@@ -10901,8 +11056,10 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             # Math functions
             "sqrtf": "sqrt",
             "powf": "pow",
-            "sinf": "sin",
-            "cosf": "cos",
+            # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
+            # carries; CrossGL's sin and cos have the precision of the target.
+            "sinf": "__cgl_libm_sin",
+            "cosf": "__cgl_libm_cos",
             "tanf": "tan",
             "sinhf": "sinh",
             "coshf": "cosh",
@@ -10942,8 +11099,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             # Double precision variants
             "sqrt": "sqrt",
             "pow": "pow",
-            "sin": "sin",
-            "cos": "cos",
+            "sin": "__cgl_libm_sin",
+            "cos": "__cgl_libm_cos",
             "tan": "tan",
             "log": "log",
             "exp": "exp",
@@ -10974,7 +11131,8 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
-            "size_t": "u32",
+            "size_t": "u64",
+            "ptrdiff_t": "i64",
             # Vector functions
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",

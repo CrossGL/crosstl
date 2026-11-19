@@ -1,4 +1,4 @@
-"""GLSL bit-field built-ins and ``mix`` with a boolean selector on Metal, HLSL, SPIR-V, GLSL and WGSL.
+"""GLSL bit-field built-ins and ``mix`` with a boolean selector on Metal, HLSL, SPIR-V, GLSL, WGSL, Slang, CUDA and HIP.
 
 Execution is covered by the ``g_bitfield`` and ``g_mix_select`` conformance cases; these tests check the spelling
 each target receives, the typed refusals and the native checkers when they are installed.
@@ -12,10 +12,13 @@ import pytest
 
 import crosstl
 from crosstl.translator import parse
+from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
@@ -188,6 +191,65 @@ def test_boolean_mix_selects_on_every_target(tmp_path):
     if shutil.which("glslangValidator"):
         (tmp_path / "out.comp").write_text(glsl, encoding="utf-8")
         _check(["glslangValidator", "out.comp"], tmp_path)
+
+
+CALL_SELECTS = """shader CallSelects {
+    RWStructuredBuffer<float> values @register(u0);
+    compute {
+        @numthreads(64, 1, 1)
+        void main(uvec3 id @gl_GlobalInvocationID) {
+            uint i = id.x;
+            float f = values[i];
+            vec3 v = vec3(f, 1.0, 2.0);
+            bvec3 bv = greaterThan(v, vec3(1.0));
+            float a = mix(1.0, 2.0, any(bv));
+            float b = mix(1.0, 2.0, all(bv));
+            float n = mix(1.0, 2.0, isnan(f));
+            float k = mix(1.0, 2.0, isinf(f));
+            vec3 vn = mix(v, v, isnan(v));
+            vec3 vk = mix(v, v, isinf(v));
+            values[i] = a + b + n + k + vn.x + vk.y;
+        }
+    }
+}"""
+
+
+def test_boolean_mix_with_a_builtin_call_selector_selects(tmp_path):
+    # any, all, isnan and isinf return bool or bvecN, so mix selects; a blend would turn an unselected
+    # infinity into NaN (#4538).
+    metal = MetalCodeGen().generate(parse(CALL_SELECTS))
+    hlsl = HLSLCodeGen().generate(parse(CALL_SELECTS))
+    slang = SlangCodeGen().generate(parse(CALL_SELECTS))
+    wgsl = WGSLCodeGen().generate(parse(CALL_SELECTS))
+
+    for selector in ("any(bv)", "all(bv)", "isnan(f)", "isinf(f)"):
+        assert f"select(1.0, 2.0, {selector})" in metal
+        assert f"select({selector}, 2.0, 1.0)" in hlsl
+        assert f"({selector} ? 2.0 : 1.0)" in slang
+    for selector in ("isnan(v)", "isinf(v)"):
+        assert f"select(v, v, {selector})" in metal
+        assert f"select({selector}, v, v)" in hlsl
+        assert f"_crossgl_select_bool3_float3({selector}, v, v)" in slang
+    assert "mix(" not in metal and "lerp(" not in hlsl and "lerp(" not in slang
+    # WGSL spells isnan and isinf as bit tests; the selector still reaches select.
+    assert "mix(" not in wgsl
+    assert "select(1.0, 2.0, any(bv))" in wgsl and "select(1.0, 2.0, all(bv))" in wgsl
+    assert wgsl.count("select(1.0, 2.0, ((bitcast<u32>(f)") == 2
+    assert wgsl.count("select(v, v, ((bitcast<vec3<u32>>(v)") == 2
+    _metal_compiles(metal, tmp_path)
+    _hlsl_compiles(hlsl, tmp_path)
+    _naga_validates(wgsl, tmp_path)
+
+
+@pytest.mark.parametrize("generator", [CudaCodeGen, HipCodeGen])
+def test_cuda_and_hip_boolean_mix_with_a_scalar_builtin_call_selector(generator):
+    code = generator().generate(parse(CALL_SELECTS))
+
+    assert "cgl_float_select(cgl_uchar3_any(bv), 2.0f, 1.0f)" in code
+    assert "cgl_float_select(cgl_uchar3_all(bv), 2.0f, 1.0f)" in code
+    assert "cgl_float_select(isnan(f), 2.0f, 1.0f)" in code
+    assert "cgl_float_select(isinf(f), 2.0f, 1.0f)" in code
+    assert "cgl_float_mix(" not in code
 
 
 def test_wgsl_boolean_mix_is_select(tmp_path):

@@ -135,6 +135,10 @@ class Uniform:
     binding: int | None = None
 
 
+# The qualifier of a uniform CrossGL declares as an unsized storage buffer of its spelling, ``buffer uint* name;``.
+STORAGE_BUFFER = "buffer"
+
+
 def _same(*names: str) -> dict[str, Uniform]:
     return {name: Uniform(name) for name in names}
 
@@ -183,6 +187,11 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
         **_same("sampler2DArray"),
         **_acceleration_structure("accelerationStructureEXT"),
         **_same("ByteAddressBuffer", "RWByteAddressBuffer", DESCRIPTOR_HANDLE),
+        # rust-gpu's runtime arrays of words, which CrossGL declares as unsized buffers.
+        **{
+            opaque: Uniform("uint", STORAGE_BUFFER)
+            for opaque in ("RuntimeArray<u32>", "&mut RuntimeArray<u32>")
+        },
     },
     "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
     # Slang's cooperative-vector functions load and accumulate through byte-address buffers, and its bindless
@@ -201,6 +210,36 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
     ),
     # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
+    # rust-gpu's images as spirv_std's Image! macro spells them, the 2D ones features/spirv_std.py probes methods on,
+    # and its sampler. A subpass input names the attachment it reads. A byte-address buffer, and the slice of words one
+    # is made from, is a storage buffer of u32 (kernels.Rust.uniform_argument), as is a runtime array of words. A ray
+    # query traces rays through an acceleration structure.
+    "rust": {
+        **_same("AccelerationStructure"),
+        **{
+            opaque: Uniform(spelling, "storage_buffer")
+            for opaque, spelling in (
+                ("ByteAddressableBuffer<&[u32]>", "[u32]"),
+                ("ByteAddressableBuffer<&mut [u32]>", "mut [u32]"),
+                ("&[u32]", "[u32]"),
+                ("&mut [u32]", "mut [u32]"),
+                ("RuntimeArray<u32>", "RuntimeArray<u32>"),
+                ("&mut RuntimeArray<u32>", "mut RuntimeArray<u32>"),
+            )
+        },
+        **_same(
+            "Sampler",
+            "Image!(2D, type=f32, sampled)",
+            "Image!(2D, type=f32, sampled, depth)",
+            "Image!(2D, type=f32, sampled, multisampled)",
+            "Image!(2D, format=rgba32f, sampled=false)",
+            "SampledImage<Image!(2D, type=f32, sampled)>",
+            "SampledImage<Image!(2D, type=f32, sampled, multisampled)>",
+        ),
+        "Image!(subpass, type=f32, sampled=false)": Uniform(
+            "Image!(subpass, type=f32, sampled=false)", "input_attachment_index = 0"
+        ),
+    },
 }
 # Uniforms bind past the probe's buffers.
 _FIRST_UNIFORM = 8
@@ -229,7 +268,7 @@ class Uniforms:
         self.declarations.append(
             self.dialect.uniform(uniform.spelling, name, binding, uniform.qualifier)
         )
-        return name
+        return self.dialect.uniform_argument(kind.opaque, name)
 
 
 # Methods whose object must hold another element type: GatherRaw returns raw texel bits, so its texture holds uint.
@@ -250,9 +289,11 @@ def element(owner: str, method: str) -> Type | None:
 _STARTS = {"RayQuery": "{name}.Proceed();"}
 
 
-def local_object(kind: Type, name: str = "obj") -> list[str]:
+def local_object(kind: Type, dialect: Dialect, name: str = "obj") -> list[str]:
     """The statements that declare ``name`` as the default-constructed local object a parameter of ``kind`` takes,
     such as a ray query or a hit object; none when ``kind`` is no such object."""
+    if kind.opaque in dialect.own_objects:
+        return [line.format(name=name) for line in dialect.own_objects[kind.opaque]]
     found = OBJECTS.get(kind.opaque)
     if found is None or found.register or found.parameter or found.element:
         return []
