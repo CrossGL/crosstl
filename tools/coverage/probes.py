@@ -120,6 +120,8 @@ class _Builder:
         self.inputs: list[Buffer] = []
         # Boolean scalar and vector argument locals, which a baseline probe keeps in use (Dialect.retain).
         self.conditions: list[tuple[Type, str]] = []
+        # The receiver a method changes in place, as ``(type, local)``; a call that returns nothing stores it.
+        self.mutated: tuple[Type, str] | None = None
 
     def element(self, scalar: str) -> str:
         storage = _storage(scalar)
@@ -300,6 +302,11 @@ class _Builder:
             elif param.direction == "pointer":
                 self.pointers.append(dialect.pointer(param.type, local))
                 arguments.append(local)
+            elif param.direction == "mutable":
+                value = self.value(param.type)
+                self.lines.append(dialect.declare_mutable(param.type, local, value))
+                arguments.append(local)
+                self.mutated = (param.type, local)
             else:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
@@ -331,6 +338,11 @@ class _Builder:
         elif output is None and held:
             output = Type("uint")
             stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
+        elif output is None and result == VOID and self.mutated:
+            # A method that changes its receiver in place returns nothing, so the probe stores the receiver.
+            kind, local = self.mutated
+            output, kept = self._kept(kind, local)
+            stores = [dialect.statement(call), *kept]
         elif output is not None or result.opaque:
             # An atomic call updates the output buffer itself; the value it returns is dropped.
             dropped = output is not None and result != VOID
@@ -338,15 +350,8 @@ class _Builder:
             if output is None:
                 output = Type("uint")
                 stores.append(dialect.store(dialect.literal(output)))
-        elif result.scalar == "bool":
-            flag = dialect.first("r") if result.shape else "r"
-            stores = [
-                dialect.declare(result, "r", call),
-                dialect.store(dialect.to_int(flag)),
-            ]
-            output = Type("int")
         else:
-            output, stores = self._stored(result, call)
+            output, stores = self._kept(result, call)
         if baseline:
             keep = dialect.keep(atomic)
             stores = []
@@ -355,6 +360,19 @@ class _Builder:
                     stores += dialect.retain(kind, local, keep)
                 stores.append(keep)
         return self.lines + stores, output
+
+    def _kept(self, kind: Type, value: str) -> tuple[Type, list[str]]:
+        """Statements that store ``value``, of type ``kind``, and the output buffer's element type: a boolean as an
+        integer, from its first component, and any other value as :meth:`_stored` does.
+        """
+        if kind.scalar != "bool":
+            return self._stored(kind, value)
+        dialect = self.dialect
+        flag = dialect.first("r") if kind.shape else "r"
+        return Type("int"), [
+            dialect.declare(kind, "r", value),
+            dialect.store(dialect.to_int(flag)),
+        ]
 
     def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:
         """Statements that keep ``value``, of type ``kind``, in a local and store it, and the output buffer's element

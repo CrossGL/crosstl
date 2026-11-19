@@ -7,3 +7,13 @@ external_corpus_manifest = "corpus.json"
 
 [project.defines]
 __HIP_PLATFORM_AMD__ = "1"
+
+# OpenGL subscripts are 32-bit. The host launches this kernel over buffers of
+# fewer than 2^31 elements, so every subscript the loop reaches (i < size)
+# fits the target index type.
+[[project.index_range_assertions]]
+source = "main.hip"
+function = "bit_extract_kernel"
+expression = "i"
+minimum = 0
+maximum = 2147483647

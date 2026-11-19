@@ -414,6 +414,10 @@ from .metal_buffer_component_stores import (
     metal_glsl_buffer_component_refusal,
 )
 from .metal_buffer_resource_types import metal_buffer_resource_scope_type
+from .metal_buffer_scalars import (
+    is_metal_buffer_scalar_type_name,
+    metal_buffer_scalar_type,
+)
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
@@ -17673,7 +17677,7 @@ class MetalCodeGen(
         if self.is_raw_buffer_parameter_type(raw_param_type, node):
             return False
         type_name = self.type_name_string(raw_param_type)
-        return is_numeric_scalar_type_name(type_name, self.map_type)
+        return is_metal_buffer_scalar_type_name(type_name, self.map_type)
 
     def is_texture_or_image_resource_type(self, vtype):
         return (
@@ -18199,7 +18203,10 @@ class MetalCodeGen(
                 raw_param_type, name
             )
         if self.is_bound_scalar_value_parameter(raw_param_type, node, shader_type):
-            return f"constant {mapped_type}& {name}"
+            scalar_type = metal_buffer_scalar_type(
+                self.type_name_string(raw_param_type), mapped_type
+            )
+            return f"constant {scalar_type}& {name}"
         address_space_declaration = self.format_address_space_parameter_declaration(
             raw_param_type, mapped_type, name, node, shader_type
         )

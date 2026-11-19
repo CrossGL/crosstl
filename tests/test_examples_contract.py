@@ -45,6 +45,20 @@ CUDA_WARP_EXAMPLE_DIAGNOSTICS = (("gpu_computing/MatrixMultiplication.cgl", "wgs
 # Mojo has no lowering of warp shuffles, so the same kernel is refused rather than given a one-lane stand-in.
 MOJO_WARP_EXAMPLE_REFUSALS = (("gpu_computing/MatrixMultiplication.cgl", "mojo"),)
 
+# CUDA and HIP declare only __global__ kernels, so every example with a vertex or fragment entry is refused there.
+KERNEL_ONLY_EXAMPLE_REFUSALS = tuple(
+    (relative_path, backend)
+    for relative_path in (
+        "advanced/ArrayTest.cgl",
+        "advanced/GenericPatternMatching.cgl",
+        "cross_platform/UniversalPBRShader.cgl",
+        "graphics/ComplexShader.cgl",
+        "graphics/PerlinNoise.cgl",
+        "graphics/SimpleShader.cgl",
+    )
+    for backend in ("cuda", "hip")
+)
+
 MOJO_PLACEHOLDER_MARKERS = (
     "# CrossGL builtin placeholders",
     "# CrossGL GPU builtin placeholders",
@@ -85,6 +99,7 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
     and (relative_path, backend) not in CUDA_WARP_EXAMPLE_DIAGNOSTICS
     and (relative_path, backend) not in MOJO_WARP_EXAMPLE_REFUSALS
     and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
+    and (relative_path, backend) not in KERNEL_ONLY_EXAMPLE_REFUSALS
 )
 
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
@@ -106,10 +121,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
-ADDITIONAL_FIXED_CASES = (
-    ("advanced/GenericPatternMatching.cgl", "hip"),
-    ("cross_platform/UniversalPBRShader.cgl", "slang"),
-)
+ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
@@ -228,6 +240,16 @@ def test_cuda_warp_examples_report_typed_refusals(relative_path, backend):
     assert raised.value.code == (
         f"project.translate.{backend}-cuda-warp-intrinsic-unsupported"
     )
+
+
+@pytest.mark.parametrize("relative_path,backend", KERNEL_ONLY_EXAMPLE_REFUSALS)
+def test_graphics_examples_are_refused_on_kernel_only_targets(relative_path, backend):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == f"project.translate.{backend}-stage-unsupported"
+    assert raised.value.stages == ("fragment", "vertex")
 
 
 @pytest.mark.parametrize("relative_path,backend", MOJO_WARP_EXAMPLE_REFUSALS)

@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import textwrap
@@ -60,6 +61,7 @@ from crosstl.translator.codegen.rust_codegen import RustCodeGen
 from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.refusals import RustRefusal
 
 
 def tokenize_code(code: str) -> List:
@@ -19339,9 +19341,10 @@ def test_bool_string_and_char_literals_emit_rust_syntax(tmp_path):
     assert "let enabled: bool = true;" in generated_code
     assert "let disabled: bool = false;" in generated_code
     assert 'let mut label: &\'static str = "debug";' in generated_code
-    assert "let mut marker: char = 'x';" in generated_code
+    # CrossGL char is a signed 8-bit integer, so 'x' is its code, not a Rust char.
+    assert "let mut marker: i8 = 120i8;" in generated_code
     assert 'label = "active";' in generated_code
-    assert "marker = 'y';" in generated_code
+    assert "marker = 121i8;" in generated_code
     assert "True" not in generated_code
     assert "False" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -19390,8 +19393,34 @@ def test_direct_literal_nodes_emit_rust_escaping():
         == '"debug\\"name"'
     )
     assert (
-        codegen.generate_expression(LiteralNode("'", PrimitiveType("char"))) == "'\\''"
+        codegen.generate_expression(LiteralNode("'", PrimitiveType("char"))) == "39i8"
     )
+    assert (
+        codegen.generate_expression(LiteralNode("\\n", PrimitiveType("char"))) == "10i8"
+    )
+
+
+def test_char_is_a_signed_8_bit_integer_in_rust(tmp_path):
+    code = """
+    shader CharArithmetic {
+        int addChars(char a, char b) { return a + b; }
+        int letterOffset(char c) { char base = 'A'; return c - base; }
+        char newline() { return '\\n'; }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert re.search(r":\s*char\b", generated_code) is None
+    assert "a: i8, b: i8" in generated_code
+    assert "((a as i32) + (b as i32))" in generated_code
+    assert "let base: i8 = 65i8;" in generated_code
+    assert "10i8" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_refuses_a_char_literal_without_a_single_byte_value():
+    with pytest.raises(RustRefusal, match="signed 8-bit integer"):
+        RustCodeGen().generate_expression(LiteralNode("\u00e9", PrimitiveType("char")))
 
 
 def test_else_if_statement(tmp_path):
