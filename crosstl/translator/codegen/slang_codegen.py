@@ -243,6 +243,7 @@ from .stage_utils import (
     normalize_stage_name,
 )
 from .storage_parameter_texels import StorageParameterTexels
+from .wgsl_conditional_effects import FunctionSideEffectChecker
 
 
 class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
@@ -9263,6 +9264,64 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
                 }
         return None
 
+    def generate_slang_matrix_select_call(self, args):
+        """``select`` on matrix operands as a ternary (slangc has no matrix ``select`` overload)."""
+        if len(args) != 3:
+            return None
+        condition_type = self.expression_result_type(args[2])
+        if condition_type is None or self.convert_type(condition_type) != "bool":
+            return None
+        for arg in args[:2]:
+            if self.matrix_value_info(self.expression_result_type(arg)) is None:
+                return None
+        if self.slang_matrix_select_has_side_effect(args):
+            # A conditional evaluates only the branch it picks, while
+            # ``select`` evaluates both value arguments.
+            self.refuse_lowering(
+                "Slang cannot lower select on matrix operands when a value "
+                "argument has a side effect: the ternary would skip the "
+                "branch the condition does not pick"
+            )
+            return None
+        return self.generate_expression(TernaryOpNode(args[2], args[1], args[0]))
+
+    def slang_matrix_select_has_side_effect(self, args):
+        """Whether either matrix ``select`` value argument can have a side effect."""
+        checker = FunctionSideEffectChecker(
+            getattr(self, "user_functions_by_name", None),
+            getattr(self, "user_symbol_names", None),
+        )
+        return any(checker.expression_has_side_effect(arg) for arg in args[:2])
+
+    def slang_matrix_select_result_type(self, expr):
+        """The matrix type a ``select`` call on matrix operands selects, or None.
+
+        ``expression_result_type`` does not see through the call, so a
+        matrix product whose operand is the lowered ternary would keep the
+        ``*`` that slangc rejects on (matrix, vector); a plain ternary
+        already takes the ``mul(...)`` form.
+        """
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        function = getattr(expr, "function", None) or getattr(expr, "name", None)
+        name = (
+            function if isinstance(function, str) else getattr(function, "name", None)
+        )
+        if name != "select" or name in self.user_function_names:
+            return None
+        args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        if len(args) != 3:
+            return None
+        condition_type = self.expression_result_type(args[2])
+        if condition_type is None or self.convert_type(condition_type) != "bool":
+            return None
+        value_type = self.expression_result_type(args[0])
+        if self.matrix_value_info(value_type) is None:
+            return None
+        if self.matrix_value_info(self.expression_result_type(args[1])) is None:
+            return None
+        return value_type
+
     def generate_bool_mix_call(self, args):
         if len(args) != 3:
             return None
@@ -10026,8 +10085,10 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
         if self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
         if node.op == "*" and self.binary_requires_slang_mul(
-            self.expression_result_type(node.left),
-            self.expression_result_type(node.right),
+            self.slang_matrix_select_result_type(node.left)
+            or self.expression_result_type(node.left),
+            self.slang_matrix_select_result_type(node.right)
+            or self.expression_result_type(node.right),
         ):
             return f"mul({left}, {right})"
         return f"{left} {node.op} {right}"
@@ -10229,6 +10290,10 @@ class SlangCodeGen(SlangPreciseFunctionMixin, LoweringRefusalMixin):
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if callee == "select" and callee not in self.user_function_names:
+                matrix_select = self.generate_slang_matrix_select_call(node.args)
+                if matrix_select is not None:
+                    return matrix_select
             if (
                 callee == "mod"
                 and len(node.args) == 2

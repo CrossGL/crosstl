@@ -570,6 +570,7 @@ from .texture_residency import (
     metal_texture_residency_call,
     metal_texture_resident_call,
 )
+from .wgsl_conditional_effects import FunctionSideEffectChecker
 from .workgroup_size_extents import fold_workgroup_size_extents
 from .written_function_names import (
     METAL_CALLABLE_FUNCTION_NAMES,
@@ -12523,6 +12524,40 @@ class MetalCodeGen(
             )
         return template.format(value=self.generate_expression(args[0]))
 
+    def generate_metal_matrix_select_call(self, func_name, args):
+        """``select`` on matrix operands as a ternary (Metal has no matrix ``select`` overload)."""
+        if (
+            func_name != "select"
+            or len(args or ()) != 3
+            or func_name in self.user_function_names
+        ):
+            return None
+        if self.expression_result_type(args[2]) != "bool":
+            return None
+        for arg in args[:2]:
+            if self.metal_matrix_dimensions(self.expression_result_type(arg)) is None:
+                return None
+        if self.metal_matrix_select_has_side_effect(args):
+            # A conditional evaluates only the branch it picks, while
+            # ``select`` evaluates both value arguments.
+            self.refuse_lowering(
+                "Metal cannot lower select on matrix operands when a value "
+                "argument has a side effect: the ternary would skip the "
+                "branch the condition does not pick"
+            )
+            return None
+        # A bare ternary binds below every binary operator, so parenthesize
+        # it exactly as a written ternary operand is parenthesized.
+        return f"({self.generate_expression(TernaryOpNode(args[2], args[1], args[0]))})"
+
+    def metal_matrix_select_has_side_effect(self, args):
+        """Whether either matrix ``select`` value argument can have a side effect."""
+        checker = FunctionSideEffectChecker(
+            getattr(self, "function_overloads_by_name", None),
+            getattr(self, "metal_program_identifier_names", None),
+        )
+        return any(checker.expression_has_side_effect(arg) for arg in args[:2])
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
@@ -12938,6 +12973,9 @@ class MetalCodeGen(
             )
             if boolean_mix is not None:
                 return metal_boolean_mix(self, expr.args, boolean_mix)
+            matrix_select = self.generate_metal_matrix_select_call(func_name, expr.args)
+            if matrix_select is not None:
+                return matrix_select
             exponent_call = metal_exponent_call(self, func_name, expr.args)
             if exponent_call is not None:
                 return exponent_call

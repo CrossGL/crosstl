@@ -705,6 +705,7 @@ from .texture_residency import (
     glsl_texture_resident_call,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
+from .wgsl_conditional_effects import FunctionSideEffectChecker
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 from .written_type_names import (
@@ -41311,6 +41312,12 @@ complex64_t crossgl_complex64_mod_assign(
             if log10_call is not None:
                 return log10_call
 
+            matrix_select_call = self.generate_glsl_matrix_select_call(
+                original_func_name, expr.args, call_node=expr
+            )
+            if matrix_select_call is not None:
+                return matrix_select_call
+
             metal_math_call = self.generate_glsl_metal_math_call(
                 original_func_name, expr.args, call_node=expr
             )
@@ -42550,6 +42557,60 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return f"(1.0 / {value})"
         return None
+
+    def generate_glsl_matrix_select_call(self, func_name, args, *, call_node=None):
+        """``select`` on matrix operands as a ternary (GLSL has no matrix ``select`` overload).
+
+        Mirrors the Metal lowering: ``cond ? a : b`` is valid GLSL on
+        matrices, and the ternary is parenthesized by the expression
+        renderer, so an operator next to the call cannot bind to one branch.
+        """
+        if (
+            func_name != "select"
+            or len(args or ()) != 3
+            or func_name in self.function_return_types
+        ):
+            return None
+        types = tuple(self.glsl_source_expression_type(arg) for arg in args)
+        if any(item is None for item in types):
+            return None
+        if not (
+            self.is_matrix_value_type(types[0]) and self.is_matrix_value_type(types[1])
+        ):
+            return None
+        if self.map_type(types[0]) != self.map_type(types[1]):
+            return None
+        condition_info = self.glsl_value_type_info(types[2])
+        if (
+            condition_info is None
+            or condition_info["family"] != "bool"
+            or condition_info["width"] != 1
+        ):
+            return None
+        if self.glsl_matrix_select_has_side_effect(args):
+            # A conditional evaluates only the branch it picks, while
+            # ``select`` evaluates both value arguments. Pure calls and
+            # constructors still lower: only a real side effect refuses.
+            raise OpenGLMetalMathError(
+                f"OpenGL cannot preserve 'select' for operand types {types}: "
+                "a matrix operand has a side effect, and the conditional it "
+                "lowers to would skip the branch the condition does not pick",
+                operation=func_name,
+                operand_types=tuple(self.type_name_string(item) for item in types),
+                target_profile=self.current_glsl_version_line,
+                reason="matrix-operand-has-side-effect",
+                source_location=getattr(call_node, "source_location", None),
+            )
+        return self.generate_expression(TernaryOpNode(args[2], args[1], args[0]))
+
+    def glsl_matrix_select_has_side_effect(self, args):
+        """Whether either matrix ``select`` value argument can have a side effect."""
+        checker = FunctionSideEffectChecker(
+            getattr(self, "glsl_function_overloads_by_name", None),
+            set(getattr(self, "global_variable_types", None) or ())
+            | set(getattr(self, "function_return_types", None) or ()),
+        )
+        return any(checker.expression_has_side_effect(arg) for arg in args[:2])
 
     def generate_glsl_metal_math_call(self, func_name, args, *, call_node=None):
         arities = {"fabs": 1, "fmin": 2, "fmax": 2, "select": 3}
