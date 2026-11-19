@@ -9,7 +9,7 @@
 # noble-updates, so once a pin is superseded the build fails instead of silently testing another driver. Then move
 # MESA and LLVM to the new versions, rebuild, re-run the suite and update the scoreboard in the same change.
 FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
-ARG MESA=25.2.8-0ubuntu0.24.04.4
+ARG MESA=25.2.8-0ubuntu0.24.04.5
 ARG LLVM=1:20.1.2-0ubuntu1~24.04.3
 ARG VULKAN=1.3.275.0-1build1
 ENV DEBIAN_FRONTEND=noninteractive
