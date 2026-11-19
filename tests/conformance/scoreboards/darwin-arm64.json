@@ -3520,6 +3520,76 @@
       "outcome": "preserved",
       "sourceSHA256": "dfe8bb0add8d0c9c8a98e04be6ac71c856880b847aaa478ff4ef702b0fd3a021"
     },
+    "m_precise_pow|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "compiled-only",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "compiled-only",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|metal|strict|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
+    "m_precise_pow|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "ca91382dcfd4db7473007deb0d7f09ee3e14e3d2a1d5150ed17f82562f8f5164",
+      "outcome": "preserved",
+      "sourceSHA256": "230e33a6f48140671bf72985dee99b616f0a6f1848615ed7b37ff480ca975a55"
+    },
     "m_precise_sin|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "eecaaae2b08d935528dfb3f7c819cf0b5a7eaa6f575b4d4b9eb3e8fa9e6a6f67",
       "outcome": "preserved",
