@@ -52,4 +52,6 @@ def test_specialization_body_is_checked_for_undeclared_types():
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl", "vulkan"])
 def test_translation_refuses_reachable_specialization(target):
     with pytest.raises(UndeclaredTypeError):
-        apply_rule_carrying(_program(SPECIALIZATION_WITH_UNDECLARED_TYPE), "cgl", target)
+        apply_rule_carrying(
+            _program(SPECIALIZATION_WITH_UNDECLARED_TYPE), "cgl", target
+        )
