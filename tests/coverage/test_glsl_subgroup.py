@@ -1,4 +1,5 @@
-"""GL_KHR_shader_subgroup's functions in the GLSL list, and the non-uniform instructions they give the SPIR-V list."""
+"""The GLSL subgroup extensions' functions in the GLSL list, and the non-uniform instructions they give the SPIR-V
+list."""
 
 import json
 
@@ -202,4 +203,126 @@ def test_non_uniform_instructions_are_probed_with_the_function_that_compiles_to_
     # A non-uniform instruction no function of the extension compiles to is listed, without a probe.
     quad = features["OpGroupNonUniformQuadAllKHR"]
     assert quad.signature is None
-    assert quad.note == "no function of GL_KHR_shader_subgroup compiles to it"
+    assert quad.note == "no function of a GLSL subgroup extension compiles to it"
+
+
+# Excerpts of GL_KHR_shader_subgroup_rotate.txt, GLSL_EXT_shader_quad_control.txt and
+# GL_NV_shader_subgroup_partitioned.txt, keeping their layout. The rotate specification puts each instruction on the
+# line after its function, the quad votes need two extensions, and the partitioned specification names
+# OpGroupNonUniformPartitionNV, which the grammar lists as an alias of OpGroupNonUniformPartitionEXT.
+ROTATE = """\
+    Mapping to SPIR-V
+    -----------------
+
+      subgroupClusteredRotate(value, delta, clusterSize) ->
+        Opcode: OpGroupNonUniformRotateKHR(
+                    /*Execution*/Subgroup,
+                    /*Value*/value,
+                    /*Delta*/delta,
+                    /*ClusterSize*/clusterSize)
+        Capabilities: GroupNonUniformRotateKHR
+
+Additions to Chapter 8 of the OpenGL Shading Language Specification
+(Built-in Functions)
+
+    Syntax:
+
+        genType  subgroupClusteredRotate(genType value,  uint delta, uint clusterSize);
+        genIType subgroupClusteredRotate(genIType value, uint delta, uint clusterSize);
+
+        If GL_EXT_shader_subgroup_extended_types_int8 is enabled:
+
+        genI8Type subgroupClusteredRotate(genI8Type value, uint delta, uint clusterSize);
+
+    Only usable if the extension GL_KHR_shader_subgroup_rotate is enabled.
+"""
+QUAD = """\
+      subgroupQuadAll(value) -> OpGroupNonUniformQuadAllKHR(
+        /*Predicate*/value)
+
+Additions to Chapter 8 of the OpenGL Shading Language Specification
+(Built-in Functions)
+
+    Syntax:
+
+        bool subgroupQuadAll(bool value);
+
+    Only usable if the extensions GL_KHR_shader_subgroup_vote and
+    GL_EXT_shader_quad_control are enabled.
+"""
+PARTITIONED = """\
+    When using GroupOperationPartitioned*, the <ballot> parameter is the last
+    operand to OpGroupNonUniform<op>, similar to ClusterSize.
+
+        subgroupPartitionNV -> OpGroupNonUniformPartitionNV
+
+Additions to Chapter 8 of the OpenGL Shading Language Specification
+(Built-in Functions)
+
+    Syntax:
+
+        uvec4 subgroupPartitionNV(genType value);
+        uvec4 subgroupPartitionNV(genIType value);
+
+    Only usable if the extension GL_NV_shader_subgroup_partitioned is enabled.
+"""
+EXTENSIONS = (SUBGROUP, ROTATE, QUAD, PARTITIONED)
+
+
+def test_the_extensions_map_their_functions_in_their_own_layouts():
+    assert glsl_subgroup.instructions(*EXTENSIONS) == glsl_subgroup.instructions(
+        SUBGROUP
+    ) | {
+        "OpGroupNonUniformRotateKHR": ("subgroupClusteredRotate", ""),
+        "OpGroupNonUniformQuadAllKHR": ("subgroupQuadAll", ""),
+        "OpGroupNonUniformPartitionNV": ("subgroupPartitionNV", ""),
+    }
+
+
+def test_a_function_needing_two_extensions_enables_both_and_belongs_to_the_last():
+    quad = {f.name: f for f in glsl_subgroup.parse(*EXTENSIONS)}["subgroupQuadAll"]
+    assert quad.group == "GL_EXT_shader_quad_control"
+    assert quad.extension == "GL_KHR_shader_subgroup_vote GL_EXT_shader_quad_control"
+    native = probes.build(quad, "glsl").source
+    assert (
+        "#extension GL_KHR_shader_subgroup_vote : require\n"
+        "#extension GL_EXT_shader_quad_control : require\n"
+    ) in native
+
+
+def test_the_cluster_size_rule_of_gl_khr_shader_subgroup_binds_the_clustered_rotation():
+    rotate = glsl_subgroup.functions(*EXTENSIONS)["subgroupClusteredRotate"]
+    assert rotate[0] == "GL_KHR_shader_subgroup_rotate"
+    assert [p.direction for p in rotate[1][0].params] == ["in", "in", "const"]
+    # Without GL_KHR_shader_subgroup's overview the rotation's specification states no such rule.
+    alone = glsl_subgroup.functions(ROTATE)["subgroupClusteredRotate"]
+    assert [p.direction for p in alone[1][0].params] == ["in", "in", "in"]
+
+
+def test_an_instruction_named_by_an_alias_takes_the_grammar_name(monkeypatch):
+    monkeypatch.setattr(spirv, "CORE", {})
+    grammar = json.dumps(
+        {
+            "instructions": [
+                {
+                    "opname": "OpGroupNonUniformPartitionEXT",
+                    "class": "Non-Uniform",
+                    "aliases": ["OpGroupNonUniformPartitionNV"],
+                },
+                {"opname": "OpGroupNonUniformQuadAllKHR", "class": "Non-Uniform"},
+                {"opname": "OpGroupNonUniformRotateKHR", "class": "Group"},
+            ]
+        }
+    )
+    features = {f.name: f for f in spirv.core(grammar, "", ROTATE, QUAD, PARTITIONED)}
+    assert sorted(features) == [
+        "OpGroupNonUniformPartitionEXT",
+        "OpGroupNonUniformQuadAllKHR",
+        "OpGroupNonUniformRotateKHR",
+    ]
+    partition = features["OpGroupNonUniformPartitionEXT"]
+    assert (partition.spelling, partition.extension) == (
+        "subgroupPartitionNV",
+        "GL_NV_shader_subgroup_partitioned",
+    )
+    assert features["OpGroupNonUniformRotateKHR"].group == "core-group"

@@ -5,11 +5,12 @@ An instruction is reached from CrossGL through the GLSL built-in function of the
 instruction's operand count and operand type.
 
 The core instructions measured are the ones a GLSL built-in function compiles to (:data:`CORE`), and the
-``OpGroupNonUniform*`` instructions, which GL_KHR_shader_subgroup's functions compile to as that specification lists
-(:func:`.glsl_subgroup.instructions`). Their probe is the GLSL function's, on the overload whose operands select the
-instruction, and they are grouped by the core grammar's instruction class. A non-uniform instruction that no function
-of GL_KHR_shader_subgroup compiles to is listed without a probe. Core instructions that only GLSL operators,
-declarations or statements reach are measured as language-level features (:mod:`..constructs`) or not at all.
+``OpGroupNonUniform*`` instructions, which the functions of the GLSL subgroup extensions compile to as their
+specifications list (:func:`.glsl_subgroup.instructions`). Their probe is the GLSL function's, on the overload whose
+operands select the instruction, and they are grouped by the core grammar's instruction class. A non-uniform
+instruction that no function of those extensions compiles to is listed without a probe. Core instructions that only
+GLSL operators, declarations or statements reach are measured as language-level features (:mod:`..constructs`) or not
+at all.
 """
 
 from __future__ import annotations
@@ -251,23 +252,29 @@ def is_core(feature: Feature) -> bool:
     return feature.language == "spirv" and feature.group.startswith(CORE_GROUP)
 
 
-def core(grammar_text: str, glsl_text: str, subgroup_text: str) -> list[Feature]:
+def core(grammar_text: str, glsl_text: str, *subgroup_texts: str) -> list[Feature]:
     """The core instructions of :data:`CORE` and the non-uniform instructions, each probed like the GLSL function that
-    compiles to it."""
+    compiles to it. ``subgroup_texts`` are the specifications of :data:`.glsl_subgroup.SOURCES`.
+    """
+    grammar = json.loads(grammar_text)["instructions"]
     classes = {
-        instruction["opname"]: instruction.get("class", "")
-        for instruction in json.loads(grammar_text)["instructions"]
+        instruction["opname"]: instruction.get("class", "") for instruction in grammar
     }
-    functions = glsl.overloads(glsl_text) | glsl_subgroup.functions(subgroup_text)
+    # A specification may name an instruction by an alias, as GL_NV_shader_subgroup_partitioned names
+    # OpGroupNonUniformPartitionNV, which the grammar now lists as OpGroupNonUniformPartitionEXT.
+    canonical = {
+        alias: instruction["opname"]
+        for instruction in grammar
+        for alias in instruction.get("aliases", ())
+    }
+    functions = glsl.overloads(glsl_text) | glsl_subgroup.functions(*subgroup_texts)
     native = {
         feature.name: feature
-        for feature in glsl.parse(glsl_text) + glsl_subgroup.parse(subgroup_text)
+        for feature in glsl.parse(glsl_text) + glsl_subgroup.parse(*subgroup_texts)
     }
-    mapping = CORE | {
-        opname: pair
-        for opname, pair in glsl_subgroup.instructions(subgroup_text).items()
-        if opname not in CORE
-    }
+    mapping = dict(CORE)
+    for opname, pair in glsl_subgroup.instructions(*subgroup_texts).items():
+        mapping.setdefault(canonical.get(opname, opname), pair)
     features = []
     for opname, (name, operand) in sorted(mapping.items()):
         if opname not in classes:
@@ -307,7 +314,7 @@ def core(grammar_text: str, glsl_text: str, subgroup_text: str) -> list[Feature]
             opname,
             None,
             group=_group(kind),
-            note="no function of GL_KHR_shader_subgroup compiles to it",
+            note="no function of a GLSL subgroup extension compiles to it",
         )
         for opname, kind in sorted(classes.items())
         if opname.startswith(NON_UNIFORM) and opname not in mapping
