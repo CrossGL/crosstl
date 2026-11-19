@@ -994,6 +994,9 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 if sizeof_value is not None:
                     return str(sizeof_value)
                 self.refuse_opencl_sizeof_expression(raw_args)
+            cross = self.format_opencl_four_component_cross(func_name, raw_args)
+            if cross is not None:
+                return cross
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
@@ -1001,6 +1004,46 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             if fence is not None:
                 return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_four_component_cross(self, func_name, args):
+        """Write OpenCL's four-component ``cross`` with the three-component form CrossGL has.
+
+        OpenCL defines ``cross`` for ``float4`` and ``double4`` as the cross product of the first three
+        components with a ``w`` of zero (OpenCL C 3.0, section 6.15.5). CrossGL's ``cross`` takes three
+        components only.
+        """
+        if (
+            func_name != "cross"
+            or len(args) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+        vector_types = {self.opencl_four_component_vector_type(arg) for arg in args}
+        vector_types.discard(None)
+        if len(vector_types) != 1:
+            return None
+        operands = []
+        for arg in args:
+            text = self.visit(arg)
+            if not re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+|\[[^\[\]]*\])*", text):
+                text = f"({text})"
+            operands.append(f"{text}.xyz")
+        return f"{vector_types.pop()}(cross({operands[0]}, {operands[1]}), 0.0)"
+
+    def opencl_four_component_vector_type(self, expression):
+        """The CrossGL type of a four-component vector ``expression``, or ``None``."""
+        type_name = self.expression_declared_type(expression)
+        if type_name is None and isinstance(expression, FunctionCallNode):
+            # (float4)(x, y, z, w) is a call named after its type, as are
+            # convert_float4 and as_float4.
+            name = re.sub(r"^(?:convert|as)_", "", str(expression.name))
+            name = name.split("_")[0]
+            if name in self.OPENCL_VECTOR_TYPE_MAPPING:
+                type_name = name
+        if not type_name:
+            return None
+        crossgl_type = self.convert_hip_type_to_crossgl(str(type_name))
+        return crossgl_type if re.fullmatch(r"vec4<\w+>", crossgl_type) else None
 
     def format_opencl_fence_call(self, func_name, args):
         if func_name == "sub_group_barrier" and args:

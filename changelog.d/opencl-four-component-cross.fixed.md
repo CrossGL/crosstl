@@ -1,0 +1,1 @@
+OpenCL C input writes `cross` on `float4` or `double4` vectors as `vec4(cross(a.xyz, b.xyz), 0.0)`, the zero-`w` result OpenCL defines. It used to copy the four-component call into CrossGL, where `cross` takes three components, so DXC rejected the HLSL output (#2867).

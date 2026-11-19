@@ -1882,3 +1882,42 @@ __kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; ou
 
     assert "    Inner inner;" in keyword
     assert "    Inner inner;" in typedef
+
+
+def test_opencl_four_component_cross_uses_the_three_component_form():
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        __kernel void probe(__global float4* out, __global const float4* a) {
+            float4 a0 = a[0];
+            float4 a1 = a[1];
+            float4 r = cross(a0, a1);
+            out[0] = r + cross(a[2] + a[3], (float4)(1.0f, 0.0f, 0.0f, 0.0f));
+        }
+        """)
+
+    assert "var r: vec4<f32> = vec4<f32>(cross(a0.xyz, a1.xyz), 0.0);" in crossgl
+    assert (
+        "vec4<f32>(cross(((a[2] + a[3])).xyz, "
+        "(vec4<f32>(1.0f, 0.0f, 0.0f, 0.0f)).xyz), 0.0)"
+    ) in crossgl
+    hlsl = HLSLCodeGen().generate(cgl_ast)
+    assert "float4 r = float4(cross(a0.xyz, a1.xyz), 0.0);" in hlsl
+
+
+def test_opencl_double4_cross_keeps_its_element_type():
+    crossgl = generate_crossgl("""
+        #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+        __kernel void probe(__global double4* out) {
+            out[0] = cross(out[1], out[2]);
+        }
+        """)
+
+    assert "out[0] = vec4<f64>(cross(out[1].xyz, out[2].xyz), 0.0);" in crossgl
+
+
+def test_opencl_three_component_cross_is_unchanged():
+    crossgl = generate_crossgl("""
+        float3 normal(float3 a, float3 b) { return cross(a, b); }
+        """)
+
+    assert "return cross(a, b);" in crossgl
+    assert ".xyz" not in crossgl
