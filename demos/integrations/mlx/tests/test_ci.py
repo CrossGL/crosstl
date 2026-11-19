@@ -32,6 +32,8 @@ WORKFLOW_DIR = ROOT / ".github/workflows"
 FRONTIER_ACCOUNTING = ROOT / "demos" / "integrations" / "mlx" / "frontier_accounting.py"
 DIRECTX_TOOLS = ROOT / "demos" / "integrations" / "mlx" / "install_directx_tools.ps1"
 DIRECTX_TOOLS_STEP = "./demos/integrations/mlx/install_directx_tools.ps1"
+REFERENCE_WARP = ROOT / "demos" / "integrations" / "mlx" / "select_reference_warp.ps1"
+REFERENCE_WARP_STEP = "./demos/integrations/mlx/select_reference_warp.ps1"
 
 
 def _frontier_accounting_script(workflow):
@@ -3109,6 +3111,62 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
     )
 
 
+def _assert_dot_runs_on_reference_warp(workflow):
+    """The multi-wave dot reduction executes on the WARP conformance reference.
+
+    WARP 1.0.21 returns wrong WaveActiveSum results for partially active waves
+    in 512-invocation groups (#2120), which is the dot kernel's final step, and
+    WARP 1.0.19 passes the matrix's fixed HLSL controls for that case. The
+    script must pin the very libraries the conformance matrix names, and the
+    required library must come back even after a failure.
+    """
+
+    dot = "Prove pinned MLX dot Direct3D native-loader execution"
+    select = workflow_text.workflow_step_section(
+        workflow, "Select the reference WARP 1.0.19 for the multi-wave dot"
+    )
+    assert "id: dot-warp" in select
+    assert "if: runner.os == 'Windows'" in select
+    assert "shell: pwsh" in select
+    assert f"run: {REFERENCE_WARP_STEP}\n" in select + "\n"
+    restore = workflow_text.workflow_step_section(
+        workflow, "Restore the required WARP 1.0.21"
+    )
+    assert (
+        "if: always() && runner.os == 'Windows' && "
+        "steps.dot-warp.outcome != 'skipped'"
+    ) in restore
+    assert f"run: {REFERENCE_WARP_STEP} -Restore" in restore
+    assert workflow_text.workflow_step_after(
+        workflow, dot, "Select the reference WARP 1.0.19 for the multi-wave dot"
+    )
+    assert workflow_text.workflow_step_after(
+        workflow, "Restore the required WARP 1.0.21", dot
+    )
+    assert workflow_text.workflow_step_after(
+        workflow, "Upload dot Direct3D evidence", "Restore the required WARP 1.0.21"
+    )
+
+    script = REFERENCE_WARP.read_text(encoding="utf-8")
+    matrix = {
+        match.group(1): (match.group(2), match.group(3))
+        for match in re.finditer(
+            r'version = "([0-9.]+)"; archiveSHA256 = "([0-9a-f]{64})"; '
+            r'dllSHA256 = "([0-9a-f]{64})"',
+            workflow,
+        )
+    }
+    reference_archive, reference_dll = matrix["1.0.19"]
+    assert f'$reference = "{reference_dll}"' in script
+    assert f'(Get-Digest $archive) -ne "{reference_archive}"' in script
+    assert "microsoft.direct3d.warp/1.0.19/microsoft.direct3d.warp.1.0.19.nupkg" in (
+        script
+    )
+    assert f'$required = "{matrix["1.0.21"][1]}"' in script
+    assert "--require 1.0.19" in workflow
+    assert script.count("(Get-Digest $installed) -ne") == 3
+
+
 def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
     test_path = "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py"
@@ -3151,6 +3209,7 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         "Upload dot Direct3D evidence",
         "Prove pinned MLX dot Direct3D native-loader execution",
     )
+    _assert_dot_runs_on_reference_warp(mlx_porting)
 
     metal_step = workflow_text.workflow_step_section(
         mlx_porting,

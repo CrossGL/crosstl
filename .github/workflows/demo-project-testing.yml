@@ -6147,6 +6147,13 @@ jobs:
           --junitxml=demo-results/normalization/layer_norm_vjp/directx.xml
           demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader
 
+      - name: Select the reference WARP 1.0.19 for the multi-wave dot
+        id: dot-warp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./demos/integrations/mlx/select_reference_warp.ps1
+
       - name: Prove pinned MLX dot Direct3D native-loader execution
         id: dot-directx
         if: runner.os == 'Windows'
@@ -6158,6 +6165,12 @@ jobs:
           python -m pytest -q -n auto
           --junitxml=demo-results/dot/directx.xml
           demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader
+
+      - name: Restore the required WARP 1.0.21
+        if: always() && runner.os == 'Windows' && steps.dot-warp.outcome != 'skipped'
+        shell: pwsh
+        timeout-minutes: 2
+        run: ./demos/integrations/mlx/select_reference_warp.ps1 -Restore
 
       - name: Upload dot Direct3D evidence
         if: always() && runner.os == 'Windows' && steps.dot-directx.outcome != 'skipped'
