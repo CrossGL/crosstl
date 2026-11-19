@@ -55,11 +55,12 @@ SPIR-V is compiler output rather than a language people write, so its input prob
 feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
-compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V
-(Slang), the Mojo compiler with MAX's GPU package (Mojo), rustc with the rust-gpu
-backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
-validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
-OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
+compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V,
+or to CUDA that nvcc checks for a function only CUDA has (Slang), the Mojo compiler with MAX's GPU package (Mojo),
+rustc with the rust-gpu backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile.
+Input probes are validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C
+generator, so an OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked
+by DXC.
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the

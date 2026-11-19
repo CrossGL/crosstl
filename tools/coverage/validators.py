@@ -118,6 +118,10 @@ OPENCL_TARGET = "spir64"
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
 SLANG_VALIDATION = {"SLANG_RUN_SPIRV_VALIDATION": "1"}
+# The targets other than SPIR-V a Slang probe compiles for, each with the compiler that checks what slangc writes.
+# slangc writes HLSL and CUDA source without compiling it, so DXC and nvcc check that source as they check the probes
+# of those languages. The CUDA source includes the prelude header that ships with slangc.
+SLANG_SOURCE_TARGETS = {"hlsl": "dxc", "cuda": "nvcc"}
 # HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
 # targets have none. No GPU is needed: hipcc compiles for the named target.
 HIP_ARCH = "gfx1100"
@@ -200,9 +204,10 @@ def version(name: str) -> str:
 
 def toolchain(language: str, target: str = "") -> tuple[str, ...]:
     """The tools that checking ``language`` probes for ``target`` runs."""
+    if language == "slang" and target in SLANG_SOURCE_TARGETS:
+        return ("slangc", SLANG_SOURCE_TARGETS[target])
     return {
         "spirv": ("spirv-as", "spirv-val"),
-        "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
         "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
@@ -441,7 +446,7 @@ def _slang(
         *(["-entry", entry or "main"] if target or not attributed else []),
         *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
     ]
-    output = "probe.hlsl" if target == "hlsl" else "probe.spv"
+    output = f"probe{SUFFIX[target]}" if target in SLANG_SOURCE_TARGETS else "probe.spv"
     compiled = run(
         [
             *command("slangc"),
@@ -456,10 +461,12 @@ def _slang(
         SLANG_VALIDATION,
         stdout=False,
     )
-    if target != "hlsl" or not compiled.accepted:
+    if target not in SLANG_SOURCE_TARGETS or not compiled.accepted:
         return compiled
-    # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where HLSL lacks
-    # an operation, Slang's library emits a comment in place of the call.
+    if target == "cuda":
+        arguments = (a.format(source=output) for a in COMPILE_ARGUMENTS["cuda"])
+        return run([*command("nvcc"), *arguments], scratch)
+    # Where HLSL lacks an operation, Slang's library emits a comment in place of the call.
     generated = Path(scratch, output).read_text()
     dropped = _UNSUPPORTED_IN_HLSL.search(generated)
     if dropped:

@@ -11,7 +11,8 @@ parameters (``expand each T``) is empty, a type pack (``each T``) is one ``int``
 ``Tuple<int>``, and a pointer is a uniform that holds a device address. A function whose every
 ``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
 ``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
-Direct3D allows it in; any other function stays untested.
+Direct3D allows it in. One that allows only CUDA compiles for CUDA, which nvcc then checks, unless it needs OptiX. Any
+other function stays untested.
 """
 
 from __future__ import annotations
@@ -97,6 +98,13 @@ _SHORTHAND = re.compile(
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
 # Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
 _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
+# The targets a function SPIR-V lacks is probed for instead, in order: HLSL, which DXC checks, then CUDA, which nvcc
+# checks (validators.SLANG_SOURCE_TARGETS).
+FALLBACKS = ("hlsl", "cuda")
+# The OptiX capabilities. CUDA source that calls an OptiX function includes the OptiX SDK's device headers, which
+# NVIDIA distributes under its own SDK license rather than with the CUDA toolkit, so nvcc cannot compile such a probe.
+_OPTIX = re.compile(r"\boptix_\w+")
+OPTIX_NOTE = "needs the OptiX SDK headers, which the CUDA toolkit does not include"
 _GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec|Tuple)\s*<(.*)>")
 _DESCRIPTOR_HANDLE = re.compile(r"DescriptorHandle\s*<\s*(\w+)\s*>")
 _QUALIFIERS = {
@@ -425,11 +433,18 @@ def parse(
         candidates = [(s, d) for s, d in ((signature(d), d) for _, d in declared) if s]
         note = "" if candidates else "variadic"
         target, stage = "", _stage(name, declared[0][1])
-        if not any(allows(d, "spirv") for _, d in declared):
-            candidates = [(s, d) for s, d in candidates if allows(d, "hlsl")]
-            target, stage = "hlsl", direct3d_stage(name) or stage
-            if not any(allows(d, "hlsl") for _, d in declared):
-                note = "needs a target other than SPIR-V and HLSL"
+        found = [d for _, d in declared]
+        if not any(allows(d, "spirv") for d in found):
+            target = next(
+                (t for t in FALLBACKS if any(allows(d, t) for d in found)), ""
+            )
+            candidates = [(s, d) for s, d in candidates if allows(d, target)]
+            if target == "hlsl":
+                stage = direct3d_stage(name) or stage
+            elif any(_OPTIX.search(d.requires) for d in found):
+                candidates, note = [], OPTIX_NOTE
+            elif not target:
+                candidates, note = [], "needs a target other than SPIR-V, HLSL and CUDA"
         chosen = None
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))

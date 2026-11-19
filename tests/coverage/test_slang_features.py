@@ -253,13 +253,35 @@ def test_slang_stages_targets_and_explicit_generic_arguments():
     assert (tess.target, tess.stage, tess.note) == ("hlsl", "tessellation-control", "")
     assert tess.signature.params[2] == Param(Type("float", (3,)), "out")
     assert features["clip"].target == ""
-    # An OptiX capability implies the CUDA target, which is not probed.
+    # An OptiX capability implies the CUDA target, but nvcc needs the OptiX SDK headers for it.
     traversable = features["GetTraversableChild"]
     assert (traversable.signature, traversable.target) == (None, "")
-    assert traversable.note == "needs a target other than SPIR-V and HLSL"
+    assert traversable.note == slang.OPTIX_NOTE
     # No argument fixes bit_cast's result type, so the probe names it.
     assert features["bit_cast"].spelling == "bit_cast<int>"
     assert features["sin"].spelling == ""
+
+
+SLANG_TARGETED = """
+//@public:
+[require(cuda)]
+uint3 cudaThreadIdx();
+
+[require(metal)]
+uint metalOnly();
+"""
+
+
+def test_a_slang_function_only_cuda_has_compiles_for_cuda():
+    features = by_name(slang.parse("", SLANG_TARGETED))
+    thread = features["cudaThreadIdx"]
+    assert (thread.target, thread.stage, thread.note) == ("cuda", "compute", "")
+    assert thread.signature == Signature(Type("uint", (3,)), ())
+    # CUDA's threadIdx is CrossGL's local invocation id.
+    assert thread.crossgl == "gl_LocalInvocationID"
+    other = features["metalOnly"]
+    assert (other.signature, other.target) == (None, "")
+    assert other.note == "needs a target other than SPIR-V, HLSL and CUDA"
 
 
 def test_slang_types():
