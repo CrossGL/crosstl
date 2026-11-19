@@ -378,6 +378,7 @@ from .hlsl_narrow_system_values import (
     hlsl_narrow_compute_system_value_bridge,
 )
 from .hlsl_precise_functions import HLSLPreciseFunctionMixin
+from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
@@ -2841,6 +2842,7 @@ class HLSLCodeGen(
         self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
         self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        self.hlsl_program_functions = None
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
@@ -4079,9 +4081,12 @@ class HLSLCodeGen(
                 )
             except DirectXSoftwareSubgroupError:
                 raise error from None
+        finally:
+            self.hlsl_program_functions = None
 
     def _generate_program_attempt(self, ast, target_stage, early_exits, owned=False):
         self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        self.hlsl_program_functions = None
         ast = lower_resource_aggregates(
             ast,
             workgroup_access_assertions=getattr(
@@ -4499,6 +4504,7 @@ class HLSLCodeGen(
         self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
+        self.hlsl_program_functions = HlslProgramFunctions(ast, functions)
         self.hlsl_compute_num_workgroups_uniform = (
             self.hlsl_compute_num_workgroups_uniform_names(
                 ast, target_stage, cbuffers, global_vars, functions
@@ -4772,6 +4778,7 @@ class HLSLCodeGen(
             for name in self.global_mixed_sampler_names
         }
         self.validate_explicit_sampler_role_conflicts(ast)
+        self.hlsl_program_functions = None
         code = "\n"
         code += source_license_comments(ast, "directx")
         preprocessors = getattr(ast, "preprocessors", []) or []
@@ -41563,6 +41570,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return False
 
     def collect_functions(self, root):
+        kept = getattr(self, "hlsl_program_functions", None)
+        if kept is not None and (functions := kept.lookup(root)) is not None:
+            return functions
         functions = []
         for node in self.walk_ast(root):
             if hasattr(node, "body") and hasattr(node, "parameters"):
