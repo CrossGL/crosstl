@@ -31,9 +31,9 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to, including the non-uniform instructions that `GL_KHR_shader_subgroup` maps its functions to |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to, including the non-uniform instructions that the GLSL subgroup extensions below map their functions to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
-| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification, and the subgroup functions of `extensions/khr/GL_KHR_shader_subgroup.txt` |
+| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification, and the subgroup functions of `GL_KHR_shader_subgroup`, `GL_KHR_shader_subgroup_rotate`, `GL_EXT_shader_quad_control` and `GL_NV_shader_subgroup_partitioned` (`extensions/`), the extensions whose functions compile to SPIR-V's non-uniform instructions |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
 | Metal | The standard-library headers of Apple's Metal toolchain, read once by a script in the repository into `metal.txt`, which records the toolchain and language version |
 | CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h`, `__clang_cuda_device_functions.h` and `__clang_cuda_intrinsics.h`, the last read as a compile for the architecture nvcc validates the probes for |
