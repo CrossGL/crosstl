@@ -14984,6 +14984,77 @@ def test_metal_stage_entry_name_avoids_local_helper_collision():
     assert "return fragment_main(uv);" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("stage", "body", "expected"),
+    [
+        (
+            "compute",
+            """
+        @stage_entry
+        void main(RWStructuredBuffer<float> out_ @buffer(1), uint id @gl_GlobalInvocationID) {
+            out_[id] = 1.0;
+        }
+""",
+            "kernel void kernel_main(",
+        ),
+        (
+            "vertex",
+            """
+        @stage_entry
+        vec4 main(uint vid @gl_VertexID) @gl_Position {
+            return vec4(float(vid), 0.0, 0.0, 1.0);
+        }
+""",
+            "vertex float4 vertex_main(",
+        ),
+        (
+            "fragment",
+            """
+        @stage_entry
+        vec4 main(vec4 pos @gl_FragCoord) @gl_FragColor {
+            return pos;
+        }
+""",
+            "fragment float4 fragment_main(",
+        ),
+    ],
+)
+def test_metal_explicit_stage_entry_named_main_is_renamed(stage, body, expected):
+    shader = f"""
+    shader ExplicitMainEntry {{
+        {stage} {{
+{body}
+        }}
+    }}
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), stage
+    )
+
+    assert expected in generated_code
+    assert not re.search(r"(kernel|vertex|fragment)\s+\w+\s+main\(", generated_code)
+
+
+def test_metal_explicit_stage_entry_keeps_other_names():
+    shader = """
+    shader ExplicitNamedEntry {
+        fragment {
+            @stage_entry
+            vec4 shade(vec4 pos @gl_FragCoord) @gl_FragColor {
+                return pos;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "fragment float4 shade(" in generated_code
+
+
 def test_metal_atomic_fetch_codegen():
     code = """
     shader main {
