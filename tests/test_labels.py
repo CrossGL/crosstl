@@ -189,6 +189,13 @@ def test_every_path_pattern_matches_a_tracked_file():
         (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),
         ([".github/workflows/coverage.yml", "tools/coverage/run.py"], ["area:ci"]),
         (["tools/pytest_shard.py", "tests/test_pytest_shard.py"], ["area:ci"]),
+        (
+            [
+                "tests/conformance/fail_closed.py",
+                "tests/conformance/docker/mesa/Dockerfile",
+            ],
+            ["area:ci"],
+        ),
         ([".github/dependabot.yml"], ["area:ci"]),
         (["pyproject.toml"], ["area:ci"]),
         (["conftest.py", "tests/test_ci_workflows.py"], ["area:ci"]),
