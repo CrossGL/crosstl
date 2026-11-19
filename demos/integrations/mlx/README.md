@@ -2664,16 +2664,18 @@ translated with the host's recipe (`fft_packages.signature_config`) and runs
 the Rader and Bluestein tables, both directions of complex transforms and
 Bluestein's first and last convolved length; four-step units run one pass,
 step 1 from the float32 rounding of the double-precision step 0 temporary.
-Every output must stay within `test_fft`'s tolerances of numpy's
-double-precision transform, every guard past the kernel's footprint must stay
-untouched and no input may change; on Metal the translation must also match
-the unchanged upstream kernel word for word. Direct3D and OpenGL refuse the
-50 complex32_t units with `project.translate.resource-aggregate-unsupported`
-until CrossGL lowers records pointing at threadgroup half2 arrays
-(crosstl#4576), and the gate pins that refusal. The units run in the `fft-0`
-to `fft-4` legs. This covers 101/17,832 entries (76 on Direct3D and OpenGL);
-it does not itself run the upstream MLX test suite, which the host stack
-runs for the reachable entries.
+Every float output must stay within `test_fft`'s tolerances of numpy's
+double-precision transform. `test_fft` cannot run complex32_t, so the 50
+complex32_t units take test_fft's inputs halved and rounded to binary16, and
+their outputs must stay within Higham's normwise FFT error bound for binary16
+(Accuracy and Stability of Numerical Algorithms, Theorem 24.2) of the
+double-precision transform of those exact inputs; their inverse four-step
+passes normalize by `1/n` each, as `readwrite.h` does for reduced precision.
+Every guard past the kernel's footprint must stay untouched and no input may
+change; on Metal the translation must also match the unchanged upstream
+kernel word for word. The units run in the `fft-0` to `fft-4` legs. This
+covers 101/17,832 entries on every target; it does not itself run the
+upstream MLX test suite, which the host stack runs for the reachable entries.
 
 `contracts/fence.current-tree.translation.json` pins `fence.metal`'s three
 entries, the kernels behind `fence.cpp`'s fast fences: `fence_update`,

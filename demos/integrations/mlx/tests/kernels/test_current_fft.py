@@ -15,15 +15,14 @@ built by the same rules. Each unit is translated with the host's recipe
 Every unit then runs ``fft.cpp``'s grid: a partial last threadgroup where
 transforms share one, the Rader and Bluestein tables, both directions of
 complex transforms and Bluestein's first and last convolved length. Every
-output must stay within ``test_fft``'s tolerances of a double-precision
-reference, every element past the kernel's footprint must keep its guard
-and no input may change. On Metal the translation must also match the
+float output must stay within ``test_fft``'s tolerances of a
+double-precision reference. test_fft cannot run complex32_t, so every
+complex32_t output must instead stay within Higham's normwise FFT error
+bound for binary16 of the double-precision transform of its exact binary16
+inputs. Every element past the kernel's footprint must keep its guard and
+no input may change. On Metal the translation must also match the
 unchanged upstream kernel, run with the same function constants, word for
-word, including complex32_t. Direct3D and OpenGL refuse complex32_t
-entries with ``project.translate.resource-aggregate-unsupported`` until
-CrossGL lowers records pointing at threadgroup half2 arrays
-(https://github.com/CrossGL/crosstl/issues/4576); the gate pins that
-refusal so it must be updated when the translator lands the capability.
+word, including complex32_t.
 """
 
 import hashlib
@@ -33,7 +32,6 @@ import re
 import shutil
 import struct
 import tempfile
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -98,10 +96,15 @@ HOST_SHA256 = "15abb8ae0445410ece0c2ccb60931faaf7a9210cb16953adcaffb1ebed07de48"
 UPSTREAM_TEST_SHA256 = (
     "47373d942ae896690bc6b61d5a025987c44b1d6a44c0dc5d3bad8c83182b3320"
 )
-CORE_ISSUE = "https://github.com/CrossGL/crosstl/issues/4576"
-REFUSAL = "project.translate.resource-aggregate-unsupported"
-REFUSAL_DETAIL = "workgroup-allocation-layout"
 UNITS = model.UNITS
+# Each target's carrier of one binary16 part of complex32 storage: element
+# type and bytes.
+COMPLEX32_PARTS = {
+    "metal": ("float16", 2),
+    "directx": ("uint16", 2),
+    "opengl": ("float32", 4),
+}
+BINARY16_STORAGE = {"encoding": "ieee754-binary16", "logicalElementType": "float16"}
 # Read by no transform: 1.5 in every float part.
 POISON = {**fft_dispatch.POISON, "float16": 0x3E00}
 SIMD_WIDTH = 32
@@ -155,15 +158,6 @@ def _contract():
     return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
-def _refused(unit, target):
-    """Whether the target refuses the unit until the Core issue lands."""
-    return target != "metal" and model.is_half(unit)
-
-
-def _pin_kind(pin):
-    return "refused" if pin.startswith("refused:") else "artifact"
-
-
 def _dispatch_count(unit):
     return len(model.cases(unit))
 
@@ -191,15 +185,24 @@ def _expected_validation_contract():
             "complex transforms; Bluestein's first and last convolved length; "
             "one pass per four-step unit"
         ),
-        "inputs": "test_fft's: real and imaginary parts uniform in [0, 1)",
+        "inputs": (
+            "test_fft's: real and imaginary parts uniform in [0, 1); "
+            "complex32_t halves them and rounds them to binary16"
+        ),
         "reference": (
             "numpy.fft in double precision; the four-step step 0 temporary "
             "is the column DFTs times exp(-2 pi i k1 c / (n1 n2)), and step 1 "
-            "reads its float32 rounding"
+            "reads its float32 rounding, or for complex32_t its binary16 "
+            "rounding; complex32_t inverse passes normalize by 1/n each"
         ),
         "tolerance": (
             "test_fft: atol 1e-4 below 1025 points, else 1e-3; 1e-2 from 2^17 "
             "points; rtol 1e-4, relative to the device output"
+        ),
+        "complex32Tolerance": (
+            "normwise relative error within Higham's Theorem 24.2 bound "
+            "t eta / (1 - t eta), eta = u + gamma_4 (sqrt 2 + u), u = 2^-11, "
+            "t = fft_model.half_levels"
         ),
         "twiddleTolerance": "fft_dispatch.BLUESTEIN_TWIDDLE_TOLERANCE, 1e-5",
         "guards": (
@@ -208,21 +211,12 @@ def _expected_validation_contract():
         ),
         "metalUpstreamComparison": (
             "the unchanged upstream kernel with the same function constants, "
-            "word for word over the whole output buffer"
-        ),
-        "complex32": (
-            "Metal: word-for-word upstream identity; Direct3D and OpenGL refuse "
-            f"with {REFUSAL} ({REFUSAL_DETAIL}) pending {CORE_ISSUE}"
+            "word for word over the whole output buffer, complex32_t included"
         ),
     }
 
 
 def _expected_scope(artifacts):
-    kinds = Counter(
-        (target, _pin_kind(pin))
-        for pins in artifacts.values()
-        for target, pin in pins.items()
-    )
     host_entries = {
         record["info"]["source"] for record in UNITS.values() if record["hostReachable"]
     }
@@ -233,17 +227,12 @@ def _expected_scope(artifacts):
         "unitCount": len(UNITS),
         "hostUnitCount": sum(record["hostReachable"] for record in UNITS.values()),
         "artifactCountByTarget": {
-            target: kinds[target, "artifact"] for target in TARGETS
+            target: sum(target in pins for pins in artifacts.values())
+            for target in TARGETS
         },
-        "refusedCountByTarget": {
-            target: kinds[target, "refused"] for target in TARGETS
-        },
-        "pendingCoreIssue": CORE_ISSUE,
         "dispatchCountByTarget": {
             target: sum(
-                _dispatch_count(unit)
-                for unit in UNITS
-                if _pin_kind(artifacts[unit][target]) == "artifact"
+                _dispatch_count(unit) for unit in UNITS if target in artifacts[unit]
             )
             for target in TARGETS
         },
@@ -298,19 +287,15 @@ def test_current_mlx_fft_contract_is_exact():
     for unit, pins in artifacts.items():
         assert list(pins) == list(TARGETS)
         for target, pin in pins.items():
-            if _refused(unit, target):
-                assert pin == f"refused:{REFUSAL}:{REFUSAL_DETAIL}"
-                continue
             record = parse_pin(pin)
             assert re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
             assert record["sizeBytes"] > 0
     scope = contract["scope"]
     assert scope["artifactCountByTarget"] == {
         "metal": 153,
-        "opengl": 103,
-        "directx": 103,
+        "opengl": 153,
+        "directx": 153,
     }
-    assert scope["refusedCountByTarget"] == {"metal": 0, "opengl": 50, "directx": 50}
 
 
 def test_fft_units_cover_every_instantiated_entry():
@@ -485,6 +470,56 @@ def test_fft_comparison_rejects_defects(damage):
     assert not model.compare(broken, case["reference"], case["tolerance"])[0]
 
 
+@pytest.mark.parametrize("damage", ("value", "nan", "conjugate", "scale"))
+def test_fft_complex32_bound_rejects_defects(damage):
+    unit = "fft_mem_256_complex32_t_complex32_t_n240_inv_0"
+    (case,) = model.cases(unit)
+    assert case["tolerance"] is None
+    bound = case["normwiseBound"]
+    # Higham's bound for 8 levels in binary16.
+    assert bound == pytest.approx(0.026751, abs=1e-6)
+    actual = model.binary16(case["reference"])
+    assert model.normwise(actual, case["reference"]) <= model.HALF_UNIT_ROUNDOFF
+    broken = actual.copy()
+    if damage == "value":
+        broken[1, 7] += 1.5 * np.linalg.norm(case["reference"]) * bound
+    elif damage == "nan":
+        broken[0, 0] = np.nan
+    elif damage == "conjugate":
+        broken = np.conj(broken)
+    else:
+        broken = broken * (1 + 2 * bound)
+    assert model.normwise(broken, case["reference"]) > bound
+
+
+def test_fft_complex32_cases_are_exact_binary16():
+    """complex32_t inputs and four-step temporaries are binary16 values, and
+    the inverse four-step references normalize per pass."""
+    for unit in (u for u in UNITS if model.is_half(u)):
+        info = UNITS[unit]["info"]
+        for case in model.cases(unit):
+            values = np.asarray(case["input"])
+            assert np.array_equal(model.binary16(values), values), unit
+            assert case["tolerance"] is None
+            levels = model.half_levels(info)
+            assert case["normwiseBound"] == model.half_normwise_bound(levels)
+            assert 0 < case["normwiseBound"] < 0.1, unit
+            assert np.abs(case["reference"]).max() < 65504, unit
+    n1, n2 = 64, 128
+    step0 = "four_step_mem_256_complex32_t_complex32_t_0_false_n64_inv_1"
+    step1 = "four_step_mem_512_complex32_t_complex32_t_1_false_n128_inv_1"
+    assert tuple(UNITS[step0]["split"]) == tuple(UNITS[step1]["split"]) == (n1, n2)
+    (first,), (second,) = model.cases(step0), model.cases(step1)
+    # Step 0 scales the inverse transform's input by 1/n1 ...
+    columns = np.conj(first["input"].astype(np.complex128)) / n1
+    np.testing.assert_allclose(
+        first["reference"], model.four_step_intermediate(columns, n1, n2)
+    )
+    # ... and step 1 its own input by 1/n2, leaving only the conjugation.
+    rows = model._step1_rows(second["input"].astype(np.complex128), n1, n2)
+    np.testing.assert_allclose(second["reference"], np.conj(rows) / n2)
+
+
 def test_fft_shards_partition_the_units(monkeypatch):
     shards = []
     for index in range(CI_SHARD_COUNT):
@@ -611,24 +646,6 @@ def _translate(root, work, target, unit, record):
     return _prepare_native_package(translation, work)
 
 
-def _check_refusal(root, work, target, unit):
-    """Direct3D and OpenGL refuse complex32_t entries, typed, pending the
-    Core issue."""
-    report = translate_project(
-        _config(work, root, target, unit),
-        format_output=False,
-        validate=True,
-        run_toolchains=False,
-    ).to_json()
-    assert report["summary"]["translatedCount"] == 0
-    assert report["summary"]["failedCount"] == 1
-    first, follow_up = report["diagnostics"]
-    assert first["code"] == REFUSAL and REFUSAL_DETAIL in first["message"], first
-    assert first["severity"] == "error" and first["target"] == target, first
-    assert follow_up["code"] == "project.validate.failed-artifact", follow_up
-    assert not list(work.rglob("*.hlsl")) and not list(work.rglob("*.glsl"))
-
-
 def _words(dtype, values):
     """The storage words of logical values."""
     if dtype == COMPLEX:
@@ -703,25 +720,28 @@ def _encode(dtype, words, target, binding):
     if dtype == "int32":
         return encode_binding(dtype, words, target, scalar, binding.get("kind", ""))
     if dtype == "complex32":
-        # Metal reflects complex32 storage as two binary16 components: the
-        # complex_t_half record (in/out) or a half2 vector (the tables).
-        assert target == "metal"
-        value = packet("float16", target, words)
+        # Every target reflects complex32 storage as two binary16 parts: the
+        # complex_t_half record (in/out) or a half2 vector (the tables). Metal
+        # keeps half words, Direct3D uint16 words holding binary16 bits and
+        # OpenGL float32 carriers of binary16 values.
+        element, part = COMPLEX32_PARTS[target]
         components = (
-            ("vector", scalar["vectorWidth"])
-            if scalar["physicalType"] == "half2"
-            else ("record", scalar["componentCount"])
+            ("record", scalar["componentCount"])
+            if "componentCount" in scalar
+            else ("vector", scalar["vectorWidth"])
         )
         assert components in {("vector", 2), ("record", 2)}, scalar
         if components[0] == "record":
             members = [(m["name"], m["offsetBytes"]) for m in scalar["structMembers"]]
-            assert members == [("real", 0), ("imag", 2)], scalar
+            assert members == [("real", 0), ("imag", part)], scalar
         assert (
             scalar["elementType"],
             scalar["elementSizeBytes"],
             scalar["elementStrideBytes"],
-        ) == ("float16", 4, 4), scalar
-        return value
+        ) == (element, 2 * part, 2 * part), scalar
+        if target == "directx":
+            assert scalar["storageEncoding"] == BINARY16_STORAGE, scalar
+        return packet("float16", target, words)
     return fft_dispatch.encode(dtype, words, target, scalar, binding.get("kind", ""))
 
 
@@ -873,7 +893,17 @@ def _run_case(work, target, unit, index, case, executor, translated, reference):
         "upstream": upstream,
     }
     if dtype == "complex32":
-        return evidence
+        span = case["spans"][name]
+        parts = np.array(words[: 2 * span], dtype=np.uint16).view(np.float16)
+        parts = parts.astype(np.float64)
+        actual = (parts[0::2] + 1j * parts[1::2]).reshape(np.shape(case["reference"]))
+        error = model.normwise(actual, case["reference"])
+        assert error <= case["normwiseBound"], (unit, index, error)
+        return {
+            **evidence,
+            "normwiseError": error,
+            "normwiseBound": case["normwiseBound"],
+        }
     span = case["spans"][name]
     actual = _values(dtype, words[:span])
     reference_values = np.asarray(case["reference"])
@@ -894,10 +924,6 @@ def test_current_mlx_fft_native_parity(current_mlx, metal_reference, tmp_path, u
     with tempfile.TemporaryDirectory(prefix=".current-fft-", dir=root) as path:
         work = Path(path)
         try:
-            if _pin_kind(pin) == "refused":
-                assert _refused(unit, target)
-                _check_refusal(root, work, target, unit)
-                return
             translated = _translate(root, work, target, unit, parse_pin(pin))
             constants = translated[0].get("specializationConstants", [])
             assert all(item.get("frozen") is True for item in constants), constants

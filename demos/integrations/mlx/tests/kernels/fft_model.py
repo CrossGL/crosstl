@@ -77,6 +77,8 @@ FOUR_STEP_BATCH = 3
 # test_fft._run_ffts' tolerances: test_fft_shared_mem's by length, and
 # test_fft_big_powers_of_two's past 4096 points.
 RTOL = 1e-4
+# binary16's unit roundoff: complex32_t kernels compute in half precision.
+HALF_UNIT_ROUNDOFF = 2.0**-11
 
 
 def instantiated_entries():
@@ -419,6 +421,73 @@ def tolerance(length):
     return (1e-4 if length < 1025 else 1e-3), RTOL
 
 
+def binary16(values):
+    """``values`` with each real and imaginary part rounded to binary16."""
+    parts = np.ascontiguousarray(values, dtype=np.complex64).view(np.float32)
+    return parts.astype(np.float16).astype(np.float32).view(np.complex64)
+
+
+def _complex32_inputs(values):
+    """complex32_t inputs: test_fft's halved, so that every forward transform
+    up to 2^17 points stays below binary16's largest finite value, and
+    rounded to binary16, so that the reference transforms the exact stored
+    words."""
+    return binary16(np.asarray(values, dtype=np.complex64) / np.float32(2))
+
+
+def _log2_ceil(n):
+    return int(n - 1).bit_length()
+
+
+def half_levels(info):
+    """The radix-2 levels a complex32_t unit chains: one per halving of each
+    transform it runs, plus one per pointwise product with a table: Rader's
+    kernel spectrum, Bluestein's two chirps and kernel spectrum, and the
+    four-step twiddles at the end of step 0."""
+    kind, n = info["kind"], info["n"]
+    if kind == "stockham":
+        return _log2_ceil(n)
+    if kind == "rader":
+        return _log2_ceil(n) + _log2_ceil(info["raderN"] - 1) + 1
+    if kind == "bluestein":
+        return 2 * _log2_ceil(n) + 3
+    if kind == "four_step":
+        return _log2_ceil(n) + (1 if info["step"] == 0 else 0)
+    raise KeyError(kind)
+
+
+def half_normwise_bound(levels):
+    """Higham's bound for a radix-2 FFT of ``2**levels`` points (Accuracy and
+    Stability of Numerical Algorithms, 2nd ed., Theorem 24.2) in binary16:
+    ``||y_hat - y|| / ||y|| <= t eta / (1 - t eta)``, ``eta = mu +
+    gamma_4 (sqrt(2) + mu)``, with ``t`` the unit's levels and twiddles
+    rounded to binary16, ``mu = u``."""
+    u = HALF_UNIT_ROUNDOFF
+    gamma4 = 4 * u / (1 - 4 * u)
+    eta = u + gamma4 * (np.sqrt(2.0) + u)
+    return float(levels * eta / (1 - levels * eta))
+
+
+def normwise(actual, reference):
+    """The relative 2-norm error of ``actual``; infinite unless it is finite."""
+    actual = np.asarray(actual)
+    if not np.isfinite(actual).all():
+        return float("inf")
+    reference = np.asarray(reference)
+    return float(np.linalg.norm(actual - reference) / np.linalg.norm(reference))
+
+
+def _accuracy(name, length):
+    """test_fft's elementwise tolerances for float units; complex32_t units,
+    which test_fft cannot run, bound the normwise error instead."""
+    if is_half(name):
+        return {
+            "tolerance": None,
+            "normwiseBound": half_normwise_bound(half_levels(UNITS[name]["info"])),
+        }
+    return {"tolerance": tolerance(length), "normwiseBound": None}
+
+
 def _rng(name, label):
     digest = hashlib.sha256(f"{name}:{label}".encode()).digest()
     return np.random.default_rng(int.from_bytes(digest[:8], "little"))
@@ -464,6 +533,8 @@ def single_case(name, length=None):
         values = np.fft.rfft(real.astype(np.float64), axis=-1).astype(np.complex64)
     else:
         values = _complex_inputs(rng, (total, length))
+        if is_half(name):
+            values = _complex32_inputs(values)
     tables = {}
     scalars = {"n": info["n"], "batch_size": total}
     if info["kind"] == "rader":
@@ -499,7 +570,7 @@ def single_case(name, length=None):
         "footprint": reach,
         "launch": layout.launch(info, total),
         "reference": _reference(transform, info["inverse"], values, length),
-        "tolerance": tolerance(length),
+        **_accuracy(name, length),
     }
 
 
@@ -541,7 +612,8 @@ def four_step_case(name):
     """One case of a four-step unit: one pass over FOUR_STEP_BATCH
     transforms of its split, with its double-precision reference.
 
-    Step 1 reads the float32 rounding of the reference step 0 temporary.
+    Step 1 reads the float32 rounding of the reference step 0 temporary, or
+    its binary16 rounding for complex32_t.
     """
     record = UNITS[name]
     info = record["info"]
@@ -552,6 +624,9 @@ def four_step_case(name):
     rng = _rng(name, overall)
     real = rng.random((batch, overall), dtype=np.float32)
     signal = _complex_inputs(rng, (batch, overall))
+    half = is_half(name)
+    if half:
+        signal = _complex32_inputs(signal)
     if transform == "r2c":
         source = real
     elif transform == "c2r":
@@ -565,13 +640,17 @@ def four_step_case(name):
     else:
         columns = source.astype(np.complex128)
     intermediate = four_step_intermediate(columns, n1, n2)
+    # complex32_t passes normalize an inverse transform on input, by 1/n per
+    # pass (readwrite.h's load_strided), so its temporary carries 1/n1.
+    scale = n1 if half and transform == "c2c" and inverse else 1
     if step == 0:
-        values, reference = source, intermediate
+        values, reference = source, intermediate / scale
     else:
-        values = intermediate.astype(np.complex64)
+        values = intermediate / scale
+        values = binary16(values) if half else values.astype(np.complex64)
         rows = _step1_rows(values.astype(np.complex128), n1, n2)
         if transform == "c2c":
-            reference = np.conj(rows) / overall if inverse else rows
+            reference = np.conj(rows) / (overall // scale) if inverse else rows
         elif transform == "r2c":
             reference = rows[:, : overall // 2 + 1]
         else:
@@ -589,7 +668,7 @@ def four_step_case(name):
         "footprint": dict(spans),
         "launch": layout.launch(info, total),
         "reference": reference,
-        "tolerance": tolerance(overall),
+        **_accuracy(name, overall),
     }
 
 
