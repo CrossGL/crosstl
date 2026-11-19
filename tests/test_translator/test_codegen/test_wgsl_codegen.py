@@ -4661,9 +4661,7 @@ def test_wgsl_codegen_passes_cube_array_texture_layer_to_gradient_lookup(tmp_pat
         ),
     ],
 )
-def test_wgsl_codegen_refuses_offset_lookups_on_cube_textures(
-    sampler_type, lookup
-):
+def test_wgsl_codegen_refuses_offset_lookups_on_cube_textures(sampler_type, lookup):
     shader = f"""
     shader WGSLCubeTextureOffset {{
         uniform {sampler_type} tex;
