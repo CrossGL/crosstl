@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
@@ -5915,6 +5916,70 @@ def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
     assert downstream_code.count("OpFunction ") == 1
     assert "OpStore" in downstream_code
+
+
+@pytest.mark.parametrize(
+    ("entry_name", "helper_id", "debug_name", "expected_helper_name"),
+    [
+        ("vs", "helper", 'OpName %helper "main"', "main_fn_1"),
+        ("vs", "main", "", "main_fn_1"),
+        ("main", "position", "", "position"),
+    ],
+)
+def test_spirv_assembly_only_declared_entry_point_sets_stage(
+    tmp_path, entry_name, helper_id, debug_name, expected_helper_name
+):
+    assembly = f"""
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "{entry_name}" %pos
+OpName %vs "{entry_name}"
+{debug_name}
+OpDecorate %pos BuiltIn Position
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%vec4 = OpTypeVector %float 4
+%entry_type = OpTypeFunction %void
+%helper_type = OpTypeFunction %vec4
+%output_type = OpTypePointer Output %vec4
+%zero = OpConstant %float 0
+%one = OpConstant %float 1
+%value = OpConstantComposite %vec4 %zero %zero %zero %one
+%pos = OpVariable %output_type Output
+%main_fn = OpFunction %vec4 None %helper_type
+%position_label = OpLabel
+OpReturnValue %value
+OpFunctionEnd
+%{helper_id} = OpFunction %vec4 None %helper_type
+%helper_label = OpLabel
+%helper_result = OpFunctionCall %vec4 %main_fn
+OpReturnValue %helper_result
+OpFunctionEnd
+%vs = OpFunction %void None %entry_type
+%entry_label = OpLabel
+%result = OpFunctionCall %vec4 %{helper_id}
+OpStore %pos %result
+OpReturn
+OpFunctionEnd
+"""
+
+    source = tmp_path / "position.spvasm"
+    source.write_text(assembly, encoding="utf-8")
+    generated_code = crosstl.translate(str(source), backend="cgl", format_output=False)
+    reparsed = parse_crossgl(generated_code)
+
+    assert set(reparsed.stages) == {ShaderStage.VERTEX}
+    assert reparsed.stages[ShaderStage.VERTEX].entry_point.name == entry_name
+    assert {function.name for function in reparsed.functions} == {
+        "main_fn",
+        expected_helper_name,
+    }
+    assert f"gl_Position = {expected_helper_name}();" in generated_code
+
+    glsl = crosstl.translate(str(source), backend="opengl", format_output=False)
+    assert glsl.count("void main()") == 1
+    assert f"vec4 {expected_helper_name}() {{" in glsl
+    assert f"gl_Position = {expected_helper_name}();" in glsl
 
 
 def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():

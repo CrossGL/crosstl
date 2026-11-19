@@ -1426,6 +1426,7 @@ class VulkanParser:
         entry_points_by_id = {}
         for entry in entry_points:
             entry_points_by_id.setdefault(entry["id"], []).append(entry)
+        names = self.spirv_name_main_helpers(instructions, names, entry_points_by_id)
         self.spirv_module_execution_models = sorted(
             {entry["execution_model"] for entry in entry_points}
         )
@@ -4932,6 +4933,44 @@ class VulkanParser:
         if storage_class == "Uniform":
             return self.spirv_has_decoration(struct_decorations, "BufferBlock")
         return False
+
+    def spirv_name_main_helpers(self, instructions, names, entry_points_by_id):
+        """Give ordinary functions a name that cannot take GLSL's entry point."""
+        if not entry_points_by_id:
+            return names
+        helpers = [
+            result_id
+            for result_id, opcode, _operands, _line in instructions
+            if opcode == "OpFunction"
+            and result_id not in entry_points_by_id
+            and names.get(
+                result_id, self.spirv_fallback_identifier(result_id, "function")
+            )
+            == "main"
+        ]
+        if not helpers:
+            return names
+        used = set(names.values())
+        used.update(
+            self.spirv_fallback_identifier(result_id, "value")
+            for result_id, _opcode, _operands, _line in instructions
+            if result_id
+        )
+        used.update(
+            entry["name"]
+            for entries in entry_points_by_id.values()
+            for entry in entries
+        )
+        names = names.copy()
+        for helper in helpers:
+            name = "main_fn"
+            index = 1
+            while name in used:
+                name = f"main_fn_{index}"
+                index += 1
+            names[helper] = name
+            used.add(name)
+        return names
 
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):
         if function_id in entry_points_by_id:
