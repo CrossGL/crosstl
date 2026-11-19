@@ -11634,6 +11634,9 @@ class MetalCodeGen(
                 self.generate_discarded_expression,
                 discarded=True,
             )
+        discarded_atomic = self.generate_discarded_metal_atomic64_min_max(expr)
+        if discarded_atomic is not None:
+            return discarded_atomic
         rendered = self.generate_expression(expr)
         narrow_update = (
             isinstance(expr, UnaryOpNode)
@@ -16351,7 +16354,65 @@ class MetalCodeGen(
             f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
         )
 
-    def generate_metal_buffer_resource_atomic_call(self, func_name, args):
+    def generate_discarded_metal_atomic64_min_max(self, expr):
+        """Void 64-bit min/max for a discarded call, or None when inapplicable.
+
+        MSL 3.0 section 6.15.2.6: the 64-bit atomic modify functions are the
+        void ``atomic_max_explicit``/``atomic_min_explicit`` on atomic_ulong,
+        so only a call whose value is discarded can lower to them. This is
+        called from ``generate_discarded_expression`` only, which is the one
+        place that knows a call's value is unused; a used 64-bit min/max goes
+        through the normal atomic path and is refused there.
+        """
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        func_expr = getattr(expr, "name", None)
+        if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
+            func_name = func_expr.name
+        elif isinstance(func_expr, str):
+            func_name = func_expr
+        else:
+            return None
+        if func_name in self.user_function_names:
+            return None
+        if func_name not in {
+            "atomicMin",
+            "atomicMax",
+            "atomic_fetch_min",
+            "atomic_fetch_max",
+        }:
+            return None
+        args = list(getattr(expr, "args", None) or [])
+        if len(args) != 2:
+            return None
+        try:
+            mapped_target_type = self.map_type(self.expression_result_type(args[0]))
+        except Exception:
+            return None
+        if mapped_target_type not in {"ulong", "uint64_t"}:
+            return None
+        # The dispatcher tries the GLSL block path first, so this keeps that
+        # order: a block member lowers by byte offset, not by reinterpret cast.
+        lowered = self.generate_glsl_buffer_block_atomic_call(
+            func_name, args, discarded=True
+        )
+        if lowered is not None:
+            return lowered
+        return self.generate_metal_buffer_resource_atomic_call(
+            func_name, args, discarded=True
+        )
+
+    def generate_metal_buffer_resource_atomic_call(
+        self, func_name, args, *, discarded=False
+    ):
+        """Lower a buffer atomic call, or None when it is not one.
+
+        ``discarded`` is true only when the call is an expression statement
+        (or an operand a comma discards), so its value is unused. It matters
+        for 64-bit min/max: Metal's only 64-bit forms are the void
+        ``atomic_max_explicit``/``atomic_min_explicit``, so a used result has
+        no lowering and is refused instead.
+        """
         if func_name in self.user_function_names:
             return None
         operation_info = self.buffer_atomic_operations().get(func_name)
@@ -16425,7 +16486,9 @@ class MetalCodeGen(
             and address_space == "threadgroup"
             and operation in {"load", "store", "compare_exchange_expected"}
         )
-        atomic_type = f"atomic_{'uint' if bitwise_float else mapped_target_type}"
+        atomic_type = (
+            f"atomic_{self.metal_atomic_scalar_type(mapped_target_type, bitwise_float)}"
+        )
         qualifier = "const " if readonly else ""
         atomic_target = f"reinterpret_cast<{qualifier}{address_space} {atomic_type}*>({target_expr})"
         if operation == "load":
@@ -16434,6 +16497,26 @@ class MetalCodeGen(
         if operation == "compare_exchange_expected":
             return self.generate_metal_expected_compare_exchange(
                 atomic_target, args, mapped_target_type, bitwise_float=bitwise_float
+            )
+        if operation in {"fetch_min", "fetch_max"} and mapped_target_type in {
+            "ulong",
+            "uint64_t",
+        }:
+            # MSL 3.0 section 6.15.2.6: the 64-bit atomic modify functions are
+            # the void atomic_max_explicit/atomic_min_explicit on atomic_ulong;
+            # there is no value-returning 64-bit min/max to lower a used
+            # result to.
+            if not discarded:
+                return self.unsupported_metal_buffer_resource_atomic_call(
+                    func_name,
+                    target,
+                    "Metal's 64-bit atomic min/max return no value",
+                )
+            value = self.generate_expression_with_expected(args[1], mapped_target_type)
+            min_max = "max" if operation == "fetch_max" else "min"
+            return (
+                f"atomic_{min_max}_explicit("
+                f"{atomic_target}, {value}, memory_order_relaxed)"
             )
         value = self.generate_expression_with_expected(args[1], mapped_target_type)
         if bitwise_float:
@@ -24483,20 +24566,71 @@ class MetalCodeGen(
             "atomicExchange": ("exchange", 2),
             "atomicCompSwap": ("compare_exchange", 3),
             "atomicCompareExchange": ("compare_exchange", 3),
+            # Metal's non-explicit spellings. CrossGL has no subtraction
+            # operation, and the coverage probes call these five under their
+            # Metal names; without the aliases they fell through to the
+            # generic call emitter and were written verbatim onto plain
+            # device pointers, which the Metal compiler rejects.
+            "atomic_fetch_sub": ("fetch_sub", 2),
+            "atomic_load": ("load", 1),
+            "atomic_store": ("store", 2),
+            "atomic_fetch_min": ("fetch_min", 2),
+            "atomic_fetch_max": ("fetch_max", 2),
         }
+
+    # CrossGL/Metal scalar spelling -> the element type of Metal's atomic_<T>.
+    # Metal has atomic_int, atomic_uint, atomic_ulong and atomic_float, and
+    # spells its 64-bit atomics atomic_ulong even though the scalar is also
+    # written uint64_t, so atomic_uint64_t would not compile. There is no
+    # atomic_long: signed 64-bit atomics have no Metal form (MSL 3.0 section
+    # 6.15.2.6), and the type gate refuses them before this mapping is used.
+    _METAL_ATOMIC_SCALAR_TYPES = {
+        "int": "int",
+        "uint": "uint",
+        "ulong": "ulong",
+        "uint64_t": "ulong",
+        "float": "float",
+    }
+
+    @staticmethod
+    def metal_atomic_scalar_type(component_type, bitwise_float=False):
+        """Map a scalar to the element type of Metal's ``atomic_<T>``.
+
+        Unknown scalars are refused, never passed through verbatim: an
+        unmapped name would be emitted as ``atomic_<name>``, which no Metal
+        compiler accepts, so the translator must say so instead of writing
+        output it cannot stand behind. Both callers gate on
+        ``buffer_atomic_supports_scalar_type`` first, so this is a backstop.
+        """
+        if bitwise_float:
+            return "uint"
+        mapped = MetalCodeGen._METAL_ATOMIC_SCALAR_TYPES.get(component_type)
+        if mapped is None:
+            raise MetalRefusal(
+                "unsupported Metal atomic scalar type: " f"{component_type!r}"
+            )
+        return mapped
 
     @staticmethod
     def buffer_atomic_supports_scalar_type(operation, component_type):
-        return component_type in {"int", "uint"} or (
-            component_type == "float"
-            and operation in {
-                "load",
-                "store",
-                "fetch_add",
-                "exchange",
-                "compare_exchange_expected",
-            }
-        )
+        if component_type in {"int", "uint"}:
+            return True
+        if component_type in {"ulong", "uint64_t"} and operation in {
+            "fetch_min",
+            "fetch_max",
+        }:
+            # MSL 3.0 section 6.15.2.6: the 64-bit atomic modify functions are
+            # the void atomic_max_explicit/atomic_min_explicit on atomic_ulong.
+            # Metal has no atomic_long and no 64-bit load, store, fetch or
+            # compare-exchange, so every other 64-bit operation stays refused.
+            return True
+        return component_type == "float" and operation in {
+            "load",
+            "store",
+            "fetch_add",
+            "exchange",
+            "compare_exchange_expected",
+        }
 
     def glsl_buffer_block_atomic_access(self, target):
         access = self.glsl_buffer_block_array_access(target)
@@ -24514,7 +24648,13 @@ class MetalCodeGen(
             "metal", "atomic", f"Metal {operation} {reason}"
         )
 
-    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+    def generate_glsl_buffer_block_atomic_call(
+        self, func_name, args, *, discarded=False
+    ):
+        # ``discarded`` is true only when the call is an expression statement
+        # (or an operand a comma discards); see
+        # generate_metal_buffer_resource_atomic_call for why 64-bit min/max
+        # need it.
         operations = self.buffer_atomic_operations()
         operation_info = operations.get(func_name)
         if operation_info is None or not args:
@@ -24579,7 +24719,9 @@ class MetalCodeGen(
                 f"{compare_value}, {replacement})"
             )
 
-        atomic_type = f"atomic_{access['component_type']}"
+        atomic_type = (
+            f"atomic_{self.metal_atomic_scalar_type(access['component_type'])}"
+        )
         atomic_target = (
             f"reinterpret_cast<{access.get('memory', '')}device {atomic_type}*>"
             f"({access['buffer']} + {offset})"
@@ -24591,6 +24733,23 @@ class MetalCodeGen(
                 atomic_target, args, access["component_type"]
             )
         value = self.generate_expression_with_expected(args[1], access["type"])
+        if operation in {"fetch_min", "fetch_max"} and access["component_type"] in {
+            "ulong",
+            "uint64_t",
+        }:
+            # MSL 3.0 section 6.15.2.6: the 64-bit atomic modify functions are
+            # the void atomic_max_explicit/atomic_min_explicit on atomic_ulong.
+            if not discarded:
+                return self.unsupported_glsl_buffer_block_atomic_call(
+                    target,
+                    func_name,
+                    "64-bit atomic min/max return no value",
+                    access,
+                )
+            return (
+                f"atomic_{'max' if operation == 'fetch_max' else 'min'}_explicit"
+                f"({atomic_target}, {value}, memory_order_relaxed)"
+            )
         return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"
 
     def glsl_buffer_block_diagnostic(

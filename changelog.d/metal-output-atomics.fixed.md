@@ -1,0 +1,1 @@
+Metal output now lowers `atomic_fetch_sub`, `atomic_load`, `atomic_store` and the 64-bit `atomic_max`/`atomic_min` instead of writing the calls verbatim onto plain device pointers, which the Metal compiler rejected (#2337).
