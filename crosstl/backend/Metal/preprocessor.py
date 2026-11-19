@@ -47,6 +47,7 @@ from .array_element_receivers import (
 )
 from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
+from .bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from .call_result_types import CallResultScope, infer_call_result_type
 from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
 from .class_argument_precedence import class_identity_template_outranks
@@ -1354,6 +1355,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
+        # Generic-lambda callbacks of a Boolean dispatch helper become their two
+        # instantiations, so `p.value` is a constant for the passes below.
+        processed = expand_bool_dispatch_callbacks(self, processed)
         # Assertions over constexpr aggregates and operators, such as MLX's
         # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
         # their operators are still spelled as in the source, as template materialization decides them; an
