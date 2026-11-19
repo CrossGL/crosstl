@@ -321,14 +321,17 @@
       "class": "silent",
       "component": "Metal importer with SPIR-V and GLSL emitters",
       "summary": "whole-file multi-kernel translation: the second kernel loses its entry status or bindings collide",
-      "status": "open",
-      "note": "GLSL output of a two-kernel Metal file has one void main, and the second kernel becomes a non-entry function without a diagnostic; one GLSL compilation unit has one entry point, so this needs a refusal or one output per entry. SPIR-V keeps both entry points.",
+      "status": "refused",
+      "note": "A GLSL compilation unit has one entry point per stage (GLSL 4.60 section 6.1). Whole-file GLSL translation of a program with two entries of one stage raises OpenGLRepeatedStageEntryError; translate with entry_point gives one artifact per entry, with its own bindings. SPIR-V, HLSL and Metal keep every entry in one module. Open M3 gap: HLSL keeps both kernels but moves the second one's buffer(0) to register(u1), and translate_with_metadata reports no HLSL bindings, so a host binding by the source slots binds the wrong buffer.",
       "probes": [
         {
           "source": "S16.metal",
           "target": "opengl",
           "expect": "refused"
         }
+      ],
+      "tests": [
+        "tests/test_translator/test_glsl_guarded_stage_entries.py"
       ]
     },
     {
