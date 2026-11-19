@@ -357,7 +357,8 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
     return compiled
 
 
-# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``.
+# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``. The feature
+# list probes such a function for CUDA instead (features.slang.lacking); this catches a comment it does not find.
 _UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\*/")
 
 

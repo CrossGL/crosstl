@@ -284,6 +284,42 @@ def test_a_slang_function_only_cuda_has_compiles_for_cuda():
     assert other.note == "needs a target other than SPIR-V, HLSL and CUDA"
 
 
+SLANG_COMMENTED = """
+//@public:
+[ForceInline]
+[require(cpp_cuda_glsl_hlsl_llvm, breakpoint)]
+void debugBreak()
+{
+    __target_switch
+    {
+    case hlsl: __intrinsic_asm "/* debugBreak() not currently supported for HLSL */";
+    case cuda: __intrinsic_asm "__brkpt()";
+    }
+}
+
+[require(cpp_cuda_glsl_hlsl_llvm, breakpoint)]
+void hlslBreak()
+{
+    __target_switch
+    {
+    case hlsl: __intrinsic_asm "hlslBreak()";
+    case cuda: __intrinsic_asm "/* not on CUDA */";
+    }
+}
+"""
+
+
+def test_a_target_whose_case_is_a_comment_lacks_the_function():
+    assert slang.lacking(SLANG_COMMENTED) == {
+        "debugBreak": frozenset({"hlsl"}),
+        "hlslBreak": frozenset({"cuda"}),
+    }
+    features = by_name(slang.parse("", SLANG_COMMENTED))
+    # Slang's HLSL case of debugBreak is a comment, so the probe compiles for CUDA, the next fallback.
+    assert (features["debugBreak"].target, features["debugBreak"].note) == ("cuda", "")
+    assert features["hlslBreak"].target == "hlsl"
+
+
 def test_slang_types():
     generics = {"T": "float", "N": "size"}
     assert slang.slang_type("vector<T, N>", generics) == Type("float", (2,))

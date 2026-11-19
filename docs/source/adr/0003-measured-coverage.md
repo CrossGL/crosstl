@@ -56,7 +56,7 @@ feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
 compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V,
-or to CUDA that nvcc checks for a function only CUDA has (Slang), the Mojo compiler with MAX's GPU package (Mojo),
+or to CUDA that nvcc checks for a function SPIR-V and HLSL lack (Slang), the Mojo compiler with MAX's GPU package (Mojo),
 rustc with the rust-gpu backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile.
 Input probes are validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C
 generator, so an OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked

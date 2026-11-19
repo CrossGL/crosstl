@@ -10,9 +10,10 @@ such as the alignment of ``loadAligned``, is spelled out as 4. A string argument
 parameters (``expand each T``) is empty, a type pack (``each T``) is one ``int``, so that ``makeTuple`` makes a
 ``Tuple<int>``, and a pointer is a uniform that holds a device address. A function whose every
 ``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
-``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
-Direct3D allows it in. One that allows only CUDA compiles for CUDA, which nvcc then checks, unless it needs OptiX. Any
-other function stays untested.
+``require`` names no SPIR-V target compiles for HLSL instead when it allows HLSL, which DXC then checks in the stage
+Direct3D allows it in, and otherwise for CUDA, which nvcc then checks, unless it needs OptiX. A target whose
+``__target_switch`` case is only a comment, as HLSL's is for ``debugBreak``, does not count as allowing the function.
+Any other function stays untested.
 """
 
 from __future__ import annotations
@@ -101,6 +102,10 @@ _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 # The targets a function SPIR-V lacks is probed for instead, in order: HLSL, which DXC checks, then CUDA, which nvcc
 # checks (validators.SLANG_SOURCE_TARGETS).
 FALLBACKS = ("hlsl", "cuda")
+# A function body that starts with a ``__target_switch``, and a case of it that is only a comment. Slang's library
+# writes such a comment where the target has no counterpart, as ``case hlsl`` of ``debugBreak`` does.
+_SWITCHED = re.compile(r"\b(\w+)\s*\([^()]*\)\s*\{\s*__target_switch\s*\{")
+_COMMENT_CASE = re.compile(r'\bcase\s+(\w+)\s*:\s*__intrinsic_asm\s*"/\*')
 # The OptiX capabilities. CUDA source that calls an OptiX function includes the OptiX SDK's device headers, which
 # NVIDIA distributes under its own SDK license rather than with the CUDA toolkit, so nvcc cannot compile such a probe.
 _OPTIX = re.compile(r"\boptix_\w+")
@@ -305,6 +310,22 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     )
 
 
+def lacking(text: str) -> dict[str, frozenset[str]]:
+    """The targets a ``__target_switch`` in a function's body gives only a comment, by function name. A function
+    that some definition writes a comment for counts as lacking on that target; the validator's own check of the
+    generated source covers any it misses."""
+    found: dict[str, set[str]] = {}
+    for switch in _SWITCHED.finditer(text):
+        depth, end = 1, switch.end()
+        while depth and end < len(text):
+            depth += {"{": 1, "}": -1}.get(text[end], 0)
+            end += 1
+        cases = _COMMENT_CASE.findall(text, switch.end(), end)
+        if cases:
+            found.setdefault(switch.group(1), set()).update(cases)
+    return {name: frozenset(targets) for name, targets in found.items()}
+
+
 def allows(declaration: Declaration, target: str) -> bool:
     """Whether some ``require`` alternative allows ``target``; one that names no target allows every target."""
     clauses = re.findall(r"require\s*\(([^)]*)\)", declaration.requires)
@@ -429,6 +450,7 @@ def parse(
         for declaration in declarations(text):
             overloads.setdefault(declaration.name, []).append((group, declaration))
     features = []
+    commented = lacking(f"{core}\n{hlsl}")
     for name, declared in sorted(overloads.items()):
         candidates = [(s, d) for s, d in ((signature(d), d) for _, d in declared) if s]
         note = "" if candidates else "variadic"
@@ -436,7 +458,13 @@ def parse(
         found = [d for _, d in declared]
         if not any(allows(d, "spirv") for d in found):
             target = next(
-                (t for t in FALLBACKS if any(allows(d, t) for d in found)), ""
+                (
+                    t
+                    for t in FALLBACKS
+                    if t not in commented.get(name, ())
+                    and any(allows(d, t) for d in found)
+                ),
+                "",
             )
             candidates = [(s, d) for s, d in candidates if allows(d, target)]
             if target == "hlsl":
