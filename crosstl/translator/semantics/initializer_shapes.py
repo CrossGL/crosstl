@@ -12,6 +12,11 @@ vector or matrix initializer of another vector or matrix shape is refused. A sca
 is a separate question and is left alone, as is an initializer whose type the pass cannot tell. Programs imported
 from other languages are left alone too: HLSL truncates a wider vector implicitly, and the importers carry that.
 
+Declarations are checked in function bodies, at module scope (constants and global variables) and at stage
+scope. An initializer that is matrix arithmetic has the shape GLSL 4.60 section 5.10 gives it: ``matCxR * vecC``
+is ``vecR``, ``vecR * matCxR`` is ``vecC``, ``matC1xR1 * matC2xC1`` is ``matC2xR1``, and matrix ``+``, ``-``,
+``/``, unary minus and scaling by a scalar keep the matrix's shape.
+
 The shape of a call is known only for a constructor, a DXR transform call and a function of the program. Other
 calls are left alone, and so is an expression that contains one: a texel read into a narrower vector
 (``vec2 t = imageLoad(rg, p);``) takes the leading components, which CrossGL allows.
@@ -30,7 +35,7 @@ from ..matrix_shape import crossgl_matrix_shape, crossgl_matrix_spelling
 from .dxr_ray_interfaces import defined_function_names
 from .hub_types import HubType, call_name, type_from_name, type_from_node
 from .rewrite import child_slots, get_child
-from .scoped_walk import ScopedWalker
+from .scoped_walk import ScopedWalker, program_stages
 
 __all__ = ["InitializerShapeMismatchError", "refuse_initializer_shape_mismatches"]
 
@@ -83,19 +88,39 @@ class _ShapeWalker(ScopedWalker):
         self.target = target
         self.defined = defined_function_names(program)
 
+    def run_program(self):
+        # Module-scope constants and globals, then each stage's own variables, then the function bodies.
+        for constant in getattr(self.program, "constants", None) or []:
+            if isinstance(constant, A.ConstantNode) and constant.value is not None:
+                self.check_declaration(constant, constant.const_type, constant.value)
+        for variable in getattr(self.program, "global_variables", None) or []:
+            self.check_variable(variable)
+        for stage in program_stages(self.program):
+            self.scope.push()
+            for variable in getattr(stage, "local_variables", None) or []:
+                self.check_variable(variable)
+                if getattr(variable, "name", None) is not None:
+                    self.scope.declare(variable.name, variable.var_type)
+                    self.scope.declare_block_members(variable)
+            self.scope.pop()
+        super().run_program()
+
     def _walk(self, node):
-        if isinstance(node, A.VariableNode) and node.initial_value is not None:
-            self.check(node)
+        self.check_variable(node)
         super()._walk(node)
+
+    def check_variable(self, node):
+        if isinstance(node, A.VariableNode) and node.initial_value is not None:
+            self.check_declaration(node, node.var_type, node.initial_value)
 
     def visit(self, node):
         return
 
-    def check(self, node):
-        declared = _type_shape(node.var_type)
+    def check_declaration(self, node, declared_type, initial_value):
+        declared = _type_shape(declared_type)
         if declared is None or declared[0] == "scalar":
             return
-        initializer = self.value_shape(node.initial_value)
+        initializer = self.value_shape(initial_value)
         if initializer is None or initializer[0] == "scalar":
             return
         if declared[:-1] == initializer[:-1]:
@@ -134,9 +159,74 @@ class _ShapeWalker(ScopedWalker):
             if matrix is not None:
                 return _matrix_shape(*matrix)
             return _hub_shape(type_from_name(name))
+        matrix = self.matrix_arithmetic_shape(expr)
+        if matrix is not None:
+            return matrix
         if _contains_call(expr):
             return None
         return _hub_shape(self.scope.infer(expr))
+
+    def matrix_arithmetic_shape(self, expr):
+        """The shape of arithmetic with a matrix operand (GLSL 4.60 section 5.10), or None."""
+        if isinstance(expr, A.UnaryOpNode) and expr.operator in {"-", "+"}:
+            operand = self.value_shape(expr.operand)
+            return operand if _is_matrix(operand) else None
+        if isinstance(expr, A.TernaryOpNode):
+            branches = self.value_shape(expr.true_expr), self.value_shape(
+                expr.false_expr
+            )
+            if _is_matrix(branches[0]) and branches[0][:-1] == (branches[1] or ())[:-1]:
+                return branches[0]
+            return None
+        if not isinstance(expr, A.BinaryOpNode) or expr.operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+        }:
+            return None
+        left, right = self.value_shape(expr.left), self.value_shape(expr.right)
+        if not (_is_matrix(left) or _is_matrix(right)) or left is None or right is None:
+            return None
+        if left[0] == "scalar":
+            return right
+        if right[0] == "scalar":
+            return left
+        if expr.operator != "*":
+            # Component-wise matrix arithmetic needs two matrices of one shape.
+            return left if left[:-1] == right[:-1] else None
+        if _is_matrix(left) and _is_matrix(right):
+            # matC1xR1 * matC2xC1 is matC2xR1.
+            if left[1] != right[2]:
+                return None
+            return (
+                "matrix",
+                right[1],
+                left[2],
+                _matrix_spelling_like(left, right[1], left[2]),
+            )
+        if _is_matrix(left):
+            # matCxR * vecC is vecR.
+            if left[1] != right[1]:
+                return None
+            return ("vector", left[2], _vector_spelling_like(left, left[2]))
+        # vecR * matCxR is vecC.
+        if right[2] != left[1]:
+            return None
+        return ("vector", right[1], _vector_spelling_like(right, right[1]))
+
+
+def _is_matrix(shape):
+    return shape is not None and shape[0] == "matrix"
+
+
+def _matrix_spelling_like(matrix, columns, rows):
+    scalar = "double" if matrix[-1].startswith("d") else "float"
+    return crossgl_matrix_spelling(columns, rows, scalar)
+
+
+def _vector_spelling_like(matrix, lanes):
+    return f"{'d' if matrix[-1].startswith('d') else ''}vec{lanes}"
 
 
 def _contains_call(node):

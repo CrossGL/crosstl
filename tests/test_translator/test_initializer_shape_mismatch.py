@@ -58,6 +58,25 @@ MISMATCHES = [
     ("mat3x4 m = mat4x3(1.0); data[0] = m[0];", "mat3x4", "mat4x3"),
     ("vec4 a = vec4(1.0); mat2 m = a; data[0] = vec4(m[0], m[1]);", "mat2", "vec4"),
     ("vec4 m = vec3(1.0); data[0] = m;", "vec4", "vec3"),
+    # Matrix arithmetic has the shape GLSL 4.60 section 5.10 gives it.
+    (
+        "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec4 m = a * v; data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
+    (
+        "mat4x3 a = mat4x3(1.0); mat3x4 b = mat3x4(1.0); mat4 m = a * b; data[0] = m[0];",
+        "mat4",
+        "mat3",
+    ),
+    (
+        "mat3x4 a = mat3x4(1.0); vec4 v = vec4(1.0); vec4 m = v * a; data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
+    ("mat4x3 a = mat4x3(1.0); mat3x4 m = -a; data[0] = m[0];", "mat3x4", "mat4x3"),
+    ("mat4x3 a = mat4x3(1.0); mat3x4 m = 2.0 * a; data[0] = m[0];", "mat3x4", "mat4x3"),
+    ("mat4x3 a = mat4x3(1.0); mat3x4 m = a + a; data[0] = m[0];", "mat3x4", "mat4x3"),
 ]
 
 
@@ -102,6 +121,13 @@ MATCHING = [
     "mat4x3 a = mat4x3(1.0); mat4x3 m = a; data[0] = vec4(m[0], 1.0);",
     "mat4 a = mat4(1.0); vec4 m = a[1]; data[0] = m;",
     "mat4x3 a = mat4x3(1.0); vec3 m = a * vec4(1.0); data[0] = vec4(m, 1.0);",
+    "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 m = a * v; data[0] = vec4(m, 1.0);",
+    "mat4x3 a = mat4x3(1.0); vec3 v = vec3(1.0); vec4 m = v * a; data[0] = m;",
+    "mat3x4 a = mat3x4(1.0); vec3 v = vec3(1.0); vec4 m = a * v; data[0] = m;",
+    "mat4x3 a = mat4x3(1.0); mat3x4 b = mat3x4(1.0); mat3 m = a * b; data[0] = vec4(m[0], 1.0);",
+    "mat3x4 a = mat3x4(1.0); mat4x3 b = mat4x3(1.0); mat4 m = a * b; data[0] = m[0];",
+    "mat4x3 a = mat4x3(1.0); mat4x3 m = -a * 2.0 + a / 2.0; data[0] = vec4(m[0], 1.0);",
+    "mat4 a = mat4(1.0); mat4 m = true ? a : a * a; data[0] = m[0];",
     # Same shape, other component type: the conversion is not this check's business.
     "ivec2 a = ivec2(1); uvec2 m = a; data[0] = vec4(m, m);",
     "ivec4 a = ivec4(1); bvec4 m = a; data[0] = vec4(m);",
@@ -148,3 +174,47 @@ def test_texel_read_into_a_narrower_vector_still_translates(tmp_path):
 }
 """
     assert translate(tmp_path, source, "opengl")
+
+
+MODULE = """
+shader main {{
+    {module}
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer vec4 data[];
+        {stage}
+        void main() {{ data[0] = {use}; }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "module,stage,use",
+    [
+        ("const vec3 B = vec3(1.0); const vec4 m = B;", "", "m"),
+        ("vec3 B = vec3(1.0); vec4 m = B;", "", "m"),
+        ("const mat4x3 A = mat4x3(1.0); const vec4 m = A * vec4(1.0);", "", "m"),
+        ("const vec3 B = vec3(1.0);", "vec4 m = B;", "m"),
+    ],
+)
+@pytest.mark.parametrize("backend", ["vulkan", "opengl", "directx", "metal"])
+def test_module_and_stage_scope_declarations_are_checked(
+    tmp_path, backend, module, stage, use
+):
+    source = MODULE.format(module=module, stage=stage, use=use)
+    with pytest.raises(InitializerShapeMismatchError) as caught:
+        translate(tmp_path, source, backend)
+    assert caught.value.name == "m"
+    assert caught.value.declared_type == "vec4"
+    assert caught.value.initializer_type == "vec3"
+
+
+@pytest.mark.parametrize("backend", ["vulkan", "opengl", "directx", "metal"])
+def test_matching_module_scope_declarations_still_translate(tmp_path, backend):
+    source = MODULE.format(
+        module="const vec3 B = vec3(1.0); const vec4 G = vec4(B, 1.0);",
+        stage="",
+        use="G",
+    )
+    assert translate(tmp_path, source, backend)
