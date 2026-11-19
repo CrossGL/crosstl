@@ -5267,6 +5267,10 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 else:
                     if has_kernel and stmt.name == "main":
                         continue
+                    if getattr(
+                        stmt, "body", None
+                    ) is None and self.is_redundant_function_prototype(stmt, node):
+                        continue
                     self.emit_function_local_record_definitions(stmt)
                     self.emit(f"// Function: {stmt.name}")
                     self.visit(stmt)
@@ -5291,6 +5295,55 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 self.emit("")
             else:
                 self.visit(stmt)
+
+    def is_redundant_function_prototype(self, prototype, program):
+        """Whether a function prototype is left out of the CrossGL program.
+
+        A prototype such as ``__device__ float twice(float x);`` adds nothing when the file also defines the
+        function: the definition is written where the file gives it, and writing the prototype too would
+        give CrossGL two functions of that name. A call to a function the file declares but never defines
+        is refused, since there is no body to translate and an empty function is not a faithful stand-in.
+        """
+        argument_count = len(getattr(prototype, "params", None) or [])
+        if any(
+            getattr(candidate, "body", None) is not None
+            for candidate in self.function_definition_candidates(
+                prototype.name, argument_count
+            )
+        ):
+            return True
+        if (prototype.name, argument_count) in self.collect_function_calls(program):
+            self.refuse_import(
+                f"{self.SOURCE_LANGUAGE_NAME} function '{prototype.name}' is called but "
+                "never defined: CrossGL has no function without a body"
+            )
+            return True
+        return False
+
+    def collect_function_calls(self, node):
+        """The ``(name, argument count)`` of every function call in ``node``."""
+        calls = set()
+        pending = [node]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current is None or isinstance(current, (str, int, float, bool)):
+                continue
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            if isinstance(current, (list, tuple)):
+                pending.extend(current)
+                continue
+            if isinstance(current, dict):
+                pending.extend(current.values())
+                continue
+            if not hasattr(current, "__dict__"):
+                continue
+            if isinstance(current, FunctionCallNode) and isinstance(current.name, str):
+                calls.add((current.name, len(getattr(current, "args", None) or [])))
+            pending.extend(vars(current).values())
+        return calls
 
     def format_preprocessor_content(self, content):
         text = str(content).strip()

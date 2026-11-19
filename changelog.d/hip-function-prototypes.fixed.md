@@ -1,0 +1,1 @@
+HIP input leaves out a function prototype such as `__device__ float twice(float x);` when the file also defines the function. The prototype used to become an empty CrossGL function, so the definition that followed was a redefinition that hipcc rejected. A prototype that is called but never defined is refused (#3260).
