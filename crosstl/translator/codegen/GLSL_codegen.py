@@ -245,6 +245,10 @@ from .generic_global_types import (
     collect_constant_and_cbuffer_member_types,
     glsl_preliminary_global_variable_types,
 )
+from .generic_pointer_spaces import (
+    assign_generic_pointer_spaces,
+    refuse_written_generic_pointers,
+)
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -8946,6 +8950,7 @@ class GLSLCodeGen(
         """Render the program and refuse every built-in the target profile does not have."""
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()
         try:
@@ -8954,6 +8959,9 @@ class GLSLCodeGen(
                 code,
                 self.written_foreign_type_names,
                 self.LOWERING_REFUSAL_TYPE.label,
+            )
+            refuse_written_generic_pointers(
+                code, self.refuse_lowering, self.LOWERING_REFUSAL_TYPE.label
             )
         finally:
             self.written_foreign_type_names = None

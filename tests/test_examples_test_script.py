@@ -70,7 +70,9 @@ def test_validate_generated_output_rejects_internal_ast_repr(tmp_path):
 def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
     source = ROOT / "examples" / "advanced" / "GenericPatternMatching.cgl"
     expected_diagnostics = {
-        "cuda": "CUDA codegen cannot emit unresolved generic parameter 'T'",
+        # CUDA and HIP declare only kernels and refuse the example's vertex and fragment entries.
+        "cuda": "CUDA target does not support shader stage(s): fragment, vertex",
+        "hip": "HIP target does not support shader stage(s): fragment, vertex",
         "mojo": "generic payload enum specializations must be concrete",
         "slang": "Slang codegen cannot emit unresolved generic parameter 'T'",
         # SPIR-V specializes the generic helper; the trait method `T::zero()` has no
@@ -103,26 +105,6 @@ def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
 
         assert result.returncode != 0
         assert diagnostic in combined_output
-
-    for backend in ("hip",):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "crosstl._crosstl",
-                "translate",
-                str(source),
-                "--backend",
-                backend,
-                "--no-format",
-                "--output",
-                "-",
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, (result.stdout + result.stderr)[-4000:]
 
 
 @pytest.fixture

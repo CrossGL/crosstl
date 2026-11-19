@@ -35126,17 +35126,6 @@ def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path
     [
         (
             """
-            __kernel void k(__global float* out, __global const float* in) {
-                __global const float *p;
-                p = in;
-                out[get_global_id(0)] = p[get_global_id(0)];
-            }
-            """,
-            ".cl",
-            r"pointer local: 'p' has no initializer",
-        ),
-        (
-            """
             __global__ void k(float* out, const float* in) {
                 __shared__ float tile[64];
                 tile[threadIdx.x] = in[threadIdx.x];
@@ -35164,13 +35153,32 @@ def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path
             r"but target 'p' uses thread",
         ),
     ],
-    ids=["uninitialized", "to-shared", "to-device"],
+    ids=["to-shared", "to-device"],
 )
 def test_metal_refuses_crossgl_pointer_local_of_unknown_address_space(
     tmp_path, source, suffix, message
 ):
     with pytest.raises(MetalLoweringRefused, match=message):
         _translate_pointer_local_kernel(tmp_path, source, suffix)
+
+
+def test_metal_uninitialized_pointer_local_takes_the_space_of_its_assignments(tmp_path):
+    # The OpenCL importer spells the local ptr<f32>; its one assignment points it into the read-only buffer.
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __global const float* in) {
+            __global const float *p;
+            p = in;
+            out[get_global_id(0)] = p[get_global_id(0)];
+        }
+        """,
+        ".cl",
+    )
+
+    assert "const device float* p;" in generated
+    assert "p = in_;" in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_crossgl_local_pointer_local_keeps_threadgroup_initializer(tmp_path):

@@ -137,6 +137,7 @@ from .gpu_subgroup_builtins import (
 )
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
+from .kernel_only_stages import NON_KERNEL_STAGES, refuse_non_kernel_stages
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -165,6 +166,7 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .warp_wave_helpers import HIP_WAVEFRONT, wave_first_lane_test, wave_helper_body
 from .written_function_names import (
     CUDA_CALLABLE_FUNCTION_NAMES,
     refuse_written_foreign_calls,
@@ -1123,7 +1125,7 @@ class HipCodeGen(
         return member_types
 
     def unsupported_stage_types(self):
-        return set()
+        return NON_KERNEL_STAGES
 
     def hip_ray_stage_names(self):
         return {
@@ -1534,9 +1536,7 @@ class HipCodeGen(
                 ):
                     unsupported_stages.add(stage_name)
 
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise HipRefusal(f"HIP output does not support stage type(s): {stage_list}")
+        refuse_non_kernel_stages("hip", "HIP", unsupported_stages)
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""
@@ -5198,7 +5198,7 @@ class HipCodeGen(
             # Warps are formed from linear thread IDs, so a block of more than one dimension needs all three.
             return warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return f"({warp_lane_index_expression()} == 0)"
+            return wave_first_lane_test(HIP_WAVEFRONT, warp_lane_index_expression())
 
         diagnostic = self.wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -5318,10 +5318,19 @@ class HipCodeGen(
             f"{arg_type} {parameter_name}"
             for parameter_name, arg_type in zip(parameter_names, arg_types)
         ]
+        body = wave_helper_body(
+            HIP_WAVEFRONT,
+            operation,
+            result_type,
+            arg_types[0] if arg_types else result_type,
+            warp_lane_index_expression(),
+        )
+        if body is None:
+            raise HipRefusal(f"Unsupported HIP wave intrinsic {operation}")
         helper = (
             f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
             "{\n"
-            f"    return {self.wave_helper_return_expression(operation, result_type)};\n"
+            f"{body}"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -5381,25 +5390,6 @@ class HipCodeGen(
         if operation == "WaveMultiPrefixCountBits":
             return ["predicate", "mask"]
         return ["value", "mask"]
-
-    def wave_helper_return_expression(self, operation, result_type):
-        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            return "predicate"
-        if operation == "WaveActiveAllEqual":
-            return "true"
-        if operation in {
-            "WaveActiveCountBits",
-            "WavePrefixCountBits",
-            "WaveMultiPrefixCountBits",
-        }:
-            return "(predicate ? 1u : 0u)"
-        if operation == "WaveActiveBallot":
-            return "make_uint4((predicate ? 1u : 0u), 0u, 0u, 0u)"
-        if operation == "WaveMatch":
-            return "make_uint4(0u, 0u, 0u, 0u)"
-        if result_type == "bool":
-            return "false"
-        return "value"
 
     def generate_lambda_expression(self, args):
         """Render CrossGL's pseudo-lambda as a HIP device lambda."""
@@ -10686,6 +10676,11 @@ class HipCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            scalar_boolean_type = self.scalar_boolean_builtin_result_type(
+                func_name, raw_args
+            )
+            if scalar_boolean_type is not None:
+                return scalar_boolean_type
             if func_name in self.HIP_SHADER_CLOCK_RESULT_TYPES:
                 return self.HIP_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (

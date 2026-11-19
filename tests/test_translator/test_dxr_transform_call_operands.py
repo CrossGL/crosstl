@@ -107,9 +107,10 @@ def test_transform_calls_convert_like_a_local_of_their_type(tmp_path, backend):
 @pytest.mark.parametrize("backend", ["slang", "directx"])
 def test_a_declared_function_with_a_transform_name_keeps_its_type(tmp_path, backend):
     code = compact(translate(tmp_path, SHADOWED, backend))
-    assert (
-        "float4q=(ObjectToWorld()*p);" in code or "float4q=ObjectToWorld()*p;" in code
-    )
+    # HLSL output renames the program's function, since DXC would read the call as the intrinsic (#4571).
+    name = "ObjectToWorld_" if backend == "directx" else "ObjectToWorld"
+    assert f"float4q=({name}()*p);" in code or f"float4q={name}()*p;" in code
+    assert f"mul({name}(),p)" not in code
     assert "mul(ObjectToWorld(),p)" not in code
 
 

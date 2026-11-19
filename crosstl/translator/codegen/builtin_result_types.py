@@ -155,6 +155,8 @@ _BOOL_VECTOR = frozenset(
     {"lessThan", "lessThanEqual", "greaterThan", "greaterThanEqual", "equal", "notEqual", "not", "isnan", "isinf"}
 )  # fmt: skip
 _BOOL_SCALAR = frozenset({"any", "all"})
+# Built-ins with a bool result that every emitter types the same way (boolean_builtin_result_type).
+BOOLEAN_RESULT_BUILTINS = _BOOL_SCALAR | {"isnan", "isinf"}
 # Functions with a fixed result scalar and their argument's width (sections 8.3 and 8.8).
 _FIXED_SCALAR = {
     "floatBitsToInt": "int",
@@ -250,6 +252,19 @@ def builtin_call_result_type(name, argument_types, family):
             return format_type(shapes[-1].scalar, width, result_family)
         return format_type(first.scalar, width, result_family)
     return None
+
+
+def boolean_builtin_result_type(name, argument_types, family):
+    """``bool`` for ``any``/``all`` and the ``bool``/``boolN`` of the argument for ``isnan``/``isinf``, else ``None``.
+
+    These are the built-ins a ``mix`` selector most often calls (GLSL 4.60 sections 8.3 and 8.7).  ``any`` and ``all``
+    return ``bool`` whatever their argument; ``isnan`` and ``isinf`` need the argument's type for their width.
+    """
+    if name not in BOOLEAN_RESULT_BUILTINS or len(argument_types) != 1:
+        return None
+    if name in _BOOL_SCALAR:
+        return "bool"
+    return builtin_call_result_type(name, argument_types, family)
 
 
 def inferred_value_type(emitter, expression, family):

@@ -1,0 +1,40 @@
+; SPIR-V
+; Version: 1.0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gid
+               OpExecutionMode %main LocalSize 64 1 1
+               OpDecorate %gid BuiltIn GlobalInvocationId
+               OpDecorate %_rt ArrayStride 4
+               OpMemberDecorate %Buf 0 Offset 0
+               OpDecorate %Buf BufferBlock
+               OpDecorate %buf DescriptorSet 0
+               OpDecorate %buf Binding 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+   %p_v3uint = OpTypePointer Input %v3uint
+        %gid = OpVariable %p_v3uint Input
+        %_rt = OpTypeRuntimeArray %float
+        %Buf = OpTypeStruct %_rt
+      %p_Buf = OpTypePointer Uniform %Buf
+        %buf = OpVariable %p_Buf Uniform
+     %uint_0 = OpConstant %uint 0
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+    %p_float = OpTypePointer Uniform %float
+     %float1 = OpConstant %float 1
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+         %g3 = OpLoad %v3uint %gid
+          %x = OpCompositeExtract %uint %g3 0
+         %pa = OpAccessChain %p_float %buf %int_0 %x
+          %v = OpLoad %float %pa
+          %m = OpExtInst %float %1 NMin %v %float1
+          %n = OpExtInst %float %1 NMax %m %float1
+               OpStore %pa %n
+               OpReturn
+               OpFunctionEnd

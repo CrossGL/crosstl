@@ -602,7 +602,9 @@ def test_opencl_program_constant_binds_before_kernel_buffers(tmp_path):
     opencl_path.write_text(CONSTANT_TABLE_KERNEL_SOURCE, encoding="utf-8")
     metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
 
-    assert "constant float* coeffs_table [[buffer(0)]]" in metal
+    # The initialized program constant holds its values; it used to become a buffer the host had to fill.
+    assert "constant float coeffs_table[4] = {1.0, 2.0, 3.0, 4.0};" in metal
+    assert "[[buffer(0)]]" not in metal
     assert "device float* out [[buffer(1)]]" in metal
 
 
@@ -774,7 +776,8 @@ def test_opencl_multiline_constant_qualifier_after_static_or_const(
     opencl_path.write_text(source, encoding="utf-8")
     metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
 
-    assert "constant float* table [[buffer(0)]]" in metal
+    assert "constant float table[4] = {1.0, 2.0, 3.0, 4.0};" in metal
+    assert "[[buffer(0)]]" not in metal
     assert "device float* out [[buffer(1)]]" in metal
 
 
