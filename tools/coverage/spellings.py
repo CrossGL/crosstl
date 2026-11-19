@@ -322,7 +322,8 @@ COUNTERPARTS = {
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
     # Mojo returns both parts of frexp and modf as a tuple. std.atomic's static load and store are CrossGL's relaxed
-    # atomicLoad and atomicStore, and its max and min return nothing.
+    # atomicLoad and atomicStore, and its max and min return nothing. Atomic.fetch_sub takes an Atomic value, where
+    # CrossGL's atomicAdd, which it is of the negated operand (:data:`OTHER_NAMES`), takes the buffer element.
     "mojo": {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
@@ -330,6 +331,7 @@ COUNTERPARTS = {
         "Atomic.store": "void atomicStore(inout int, int)",
         "Atomic.max": "void atomicMax(inout int, int)",
         "Atomic.min": "void atomicMin(inout int, int)",
+        "Atomic.fetch_sub": "int atomicAdd(inout int, int)",
     },
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
@@ -616,10 +618,13 @@ OTHER_NAMES = {
         "warp.match_any": "__match_any_sync(4294967295u, {0})",
         "syncwarp": "subgroupBarrier",
         # max.gpu's lane_id is the invocation's index in its warp, and warp_id divides the x index in the block by the
-        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced.
+        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced, and
+        # Atomic.fetch_sub, which CrossGL has no operation of its own for, is an atomicAdd of the negated operand,
+        # which wraps to the same result.
         "lane_id": "int64(gl_SubgroupInvocationID)",
         "warp_id": "int64(gl_LocalInvocationID.x / gl_SubgroupSize)",
         "Atomic.fetch_add": "atomicAdd",
+        "Atomic.fetch_sub": "atomicAdd({0}, -({1}))",
         # std.atomic's fence is sequentially consistent by default (atomic.mojo, _DEFAULT_MEMORY_ORDERING), as CUDA's
         # __threadfence is.
         "fence": "memoryBarrier",

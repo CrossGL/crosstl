@@ -177,6 +177,11 @@ class Mojo(Dialect):
         # An atomic operation takes a pointer to the output buffer's element.
         return "outp + i"
 
+    def atomic_argument(self, kind: Type) -> str:
+        # An Atomic's only field is the value it holds (std/atomic/atomic.mojo, Atomic._value), so the output
+        # buffer's element, viewed as an Atomic, is the receiver of an Atomic method.
+        return f"(outp + i).bitcast[Atomic[{self.type(kind)}]]()[]"
+
     def discard(self, expression: str) -> str:
         return f"_ = {expression}"
 

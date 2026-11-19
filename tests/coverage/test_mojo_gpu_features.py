@@ -1,6 +1,8 @@
 """The Mojo feature list's GPU functions, read from the gpu package: warp, block, sync, index and atomic."""
 
-from tools.coverage import probes
+import pytest
+
+from tools.coverage import probes, validators
 from tools.coverage.execution import THREADS
 from tools.coverage.features import mojo
 from tools.coverage.model import VOID, Param, Signature, Type
@@ -326,10 +328,13 @@ struct Atomic[T: Deinitable & Movable, *, scope: StaticString = ""]:
     ) -> Scalar[dtype] where (Self.T == Scalar[dtype]):
         return value
 
+    @__allow_legacy_custom_self_type
     @inline(.always)
     def fetch_sub[
-        *, ordering: Ordering = _DEFAULT_ARITHMETIC_ORDERING
-    ](mut self, rhs: Self.T) -> Self.T:
+        dtype: DType, //, *, ordering: Ordering = _DEFAULT_ARITHMETIC_ORDERING
+    ](mut self: Atomic[Scalar[dtype], scope=_], rhs: Scalar[dtype]) -> Scalar[
+        dtype
+    ]:
         return rhs
 
     @staticmethod
@@ -401,7 +406,7 @@ def test_mojo_reads_the_gpu_index_functions_but_not_the_index_values():
     assert "    var r: Int = lane_id()\n" in source
 
 
-def test_mojo_reads_atomic_static_methods_and_lists_value_methods_untested():
+def test_mojo_reads_atomic_static_methods_and_value_methods():
     features = _all_features()
     atomic = {name for name, f in features.items() if f.group == "atomic"}
     # Private methods are skipped, and a name with a static and a value overload is probed through the static one.
@@ -424,11 +429,15 @@ def test_mojo_reads_atomic_static_methods_and_lists_value_methods_untested():
     assert features["Atomic.load"].counterpart == Signature(
         Type("int"), (Param(Type("int"), "inout"),)
     )
+    # fetch_sub has no static form: its receiver is an Atomic value, and CrossGL adds the negated operand.
     fetch_sub = features["Atomic.fetch_sub"]
-    assert fetch_sub.signature is None
-    assert fetch_sub.note == (
-        "a method of an Atomic value only, and the probes call Atomic's static methods on a buffer element"
+    assert fetch_sub.signature == Signature(
+        Type("int"), (Param(Type("int"), "atomic"), Param(Type("int")))
     )
+    assert fetch_sub.spelling == "Atomic.fetch_sub[ordering=Ordering.RELAXED]"
+    assert fetch_sub.note == ""
+    assert fetch_sub.crossgl == "atomicAdd({0}, -({1}))"
+    assert fetch_sub.counterpart == fetch_add.signature
     assert features["fence"].extension == "std.atomic.fence"
     assert features["fence"].crossgl == "memoryBarrier"
 
@@ -445,3 +454,33 @@ def test_mojo_atomic_probes_pass_the_buffer_element_and_discard_the_result():
     crossgl = probes.build(features["Atomic.fetch_add"], "crossgl").source
     assert "atomicAdd(outp[i], a1);" in crossgl
     assert "import" not in crossgl
+
+
+def test_mojo_atomic_value_methods_take_the_buffer_element_as_an_atomic():
+    fetch_sub = _all_features()["Atomic.fetch_sub"]
+    source = probes.build(fetch_sub, "mojo").source
+    assert (
+        "    _ = Atomic.fetch_sub[ordering=Ordering.RELAXED]"
+        "((outp + i).bitcast[Atomic[Int32]]()[], a1)\n"
+    ) in source
+    assert "outp: UnsafePointer[Int32, MutAnyOrigin]" in source
+    # The CrossGL probe calls the counterpart on the buffer element itself.
+    assert "atomicAdd(outp[i], -(a1));" in probes.build(fetch_sub, "crossgl").source
+    with pytest.raises(probes.ProbeError, match="glsl has no atomic values"):
+        probes.build(fetch_sub, "glsl")
+
+
+@pytest.mark.skipif(
+    not validators.available("mojo"), reason="the Mojo compiler is not installed"
+)
+def test_mojo_type_checks_the_atomic_value_method_probe():
+    fetch_sub = _all_features()["Atomic.fetch_sub"]
+    for baseline in (False, True):
+        probe = probes.build(fetch_sub, "mojo", baseline=baseline)
+        verdict = validators.validate("mojo", probe.source, entry=probe.entry)
+        assert verdict.accepted, verdict.log
+    # The compiler checks the call: an operand of another type than the Atomic's is an error.
+    probe = probes.build(fetch_sub, "mojo")
+    wrong = probe.source.replace("()[], a1)", "()[], Float32(1.5))")
+    assert wrong != probe.source
+    assert not validators.validate("mojo", wrong, entry=probe.entry).accepted

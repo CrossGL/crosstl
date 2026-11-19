@@ -236,6 +236,7 @@ def tuple_element(opaque: str) -> tuple[Type, int] | None:
 @dataclass(frozen=True)
 class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
+    ``atomic``, an atomic value whose method the probe calls, made of the output buffer's element,
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
     value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
     a uniform, ``workgroup``, a variable the compute workgroup shares, ``workgroup address`` and ``constant address``,
