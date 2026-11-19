@@ -171,10 +171,8 @@ def test_mojo_probes_warp_reductions_over_the_whole_warp():
     assert (
         reduce.note == "no CrossGL warp reduction applies a function the kernel passes"
     )
-    # A comment in a parameter list is not part of a parameter's kind.
-    assert features["named_barrier"].note == (
-        "no probe value for the parameter num_threads: Int32"
-    )
+    # A comment in a parameter list is not part of a parameter's kind: num_threads is an Int32, which the call names.
+    assert features["named_barrier"].spelling == f"named_barrier[num_threads={THREADS}]"
 
 
 def test_mojo_names_the_mask_type_of_votes_and_matches():
