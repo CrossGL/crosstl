@@ -379,6 +379,7 @@ from .hlsl_narrow_system_values import (
     hlsl_narrow_compute_system_value_bridge,
 )
 from .hlsl_precise_functions import HLSLPreciseFunctionMixin
+from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
@@ -2842,6 +2843,7 @@ class HLSLCodeGen(
         self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
         self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        self.hlsl_program_functions = None
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
@@ -3835,7 +3837,9 @@ class HLSLCodeGen(
 
     HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT = 4
 
-    def generate_hlsl_program_with_narrow_pointer_layouts(self, ast, target_stage):
+    def generate_hlsl_program_with_narrow_pointer_layouts(
+        self, ast, target_stage, narrow_parameters=None
+    ):
         """Generate HLSL whose helper pointers keep their callers' byte layout.
 
         A DirectX root buffer stores each 8- or 16-bit source element in its own
@@ -3846,9 +3850,15 @@ class HLSLCodeGen(
         pass widened storage are regenerated with element-indexed reads, and a
         helper that receives both layouts is rejected. Output is returned only
         from a complete pass whose recorded layouts reproduce its assumptions.
+
+        Every pass renders a copy, so ``ast`` itself is left unchanged
+        exactly when it has such parameters; ``narrow_parameters`` is that
+        answer when the caller has already computed it.
         """
         self.hlsl_widened_narrow_pointer_parameters = frozenset()
-        if not self.hlsl_ast_has_narrow_storage_pointer_parameters(ast):
+        if narrow_parameters is None:
+            narrow_parameters = self.hlsl_ast_has_narrow_storage_pointer_parameters(ast)
+        if not narrow_parameters:
             self.hlsl_narrow_pointer_argument_layouts = None
             return self._generate_program(ast, target_stage)
         widened = frozenset()
@@ -3862,7 +3872,9 @@ class HLSLCodeGen(
                 self.hlsl_widened_narrow_pointer_parameters = widened
                 self.hlsl_narrow_pointer_argument_layouts = {}
                 try:
-                    code = self._generate_program(deepcopy(ast), target_stage)
+                    code = self._generate_program(
+                        deepcopy(ast), target_stage, owned=True
+                    )
                 except Exception as error:
                     # An incomplete pass can still prove widened callers for
                     # helpers emitted before the failure. Retry only when that
@@ -4044,38 +4056,44 @@ class HLSLCodeGen(
         {"early-return-unproven", "potentially-divergent-control-flow"}
     )
 
-    def _generate_program(self, ast, target_stage=None):
+    def _generate_program(self, ast, target_stage=None, owned=False):
         """Render an AST to HLSL, optionally filtering stage entry points.
 
         Software subgroups need every invocation at their barriers. A program
         whose early returns cannot be proven uniform is rendered once more
         with ``converge_subgroup_early_exits``; programs that validate as
         written keep their output, and a failed retry reports the original
-        error.
+        error. ``owned`` says that the caller made ``ast`` for this call alone,
+        so a pass may rewrite it in place instead of copying it first.
         """
         retry = self.software_subgroup_width is not None and has_subgroup_early_exits(
             ast, self.walk_ast
         )
         pristine = deepcopy(ast) if retry else None
         try:
-            return self._generate_program_attempt(ast, target_stage, False)
+            return self._generate_program_attempt(ast, target_stage, False, owned=owned)
         except DirectXSoftwareSubgroupError as error:
             if not retry or error.reason not in self.HLSL_EARLY_EXIT_RETRY_REASONS:
                 raise
             try:
-                return self._generate_program_attempt(pristine, target_stage, True)
+                return self._generate_program_attempt(
+                    pristine, target_stage, True, owned=True
+                )
             except DirectXSoftwareSubgroupError:
                 raise error from None
+        finally:
+            self.hlsl_program_functions = None
 
-    def _generate_program_attempt(self, ast, target_stage, early_exits):
+    def _generate_program_attempt(self, ast, target_stage, early_exits, owned=False):
         self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        self.hlsl_program_functions = None
         ast = lower_resource_aggregates(
             ast,
             workgroup_access_assertions=getattr(
                 self, "workgroup_access_assertions", ()
             ),
         )
-        ast = lower_reference_aliases(ast)
+        ast = lower_reference_aliases(ast, copy=not owned)
         ast = lower_private_vector_views(ast, "directx")
         ast = canonicalize_separate_textures(ast)
         # HLSL resource parameters cannot carry a caller's pointer rebase, so
@@ -4486,6 +4504,7 @@ class HLSLCodeGen(
         self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
+        self.hlsl_program_functions = HlslProgramFunctions(ast, functions)
         self.hlsl_compute_num_workgroups_uniform = (
             self.hlsl_compute_num_workgroups_uniform_names(
                 ast, target_stage, cbuffers, global_vars, functions
@@ -4759,6 +4778,7 @@ class HLSLCodeGen(
             for name in self.global_mixed_sampler_names
         }
         self.validate_explicit_sampler_role_conflicts(ast)
+        self.hlsl_program_functions = None
         code = "\n"
         code += source_license_comments(ast, "directx")
         preprocessors = getattr(ast, "preprocessors", []) or []
@@ -41550,6 +41570,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return False
 
     def collect_functions(self, root):
+        kept = getattr(self, "hlsl_program_functions", None)
+        if kept is not None and (functions := kept.lookup(root)) is not None:
+            return functions
         functions = []
         for node in self.walk_ast(root):
             if hasattr(node, "body") and hasattr(node, "parameters"):
