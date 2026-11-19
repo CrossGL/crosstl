@@ -1093,7 +1093,19 @@ class VulkanToCrossGLConverter:
         return code
 
     def storage_buffer_block_type_name(self, node):
+        # An OpName is only debug information, so a block may be named like the resource type that will wrap
+        # it: slangc names the block of every RWStructuredBuffer<T> ``RWStructuredBuffer``. Declaring the struct
+        # under that name and wrapping it as ``RWStructuredBuffer<RWStructuredBuffer>`` reads as a buffer of
+        # buffers, and the struct's runtime array is then refused as an unsized array that ends no storage
+        # buffer. Such a block takes a suffixed name, as a block whose name is already used does. A block named
+        # like the other wrapper (``StructuredBuffer`` on a writable block) does not collide, so it keeps its
+        # name.
         base_name = node.block_name or node.variable_name or "StorageBuffer"
+        wrapper = (
+            "StructuredBuffer"
+            if "readonly" in getattr(node, "declaration_qualifiers", [])
+            else "RWStructuredBuffer"
+        )
         signature = tuple(
             (str(field_type), str(field_name))
             for field_type, field_name in getattr(node, "struct_fields", []) or []
@@ -1106,6 +1118,7 @@ class VulkanToCrossGLConverter:
         if (
             existing_signature is None
             and base_name not in self.used_global_declaration_names
+            and base_name != wrapper
         ) or existing_signature == signature:
             type_name = base_name
         else:

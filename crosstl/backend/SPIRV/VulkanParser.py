@@ -2201,9 +2201,10 @@ class VulkanParser:
                 "OpInBoundsPtrAccessChain",
             }:
                 if len(operands) >= 3:
-                    access = self.spirv_assembly_access_chain_expression(
+                    access = self.spirv_assembly_ptr_access_chain_expression(
                         operands[1],
-                        operands[2:],
+                        operands[2],
+                        operands[3:],
                         expressions,
                         names,
                         decorations,
@@ -2212,6 +2213,7 @@ class VulkanParser:
                         types,
                         variables_by_id,
                         constants,
+                        expression_type_ids=expression_type_ids,
                     )
                     expressions[result_id] = access
                     expression_type_ids[result_id] = operands[0]
@@ -3151,6 +3153,99 @@ class VulkanParser:
             if expression_type_ids is not None
             else None
         )
+        return walk_indices(
+            self,
+            access,
+            pointee,
+            index_operands,
+            lambda operand: self.spirv_assembly_operand_expression(
+                operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+                variables_by_id=variables_by_id,
+                types=types,
+            ),
+            member_names,
+            types,
+            constants,
+        )
+
+    def spirv_assembly_ptr_access_chain_expression(
+        self,
+        base_operand,
+        element_operand,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+        expression_type_ids=None,
+    ):
+        """``OpPtrAccessChain``: its Element operand advances the base pointer, it is not a traversal index.
+
+        spirv-val walks only the remaining Indexes from the base pointer's pointee type (the Element is
+        skipped), and SPIRV-Tools' ``CombineAccessChains`` folds an Element into the last index of the
+        base chain (``var[1][0]`` plus Element 2 becomes ``var[1][0 + 2]``). Treating the Element as
+        another index imported ``&outp[0] + i`` as ``outp[0].__member0[0][i]`` — a subscript on the float
+        element 0 — and the SPIR-V generator re-emitted that as an ``OpAccessChain`` that reaches the
+        float while indexes remain. The Element instead adds to the subscript that selects the object the
+        base pointer points at. A bare object advanced by zero stays itself, so its Indexes still traverse
+        it; a bare object advanced by anything else has no CrossGL form and is refused.
+        """
+        access = self.spirv_assembly_operand_expression(
+            base_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+            variables_by_id=variables_by_id,
+            types=types,
+        )
+        pointee = (
+            chain_base_pointee(
+                base_operand, types, variables_by_id, expression_type_ids
+            )
+            if expression_type_ids is not None
+            else None
+        )
+        element = self.spirv_assembly_operand_expression(
+            element_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+            variables_by_id=variables_by_id,
+            types=types,
+        )
+        if isinstance(access, ArrayAccessNode):
+            # The base pointer selects an element of an array; the Element moves to a sibling element.
+            access = ArrayAccessNode(
+                access.array, BinaryOpNode(access.index, "+", element)
+            )
+        elif (
+            pointee is not None
+            and types.get(pointee, {}).get("kind")
+            not in {"array", "runtime_array", "vector", "matrix", "struct"}
+            and isinstance(access, VariableNode)
+        ):
+            # A bare pointer variable to a scalar: the Element selects an element of the array it points
+            # into.
+            access = ArrayAccessNode(access, element)
+        elif self.spirv_integer_constant_operand(element_operand, constants) == 0:
+            # Advancing a bare object by zero leaves it where it is; the Indexes then traverse it.
+            pass
+        else:
+            raise SpirvInstructionUnsupportedError(
+                "OpPtrAccessChain",
+                "advances a bare pointer by a nonzero Element, which has no CrossGL form: only a "
+                "pointer that already selects an array element can be moved",
+            )
         return walk_indices(
             self,
             access,
