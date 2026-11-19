@@ -225,7 +225,7 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
             continue
         closure = _CLOSURE.fullmatch(bounds.strip())
         if closure:
-            # A closure keeps its bound as its type, from which a probe writes one (kernels.Rust.handle).
+            # A closure keeps its bound as its type, from which a probe writes one (..rust.Rust.handle).
             arguments = ", ".join(separated(closure.group(2)))
             types[name] = Type.other(
                 f"{closure.group(1)}({arguments}) -> {closure.group(3)}"

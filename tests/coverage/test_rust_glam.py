@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import probes
+from tools.coverage import probes, validators
 from tools.coverage.features import glam, rust
 from tools.coverage.model import Param, Signature, Type
 
@@ -57,6 +57,14 @@ impl Mat4 {
         Self::ZERO
     }
 
+    pub const fn to_cols_array_2d(&self) -> [[f32; 4]; 4] {
+        [[0.0; 4]; 4]
+    }
+
+    pub fn col_mut(&mut self, index: usize) -> &mut Vec4 {
+        &mut self.x_axis
+    }
+
     pub const fn from_cols_slice(slice: &[f32]) -> Self {
         Self::ZERO
     }
@@ -105,6 +113,14 @@ impl Quat {
 
     pub fn as_dquat(self) -> DQuat {
         DQuat::IDENTITY
+    }
+
+    pub fn from_affine3(a: &crate::Affine3) -> Self {
+        Self::IDENTITY
+    }
+
+    pub fn from_affine3a(a: &crate::Affine3A) -> Self {
+        Self::IDENTITY
     }
 }
 """
@@ -200,9 +216,41 @@ def test_glam_arrays_and_slices_are_read_as_glam_reads_them():
     # Every invocation reads a slice's first elements, so CrossGL reads them from the buffer.
     crossgl = probes.build(features["Mat4::from_cols_slice"], "crossgl").source
     assert "mat4 r = mat4(fin[0], fin[1]," in crossgl
-    # A probe passes arrays of values only.
-    with pytest.raises(probes.ProbeError, match=r"\[\[f32; 4\]; 4\]"):
-        probes.build(features["Mat4::from_cols_array_2d"], "rust")
+    # Column arrays are made from the flat array's elements, which CrossGL reads as from_cols_array's.
+    columns = features["Mat4::from_cols_array_2d"]
+    source = probes.build(columns, "rust").source
+    assert "let a0: [f32; 16] = [fin[i + 0]," in source
+    assert (
+        "Mat4::from_cols_array_2d(&[[a0[0], a0[1], a0[2], a0[3]], [a0[4], a0[5], a0[6], a0[7]], "
+        "[a0[8], a0[9], a0[10], a0[11]], [a0[12], a0[13], a0[14], a0[15]]])"
+    ) in source
+    assert (
+        probes.build(columns, "crossgl").source == probes.build(array, "crossgl").source
+    )
+    # A result's column arrays are stored as its first column, as a matrix is.
+    source = probes.build(features["Mat4::to_cols_array_2d"], "rust").source
+    assert "let r: Vec4 = Vec4::from((a0.to_cols_array_2d())[0]);" in source
+
+
+def test_glam_column_references_are_read_through():
+    source = probes.build(parse()["Mat4::col_mut"], "rust").source
+    assert "let mut a0: Mat4 = Mat4::from_cols(" in source
+    assert "let r: Vec4 = *(a0.col_mut(a1));" in source
+
+
+def test_glam_affine_transforms_are_made_from_their_matrix():
+    features = parse()
+    source = probes.build(features["Quat::from_affine3"], "rust").source
+    assert "let a0: Mat3 = Mat3::from_cols(" in source
+    assert (
+        "Vec4::from(Quat::from_affine3(&Affine3 { matrix3: a0, translation: Vec3::ZERO }))"
+        in source
+    )
+    source = probes.build(features["Quat::from_affine3a"], "rust").source
+    assert (
+        "Quat::from_affine3a(&Affine3A { matrix3: Mat3A::from(a0), translation: Vec3A::ZERO })"
+        in source
+    )
 
 
 def test_glam_quaternions_are_crossgl_vec4s():
@@ -231,6 +279,26 @@ def test_glam_aligned_types_are_made_from_and_read_as_plain_ones():
     source = probes.build(vec3a, "rust").source
     assert "Vec3::from(a0.mul_vec3a(Vec3A::from(a1)))" in source
     assert vec3a.counterpart.params[1] == Param(Type("float", (3,)))
+
+
+@pytest.mark.skipif(
+    not validators.available("rust"), reason="rust-gpu is not installed"
+)
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Mat4::from_cols_array_2d",
+        "Mat4::to_cols_array_2d",
+        "Mat4::col_mut",
+        "Quat::from_affine3",
+        "Quat::from_affine3a",
+    ],
+)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_glam_array_reference_and_affine_probes_compile_with_rust_gpu(name, baseline):
+    probe = probes.build(parse()[name], "rust", baseline=baseline)
+    verdict = validators.validate("rust", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
 
 
 def test_glam_options_and_tuples_of_matrices_are_read():
