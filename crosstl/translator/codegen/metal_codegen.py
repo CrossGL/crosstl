@@ -510,6 +510,10 @@ from .metal_texture_coherence import (
 )
 from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
+from .metal_type_name_memo import (
+    memoized_bare_metal_type,
+    note_unmemoized_metal_mapping,
+)
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .metal_wave_extended import (
@@ -28768,8 +28772,15 @@ class MetalCodeGen(
             resolved = self.type_name_string(aliases[resolved])
         return resolved
 
-    def map_type(self, vtype):
-        """Map types to Metal equivalents, handling both strings and TypeNode objects."""
+    def map_type(self, vtype, *, memoized=True):
+        """Map types to Metal equivalents, handling both strings and TypeNode objects.
+
+        ``memoized=False`` skips the bare type-name memo (``metal_type_name_memo``).
+        """
+        if memoized:
+            if vtype.__class__ is str:
+                return memoized_bare_metal_type(self, vtype)
+            note_unmemoized_metal_mapping(self)
         if vtype is None:
             return "float"
 
