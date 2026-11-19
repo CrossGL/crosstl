@@ -3835,7 +3835,9 @@ class HLSLCodeGen(
 
     HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT = 4
 
-    def generate_hlsl_program_with_narrow_pointer_layouts(self, ast, target_stage):
+    def generate_hlsl_program_with_narrow_pointer_layouts(
+        self, ast, target_stage, narrow_parameters=None
+    ):
         """Generate HLSL whose helper pointers keep their callers' byte layout.
 
         A DirectX root buffer stores each 8- or 16-bit source element in its own
@@ -3846,9 +3848,15 @@ class HLSLCodeGen(
         pass widened storage are regenerated with element-indexed reads, and a
         helper that receives both layouts is rejected. Output is returned only
         from a complete pass whose recorded layouts reproduce its assumptions.
+
+        Every pass renders a copy, so ``ast`` itself is left unchanged
+        exactly when it has such parameters; ``narrow_parameters`` is that
+        answer when the caller has already computed it.
         """
         self.hlsl_widened_narrow_pointer_parameters = frozenset()
-        if not self.hlsl_ast_has_narrow_storage_pointer_parameters(ast):
+        if narrow_parameters is None:
+            narrow_parameters = self.hlsl_ast_has_narrow_storage_pointer_parameters(ast)
+        if not narrow_parameters:
             self.hlsl_narrow_pointer_argument_layouts = None
             return self._generate_program(ast, target_stage)
         widened = frozenset()
@@ -3862,7 +3870,9 @@ class HLSLCodeGen(
                 self.hlsl_widened_narrow_pointer_parameters = widened
                 self.hlsl_narrow_pointer_argument_layouts = {}
                 try:
-                    code = self._generate_program(deepcopy(ast), target_stage)
+                    code = self._generate_program(
+                        deepcopy(ast), target_stage, owned=True
+                    )
                 except Exception as error:
                     # An incomplete pass can still prove widened callers for
                     # helpers emitted before the failure. Retry only when that
@@ -4044,30 +4054,33 @@ class HLSLCodeGen(
         {"early-return-unproven", "potentially-divergent-control-flow"}
     )
 
-    def _generate_program(self, ast, target_stage=None):
+    def _generate_program(self, ast, target_stage=None, owned=False):
         """Render an AST to HLSL, optionally filtering stage entry points.
 
         Software subgroups need every invocation at their barriers. A program
         whose early returns cannot be proven uniform is rendered once more
         with ``converge_subgroup_early_exits``; programs that validate as
         written keep their output, and a failed retry reports the original
-        error.
+        error. ``owned`` says that the caller made ``ast`` for this call alone,
+        so a pass may rewrite it in place instead of copying it first.
         """
         retry = self.software_subgroup_width is not None and has_subgroup_early_exits(
             ast, self.walk_ast
         )
         pristine = deepcopy(ast) if retry else None
         try:
-            return self._generate_program_attempt(ast, target_stage, False)
+            return self._generate_program_attempt(ast, target_stage, False, owned=owned)
         except DirectXSoftwareSubgroupError as error:
             if not retry or error.reason not in self.HLSL_EARLY_EXIT_RETRY_REASONS:
                 raise
             try:
-                return self._generate_program_attempt(pristine, target_stage, True)
+                return self._generate_program_attempt(
+                    pristine, target_stage, True, owned=True
+                )
             except DirectXSoftwareSubgroupError:
                 raise error from None
 
-    def _generate_program_attempt(self, ast, target_stage, early_exits):
+    def _generate_program_attempt(self, ast, target_stage, early_exits, owned=False):
         self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
         ast = lower_resource_aggregates(
             ast,
@@ -4075,7 +4088,7 @@ class HLSLCodeGen(
                 self, "workgroup_access_assertions", ()
             ),
         )
-        ast = lower_reference_aliases(ast)
+        ast = lower_reference_aliases(ast, copy=not owned)
         ast = lower_private_vector_views(ast, "directx")
         ast = canonicalize_separate_textures(ast)
         # HLSL resource parameters cannot carry a caller's pointer rebase, so

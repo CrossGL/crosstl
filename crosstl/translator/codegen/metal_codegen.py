@@ -559,6 +559,7 @@ from .storage_image_texels import (
     texel_vector_type,
 )
 from .storage_word_views import reinterpret_source_layout
+from .texture_call_names import names_sampled_texture_operation
 from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
@@ -25254,13 +25255,29 @@ class MetalCodeGen(
             return False
         return self.texture_call_uses_explicit_sampler(args)
 
+    # The answers of texture_call_uses_explicit_sampler during one texture call attempt (texture_call_names).
+    explicit_sampler_answers = None
+
     def texture_call_uses_explicit_sampler(self, args):
+        answers = self.explicit_sampler_answers
+        if answers is not None:
+            known = answers.get(id(args))
+            if known is not None and known[0] is args:
+                return known[1]
+        answer = self.texture_call_names_explicit_sampler(args)
+        if answers is not None:
+            answers[id(args)] = (args, answer)
+        return answer
+
+    def texture_call_names_explicit_sampler(self, args):
         if len(args) < 2:
             return False
-        sampler_name = self.expression_name(args[1]) or self.generate_expression(
-            args[1]
-        )
-        if sampler_name in self.sampler_variable_names():
+        sampler_names = self.sampler_variable_names()
+        sampler_name = self.expression_name(args[1])
+        if not sampler_name and (sampler_names or self.program_scope_sampler_constants):
+            # Rendered only when some sampler name could match the text.
+            sampler_name = self.generate_expression(args[1])
+        if sampler_name in sampler_names:
             return True
         if sampler_name in self.program_scope_sampler_constants or (
             is_sampler_constructor(args[1])
@@ -28292,6 +28309,16 @@ class MetalCodeGen(
         return expression
 
     def generate_texture_call_value(self, func_name, args):
+        outermost = self.explicit_sampler_answers is None
+        if outermost:
+            self.explicit_sampler_answers = {}
+        try:
+            return self.attempt_texture_call_value(func_name, args)
+        finally:
+            if outermost:
+                self.explicit_sampler_answers = None
+
+    def attempt_texture_call_value(self, func_name, args):
         if not func_name:
             return None
         texel_buffer_call = self.metal_texel_buffers.generate_call(func_name, args)
@@ -28333,12 +28360,16 @@ class MetalCodeGen(
         if len(args) < 2:
             return None
 
+        texture_type = self.texture_argument_resource_type(args[0])
+        if texture_type is None and not names_sampled_texture_operation(func_name):
+            # Nothing below applies; the caller generates this call's arguments (texture_call_names).
+            return None
+
         parts = self.texture_call_parts(args)
         if parts is None:
             return None
 
         texture_name, sampler_arg, coord, extra_args = parts
-        texture_type = self.texture_argument_resource_type(args[0])
         storage_image_operation = self.storage_image_texture_operation_expression(
             func_name, texture_type
         )
