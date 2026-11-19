@@ -5,7 +5,7 @@ import pytest
 from tools.coverage import probes, validators
 from tools.coverage.execution import THREADS
 from tools.coverage.features import mojo
-from tools.coverage.model import VOID, Param, Signature, Type
+from tools.coverage.model import REDUCE_CLOSURE, VOID, Param, Signature, Type
 
 from .mojo_cases import (
     MOJO_BIT,
@@ -41,15 +41,31 @@ def shuffle_down[
 def lane_group_reduce[
     val_type: DType,
     simd_width: SIMDLength,
+    FuncType: _ReduceClosure,
     //,
     shuffle: def[dtype: DType, simd_width: SIMDLength](
         val: SIMD[dtype, simd_width], offset: UInt32
     ) thin -> SIMD[dtype, simd_width],
-    func: def[dtype: DType, width: SIMDLength](
-        SIMD[dtype, width], SIMD[dtype, width]
-    ) capturing -> SIMD[dtype, width],
     num_lanes: Int,
-](val: SIMD[val_type, simd_width]) -> SIMD[val_type, simd_width]:
+    *,
+    stride: Int = 1,
+](val: SIMD[val_type, simd_width], func: FuncType) -> SIMD[
+    val_type, simd_width
+]:
+    return val
+
+
+def reduce[
+    val_type: DType,
+    simd_width: SIMDLength,
+    FuncType: _ReduceClosure,
+    //,
+    shuffle: def[dtype: DType, simd_width: SIMDLength](
+        val: SIMD[dtype, simd_width], offset: UInt32
+    ) thin -> SIMD[dtype, simd_width],
+](val: SIMD[val_type, simd_width], func: FuncType) -> SIMD[
+    val_type, simd_width
+]:
     return val
 
 
@@ -137,6 +153,7 @@ def test_mojo_reads_max_gpu_warp_and_sync_functions():
     assert warp == {
         "warp.shuffle_down",
         "warp.lane_group_reduce",
+        "warp.reduce",
         "warp.lane_group_sum",
         "warp.sum",
         "warp.max",
@@ -166,12 +183,36 @@ def test_mojo_probes_warp_reductions_over_the_whole_warp():
         Type("float"), (Param(Type("float")),)
     )
     assert features["warp.max"].crossgl == "subgroupMax"
-    # A reduction over a function the kernel passes has no probe and no CrossGL operation.
-    reduce = features["warp.lane_group_reduce"]
-    assert reduce.signature is None
-    assert reduce.crossgl == ""
-    assert (
-        reduce.note == "no CrossGL warp reduction applies a function the kernel passes"
+    # A reduction over a function the kernel passes is probed with shuffle_xor and a function the probe defines, the
+    # sum of its two arguments; CrossGL has no operation that applies a passed function.
+    for name in ("warp.reduce", "warp.lane_group_reduce"):
+        reduce = features[name]
+        assert reduce.signature == Signature(
+            Type("float"),
+            (Param(Type("float")), Param(Type.other(REDUCE_CLOSURE))),
+        )
+        assert reduce.crossgl == ""
+        assert (
+            reduce.note
+            == "no CrossGL warp reduction applies a function the kernel passes"
+        )
+        with pytest.raises(probes.NoSpelling, match="applies a function"):
+            probes.build(reduce, "crossgl")
+    assert features["warp.reduce"].spelling == "warp.reduce[shuffle=warp.shuffle_xor]"
+    assert features["warp.lane_group_reduce"].spelling == (
+        "warp.lane_group_reduce[shuffle=warp.shuffle_xor, num_lanes=warp.WARP_SIZE]"
+    )
+    source = probes.build(features["warp.reduce"], "mojo").source
+    assert "\ndef combine[dtype: DType, width: SIMDLength](\n" in source
+    assert "warp.reduce[shuffle=warp.shuffle_xor](a0, combine)" in source
+    # A function parameter the probes have no value for leaves the definition without a probe.
+    defined = mojo.definitions(
+        "def apply[f: def(Float32) -> Float32](x: Float32) -> Float32:\n    return x\n"
+    )
+    assert mojo.signature("apply", defined["apply"], "float") == (
+        None,
+        "",
+        "no probe passes a function as the parameter f",
     )
     # A comment in a parameter list is not part of a parameter's kind: num_threads is an Int32, which the call names.
     assert features["named_barrier"].spelling == f"named_barrier[num_threads={THREADS}]"
@@ -482,5 +523,22 @@ def test_mojo_type_checks_the_atomic_value_method_probe():
     # The compiler checks the call: an operand of another type than the Atomic's is an error.
     probe = probes.build(fetch_sub, "mojo")
     wrong = probe.source.replace("()[], a1)", "()[], Float32(1.5))")
+    assert wrong != probe.source
+    assert not validators.validate("mojo", wrong, entry=probe.entry).accepted
+
+
+@pytest.mark.skipif(
+    not validators.available("mojo"), reason="the Mojo compiler is not installed"
+)
+def test_mojo_type_checks_the_generic_warp_reduction_probes():
+    features = _all_features()
+    for name in ("warp.reduce", "warp.lane_group_reduce"):
+        for baseline in (False, True):
+            probe = probes.build(features[name], "mojo", baseline=baseline)
+            verdict = validators.validate("mojo", probe.source, entry=probe.entry)
+            assert verdict.accepted, verdict.log
+    # The compiler checks the function argument: a value that is not a reduction function is an error.
+    probe = probes.build(features["warp.reduce"], "mojo")
+    wrong = probe.source.replace("(a0, combine)", "(a0, a0)")
     assert wrong != probe.source
     assert not validators.validate("mojo", wrong, entry=probe.entry).accepted

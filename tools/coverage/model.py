@@ -141,6 +141,9 @@ GENERIC_POINTER = "void *"
 # every ALU instruction (max/gpu/sync/sync.mojo).
 SCHEDULE_MASK = "AMDScheduleBarrierMask"
 SCHEDULE_MASK_VALUE = f"{SCHEDULE_MASK}.ALL_ALU"
+# The type of the binary function MAX's generic warp reductions apply (max/gpu/primitives/warp.mojo), which a Mojo
+# probe defines as the sum of its two arguments.
+REDUCE_CLOSURE = "_ReduceClosure"
 # The OpenCL C enumerated types of the synchronization, atomic, event-profiling and enqueue functions, whose arguments
 # are named constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as
 # ``opaque``.

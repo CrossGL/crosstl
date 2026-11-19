@@ -28,7 +28,7 @@ from collections.abc import Callable
 
 from .. import spellings
 from ..execution import THREADS
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import REDUCE_CLOSURE, VOID, Feature, Param, Signature, Type
 from .common import prototype
 
 _EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
@@ -82,8 +82,10 @@ SYNC = "max.gpu.sync"
 GPU = "max.gpu"
 ATOMIC = "std.atomic"
 # A lane-group reduction is probed over the whole warp, where it is the warp reduction CrossGL has. Over fewer lanes
-# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does.
-_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE"}
+# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does. A
+# generic reduction exchanges values with shuffle_xor, which leaves the result in every lane, as warp.mojo's own
+# broadcasting reductions do (_lane_group_broadcast_reduce).
+_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE", "shuffle": "warp.shuffle_xor"}
 # A block reduction is probed over a block of the invocations a subgroup probe runs as one workgroup, a whole number
 # of warps, as block.mojo asserts the block size is.
 _BLOCK_LITERALS = {"block_size": str(THREADS)}
@@ -337,7 +339,11 @@ def signature(
     parameters, arguments, result, body = definition
     element = _element(body, default)
     declared = _parameters(parameters)
-    generics = {n for n, kind, _, _ in declared if kind not in _LITERALS}
+    # A generic constrained to a reduction function is the type of the function the probe passes.
+    closures = {n for n, kind, _, _ in declared if kind == REDUCE_CLOSURE}
+    generics = {
+        n for n, kind, _, _ in declared if kind not in _LITERALS and n not in closures
+    }
     params: list[Param] = []
     by_name: dict[str, Type] = {}
     passed: list[str] = []
@@ -364,6 +370,8 @@ def signature(
             shared = bool(_SHARED.search(held)) or bool(
                 space and space.group(1) in generics
             )
+        elif spelled in closures:
+            mapped = Type.other(REDUCE_CLOSURE)
         else:
             mapped = mojo_type(kind, element, generics, by_name)
         by_name[local] = mapped
@@ -411,6 +419,8 @@ def signature(
             fixed.append(
                 f"{parameter}={(literals or {}).get(parameter, _LITERALS[kind])}"
             )
+        elif kind.startswith("def") and parameter in (literals or {}):
+            fixed.append(f"{parameter}={literals[parameter]}")
         elif kind.startswith("def"):
             return None, "", f"no probe passes a function as the parameter {parameter}"
         else:
