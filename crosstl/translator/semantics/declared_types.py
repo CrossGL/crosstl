@@ -222,32 +222,53 @@ def shared_dead_functions():
 def _find_dead_functions(program):
     """:func:`_dead_functions`, computed."""
     helpers = {}
+    # A call to a generic primary is routed by the generators to its explicit
+    # specializations, so those specializations are written even though no call
+    # names them directly. Track primary name -> explicit specializations.
+    specializations = {}
     for functions in _function_lists(program):
         for function in functions:
             if isinstance(function, A.FunctionNode) and isinstance(function.name, str):
                 helpers.setdefault(function.name, []).append(function)
-    entries = {
-        id(stage.entry_point)
+                spec = (getattr(function, "annotations", None) or {}).get(
+                    "explicit_specialization"
+                )
+                if isinstance(spec, tuple) and spec and isinstance(spec[0], str):
+                    specializations.setdefault(spec[0], []).append(function)
+    entry_functions = [
+        stage.entry_point
         for stage in (getattr(program, "stages", None) or {}).values()
         if isinstance(getattr(stage, "entry_point", None), A.FunctionNode)
-    }
-    if not entries:
+    ]
+    if not entry_functions:
         return set()
+    entry_ids = {id(function) for function in entry_functions}
     every = {id(function) for group in helpers.values() for function in group}
-    skip = every - entries
-    live = set(entries)
-    pending = sorted(_referenced_names(program, skip))
+    skip = every - entry_ids
+    live = set()
+    pending = []
     seen = set()
+
+    def activate(function):
+        fid = id(function)
+        if fid in live:
+            return
+        live.add(fid)
+        pending.extend(sorted(_referenced_names(function, skip - {fid})))
+        # A specialization counts as reached when its primary does.
+        for specialization in specializations.get(function.name, []):
+            activate(specialization)
+
+    for function in entry_functions:
+        activate(function)
+    pending.extend(sorted(_referenced_names(program, skip)))
     while pending:
         name = pending.pop()
         if name in seen:
             continue
         seen.add(name)
         for function in helpers.get(name, []):
-            if id(function) in live:
-                continue
-            live.add(id(function))
-            pending.extend(sorted(_referenced_names(function, skip - {id(function)})))
+            activate(function)
     return every - live
 
 
