@@ -5,6 +5,7 @@ from importlib import import_module
 __all__ = [
     "translate",
     "translate_with_metadata",
+    "translate_entries",
     "TranslationResult",
     "supported_backends",
     "supported_sources",
@@ -31,7 +32,7 @@ def __getattr__(name):
         from ._crosstl import translate
 
         return translate
-    if name in {"translate_with_metadata", "TranslationResult"}:
+    if name in {"translate_with_metadata", "translate_entries", "TranslationResult"}:
         from . import _crosstl
 
         return getattr(_crosstl, name)

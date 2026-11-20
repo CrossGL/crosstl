@@ -54,7 +54,7 @@ _SPELLED = {scalar: name for name, scalar in _NAMED.items()}
 # Argument conventions a probe can pass a local to; ``mut`` makes the argument read-modify-write.
 _CONVENTIONS = frozenset({"mut", "read", "var", "ref", "owned"})
 # Compile-time parameter kinds a probe can fill in with a constant, and the constant it uses.
-_LITERALS = {"Int": "1", "SIMDLength": "1", "Bool": "True"}
+_LITERALS = {"Int": "1", "Int32": "1", "SIMDLength": "1", "Bool": "True"}
 # Operations CrossGL has no spelling for, with the reason.
 UNSPELLED = {
     "divmod": "no CrossGL function returns a quotient and a remainder together",
@@ -85,6 +85,8 @@ _WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE"}
 # A block reduction is probed over a block of the invocations a subgroup probe runs as one workgroup, a whole number
 # of warps, as block.mojo asserts the block size is.
 _BLOCK_LITERALS = {"block_size": str(THREADS)}
+# A named barrier waits for the threads of a whole number of warps (PTX ISA, ``bar.sync``), here those of that block.
+_SYNC_LITERALS = {"num_threads": str(THREADS)}
 # Why a module-qualified function has no CrossGL spelling, by group.
 _UNSPELLED_GROUPS = {
     "block": (
@@ -102,6 +104,9 @@ _RELAXED = {
 _INSTANCE = "a method of an Atomic value only, and the probes call Atomic's static methods on a buffer element"
 # A pointer argument, which a probe passes the output buffer's element as.
 _POINTER = re.compile(r"(?:Mut|Imm|Unsafe)?Pointer\[(.*)\]")
+# The address space of a pointer that a probe passes a workgroup variable as: shared memory, or an address space the
+# call infers, which MAX's memory barriers accept shared memory for (sync.mojo, ``_mbarrier_impl``).
+_SHARED = re.compile(r"address_space=(?:AddressSpace)?\.SHARED")
 
 Definition = tuple[str, str, str, str]
 
@@ -344,8 +349,15 @@ def signature(
         words, _, kind = declaration.partition(":")
         convention, _, local = words.strip().rpartition(" ")
         pointer = _POINTER.fullmatch(re.sub(r"\s+", " ", kind.strip()))
+        shared = False
         if pointer:
-            mapped = mojo_type(_split(pointer.group(1))[0], element, generics, by_name)
+            # ``Pointer[mut=True, type, _, address_space=.SHARED]`` names its mutability before the pointee.
+            pointee = [p for p in _split(pointer.group(1)) if "=" not in p]
+            mapped = mojo_type(pointee[0], element, generics, by_name)
+            space = re.search(r"address_space=(\w+)\b", pointer.group(1))
+            shared = bool(_SHARED.search(pointer.group(1))) or bool(
+                space and space.group(1) in generics
+            )
         else:
             mapped = mojo_type(kind, element, generics, by_name)
         by_name[local] = mapped
@@ -355,7 +367,9 @@ def signature(
             return None, "", f"no probe passes a {convention} argument"
         elif not default_value.strip():
             direction = (
-                "inout" if pointer else "address" if convention == "mut" else "in"
+                "workgroup address"
+                if shared
+                else "inout" if pointer else "address" if convention == "mut" else "in"
             )
             params.append(Param(mapped, direction))
             passed.append(kind)
@@ -452,7 +466,7 @@ def parse(
             definitions(sync),
             exports(sync_init, ".sync"),
             "float",
-            _imported(SYNC),
+            _imported(SYNC, _SYNC_LITERALS),
         ),
         (
             "id",
@@ -531,9 +545,11 @@ def _through(module: str, literals: dict[str, str]) -> Callable[[str], Naming]:
     return lambda name: (f"{short}.{name}", module, literals, None)
 
 
-def _imported(package: str) -> Callable[[str], Naming]:
+def _imported(
+    package: str, literals: dict[str, str] | None = None
+) -> Callable[[str], Naming]:
     """A function a probe imports by name from ``package``."""
-    return lambda name: (name, f"{package}.{name}", None, None)
+    return lambda name: (name, f"{package}.{name}", literals, None)
 
 
 _METHOD = re.compile(r"^((?:@[^\n]*\n)*)def\s+(\w+)", re.M)
