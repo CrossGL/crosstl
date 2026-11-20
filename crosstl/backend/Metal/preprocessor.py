@@ -121,6 +121,7 @@ from .preprocessing.template_struct_arguments import MetalTemplateStructArgument
 from .preprocessing.temporary_functors import MetalTemporaryFunctorMixin
 from .preprocessing.type_inference import MetalTypeInferenceMixin
 from .preprocessing.type_traits import MetalTypeTraitMixin
+from .reference_binding import member_call_result
 from .return_type_enablers import fold_concrete_enablers
 from .simd_group_template_overloads import (
     canonicalize_struct_template_ids,
@@ -2441,6 +2442,13 @@ class MetalPreprocessor(
         known_member_call = self._infer_known_member_function_call_type(expr)
         if known_member_call is not None:
             return known_member_call
+
+        # `receiver.method(args)` on a tracked struct (reference_binding.py).
+        receiver_call = member_call_result(
+            self, expr, local_variable_types, structs_by_name
+        )
+        if receiver_call is not None:
+            return receiver_call[0]
 
         # A call to a source function whose declarations agree on one return type.
         call_result = infer_call_result_type(
