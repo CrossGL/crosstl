@@ -7,7 +7,10 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.semantics import RowMajorMemberError
+from crosstl.translator.semantics import (
+    RowMajorMemberError,
+    StructuredLayoutUnsupportedError,
+)
 
 STRUCT = """shader P {
     struct S {
@@ -97,10 +100,31 @@ def test_spirv_and_wgsl_declare_the_transpose(tmp_path, backend):
     assert "Transpose" in code if backend == "vulkan" else "transpose(" in code
 
 
-def test_hlsl_keeps_row_major_struct_members(tmp_path):
-    code = _flat(_translate(tmp_path, STRUCT, "directx"))
-    assert "row_major float2x3 b;" in code
-    assert "transpose(s.b)" not in code
+def test_hlsl_refuses_a_row_major_member_whose_rows_std430_pads(tmp_path):
+    # std430 stores the row-major mat3x2 'b' as two vec3 rows 16 bytes apart (32 bytes); an HLSL structured
+    # buffer packs 'row_major float2x3' into 24, so declaring the struct as it is would read other bytes.
+    with pytest.raises(StructuredLayoutUnsupportedError, match="structured buffer sb"):
+        _translate(tmp_path, STRUCT, "directx")
+
+
+def test_hlsl_keeps_row_major_struct_members_with_the_same_layout(tmp_path):
+    source = STRUCT.replace(
+        "        @ row_major\n        mat3x2 b;",
+        "        @ row_major\n        mat2x3 b;",
+    )
+    source = source.replace("mat3x2 whole = s.b;", "mat2x3 whole = s.b;")
+    source = source.replace("vec2 column = s.b[2];", "vec3 column = s.b[1];")
+    source = source.replace("float picked = s.b[i][1];", "float picked = s.b[1][i];")
+    source = source.replace("s.b * vec3(1.0, 2.0, 3.0)", "s.b * vec2(1.0, 2.0)")
+    source = source.replace("vec2 product", "vec3 product")
+    source = source.replace("sb[0].b[2][1] = element;", "sb[0].b[1][2] = element;")
+    source = source.replace("S t = {whole, whole,", "S t = {mat3x2(1.0), whole,")
+    source = source.replace("S u = make(whole);", "S u = make(mat3x2(1.0));")
+    source = source.replace("return S(m, m,", "return S(m, mat2x3(1.0),")
+    code = _flat(_translate(tmp_path, source, "directx"))
+    # Three vec2 rows: 8-byte aligned under std430 and packed the same in an HLSL structured buffer.
+    assert "row_major float3x2 b;" in code
+    assert "RWStructuredBuffer<S> sb" in code
 
 
 BLOCK = """#version 450

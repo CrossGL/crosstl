@@ -35,6 +35,7 @@ from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
 )
+from crosstl.backend.Metal.bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from crosstl.backend.Metal.deduction_operand_types import (
     is_unary_sign_position,
     operand_expression_type,
@@ -22730,6 +22731,7 @@ def _project_template_materialization_for_artifact(
         if cached is not None:
             return cached
         preprocessor._configure_integral_constant_contracts(preprocessed)
+        preprocessed = expand_bool_dispatch_callbacks(preprocessor, preprocessed)
         preprocessed = _canonicalize_metal_struct_template_aliases(
             preprocessor,
             preprocessed,

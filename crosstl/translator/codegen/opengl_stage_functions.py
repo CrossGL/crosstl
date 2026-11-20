@@ -1247,6 +1247,9 @@ class OpenGLStageFunctionMixin:
             type_names=type_names,
             reserved_names=self.glsl_preprocessor_identifier_names(ast),
         )
+        for name in sorted(self.glsl_builtin_redeclaration_names(ast)):
+            self.glsl_module_identifier_names[name] = name
+            self.glsl_module_used_identifier_names.add(name)
 
     def prepare_glsl_trailing_zero_helper_names(self, functions):
         reserved_names = set()
