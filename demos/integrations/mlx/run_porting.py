@@ -641,6 +641,32 @@ MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
         "idx.y",
         "idx.z",
     ),
+    # The row kernels rebase each input to `gid * uint64(axis_size) + lid * N_READS` and then read `ptr + i`. MLX
+    # dispatches one threadgroup per row of a contiguous array, so every offset is an element index into that array.
+    MLX_LOGSUMEXP_SOURCE: (
+        "gid * uint64(axis_size) + lid * 4",
+        "in_ + i",
+    ),
+    MLX_RMS_NORM_SOURCE: (
+        "gid * uint64(axis_size) + lid * RMS_N_READS",
+        "x + i",
+        "g + i",
+        "out_ + i",
+        "gx + i",
+        "gw + i",
+    ),
+    # sdpa_vector rebases the key and value pointers by head, SIMD group and lane strides, then reads `ptr + j`.
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: (
+        "kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread",
+        "kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread",
+        "keys + j",
+        "values + j",
+    ),
+    MLX_SOFTMAX_SOURCE: (
+        "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
+        "in_ + i",
+        "out_ + i",
+    ),
 }
 MLX_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
     {
@@ -649,8 +675,19 @@ MLX_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
         "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
         "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
     }
-    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
-    for expression in MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS[source]
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+    for expression in MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.get(source, ())
+)
+# Each OpenGL frontier project receives the assertions of its own sources.
+MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS = tuple(
+    assertion
+    for assertion in MLX_OPENGL_INDEX_RANGE_ASSERTIONS
+    if assertion["source"] in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+)
+MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS = tuple(
+    assertion
+    for assertion in MLX_OPENGL_INDEX_RANGE_ASSERTIONS
+    if assertion["source"] in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
 MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
@@ -931,34 +968,63 @@ MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT = sum(
     for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
 )
 # Per-entry outcomes of the OpenGL dynamic-workgroup frontier. An entry that consumes
-# threads_per_threadgroup needs a concrete workgroup size; an entry whose uint64_t pointer
-# offset has no proven 32-bit range is refused before that, since OpenGL indexes with int.
-# The sdpa_vector_2pass_2 entries consume neither and translate.
+# threads_per_threadgroup needs a concrete workgroup size. Every other entry translates once
+# MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS bound its uint64_t pointer offsets to
+# the int range OpenGL indexes with.
 MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES = {
     MLX_ARG_REDUCE_SOURCE: {entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 24},
     MLX_LOGSUMEXP_SOURCE: {
-        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 3,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 3,
         entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 3,
     },
     MLX_RMS_NORM_SOURCE: {
-        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 6,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 6,
         entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 6,
     },
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
-        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 15,
-        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 12,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 27,
         entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 15,
     },
     MLX_SOFTMAX_SOURCE: {
-        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 5,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 5,
         entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 5,
     },
 }
+_MLX_FLOAT_TYPE_NAMES = ("float32", "float16", "bfloat16")
 MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
+    MLX_LOGSUMEXP_SOURCE: tuple(
+        f"block_logsumexp_{type_name}" for type_name in _MLX_FLOAT_TYPE_NAMES
+    ),
+    # Listed in materialization order: each type instantiates both kernels.
+    MLX_RMS_NORM_SOURCE: tuple(
+        f"{prefix}{type_name}"
+        for type_name in _MLX_FLOAT_TYPE_NAMES
+        for prefix in ("rms", "vjp_rms")
+    ),
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: tuple(
-        f"sdpa_vector_2pass_2_{dtype}_{head_dim}"
+        entry
         for dtype in ("float", "bfloat16_t", "float16_t")
-        for head_dim in (64, 96, 128, 256)
+        for entry in (
+            *(
+                f"sdpa_vector_{dtype}_{qk_dim}_{value_dim}"
+                for qk_dim, value_dim in (
+                    (64, 64),
+                    (96, 96),
+                    (128, 128),
+                    (192, 128),
+                    (256, 256),
+                )
+            ),
+            *(
+                f"sdpa_vector_2pass_2_{dtype}_{head_dim}"
+                for head_dim in (64, 96, 128, 256)
+            ),
+        )
+    ),
+    MLX_SOFTMAX_SOURCE: (
+        *(f"block_softmax_{type_name}" for type_name in _MLX_FLOAT_TYPE_NAMES),
+        "block_softmax_precise_float16",
+        "block_softmax_precise_bfloat16",
     ),
 }
 MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT = sum(
@@ -7835,7 +7901,7 @@ def _check_opengl_frontier(
         target="opengl",
         sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
         output_dir=clean_output_dir,
-        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
+        index_range_assertions=MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS,
         metal_source_options={"binary16_remainder_profile": "binary32-quotient"},
     )
     clean_artifacts = entry_frontier.require_clean_entry_frontier(
@@ -7847,7 +7913,7 @@ def _check_opengl_frontier(
             payload,
             target="opengl",
             sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
-            index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
+            index_range_assertions=MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS,
         ),
         entry_counts=MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS,
     )
@@ -7865,6 +7931,7 @@ def _check_opengl_frontier(
             sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
             output_dir=blocked_output_dir,
             check=False,
+            index_range_assertions=MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS,
         )
     )
     _require(
@@ -7880,6 +7947,7 @@ def _check_opengl_frontier(
             blocked_payload,
             target="opengl",
             sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            index_range_assertions=MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS,
         ),
         entry_counts=MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS,
         expected_outcomes=MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES,

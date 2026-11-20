@@ -167,13 +167,14 @@
     ],
     "source_count": 8,
     "target": "opengl",
-    "artifact_count": 8,
+    "artifact_granularity": "entry-point",
+    "artifact_count": 549,
     "translated_sources": [
       "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
-    "translated_artifact_count": 3,
+    "translated_artifact_count": 455,
     "workgroup_blocked_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
@@ -181,26 +182,40 @@
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
-    "workgroup_blocked_artifact_count": 5,
-    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_frontier_artifact_count": 94,
+    "workgroup_frontier_translated_artifact_count": 41,
+    "workgroup_blocked_artifact_count": 53,
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-required",
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "clean_project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 3,
-    "spirv_validated_artifact_count": 3,
+    "glslang_compiled_artifact_count": 496,
+    "spirv_validated_artifact_count": 496,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
     ],
     "spirv_val_target_environment": "spv1.3",
     "specialization_constants": {
+      "mlx/backend/metal/kernels/rms_norm.metal": {
+        "has_w": 20
+      },
       "mlx/backend/metal/kernels/rope.metal": {
         "forward": 1,
         "hs_transpose": 3,
         "traditional": 2
+      },
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "blocks": 26,
+        "bool_mask": 23,
+        "do_causal": 22,
+        "float_mask": 24,
+        "has_mask": 20,
+        "has_sinks": 25,
+        "query_transposed": 21
       }
     },
     "index_range_assertion_evidence": {
-      "assertion_count": 24,
+      "assertion_count": 39,
       "inclusive_bounds": {
         "minimum": 0,
         "maximum": 2147483647
@@ -235,6 +250,29 @@
           "idx.x",
           "idx.y",
           "idx.z"
+        ],
+        "mlx/backend/metal/kernels/logsumexp.metal": [
+          "gid * uint64(axis_size) + lid * 4",
+          "in_ + i"
+        ],
+        "mlx/backend/metal/kernels/rms_norm.metal": [
+          "gid * uint64(axis_size) + lid * RMS_N_READS",
+          "x + i",
+          "g + i",
+          "out_ + i",
+          "gx + i",
+          "gw + i"
+        ],
+        "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": [
+          "kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread",
+          "kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread",
+          "keys + j",
+          "values + j"
+        ],
+        "mlx/backend/metal/kernels/softmax.metal": [
+          "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
+          "in_ + i",
+          "out_ + i"
         ]
       },
       "contract_kind": "explicit-host-runtime-portability-preconditions",

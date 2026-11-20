@@ -3649,10 +3649,12 @@ The current harness verifies:
   must emit with zero diagnostics and compile for OpenGL/SPIR-V 1.3 before
   `spirv-val`. Their project configuration supplies 24 source-qualified
   index-range assertions, and the portability report must reproduce the exact
-  assertion count and content. The other five sources must produce the same
-  exact fail-closed workgroup-size diagnostic and no target file. This is native
-  artifact validation only; the gate does not run the kernels or establish
-  runtime parity;
+  assertion count and content. The other five sources run as a second project
+  with 15 source-qualified index-range assertions. Each of their 94 kernels gets
+  its own artifact: 41 translate and pass the same validators, and the 53 that
+  consume `threads_per_threadgroup` produce the exact fail-closed workgroup-size
+  diagnostic and no target file. This is native artifact validation only; the
+  gate does not run the kernels or establish runtime parity;
 - a separate bounded OpenGL dispatch-contract proof for the actual pinned
   `logsumexp.metal` source. The two float32 workloads emit standalone GLSL
   artifacts with workgroup sizes `[32, 1, 1]` and `[288, 1, 1]`, an exact
@@ -5107,8 +5109,21 @@ inclusive bounds `[0, 2147483647]`. The expressions are `offset + i`, `a_idx`,
 `batch_idx * offset_stride`, `freq_stride * pos.x`, `in_index_1`, `in_index_2`,
 `out_index_1`, and `out_index_2` for `rope.metal`; and `offset + i`, `a_idx`,
 `b_idx`, `c_idx`, `bidx`, `cidx`, `out_idx`, `out_idx++`, `idx.x`, `idx.y`, and
-`idx.z` for `ternary.metal`. These records are explicit MLX host/runtime
-portability preconditions for OpenGL. They are not inferred guarantees, CrossTL
+`idx.z` for `ternary.metal`. The dynamic-workgroup frontier supplies 15 more,
+with the same bounds: `gid * uint64(axis_size) + lid * 4` and `in_ + i` for
+`logsumexp.metal`; `gid * uint64(axis_size) + lid * RMS_N_READS`, `x + i`,
+`g + i`, `out_ + i`, `gx + i`, and `gw + i` for `rms_norm.metal`; the key and
+value rebases
+`kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread`
+and
+`kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread`,
+`keys + j`, and `values + j` for `scaled_dot_product_attention.metal`; and
+`gid * uint64(axis_size) + lid * SOFTMAX_N_READS`, `in_ + i`, and `out_ + i` for
+`softmax.metal`. Without them, OpenGL refuses 29 of those kernels: it indexes
+storage with `int`, and their `uint64_t` row and head offsets have no proven
+32-bit range. MLX dispatches these kernels over contiguous arrays, so each
+offset is an element index into one array. These records are explicit MLX
+host/runtime portability preconditions for OpenGL. They are not inferred guarantees, CrossTL
 does not enforce them at runtime, and they do not establish runtime integration
 or numerical parity.
 The eight-source OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and

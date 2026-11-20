@@ -15,7 +15,6 @@ from typing import Any, Mapping, Sequence
 
 __all__ = [
     "ENTRY_OUTCOME_TRANSLATED",
-    "OPENGL_INDEX_TYPE_UNSUPPORTED_CODE",
     "WORKGROUP_SIZE_REQUIRED_CODE",
     "WORKGROUP_SIZE_REQUIRED_MESSAGE",
     "PortingCheckError",
@@ -31,18 +30,6 @@ WORKGROUP_SIZE_REQUIRED_MESSAGE = (
     "A consumed threads_per_threadgroup value requires a concrete project "
     "workgroup_size or source execution size for this target."
 )
-OPENGL_INDEX_TYPE_UNSUPPORTED_CODE = "project.translate.opengl-index-type-unsupported"
-_OPENGL_INDEX_MESSAGE_PREFIX = (
-    "OpenGL cannot preserve subscript index type 'uint64_t' for '"
-)
-_OPENGL_INDEX_MESSAGE_SUFFIX = "': pointer offset range unproven"
-_OPENGL_INDEX_CONVERSION = {
-    "reason": "pointer-offset-range-unproven",
-    "rangeStatus": "unproven",
-    "sourceType": "uint64_t",
-    "targetType": "int",
-    "targetProfile": "OpenGL #version 450 core",
-}
 
 
 class PortingCheckError(RuntimeError):
@@ -306,36 +293,8 @@ def _require_workgroup_diagnostic(diagnostic: Mapping[str, Any], entry: str) -> 
     )
 
 
-def _require_index_diagnostic(diagnostic: Mapping[str, Any], _entry: str) -> bool:
-    details = diagnostic.get("details")
-    conversion = (
-        details.get("indexConversion") if isinstance(details, Mapping) else None
-    )
-    message = diagnostic.get("message")
-    return (
-        isinstance(message, str)
-        and message.startswith(_OPENGL_INDEX_MESSAGE_PREFIX)
-        and message.endswith(_OPENGL_INDEX_MESSAGE_SUFFIX)
-        and len(message)
-        > len(_OPENGL_INDEX_MESSAGE_PREFIX + _OPENGL_INDEX_MESSAGE_SUFFIX)
-        and diagnostic.get("missingCapabilities")
-        == ["opengl.index-width-normalization"]
-        and isinstance(conversion, Mapping)
-        and all(
-            conversion.get(key) == value
-            for key, value in _OPENGL_INDEX_CONVERSION.items()
-        )
-        and conversion.get("acceptedRange") == {
-            "maximum": 2_147_483_647,
-            "minimum": -2_147_483_648,
-            "status": "statically-bounded",
-        }
-    )
-
-
 _DIAGNOSTIC_CONTRACTS = {
     WORKGROUP_SIZE_REQUIRED_CODE: _require_workgroup_diagnostic,
-    OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: _require_index_diagnostic,
 }
 
 
