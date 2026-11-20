@@ -286,6 +286,10 @@ class Dialect:
     def inout_argument(self) -> str:
         return "outp[i]"
 
+    def atomic_argument(self, kind: Type) -> str:
+        """The output buffer's element as an atomic value holding a ``kind``, for a method of an atomic type."""
+        raise ProbeError(f"{self.language} has no atomic values")
+
     def buffer_argument(self, name: str) -> str:
         """The whole input buffer ``name``, for a parameter that takes a runtime-sized array."""
         return name

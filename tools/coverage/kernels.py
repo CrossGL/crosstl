@@ -6,7 +6,13 @@ from __future__ import annotations
 import re
 
 from .dialect import Buffer, Dialect, Handle, ProbeError
-from .model import GENERIC_POINTER, SCHEDULE_MASK, SCHEDULE_MASK_VALUE, Type
+from .model import (
+    GENERIC_POINTER,
+    REDUCE_CLOSURE,
+    SCHEDULE_MASK,
+    SCHEDULE_MASK_VALUE,
+    Type,
+)
 
 
 class CUDA(Dialect):
@@ -177,6 +183,11 @@ class Mojo(Dialect):
         # An atomic operation takes a pointer to the output buffer's element.
         return "outp + i"
 
+    def atomic_argument(self, kind: Type) -> str:
+        # An Atomic's only field is the value it holds (std/atomic/atomic.mojo, Atomic._value), so the output
+        # buffer's element, viewed as an Atomic, is the receiver of an Atomic method.
+        return f"(outp + i).bitcast[Atomic[{self.type(kind)}]]()[]"
+
     def discard(self, expression: str) -> str:
         return f"_ = {expression}"
 
@@ -184,7 +195,17 @@ class Mojo(Dialect):
         # A ``mut`` argument is passed by reference without an operator.
         return name
 
+    # The function a probe passes to a generic warp reduction: the addition of the example in warp.mojo's reduce.
+    _COMBINE = (
+        "def combine[dtype: DType, width: SIMDLength](",
+        "    x: SIMD[dtype, width], y: SIMD[dtype, width]",
+        ") -> SIMD[dtype, width]:",
+        "    return x + y",
+    )
+
     def handle(self, kind: Type, name: str) -> Handle | None:
+        if kind.opaque == REDUCE_CLOSURE:
+            return Handle("combine", declarations=self._COMBINE)
         if kind.opaque != SCHEDULE_MASK:
             return None
         return Handle(
