@@ -15,7 +15,7 @@ this file in the same change whenever a validator, driver or container pin moves
 | `spirv-val` | SPIRV-Tools v2026.4 | available |
 | `docker` | server 29.5.2 | available |
 | `vkrun` | built from `vkrun.c` (dfd360e2b4d00a13) | available |
-| `mesa-image` | Mesa 25.2.8-0ubuntu0.24.04.4 aarch64 (`docker/mesa/Dockerfile`) | available |
+| `mesa-image` | Mesa 25.2.8-0ubuntu0.24.04.5 aarch64 (`docker/mesa/Dockerfile`) | available |
 
 ## Runtimes
 

@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +20,13 @@ from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import hip_import_partial_output
+
+# windows-latest ships an MSVC STL that refuses any Clang older than its own minimum (error STL1000) before
+# parsing a single declaration. _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is the STL's documented override; the
+# syntax check of the generated HIP source still runs in full.
+HOST_STL_FLAGS = (
+    ["-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"] if sys.platform == "win32" else []
+)
 
 ROCM_BIT_EXTRACT_HIP = """
 #include <hip/hip_runtime.h>
@@ -18572,6 +18580,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -18922,6 +18931,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19117,6 +19127,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19169,6 +19180,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19353,6 +19365,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19586,6 +19599,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19836,6 +19850,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19915,6 +19930,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],

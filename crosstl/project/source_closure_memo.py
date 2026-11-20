@@ -227,6 +227,9 @@ class SourceClosureMemo:
 ENTRY_DISCOVERY_MEMO = SourceClosureMemo()
 SOURCE_HOST_INTERFACE_MEMO = SourceClosureMemo()
 PREPROCESSOR_RUN_MEMO = SourceClosureMemo()
+# Preprocessor attributes that a run writes and never reads: the line origins
+# of its output (``HLSLPreprocessor.line_origins``).
+PREPROCESSOR_RESULT_STATE = frozenset({"line_origins"})
 
 
 def memoized_entry_discovery(
@@ -314,10 +317,17 @@ def memoized_preprocessor_run(
     The key covers the preprocessor's complete state before the run, so a hit
     restores the state (macro table, include bookkeeping) that the run would
     have left behind, and later passes over the same preprocessor see exactly
-    what a fresh run produces.
+    what a fresh run produces. Attributes in ``PREPROCESSOR_RESULT_STATE``
+    describe the run's output, not its input, so the key leaves them out and
+    a hit restores them with the rest of the state.
     """
 
     state = vars(preprocessor)
+    key_state = {
+        name: value
+        for name, value in state.items()
+        if name not in PREPROCESSOR_RESULT_STATE
+    }
 
     def produce() -> tuple[str, dict[str, Any]]:
         text = run(preprocessor, source, file_path=file_path)
@@ -329,7 +339,7 @@ def memoized_preprocessor_run(
         source=source,
         file_path=file_path,
         include_paths=list(getattr(preprocessor, "include_paths", ()) or ()),
-        inputs=["preprocessor-run", source_backend, state],
+        inputs=["preprocessor-run", source_backend, key_state],
         guards=(type(preprocessor), run),
         produce=produce,
     )

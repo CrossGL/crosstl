@@ -170,7 +170,7 @@ def test_the_coverage_comment_runs_only_main_code_on_the_report():
     scripts = re.sub(r"\s*\\\n\s*", " ", scripts)
     assert not re.search(r"\bpip\b", scripts)
     assert re.findall(r"\bpython\b.*", scripts) == [
-        'python -m tools.coverage compare published.json "$REPORT" --repository "$GITHUB_REPOSITORY"'
+        'python -m tools.coverage compare "$published/coverage.json" "$REPORT" --repository "$GITHUB_REPOSITORY"'
         ' --head "$HEAD_SHA" > compare.md'
     ]
 
