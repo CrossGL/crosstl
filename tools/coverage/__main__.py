@@ -81,7 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     merging.add_argument("--output", type=Path, default=Path("coverage.json"))
     publishing = commands.add_parser(
         "publish",
-        help="write coverage.json, coverage.svg, COVERAGE.md, history.csv and trend.svg for the coverage branch",
+        help="write coverage.json, its features/ files, coverage.svg, COVERAGE.md, history.csv and trend.svg for the "
+        "coverage branch",
     )
     publishing.add_argument("report", type=Path)
     publishing.add_argument("--output-dir", type=Path, required=True)
@@ -107,7 +108,11 @@ def _parser() -> argparse.ArgumentParser:
         "compare",
         help="print, as Markdown, how a report differs from the published one",
     )
-    comparing.add_argument("published", type=Path)
+    comparing.add_argument(
+        "published",
+        type=Path,
+        help="the coverage branch's coverage.json, with its features directory beside it",
+    )
     comparing.add_argument("report", type=Path)
     comparing.add_argument(
         "--repository",
@@ -146,6 +151,13 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
     ]
+    # Slang functions SPIR-V lacks compile for HLSL or CUDA, which DXC or nvcc then checks.
+    if "slang" in languages:
+        missing += [
+            f"slang for {target} ({tool})"
+            for target, tool in validators.SLANG_SOURCE_TARGETS.items()
+            if not validators.command(tool)
+        ]
     # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
         gap
@@ -212,7 +224,12 @@ def _publish(args: argparse.Namespace) -> int:
     if args.history and args.history.is_file():
         previous = args.history.read_text(encoding="utf-8")
     data = report.load(args.report)
-    for path in publish.write_site(data, args.output_dir, previous, args.repository):
+    try:
+        paths = publish.write_site(data, args.output_dir, previous, args.repository)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for path in paths:
         print(f"wrote {path}")
     return 0
 

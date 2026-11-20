@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-import crosstl
+from tests.stage_entry_helpers import joined_entries
 
 SOURCE = """
 #include <metal_stdlib>
@@ -36,8 +36,8 @@ template [[host_name("sum_rows_f32_4")]] kernel void sum_rows<float4>(device con
 def _translate(tmp_path, backend):
     path = tmp_path / "sum_rows.metal"
     path.write_text(SOURCE, encoding="utf-8")
-    return crosstl.translate(
-        str(path), backend=backend, source_options={"threadgroup_size": (32, 1, 1)}
+    return joined_entries(
+        path, backend, source_options={"threadgroup_size": (32, 1, 1)}
     )
 
 

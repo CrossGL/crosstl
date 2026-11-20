@@ -89,9 +89,9 @@ Open the pull request against `main`. Required checks run on every push:
 translator, backend, complete-suite, example and demo tests on Linux, macOS and
 Windows, plus Lint and Coverage. Once they pass and a maintainer has reviewed
 the change, it joins the merge queue, which tests the exact commit that will
-land, and is squash-merged. When the next change lands on `main`, a pull request
-without labels gets the `backend:`, `direction:` and `area:` labels of the files
-it changes. A pull request with no activity for 14 days is marked `stale` and
+land, and is squash-merged. A few minutes after a push, a pull request without
+labels gets the `backend:`, `direction:` and `area:` labels of the files it
+changes. A pull request with no activity for 14 days is marked `stale` and
 closed 7 days later; any push or comment resets the clock.
 
 Keep a pull request to one change. Write commit messages and the pull request

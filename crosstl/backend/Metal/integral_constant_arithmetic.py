@@ -26,7 +26,13 @@ free of side effects, so replacing the operator call by its constant result pres
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+import weakref
+from typing import TYPE_CHECKING, Callable
+
+from .integral_constant_locals import (
+    integral_constant_local_atoms,
+    resolve_static_member_template_arguments,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .preprocessor import MetalPreprocessor
@@ -99,21 +105,87 @@ _CONSTRUCTION = re.compile(
     r"\s*\{\s*\}"
 )
 _QUALIFIER = re.compile(r"^(?P<qualifier>(?:[A-Za-z_]\w*\s*::\s*)*)")
+# Any spelling of the verified templates, so locals declared as ``Int<1> mm{};`` are found.
+_TEMPLATE_ID = re.compile(r"\b(?:Int|integral_constant)\s*<")
 _MAX_FOLDS = 256
+# Per preprocessor: the materialized struct names an index was built from, and the pattern matching a value
+# construction ``integral_constant_int_4{}`` of the ones that are integral constants.
+_MATERIALIZED_PATTERNS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def materialized_construction_pattern(
+    preprocessor: MetalPreprocessor,
+) -> re.Pattern | None:
+    """Pattern of ``Name{}`` for every materialized struct that is an integral-constant specialization."""
+    specializations = preprocessor._materialized_struct_specializations
+    key = tuple(specializations)
+    cached = _MATERIALIZED_PATTERNS.get(preprocessor)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    names = sorted(
+        name
+        for name, (source_name, _arguments) in specializations.items()
+        if source_name.rsplit("::", 1)[-1] == "integral_constant"
+        and _integral_constant_parts(preprocessor, name) is not None
+    )
+    pattern = (
+        re.compile(
+            rf"(?<![\w:.])(?P<type>{'|'.join(re.escape(name) for name in names)})"
+            r"\s*\{\s*\}"
+        )
+        if names
+        else None
+    )
+    _MATERIALIZED_PATTERNS[preprocessor] = (key, pattern)
+    return pattern
 
 
 def fold_integral_constant_parameter_arithmetic(
-    preprocessor: MetalPreprocessor, parameters: str, body: str
+    preprocessor: MetalPreprocessor,
+    parameters: str,
+    body: str,
+    static_members: Callable[[], Callable] | None = None,
 ) -> str:
-    """Return ``body`` with integral-constant arithmetic between its operands folded."""
+    """Return ``body`` with integral-constant arithmetic between its operands folded.
+
+    ``static_members`` returns a substituter for ``Owner::member`` constants (``static_member_constant_substituter``);
+    with it, template arguments such as ``Int<Frag::kRows>`` are first replaced by their values.
+    """
     operators = preprocessor._integral_constant_binary_operators
     if not operators or not preprocessor._integral_constant_contract_verified:
         return body
+    if static_members is not None:
+        body = resolve_static_member_template_arguments(
+            preprocessor,
+            body,
+            static_members,
+            lambda type_text: _integral_constant_parts(preprocessor, type_text),
+        )
     parameter_types = _integral_constant_parameter_types(preprocessor, parameters, body)
-    if not parameter_types and _CONSTRUCTION.search(body) is None:
+    materialized = materialized_construction_pattern(preprocessor)
+    if (
+        not parameter_types
+        and _TEMPLATE_ID.search(body) is None
+        and (materialized is None or materialized.search(body) is None)
+    ):
         return body
+    parameter_names = {
+        name
+        for name in (
+            preprocessor._declared_data_member_name(parameter)
+            for parameter in preprocessor._split_top_level_commas(parameters)
+        )
+        if name
+    }
     for _ in range(_MAX_FOLDS):
-        folded = _fold_once(preprocessor, body, parameter_types, operators)
+        folded = _fold_once(
+            preprocessor,
+            body,
+            parameter_types,
+            operators,
+            parameter_names,
+            materialized,
+        )
         if folded is None:
             return body
         body = folded
@@ -121,7 +193,9 @@ def fold_integral_constant_parameter_arithmetic(
 
 
 def fold_integral_constant_function_arithmetic(
-    preprocessor: MetalPreprocessor, function_text: str
+    preprocessor: MetalPreprocessor,
+    function_text: str,
+    static_members: Callable[[], Callable] | None = None,
 ) -> str:
     """Fold integral-constant arithmetic inside one function definition."""
     if not preprocessor._integral_constant_binary_operators:
@@ -146,7 +220,10 @@ def fold_integral_constant_function_arithmetic(
         return function_text
     body = function_text[body_open + 1 : body_close]
     folded = fold_integral_constant_parameter_arithmetic(
-        preprocessor, function_text[open_paren + 1 : close_paren], body
+        preprocessor,
+        function_text[open_paren + 1 : close_paren],
+        body,
+        static_members,
     )
     if folded == body:
         return function_text
@@ -202,12 +279,29 @@ def _fold_once(
     body: str,
     parameter_types: dict[str, str],
     operators,
+    parameter_names: set[str] = frozenset(),
+    materialized: re.Pattern | None = None,
 ) -> str | None:
     masked = preprocessor._mask_comments_and_literals(body)
     ungrouped = _strip_grouping_parentheses(preprocessor, body, masked)
     if ungrouped is not None:
         return ungrouped
     atoms = _atoms(preprocessor, masked, parameter_types)
+    if materialized is not None:
+        atoms.extend(
+            (match.start(), match.end(), match.group("type"))
+            for match in materialized.finditer(masked)
+            if not _is_member_or_scope_operand(masked, match.start())
+        )
+    atoms.extend(
+        integral_constant_local_atoms(
+            preprocessor,
+            masked,
+            set(parameter_names),
+            lambda type_text: _integral_constant_parts(preprocessor, type_text),
+        )
+    )
+    atoms.sort()
     for left, right in zip(atoms, atoms[1:]):
         operator_start = _skip_space(masked, left[1])
         operator = _operator_at(masked, operator_start)
@@ -320,7 +414,8 @@ def _result_spelling(
                 == arguments
             ):
                 return name
-        return None
+        # No struct is materialized for the result yet; later passes materialize the template spelling.
+        return result_type
     qualifier = _QUALIFIER.match(operand_type.strip()).group("qualifier")
     unqualified = operand_type.strip()[len(qualifier) :]
     _base, value = preprocessor._integral_constant_type_parts(result_type)
