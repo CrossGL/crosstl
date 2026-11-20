@@ -80,6 +80,10 @@ alone. The two outputs must match bit for bit, so a probe must compute a result 
 cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
 fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
 reassociates additions that the SPIR-V does not mark `NoContraction`.
+The remainder is the one exception. CrossGL's `fmod` is the exact remainder of C and MSL, while the Vulkan precision
+table gives SPIR-V's `OpFRem` the error inherited from `x - y * trunc(x / y)`, which lavapipe computes. So where the
+native probe of an `fmod` runs as SPIR-V that uses `OpFRem`, a translated word also matches when it is the exact
+remainder of the probe's arguments.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
