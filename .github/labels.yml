@@ -172,6 +172,7 @@
     - pyproject.toml
     - tools/*
     - tests/coverage/*
+    - tests/conformance/*
     - tests/ci_helpers.py
     - tests/test_ci_*
 - name: area:docs

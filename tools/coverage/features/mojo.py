@@ -8,8 +8,10 @@ re-exports, so their public API is every module-level definition whose name does
 ``max.gpu.sync`` exports its barriers from its ``sync`` module. ``max.gpu.primitives.id`` defines ``warp_id`` and
 ``sm_id`` and re-exports ``lane_id`` and the index values (``thread_idx``, ``global_idx`` and the rest) from
 ``std._gpu``; those values are not functions, and the compute construct probes read them. ``std.atomic`` exports
-``fence`` and the type ``Atomic``, whose static methods operate on a pointer. Each name is probed with its first
-definition. Mojo functions are generic over a ``DType`` and a SIMD width; a probe calls them on scalars, ``Float32``
+``fence`` and the type ``Atomic``. A probe calls an Atomic method through the type: a static method on a pointer to
+the output buffer's element, and a method only an Atomic value has on that element viewed as an Atomic. Each name is
+probed with its first definition, a static one where both exist. Mojo functions are generic over a ``DType`` and a
+SIMD width; a probe calls them on scalars, ``Float32``
 unless the definition requires an integral type, as all of ``std.bit`` does. A compile-time parameter no argument
 fixes is written into the call, as in ``nan[dtype=DType.float32]()``.
 
@@ -26,11 +28,19 @@ from collections.abc import Callable
 
 from .. import spellings
 from ..execution import THREADS
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import REDUCE_CLOSURE, VOID, Feature, Param, Signature, Type
 from .common import prototype
+from .mojo_source import (
+    Definition,
+    argument_default,
+    compile_parameters,
+    definitions,
+    exports,
+    methods,
+    public,
+    split_commas,
+)
 
-_EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
-_DEFINITION = re.compile(r"^def\s+(\w+)\s*", re.M)
 # The DType names a probe can spell, and the scalar type of :mod:`..model` each one is.
 _DTYPES = {
     "float32": "float",
@@ -54,7 +64,7 @@ _SPELLED = {scalar: name for name, scalar in _NAMED.items()}
 # Argument conventions a probe can pass a local to; ``mut`` makes the argument read-modify-write.
 _CONVENTIONS = frozenset({"mut", "read", "var", "ref", "owned"})
 # Compile-time parameter kinds a probe can fill in with a constant, and the constant it uses.
-_LITERALS = {"Int": "1", "SIMDLength": "1", "Bool": "True"}
+_LITERALS = {"Int": "1", "Int32": "1", "SIMDLength": "1", "Bool": "True"}
 # Operations CrossGL has no spelling for, with the reason.
 UNSPELLED = {
     "divmod": "no CrossGL function returns a quotient and a remainder together",
@@ -80,11 +90,15 @@ SYNC = "max.gpu.sync"
 GPU = "max.gpu"
 ATOMIC = "std.atomic"
 # A lane-group reduction is probed over the whole warp, where it is the warp reduction CrossGL has. Over fewer lanes
-# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does.
-_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE"}
+# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does. A
+# generic reduction exchanges values with shuffle_xor, which leaves the result in every lane, as warp.mojo's own
+# broadcasting reductions do (_lane_group_broadcast_reduce).
+_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE", "shuffle": "warp.shuffle_xor"}
 # A block reduction is probed over a block of the invocations a subgroup probe runs as one workgroup, a whole number
 # of warps, as block.mojo asserts the block size is.
 _BLOCK_LITERALS = {"block_size": str(THREADS)}
+# A named barrier waits for the threads of a whole number of warps (PTX ISA, ``bar.sync``), here those of that block.
+_SYNC_LITERALS = {"num_threads": str(THREADS)}
 # Why a module-qualified function has no CrossGL spelling, by group.
 _UNSPELLED_GROUPS = {
     "block": (
@@ -98,82 +112,13 @@ _RELAXED = {
     parameter: "Ordering.RELAXED"
     for parameter in ("ordering", "success_ordering", "failure_ordering")
 }
-# Only an Atomic value has these methods; a probe calls Atomic's static methods on a buffer element instead.
-_INSTANCE = "a method of an Atomic value only, and the probes call Atomic's static methods on a buffer element"
+# The receiver of a method only an Atomic value has, which a probe passes the output buffer's element as.
+_ATOMIC_VALUE = re.compile(r"Atomic\[(.*)\]")
 # A pointer argument, which a probe passes the output buffer's element as.
 _POINTER = re.compile(r"(?:Mut|Imm|Unsafe)?Pointer\[(.*)\]")
-
-Definition = tuple[str, str, str, str]
-
-
-def exports(init: str, module: str, functions: bool = True) -> list[str]:
-    """The function names a package's ``__init__.mojo`` imports from ``module``, in file order; every name it imports
-    unless ``functions``."""
-    names = []
-    for source, imported in _EXPORTS.findall(init):
-        if source != module:
-            continue
-        for name in re.split(r"[\s,()]+", imported):
-            if name and (name[0].islower() or not functions) and name not in names:
-                names.append(name)
-    return names
-
-
-def _split(text: str) -> list[str]:
-    """``text`` split at its top-level commas."""
-    parts, depth, start = [], 0, 0
-    for index, char in enumerate(text):
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "," and depth == 0:
-            parts.append(text[start:index].strip())
-            start = index + 1
-    parts.append(text[start:].strip())
-    return [part for part in parts if part]
-
-
-def _group(text: str, start: int, closing: str) -> tuple[str, int]:
-    """The text inside the bracket group that opens at ``text[start]``, and the index just past it."""
-    opening, depth = text[start], 0
-    for index in range(start, len(text)):
-        if text[index] == opening:
-            depth += 1
-        elif text[index] == closing:
-            depth -= 1
-            if depth == 0:
-                return text[start + 1 : index], index + 1
-    raise ValueError(f"unbalanced {opening}{closing} at offset {start}")
-
-
-def definitions(text: str) -> dict[str, Definition]:
-    """``name -> (parameters, arguments, result, body)`` for the first module-level definition of each name.
-
-    ``body`` starts with the header's ``where`` clause, so a constraint written there or asserted in the body is
-    found the same way.
-    """
-    found: dict[str, Definition] = {}
-    for match in _DEFINITION.finditer(text):
-        name, position = match.group(1), match.end()
-        if name in found:
-            continue
-        parameters = ""
-        if text[position] == "[":
-            parameters, position = _group(text, position, "]")
-        arguments, position = _group(text, position, ")")
-        header_end = text.index(":\n", position)
-        tail = text[position:header_end]
-        result = re.sub(r"\swhere\s.*", "", tail, flags=re.S).strip()
-        following = re.search(r"^(?=[^\s#])", text[header_end + 2 :], re.M)
-        body_end = header_end + 2 + (following.start() if following else len(text))
-        found[name] = (
-            parameters,
-            arguments,
-            result.removeprefix("->").strip(),
-            tail + text[header_end:body_end],
-        )
-    return found
+# The address space of a pointer that a probe passes a workgroup variable as: shared memory, or an address space the
+# call infers, which MAX's memory barriers accept shared memory for (sync.mojo, ``_mbarrier_impl``).
+_SHARED = re.compile(r"address_space=(?:AddressSpace)?\.SHARED")
 
 
 def mojo_type(
@@ -199,7 +144,7 @@ def mojo_type(
         return pair
     simd = re.fullmatch(r"(?:SIMD|Scalar)(?:\[(.*)\])?", spelling)
     if simd:
-        dtype = _split(simd.group(1) or "")[:1]
+        dtype = split_commas(simd.group(1) or "")[:1]
         # ``Scalar[val.dtype]``: the element type of the argument ``val``.
         argument = re.fullmatch(r"(\w+)\.dtype", dtype[0]) if dtype else None
         if argument and argument.group(1) in arguments:
@@ -223,7 +168,7 @@ def _pair(
     match = re.fullmatch(r"(Tuple|StaticTuple)\[(.*)\]", spelling)
     if not match:
         return None
-    parts = _split(match.group(2))
+    parts = split_commas(match.group(2))
     if match.group(1) == "StaticTuple":
         parts = [parts[0]] * 2 if len(parts) == 2 and parts[1] == "2" else []
     kinds = {mojo_type(part, element, generics, arguments) for part in parts}
@@ -271,48 +216,6 @@ def _pinned(parameter: str, default: str, body: str) -> str | None:
     return None
 
 
-def _parameters(text: str) -> list[tuple[str, str, bool, str]]:
-    """``(name, kind, required, default)`` per compile-time parameter.
-
-    Parameters before ``//`` are inferred from the arguments, and a parameter with a default needs no value, so
-    neither is required.
-    """
-    parts = _split(re.sub(r"#[^\n]*", "", text))
-    inferred = "//" in parts
-    result = []
-    for part in parts:
-        if part == "//":
-            inferred = False
-            continue
-        if part == "*":
-            continue
-        name, _, rest = part.partition(":")
-        kind, _, default = rest.partition("=")
-        result.append(
-            (
-                name.strip(),
-                kind.strip(),
-                not inferred and not default.strip(),
-                default.strip(),
-            )
-        )
-    return result
-
-
-def _default(part: str) -> tuple[str, str]:
-    """An argument's declaration and its default value, split at the first ``=`` outside brackets, as in
-    ``ptr: MutPointer[Scalar[dtype], _, address_space=_]``, which has none."""
-    depth = 0
-    for index, char in enumerate(part):
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "=" and depth == 0:
-            return part[:index], part[index + 1 :]
-    return part, ""
-
-
 def signature(
     name: str,
     definition: Definition,
@@ -324,28 +227,45 @@ def signature(
 
     ``literals`` gives the value of a compile-time parameter by name, where the probe passes another value than
     :data:`_LITERALS` gives for the parameter's kind, and ``named`` the parameters the call names even though they
-    have a default. A pointer argument takes the output buffer's element, the operand of an atomic operation, and a
-    ``mut`` argument a local the probe declares.
+    have a default. A pointer argument takes the output buffer's element, the operand of an atomic operation, an
+    Atomic receiver that element viewed as an Atomic, and a ``mut`` argument a local the probe declares.
     """
     parameters, arguments, result, body = definition
     element = _element(body, default)
-    declared = _parameters(parameters)
-    generics = {n for n, kind, _, _ in declared if kind not in _LITERALS}
+    declared = compile_parameters(parameters)
+    # A generic constrained to a reduction function is the type of the function the probe passes.
+    closures = {n for n, kind, _, _ in declared if kind == REDUCE_CLOSURE}
+    generics = {
+        n for n, kind, _, _ in declared if kind not in _LITERALS and n not in closures
+    }
     params: list[Param] = []
     by_name: dict[str, Type] = {}
     passed: list[str] = []
     result_type = None
-    for part in _split(arguments):
+    for part in split_commas(arguments):
         if part == "*":
             break  # keyword-only arguments follow, and the probe passes none
         if part == "/" or part.startswith("*"):
             continue  # the positional-only marker, or variadic arguments the probe leaves empty
-        declaration, default_value = _default(part)
+        declaration, default_value = argument_default(part)
         words, _, kind = declaration.partition(":")
         convention, _, local = words.strip().rpartition(" ")
-        pointer = _POINTER.fullmatch(re.sub(r"\s+", " ", kind.strip()))
-        if pointer:
-            mapped = mojo_type(_split(pointer.group(1))[0], element, generics, by_name)
+        spelled = re.sub(r"\s+", " ", kind.strip())
+        pointer = _POINTER.fullmatch(spelled)
+        receiver = local == "self" and _ATOMIC_VALUE.fullmatch(spelled)
+        shared = False
+        if pointer or receiver:
+            # ``Pointer[mut=True, type, _, address_space=.SHARED]`` names its mutability before the pointee, and
+            # ``Atomic[Scalar[dtype], scope=_]`` its scope after the value.
+            held = (pointer or receiver).group(1)
+            pointee = [p for p in split_commas(held) if "=" not in p]
+            mapped = mojo_type(pointee[0], element, generics, by_name)
+            space = re.search(r"address_space=(\w+)\b", held)
+            shared = bool(_SHARED.search(held)) or bool(
+                space and space.group(1) in generics
+            )
+        elif spelled in closures:
+            mapped = Type.other(REDUCE_CLOSURE)
         else:
             mapped = mojo_type(kind, element, generics, by_name)
         by_name[local] = mapped
@@ -354,9 +274,14 @@ def signature(
         elif convention and convention not in _CONVENTIONS:
             return None, "", f"no probe passes a {convention} argument"
         elif not default_value.strip():
-            direction = (
-                "inout" if pointer else "address" if convention == "mut" else "in"
-            )
+            if receiver:
+                direction = "atomic"
+            elif shared:
+                direction = "workgroup address"
+            elif pointer:
+                direction = "inout"
+            else:
+                direction = "address" if convention == "mut" else "in"
             params.append(Param(mapped, direction))
             passed.append(kind)
     # A DType parameter no passed argument's type mentions and the definition pins to one type, which the call names.
@@ -388,6 +313,8 @@ def signature(
             fixed.append(
                 f"{parameter}={(literals or {}).get(parameter, _LITERALS[kind])}"
             )
+        elif kind.startswith("def") and parameter in (literals or {}):
+            fixed.append(f"{parameter}={literals[parameter]}")
         elif kind.startswith("def"):
             return None, "", f"no probe passes a function as the parameter {parameter}"
         else:
@@ -417,7 +344,7 @@ def parse(
     ``max/gpu/sync/__init__.mojo`` and ``sync.mojo`` and its ``max/gpu/primitives/id.mojo``, the
     ``std/_gpu/primitives/id.mojo`` that defines ``lane_id``, and ``std/atomic/__init__.mojo`` and ``atomic.mojo``.
     """
-    static, instance = {}, []
+    static, instance = {}, {}
     if "Atomic" in exports(atomic_init, ".atomic", functions=False):
         static, instance = methods(atomic, "Atomic")
     lane = definitions(lanes)
@@ -452,7 +379,7 @@ def parse(
             definitions(sync),
             exports(sync_init, ".sync"),
             "float",
-            _imported(SYNC),
+            _imported(SYNC, _SYNC_LITERALS),
         ),
         (
             "id",
@@ -464,7 +391,7 @@ def parse(
         ),
         (
             "atomic",
-            static,
+            {**instance, **static},
             [*static, *instance],
             "int",
             lambda n: (f"Atomic.{n}", atomic_imports, None, _RELAXED),
@@ -477,20 +404,22 @@ def parse(
             _imported(ATOMIC),
         ),
     ]
-    absent = {f"Atomic.{name}": _INSTANCE for name in instance}
     features = []
     for group, defined, names, default, naming in modules:
         for exported in names:
             name, extension, literals, named = naming(exported)
             found, spelling = None, ""
-            note = absent.get(name, "no definition in the module it is exported from")
+            note = "no definition in the module it is exported from"
             if exported in defined:
                 found, spelling, note = signature(
                     name, defined[exported], default, literals, named
                 )
             crossgl, counterpart = spellings.spelling("mojo", name, glsl_names), None
             if name in spellings.COUNTERPARTS["mojo"]:
-                crossgl, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
+                called, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
+                # An expression spelling takes the counterpart's arguments in place of Mojo's.
+                if not spellings.is_expression(crossgl):
+                    crossgl = called
             if name in UNSPELLED:
                 crossgl, note = "", UNSPELLED[name]
             elif crossgl == name and "." in name:
@@ -531,44 +460,8 @@ def _through(module: str, literals: dict[str, str]) -> Callable[[str], Naming]:
     return lambda name: (f"{short}.{name}", module, literals, None)
 
 
-def _imported(package: str) -> Callable[[str], Naming]:
+def _imported(
+    package: str, literals: dict[str, str] | None = None
+) -> Callable[[str], Naming]:
     """A function a probe imports by name from ``package``."""
-    return lambda name: (name, f"{package}.{name}", None, None)
-
-
-_METHOD = re.compile(r"^((?:@[^\n]*\n)*)def\s+(\w+)", re.M)
-
-
-def methods(text: str, struct: str) -> tuple[dict[str, Definition], list[str]]:
-    """The definitions of the static methods of the struct ``struct`` by name, and the names of the public methods
-    only its values have, in file order."""
-    found = re.search(rf"^struct\s+{struct}\b", text, re.M)
-    if not found:
-        return {}, []
-    position = found.end()
-    if text[position] == "[":
-        _, position = _group(text, position, "]")
-    header_end = text.index(":\n", position) + 2
-    following = re.search(r"^(?=[^\s#])", text[header_end:], re.M)
-    end = header_end + (following.start() if following else len(text))
-    body = re.sub(r"^    ", "", text[header_end:end], flags=re.M)
-    static: dict[str, Definition] = {}
-    instance: list[str] = []
-    for match in _METHOD.finditer(body):
-        decorators, name = match.groups()
-        if name.startswith("_"):
-            continue
-        if "@staticmethod" in decorators:
-            static.setdefault(name, definitions(body[match.start(2) - 4 :])[name])
-        elif name not in instance:
-            instance.append(name)
-    return static, [name for name in instance if name not in static]
-
-
-def public(text: str) -> list[str]:
-    """The names of a module's module-level definitions that do not start with an underscore, in file order."""
-    names = []
-    for name in _DEFINITION.findall(text):
-        if not name.startswith("_") and name not in names:
-            names.append(name)
-    return names
+    return lambda name: (name, f"{package}.{name}", literals, None)

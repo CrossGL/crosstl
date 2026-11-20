@@ -10,7 +10,7 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request, translate_project
 from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
 from crosstl.translator.ast import ArrayAccessNode, ForNode, IdentifierNode, ReturnNode
-from crosstl.translator.codegen import GLSL_codegen
+from crosstl.translator.codegen import opengl_function_signatures
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_loop_updates import _execute
@@ -498,7 +498,7 @@ def test_proved_zero_base_preserves_absolute_index_assertion_status(
     tmp_path, monkeypatch, bounds, accepted
 ):
     decisions = []
-    original = GLSL_codegen.decide_index_narrowing
+    original = opengl_function_signatures.decide_index_narrowing
 
     def record(**kwargs):
         decision = original(**kwargs)
@@ -507,7 +507,7 @@ def test_proved_zero_base_preserves_absolute_index_assertion_status(
             decisions.append((kwargs, decision))
         return decision
 
-    monkeypatch.setattr(GLSL_codegen, "decide_index_narrowing", record)
+    monkeypatch.setattr(opengl_function_signatures, "decide_index_narrowing", record)
     config = replace(
         _index_config(
             tmp_path,

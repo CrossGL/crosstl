@@ -10,11 +10,8 @@ import re
 
 import pytest
 
-from crosstl.backend.Metal.preprocessor import (
-    SCAN_STOP_RE,
-    MetalPreprocessor,
-    _keyword_before,
-)
+from crosstl.backend.Metal.preprocessing.support import _keyword_before
+from crosstl.backend.Metal.preprocessor import SCAN_STOP_RE, MetalPreprocessor
 
 FRAGMENTS = [
     "int",
