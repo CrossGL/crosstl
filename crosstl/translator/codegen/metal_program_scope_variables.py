@@ -98,12 +98,8 @@ class MetalProgramScopeVariableMixin:
                 resource_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             emission.code += declaration
-            emission.buffer_register = max(
-                emission.buffer_register, binding + resource_count
-            )
             return
 
         lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
@@ -112,10 +108,9 @@ class MetalProgramScopeVariableMixin:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
+                binding = self.lowest_free_resource_binding(
                     emission.used_resource_bindings,
                     "buffer",
-                    emission.buffer_register,
                     resource_count,
                 )
             binding = self.reserve_or_remap_resource_binding(
@@ -126,13 +121,9 @@ class MetalProgramScopeVariableMixin:
                 resource_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             self.glsl_buffer_block_variables.append(
                 (node, binding, lowered_block, array_size)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, binding + resource_count
             )
             return
 
@@ -158,10 +149,9 @@ class MetalProgramScopeVariableMixin:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
+                binding = self.lowest_free_resource_binding(
                     emission.used_resource_bindings,
                     "buffer",
-                    emission.buffer_register,
                     binding_count,
                 )
             binding = self.reserve_or_remap_resource_binding(
@@ -172,13 +162,9 @@ class MetalProgramScopeVariableMixin:
                 binding_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             self.metal_buffer_resource_variables.append(
                 (node, binding, vtype, array_size, metal_buffer_address_space)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, binding + binding_count
             )
             return
         return UNHANDLED
@@ -198,10 +184,9 @@ class MetalProgramScopeVariableMixin:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
+                binding = self.lowest_free_resource_binding(
                     emission.used_resource_bindings,
                     "buffer",
-                    emission.buffer_register,
                     resource_count,
                 )
             binding = self.reserve_or_remap_resource_binding(
@@ -212,7 +197,6 @@ class MetalProgramScopeVariableMixin:
                 resource_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if array_size is not None:
@@ -224,15 +208,9 @@ class MetalProgramScopeVariableMixin:
                         var_name
                     )
                 )
-                emission.buffer_register = max(
-                    emission.buffer_register, binding + resource_count
-                )
                 return
             self.acceleration_structure_variables.append(
                 (node, binding, mapped_type, array_size)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, binding + resource_count
             )
             return
 
@@ -241,10 +219,9 @@ class MetalProgramScopeVariableMixin:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
+                binding = self.lowest_free_resource_binding(
                     emission.used_resource_bindings,
                     "buffer",
-                    emission.buffer_register,
                     resource_count,
                 )
             binding = self.reserve_or_remap_resource_binding(
@@ -255,7 +232,6 @@ class MetalProgramScopeVariableMixin:
                 resource_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             if array_size is not None:
                 self.unsupported_metal_ray_function_table_array_variables[var_name] = (
@@ -266,16 +242,10 @@ class MetalProgramScopeVariableMixin:
                         "visible_function_table", var_name
                     )
                 )
-                emission.buffer_register = max(
-                    emission.buffer_register, binding + resource_count
-                )
                 return
             mapped_type = self.map_visible_function_table_type(vtype)
             self.visible_function_table_variables.append(
                 (node, binding, mapped_type, array_size)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, binding + resource_count
             )
             return
 
@@ -284,10 +254,9 @@ class MetalProgramScopeVariableMixin:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
+                binding = self.lowest_free_resource_binding(
                     emission.used_resource_bindings,
                     "buffer",
-                    emission.buffer_register,
                     resource_count,
                 )
             binding = self.reserve_or_remap_resource_binding(
@@ -298,7 +267,6 @@ class MetalProgramScopeVariableMixin:
                 resource_count,
                 var_name,
                 node,
-                emission.buffer_register,
             )
             if array_size is not None:
                 self.unsupported_metal_ray_function_table_array_variables[var_name] = (
@@ -309,16 +277,10 @@ class MetalProgramScopeVariableMixin:
                         "intersection_function_table", var_name
                     )
                 )
-                emission.buffer_register = max(
-                    emission.buffer_register, binding + resource_count
-                )
                 return
             mapped_type = self.map_intersection_function_table_type(vtype)
             self.intersection_function_table_variables.append(
                 (node, binding, mapped_type, array_size)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, binding + resource_count
             )
             return
         return UNHANDLED
@@ -337,10 +299,9 @@ class MetalProgramScopeVariableMixin:
             node, {"binding", "buffer"}, ("b", "u", "t")
         )
         if binding is None:
-            binding = self.next_available_resource_binding(
+            binding = self.lowest_free_resource_binding(
                 emission.used_resource_bindings,
                 "buffer",
-                emission.buffer_register,
                 resource_count,
             )
         binding = self.reserve_or_remap_resource_binding(
@@ -351,19 +312,18 @@ class MetalProgramScopeVariableMixin:
             resource_count,
             var_name,
             node,
-            emission.buffer_register,
         )
         self.structured_buffer_variables.append((node, binding, vtype, array_size))
-        emission.buffer_register = max(
-            emission.buffer_register, binding + resource_count
-        )
+        # The companions take the first free slots after their buffer, so they sit next to it.
+        companion_start = binding + resource_count
         if self.structured_buffer_requires_length(var_name):
             length_binding = self.next_available_resource_binding(
                 emission.used_resource_bindings,
                 "buffer",
-                emission.buffer_register,
+                companion_start,
                 resource_count,
             )
+            companion_start = length_binding + resource_count
             length_name = self.structured_buffer_length_resource_name(var_name)
             self.reserve_resource_binding_range(
                 emission.used_resource_bindings,
@@ -376,14 +336,11 @@ class MetalProgramScopeVariableMixin:
             self.structured_buffer_length_variables.append(
                 (node, length_binding, vtype, array_size)
             )
-            emission.buffer_register = max(
-                emission.buffer_register, length_binding + resource_count
-            )
         if self.structured_buffer_requires_counter(vtype):
             counter_binding = self.next_available_resource_binding(
                 emission.used_resource_bindings,
                 "buffer",
-                emission.buffer_register,
+                companion_start,
                 resource_count,
             )
             counter_name = self.structured_buffer_counter_resource_name(var_name)
@@ -397,9 +354,6 @@ class MetalProgramScopeVariableMixin:
             )
             self.structured_buffer_counter_variables.append(
                 (node, counter_binding, vtype, array_size)
-            )
-            emission.buffer_register = max(
-                emission.buffer_register, counter_binding + resource_count
             )
 
     def declare_metal_texture_variable(
@@ -417,10 +371,9 @@ class MetalProgramScopeVariableMixin:
             node, {"binding", "texture"}, ("t", "u")
         )
         if binding is None:
-            binding = self.next_available_resource_binding(
+            binding = self.lowest_free_resource_binding(
                 emission.used_resource_bindings,
                 "texture",
-                emission.texture_register,
                 resource_count,
             )
         binding = self.reserve_or_remap_resource_binding(
@@ -431,7 +384,6 @@ class MetalProgramScopeVariableMixin:
             resource_count,
             var_name,
             node,
-            emission.texture_register,
         )
         self.texture_variables.append((node, binding, mapped_type, array_size))
         self.texture_variable_types[node.name] = mapped_type
@@ -441,9 +393,6 @@ class MetalProgramScopeVariableMixin:
             node,
             self.attribute_value_to_string,
             image_formats=self.image_variable_formats,
-        )
-        emission.texture_register = max(
-            emission.texture_register, binding + resource_count
         )
 
     def declare_metal_sampler_variable(
@@ -459,10 +408,9 @@ class MetalProgramScopeVariableMixin:
             node, {"binding", "sampler"}, ("s",)
         )
         if binding is None:
-            binding = self.next_available_resource_binding(
+            binding = self.lowest_free_resource_binding(
                 emission.used_resource_bindings,
                 "sampler",
-                emission.sampler_register,
                 resource_count,
             )
         binding = self.reserve_or_remap_resource_binding(
@@ -473,12 +421,8 @@ class MetalProgramScopeVariableMixin:
             resource_count,
             var_name,
             node,
-            emission.sampler_register,
         )
         self.sampler_variables.append((node, binding, array_size))
-        emission.sampler_register = max(
-            emission.sampler_register, binding + resource_count
-        )
 
     def declare_metal_value_variable(
         self,
