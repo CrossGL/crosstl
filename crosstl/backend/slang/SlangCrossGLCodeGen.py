@@ -2262,6 +2262,15 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 return bitcast_call
             args = ", ".join(rendered_args)
             if (
+                function_name == "select"
+                and len(expr.args) == 3
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return f"select({rendered_args[2]}, {rendered_args[1]}, {rendered_args[0]})"
+            if (
                 function_name == "saturate"
                 and len(expr.args) == 1
                 and (
