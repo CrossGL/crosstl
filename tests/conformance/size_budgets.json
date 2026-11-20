@@ -94,7 +94,6 @@
  "modules": {
   "crosstl/backend/CUDA/CudaCrossGLCodeGen.py": 7614,
   "crosstl/backend/CUDA/CudaParser.py": 5557,
-  "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py": 6560,
   "crosstl/backend/HIP/HipCrossGLCodeGen.py": 11430,
   "crosstl/backend/HIP/HipParser.py": 5993,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py": 24579,
