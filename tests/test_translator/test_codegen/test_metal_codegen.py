@@ -15034,6 +15034,33 @@ def test_metal_explicit_stage_entry_named_main_is_renamed(stage, body, expected)
 
     assert expected in generated_code
     assert not re.search(r"(kernel|vertex|fragment)\s+\w+\s+main\(", generated_code)
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_explicit_stage_entry_named_main_avoids_helper_collision():
+    shader = """
+    shader ExplicitMainHelperCollision {
+        compute {
+            void kernel_main(RWStructuredBuffer<float> out_, uint id) {
+                out_[id] = 2.0;
+            }
+
+            @stage_entry
+            void main(RWStructuredBuffer<float> out_ @buffer(1), uint id @gl_GlobalInvocationID) {
+                kernel_main(out_, id);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "kernel void kernel_main_2(" in generated_code
+    assert "kernel void kernel_main(" not in generated_code
+    assert re.search(r"\bvoid kernel_main\(", generated_code)
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_explicit_stage_entry_keeps_other_names():
