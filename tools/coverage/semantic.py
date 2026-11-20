@@ -100,10 +100,16 @@ _BUILTIN = re.compile(r"^\s*OpDecorate\s+(%\w+)\s+BuiltIn\s+(\w+)")
 _READS = frozenset({"OpLoad", "OpAccessChain", "OpInBoundsAccessChain"})
 
 
-def instructions(assembly: str) -> Counter:
+def canonical(opcode: str) -> str:
+    """The instruction ``opcode`` is counted as: the core instruction of a :data:`_ALIASES` entry, otherwise itself."""
+    return _ALIASES.get(opcode, opcode)
+
+
+def instructions(assembly: str, aliases: bool = True) -> Counter:
     """The instructions inside function bodies, with extended instructions named ``set:instruction``. A read of a
     built-in variable also counts as ``BuiltIn:<name>``, since a function such as HLSL ``WorldRayOrigin`` lowers to
-    that read alone."""
+    that read alone. With ``aliases``, an instruction is counted as its :func:`canonical` one.
+    """
     sets: dict[str, str] = {}
     constants: dict[str, str] = {}
     builtins: dict[str, str] = {}
@@ -131,7 +137,7 @@ def instructions(assembly: str) -> Counter:
         if opcode == "OpFunctionEnd":
             inside = False
         words = operands.split()
-        token = _token(opcode, words, sets, constants)
+        token = _token(canonical(opcode) if aliases else opcode, words, sets, constants)
         if token:
             found[token] += 1
         if opcode in _READS and len(words) > 1 and words[1] in builtins:
@@ -147,7 +153,6 @@ def _token(
             return opcode
         library = sets.get(words[1], words[1])
         return "" if library.startswith("NonSemantic.") else f"{library}:{words[2]}"
-    opcode = _ALIASES.get(opcode, opcode)
     if opcode in _CONSTANT_OPERANDS:
         return f"{opcode}({','.join(constants[w] for w in words if w in constants)})"
     operation = next(
