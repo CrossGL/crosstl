@@ -36,8 +36,6 @@
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_workgroup_pointer_direct_access_intervals": 1155,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_workgroup_pointer_direct_access_intervals.<locals>.visit": 837,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.validate_glsl_software_subgroup_helpers": 516,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen._generate_module": 339,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_function_node": 451,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.__init__": 644,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen._generate_program_attempt": 1676,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.collect_private_pointer_array_size_hints": 356,
