@@ -155,6 +155,15 @@ def test_instructions_keep_the_operands_that_change_the_operation():
     assert found["OpGroupNonUniformAll"] == 1
 
 
+def test_without_aliases_a_khr_vote_keeps_its_own_name():
+    found = semantic.instructions(BARRIERS, aliases=False)
+    assert found["OpSubgroupAllKHR"] == 1 and "OpGroupNonUniformAll" not in found
+    # The other tokens do not depend on the aliases.
+    assert found["OpControlBarrier(2,2,264)"] == 1
+    assert semantic.canonical("OpSubgroupAnyKHR") == "OpGroupNonUniformAny"
+    assert semantic.canonical("OpGroupNonUniformAny") == "OpGroupNonUniformAny"
+
+
 # HLSL's WaveMultiPrefixSum and GLSL's subgroupPartitionedAddNV, as DXC and glslang write them; an older SPIRV-Tools
 # prints the group operation with the NV suffix.
 PARTITIONED = """

@@ -2,14 +2,18 @@
 
 In memory every backend lists its features as dictionaries. ``coverage.json`` stores them as rows instead: a backend's
 ``columns`` names the fields of each row, and its ``details`` lists each diagnostic once, so the ``detail`` field
-holds an index into it. That keeps the published file under a megabyte. :func:`load` and :func:`dumps` convert
-between the two forms.
+holds an index into it. :func:`loads` and :func:`dumps` convert between the two forms.
+
+The coverage branch splits the report further, so that no published file reaches a megabyte (ADR 0003):
+:func:`site` leaves each backend's score and counts in ``coverage.json`` and moves its rows to the file named by its
+``file`` field, ``features/<language>-<direction>.json``. :func:`load` reads either layout.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -17,9 +21,12 @@ from . import execution, ir, lowering, upstream, validators
 from .features import metal
 from .model import DIRECTIONS, OUTCOMES, Result, Score
 
-SCHEMA = 2
+# 3: the coverage branch stores each backend's feature rows in its own file.
+SCHEMA = 3
 # The fields of a feature row in the order coverage.json stores them; any other field follows in sorted order.
 COLUMNS = ("name", "category", "group", "outcome", "detail")
+# The only names a ``file`` field may hold, so that loading a report never reads outside its directory.
+FEATURE_FILE = re.compile(r"features/[a-z0-9]+-[a-z]+\.json")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
@@ -247,24 +254,82 @@ def _features(backend: dict) -> dict:
     return {**rest, "features": features}
 
 
+def _json(data: dict) -> str:
+    return json.dumps(data, separators=(",", ":"), sort_keys=True) + "\n"
+
+
 def dumps(report: dict) -> str:
     """``report`` as the text of ``coverage.json``, with its features stored as rows."""
     stored = {
         **report,
         "backends": [_rows(b) if "features" in b else b for b in report["backends"]],
     }
-    return json.dumps(stored, separators=(",", ":"), sort_keys=True) + "\n"
+    return _json(stored)
+
+
+def site(report: dict) -> dict[str, str]:
+    """``report`` as the files of the coverage branch, by path: ``coverage.json`` without any feature rows, and one
+    ``features/<language>-<direction>.json`` with the rows of each backend that has features.
+    """
+    files = {}
+    backends = []
+    for backend in report["backends"]:
+        if "features" not in backend:
+            backends.append(backend)
+            continue
+        name = f"features/{backend['language']}-{backend['direction']}.json"
+        if not FEATURE_FILE.fullmatch(name):
+            raise ValueError(f"{name!r} is not the name of a feature file")
+        stored = _rows(backend)
+        files[name] = _json(
+            {
+                key: stored[key]
+                for key in ("language", "direction", "columns", "details", "features")
+            }
+        )
+        rest = {k: v for k, v in backend.items() if k != "features"}
+        backends.append({**rest, "file": name})
+    return {"coverage.json": _json({**report, "backends": backends}), **files}
+
+
+def _linked(backend: dict, directory: Path) -> dict:
+    """``backend`` with the rows of the feature file it names, read from ``directory``."""
+    name = backend["file"]
+    if not isinstance(name, str) or not FEATURE_FILE.fullmatch(name):
+        raise ValueError(f"{name!r} is not the name of a feature file")
+    base = directory.resolve()
+    path = (base / name).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError(f"{name} leads outside {directory}")
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    owner = (stored.get("language"), stored.get("direction"))
+    if owner != (backend.get("language"), backend.get("direction")):
+        raise ValueError(f"{name} holds the features of {owner[0]} {owner[1]}")
+    rest = {k: v for k, v in backend.items() if k != "file"}
+    return {**rest, **{k: stored[k] for k in ("columns", "details", "features")}}
+
+
+def _expanded(data: dict) -> dict:
+    backends = [
+        _features(b) if isinstance(b, dict) and "columns" in b else b
+        for b in data["backends"]
+    ]
+    return {**data, "backends": backends}
 
 
 def loads(text: str) -> dict:
     """The report in ``text``, with each backend's features as dictionaries again."""
-    data = json.loads(text)
-    backends = [_features(b) if "columns" in b else b for b in data["backends"]]
-    return {**data, "backends": backends}
+    return _expanded(json.loads(text))
 
 
 def load(path: Path) -> dict:
-    return loads(path.read_text(encoding="utf-8"))
+    """The report in ``path``, reading the feature file each backend names, if any, from the same directory."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    backends = [
+        _linked(b, path.parent) if isinstance(b, dict) and "file" in b else b
+        for b in data["backends"]
+    ]
+    return _expanded({**data, "backends": backends})
 
 
 def write(report: dict, path: Path) -> None:

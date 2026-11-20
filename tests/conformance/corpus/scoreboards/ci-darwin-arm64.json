@@ -7,7 +7,7 @@
    "metal": "RRRUIRURURURRURR"
   },
   "ggml-metal": {
-   "metal": "RRRRRRRRRRRDRRRRRRRRRRRRUURURIURRRUU"
+   "metal": "RRRRRRRRRRRRRRRRRRRRRRRRUURURIURRRUU"
   },
   "mlx": {
    "metal": "RRRRRRRRURRRRRRRURRRRTRRRRRRRRRRRRRRRRRRRRRRRRRRR"
@@ -43,7 +43,7 @@
   "U": "usable",
   "V": "validator-timeout"
  },
- "manifestSHA256": "c6c6f54e18bf04208935e81390d6202d068a3643fb80ec6353ad06d8b086a55a",
+ "manifestSHA256": "e845c17d13d9e42abcf5cf5d33030db704c375e5cf7acd9109ca3af727c6424d",
  "pairs": {
   "glsl->metal": {
    "feasible": 578,
@@ -67,9 +67,8 @@
   "metal->metal": {
    "feasible": 237,
    "outcomes": {
-    "degraded": 1,
     "invalid": 8,
-    "refused": 144,
+    "refused": 145,
     "timeout": 2,
     "usable": 82
    },

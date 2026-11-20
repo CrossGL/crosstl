@@ -37,6 +37,10 @@ from ..refusals import MetalRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
 from .metal_reference_argument_aliasing import metal_reference_argument_aliases
+from .metal_reference_parameters import (
+    binds_address_space_reference,
+    has_parameter_value_type,
+)
 from .metal_refusals import MetalLoweringRefused
 from .stage_utils import (
     function_stage_name,
@@ -793,6 +797,12 @@ class MetalHlslFunctionMixin:
         ):
             return self.generate_expression(arg)
         if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
+            return self.generate_expression(arg)
+        if binds_address_space_reference(
+            self, func_name, index
+        ) and has_parameter_value_type(self, arg, param_type):
+            # The parameter is a `constant T&` or `device T&` reference, which binds
+            # the argument itself; a conversion would leave no object to bind.
             return self.generate_expression(arg)
         if (
             self.is_metal_bfloat_storage_read(arg)

@@ -478,6 +478,93 @@ def test_worker_translates_and_times_one_unit(tmp_path):
         worker.stop()
 
 
+TWO_METAL_KERNELS = """#include <metal_stdlib>
+using namespace metal;
+kernel void add_one(device uint *data [[buffer(0)]], uint i [[thread_position_in_grid]]) { data[i] += 1u; }
+kernel void double_it(device float *data [[buffer(0)]], uint i [[thread_position_in_grid]]) { data[i] *= 2.0f; }
+"""
+
+
+def test_worker_translates_each_entry_where_a_unit_holds_one_per_stage(tmp_path):
+    """GLSL refuses a whole file with two kernels, so the corpus cell translates and checks each entry alone."""
+    source = tmp_path / "two.metal"
+    source.write_text(TWO_METAL_KERNELS)
+    artifact = tmp_path / "out" / "two.metal.comp"
+    worker = run.Worker(timeout=120)
+    try:
+        result = worker.translate(
+            {
+                "id": "two",
+                "source": str(source),
+                "sourceBackend": "metal",
+                "backend": "opengl",
+                "artifact": str(artifact),
+            }
+        )
+    finally:
+        worker.stop()
+    assert result["status"] == "translated" and result["markers"] == 0
+    entries = result["entryArtifacts"]
+    assert [(e["stage"], e["entry"]) for e in entries] == [
+        ("compute", "add_one"),
+        ("compute", "double_it"),
+    ]
+    assert not artifact.exists()
+    paths = run.translated_artifacts(result, artifact)
+    assert [path.name for path in paths] == [
+        "two.metal.0.add_one.comp",
+        "two.metal.1.double_it.comp",
+    ]
+    texts = [path.read_text() for path in paths]
+    assert all(text.count("void main()") == 1 for text in texts)
+    assert "1u" in texts[0] and "2.0" in texts[1] and "2.0" not in texts[0]
+    accepted = {"verdict": "accepted"}
+    assert run.classify(result, accepted, artifact, "glsl") == "usable"
+    paths[1].write_text("#version 450\n")
+    # An entry artifact without an entry point degrades the whole cell.
+    assert run.classify(result, accepted, artifact, "glsl") == "degraded"
+
+
+def test_entry_artifacts_are_checked_one_stage_at_a_time(tmp_path, monkeypatch):
+    seen = []
+
+    def check(path, target, stages):
+        seen.append((Path(path).name, target, tuple(stages)))
+        accepted = "bad" not in str(path)
+        return {
+            "verdict": "accepted" if accepted else "rejected",
+            "commands": [str(path)],
+            "log": "" if accepted else "syntax error",
+        }
+
+    monkeypatch.setattr(checks, "check", check)
+    translation = {
+        "status": "translated",
+        "entryArtifacts": [
+            {"entry": "a", "stage": "vertex", "artifact": str(tmp_path / "u.0.a.glsl")},
+            {
+                "entry": "b",
+                "stage": "fragment",
+                "artifact": str(tmp_path / "u.1.bad.glsl"),
+            },
+        ],
+    }
+    verdict = run.check_translation(
+        translation, tmp_path / "u.glsl", "glsl", ("vertex", "fragment")
+    )
+    assert seen == [
+        ("u.0.a.glsl", "glsl", ("vertex",)),
+        ("u.1.bad.glsl", "glsl", ("fragment",)),
+    ]
+    assert (
+        verdict["verdict"] == "rejected" and verdict["log"] == "entry b: syntax error"
+    )
+    assert verdict["commands"] == [
+        str(tmp_path / "u.0.a.glsl"),
+        str(tmp_path / "u.1.bad.glsl"),
+    ]
+
+
 def test_interrupted_translation_resumes_from_its_journal(tmp_path):
     source = tmp_path / "add.comp"
     source.write_text(COMPUTE_GLSL)

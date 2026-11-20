@@ -599,6 +599,55 @@ def o_sin(inp):
     return np.sin(inp.astype(np.float64)).astype(np.float32)
 
 
+def _power_pairs(n=64, seed=11):
+    """``(base, exponent)`` pairs whose powers cover the normal binary32 range, its edges and overflow.
+
+    ``exp2(y * log2(x))`` in binary32 loses about ``|y * log2(x)| * 2^-24`` of the product, so large and small
+    results put an unrefined power well past a 16 ulp bound. A third of the pairs land within two binades of the
+    normal range's ends, and fixed pairs take exponents above 2^27 next to one and overflow. No result is subnormal,
+    because whether those flush is the target's choice.
+    """
+    rng = np.random.default_rng(seed)
+    fixed = [
+        (
+            _bits_f32(0x3F7FFFF5),
+            -134217744.0,
+        ),  # just outside e_powf.c's near-one window: 2^126.95
+        (_bits_f32(0x3F7FFFFA), 201326592.0),  # near-one series: 2^-103.9
+        (_bits_f32(0x3F800004), 150000000.0),  # near-one series above one: 2^103.2
+        (_bits_f32(0x3F800004), 268435456.0),  # overflows
+        (2.0, 128.0),  # overflows exactly at 2^128
+        (2.0, 127.0),
+        (0.5, 125.0),
+        (3.0, -79.0),  # 2^-125.2
+    ]
+    pairs = [(np.float32(x), np.float32(y)) for x, y in fixed]
+    while len(pairs) < n:
+        edge = len(pairs) % 3 == 0
+        magnitude = (
+            rng.choice([rng.uniform(124.0, 127.99), rng.uniform(-125.99, -124.0)])
+            if edge
+            else rng.uniform(-120.0, 120.0)
+        )
+        base = np.float32(rng.uniform(0.25, 8.0))
+        if 0.9 < base < 1.1:
+            continue
+        exponent = np.float32(magnitude / math.log2(float(base)))
+        if 2.0**-126 <= float(base) ** float(exponent) < 2.0**128:
+            pairs.append((base, exponent))
+    return np.array(pairs, np.float32).reshape(-1)
+
+
+def _bits_f32(bits):
+    return float(np.array([bits], np.uint32).view(np.float32)[0])
+
+
+def o_pow(inp):
+    xy = inp.reshape(-1, 2).astype(np.float64)
+    with np.errstate(over="ignore"):
+        return np.power(xy[:, 0], xy[:, 1]).astype(np.float32)
+
+
 def _atan2_pairs():
     return _pairs(
         [
@@ -1458,6 +1507,16 @@ CASES = [
         v1="m_atan2_signed_zero",
     ),
     Case(
+        "m_precise_pow",
+        "H8",
+        "precise::pow(x, y) over the normal range, its edges and overflow",
+        "MSL precise pow: 16 ulp",
+        _power_pairs(),
+        np.float32,
+        o_pow,
+        compare="ulp:16",
+    ),
+    Case(
         "u_sinf",
         "H8",
         "sinf(x), |x| <= 1e5",
@@ -2066,6 +2125,30 @@ CASES = [
         threads=128,
         group=32,
         out_count=128 * warp_cases.RESULTS,
+    ),
+    Case(
+        "x_warp_vote",
+        "S29",
+        "CUDA warp votes, reductions, matches and __syncwarp called from CrossGL in a full and a partial warp",
+        "CUDA warp = 32 consecutive threads; a partial warp has only its existing lanes; sums wrap",
+        SMALL[:96],
+        np.int32,
+        warp_cases.vote_reference,
+        threads=96,
+        group=warp_cases.VOTE_GROUP,
+        out_count=96 * warp_cases.VOTE_RESULTS,
+    ),
+    Case(
+        "x_warp_sync_memory",
+        "S29",
+        "CUDA __syncwarp ordering storage-buffer writes and reads between the lanes of a full and a partial warp",
+        "__syncwarp orders the global and shared memory accesses of the lanes it waits for",
+        SMALL[:96],
+        np.int32,
+        warp_cases.sync_memory_reference,
+        threads=96,
+        group=warp_cases.VOTE_GROUP,
+        out_count=96 * warp_cases.SYNC_MEMORY_RESULTS,
     ),
     Case(
         "x_buffer_helper_parameters",

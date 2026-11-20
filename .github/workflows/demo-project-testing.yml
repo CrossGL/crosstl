@@ -1607,6 +1607,7 @@ jobs:
           CROSTL_REQUIRE_METAL_MEMBER_CALL_ARGUMENTS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_ALIAS_DEDUCTION: "1"
           CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_ARITHMETIC: "1"
+          CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_LOCALS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_OVERLOAD_NAMES: "1"
           CROSTL_REQUIRE_PRIVATE_POINTER_ARRAY_PARAMETER_VIEWS: "1"
           CROSTL_REQUIRE_METAL_LOCAL_CONDITIONAL_ALIASES: "1"
@@ -1694,6 +1695,7 @@ jobs:
               tests/test_translator/test_metal_member_call_arguments.py \
               tests/test_translator/test_metal_member_alias_deduction.py \
               tests/test_translator/test_metal_integral_constant_arithmetic.py \
+              tests/test_translator/test_metal_integral_constant_locals.py \
               tests/test_translator/test_metal_member_overload_names.py \
               tests/test_translator/test_private_pointer_array_parameter_views.py \
               tests/test_translator/test_metal_local_conditional_aliases.py \
@@ -6578,6 +6580,7 @@ jobs:
               MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
               MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
               MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE,
+              MLX_FENCE_FAILED_ARTIFACT_COUNT,
               MLX_GEMV_SHA256,
               MLX_GEMV_SOURCE,
               MLX_GEMV_SOURCE_SIZE_BYTES,
@@ -6594,13 +6597,18 @@ jobs:
               MLX_RMS_NORM_DISPATCH_VARIANTS,
               MLX_RMS_NORM_SHA256,
               MLX_RMS_NORM_SOURCE,
+              MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT,
+              MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES,
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+              MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT,
+              MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES,
               MLX_OPENGL_FRONTIER_SOURCES,
               MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS,
               MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
               MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
               MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT,
               MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
               MLX_VULKAN_FRONTIER_SOURCES,
           )
@@ -6640,6 +6648,18 @@ jobs:
           )
           opengl_blocked_sources = set(
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+          )
+          # One OpenGL artifact per kernel: a GLSL unit holds one entry per stage.
+          opengl_blocked_artifact_count = (
+              MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
+              - MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
+          )
+          opengl_toolchain_sources = opengl_toolchain_frontier_sources | set(
+              MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES
+          )
+          opengl_toolchain_artifact_count = (
+              MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
+              + MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
           )
           required_opengl_promotions = {
               "mlx/backend/metal/kernels/binary_two.metal",
@@ -6709,8 +6729,13 @@ jobs:
           ):
               raise SystemExit("MLX checkout proof does not match the pinned revision")
           fence = checks["atomic-fence-contract"]
-          if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
-              raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
+          if (
+              fence["failedArtifactCount"] != MLX_FENCE_FAILED_ARTIFACT_COUNT
+              or fence["emittedArtifactCount"] != 0
+          ):
+              raise SystemExit(
+                  "fence contract accounting must refuse every fence artifact and emit none"
+              )
           reference_accessor = checks["reference-accessor-lvalue-identity"]
           expected_directx_required = os.environ["RUNNER_OS"] == "Windows"
           expected_opengl_required = os.environ["RUNNER_OS"] == "Linux"
@@ -7204,20 +7229,27 @@ jobs:
               != "passed-with-expected-workgroup-blockers"
               or set(opengl["sources"]) != opengl_frontier_sources
               or opengl["sourceCount"] != opengl_frontier_count
-              or opengl["artifactCount"] != opengl_frontier_count
+              or opengl["artifactGranularity"] != "entry-point"
+              or opengl["artifactCount"]
+              != MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
+              + MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
               or set(opengl["translatedSources"])
               != opengl_toolchain_frontier_sources
               or opengl["translatedArtifactCount"]
-              != opengl_toolchain_frontier_count
+              != MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
               or set(opengl["workgroupBlockedSources"])
               != opengl_blocked_sources
+              or opengl["workgroupFrontierArtifactCount"]
+              != MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
+              or opengl["workgroupFrontierTranslatedArtifactCount"]
+              != MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
               or opengl["workgroupBlockedArtifactCount"]
-              != len(opengl_blocked_sources)
+              != opengl_blocked_artifact_count
               or opengl["projectDiagnosticCount"] != 0
               or opengl["expectedProjectErrorCount"]
-              != len(opengl_blocked_sources)
-              or set(opengl["toolchainSources"])
-              != opengl_toolchain_frontier_sources
+              != opengl_blocked_artifact_count
+              or set(opengl["toolchainSources"]) != opengl_toolchain_sources
+              or opengl["toolchainArtifactCount"] != opengl_toolchain_artifact_count
               or opengl["trackedIssues"] != []
               or opengl["resolvedIssues"]
               != [MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE]
@@ -7262,6 +7294,14 @@ jobs:
               ) or (
                   observed_evidence["sourceEntryPointIdentityStatus"]
                   != "matched-materialized-host-names"
+                  or observed_evidence["entryOutcomes"]
+                  != dict(
+                      sorted(MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES[source].items())
+                  )
+                  or observed_evidence["translatedEntryPoints"]
+                  != list(
+                      MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES.get(source, ())
+                  )
               ):
                   raise SystemExit(
                       f"OpenGL workgroup blocker evidence changed for {source}"
@@ -7273,9 +7313,9 @@ jobs:
                   opengl["toolchainRequired"] is not True
                   or opengl["nativeValidationStatus"] != "validated"
                   or opengl["toolchainValidatedArtifactCount"]
-                  != opengl_toolchain_frontier_count
-                  or validated_sources != opengl_toolchain_frontier_sources
-                  or validation_outputs != opengl_toolchain_frontier_sources
+                  != opengl_toolchain_artifact_count
+                  or validated_sources != opengl_toolchain_sources
+                  or validation_outputs != opengl_toolchain_sources
               ):
                   raise SystemExit(
                       "OpenGL frontier toolchain must validate every emitted source"

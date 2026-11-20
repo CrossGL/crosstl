@@ -21,6 +21,7 @@ from ..ast import (
     MemberAccessNode,
     NamedType,
     PointerType,
+    PrimitiveType,
     ReferenceType,
     ReturnNode,
     SwizzleNode,
@@ -84,12 +85,21 @@ class UniformReturnAnalysis:
         self.resource_visiting = set()
 
     def storage_load(self, node):
-        """Return ``(resource, index)`` for a builtin ``buffer_load`` call.
+        """Return ``(resource, index)`` for a builtin element read of a resource.
 
         ``storage_loads`` holds the ids of calls the target resolved to the
         CrossGL builtin ``buffer_load(resource, index)``, which reads like
         ``resource[index]``; a user function of that name is not one.
+        Dereferencing a resource, as Metal's ``params->field`` imports to
+        ``(*params).field``, reads its first element like ``resource[0]``.
+        Callers still decide whether the identifier names a resource.
         """
+        if (
+            isinstance(node, UnaryOpNode)
+            and node.operator == "*"
+            and isinstance(node.operand, IdentifierNode)
+        ):
+            return node.operand, LiteralNode(0, PrimitiveType("int"))
         if not isinstance(node, FunctionCallNode) or id(node) not in self.storage_loads:
             return None
         resource, index = node.arguments

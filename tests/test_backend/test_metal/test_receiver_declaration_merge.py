@@ -6,7 +6,7 @@ PyTorch's ``BinaryKernel.metal`` it took 79 of the 180 profiled seconds. The che
 """
 
 from crosstl.backend.Metal.member_address_types import merge_receiver_variable_types
-from crosstl.backend.Metal.preprocessor import _MetalAddressableValueType
+from crosstl.backend.Metal.preprocessing.support import _MetalAddressableValueType
 
 
 def _local(position, pointer="thread Pair*"):
