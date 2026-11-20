@@ -5080,8 +5080,7 @@ class GLSLCodeGen(
                         mutated.update(target_interval_keys(target))
                 elif isinstance(node, UnaryOpNode) and (
                     self.map_operator(node.op) in {"++", "--"}
-                    or node.op
-                    in {
+                    or node.op in {
                         "PRE_INCREMENT",
                         "PRE_DECREMENT",
                         "POST_INCREMENT",
@@ -5175,8 +5174,9 @@ class GLSLCodeGen(
                         if (
                             isinstance(counter, IdentifierNode)
                             and counter.name == init.name
-                            and init.name
-                            not in self.glsl_interval_dependency_names(offset)
+                            and init.name not in self.glsl_interval_dependency_names(
+                                offset
+                            )
                         ):
                             return counter
                 return None
@@ -5358,8 +5358,7 @@ class GLSLCodeGen(
                                 bounds is None
                                 or info is None
                                 or info.lanes != 1
-                                or info.kind
-                                not in {
+                                or info.kind not in {
                                     ArithmeticScalarKind.SIGNED_INTEGER,
                                     ArithmeticScalarKind.UNSIGNED_INTEGER,
                                 }
@@ -5829,8 +5828,7 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op
-                in {
+                or value.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -6031,8 +6029,9 @@ class GLSLCodeGen(
                 exact_values = (
                     self.glsl_storage_pointer_array_loop_iteration_values(
                         value,
-                        counter_mutated=value.init.name
-                        in mutation_interval_keys(value.body, id(value.init)),
+                        counter_mutated=value.init.name in mutation_interval_keys(
+                            value.body, id(value.init)
+                        ),
                     )
                     if count is not None
                     and (pointer_array_loop or aggregate_loop_names)
@@ -6684,8 +6683,7 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op
-                in {
+                or value.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -10482,8 +10480,7 @@ class GLSLCodeGen(
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if (
-                func_name
-                in {
+                func_name in {
                     "texture",
                     "textureLod",
                     "textureGrad",
@@ -10503,8 +10500,7 @@ class GLSLCodeGen(
             ):
                 return self.texture_sampling_result_type(args[0], func_name)
             if (
-                func_name
-                in glsl_call_names_resolving_to(
+                func_name in glsl_call_names_resolving_to(
                     self,
                     "derivative-aliases",
                     self.GLSL_DERIVATIVE_FUNCTIONS,
@@ -11840,8 +11836,7 @@ class GLSLCodeGen(
                     candidates.append(fallback)
                 for argument_index, argument in enumerate(arguments):
                     if not any(
-                        argument_index
-                        < len(
+                        argument_index < len(
                             parameters := list(
                                 getattr(
                                     candidate,
