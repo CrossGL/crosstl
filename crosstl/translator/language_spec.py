@@ -19,6 +19,7 @@ from . import lexer as lexer_module
 from . import parser as parser_module
 from . import stage_utils
 from . import validation as validation_module
+from .parsing import vocabulary as parser_vocabulary
 
 SPEC_SCHEMA_VERSION = 0
 SPEC_KIND = "crosstl-frontend-language-spec-snapshot"
@@ -172,7 +173,13 @@ def _source_hash(module: ModuleType) -> str:
 
 
 def _source_inventory() -> list[dict[str, str]]:
-    modules = (lexer_module, parser_module, ast_module, validation_module)
+    modules = (
+        lexer_module,
+        parser_module,
+        parser_vocabulary,
+        ast_module,
+        validation_module,
+    )
     return [
         {
             "path": _relative_module_path(module),
@@ -629,12 +636,12 @@ def _extract_parse_type_sampler_map() -> dict[str, str]:
 
 
 def _parser_spec() -> dict[str, Any]:
-    resources = _extract_constants(parser_module, PARSER_RESOURCE_CONSTANTS)
+    resources = _extract_constants(parser_vocabulary, PARSER_RESOURCE_CONSTANTS)
     resources["SAMPLER_IMAGE_TYPE_NAMES"] = _jsonable(_extract_parse_type_sampler_map())
 
     return {
-        "qualifiers": _extract_constants(parser_module, PARSER_QUALIFIER_CONSTANTS),
-        "intrinsics": _extract_constants(parser_module, PARSER_INTRINSIC_CONSTANTS),
+        "qualifiers": _extract_constants(parser_vocabulary, PARSER_QUALIFIER_CONSTANTS),
+        "intrinsics": _extract_constants(parser_vocabulary, PARSER_INTRINSIC_CONSTANTS),
         "resources": resources,
     }
 
