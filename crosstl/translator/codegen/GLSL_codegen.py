@@ -49,6 +49,7 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     NamedType,
+    ParameterNode,
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
@@ -2713,6 +2714,15 @@ class GLSLCodeGen(
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
+    # GLSL 4.60 (section 8.18) took these votes from GL_ARB_shader_group_vote, which OpenGL drivers without the
+    # GL_KHR_shader_subgroup extensions implement (Mesa's llvmpipe rejects GL_KHR_shader_subgroup_basic). They take
+    # a bool; SPIR-V gives the invocation group subgroup scope, as for subgroupAll and friends.
+    GLSL_GROUP_VOTE_FUNCTIONS = {
+        "WaveActiveAllTrue": "allInvocations",
+        "WaveActiveAnyTrue": "anyInvocation",
+        "WaveActiveAllEqual": "allInvocationsEqual",
+    }
+    GLSL_GROUP_VOTE_EXTENSION = "GL_ARB_shader_group_vote"
     GLSL_WAVE_HELPER_VALUE_TYPES = (
         "bool",
         "bvec2",
@@ -2954,6 +2964,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.glsl_resource_binding_records = []
@@ -8141,6 +8152,12 @@ class GLSLCodeGen(
         )
         if self.software_subgroup_width is not None:
             return []
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if group_vote_suffix is not None:
+            # GLSL 4.60 has the votes without an extension.
+            if not group_vote_suffix:
+                return []
+            return [f"#extension {self.GLSL_GROUP_VOTE_EXTENSION} : require"]
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
         if (
@@ -8169,6 +8186,86 @@ class GLSLCodeGen(
             if shuffle_line not in lines:
                 lines.append(shuffle_line)
         return lines
+
+    def glsl_group_vote_suffix(self, ast, target_stage=None):
+        """The suffix the stage's votes take as GL_ARB_shader_group_vote functions: ``"ARB"`` below GLSL 4.60, ``""``
+        from 4.60, where they are core. ``None`` keeps them GL_KHR_shader_subgroup_vote calls: the stage uses another
+        subgroup operation or built-in, or votes on a value this check cannot show is a bool (#3009).
+        """
+        version_line = getattr(self, "current_glsl_version_line", None)
+        if (
+            self.software_subgroup_width is not None
+            or self.glsl_version_is_es(version_line)
+            or self.GLSL_GROUP_VOTE_EXTENSION in getattr(
+                self, "current_glsl_disabled_extensions", set()
+            )
+        ):
+            return None
+        operations = self.glsl_wave_operations(ast, target_stage)
+        if not operations or not operations <= set(self.GLSL_GROUP_VOTE_FUNCTIONS):
+            return None
+        if (
+            self.glsl_stage_requires_exact_subgroup_width(ast, target_stage)
+            or self.uses_glsl_subgroup_basic_builtin(ast, target_stage)
+            or self.glsl_software_cooperative_matrix_uses_multiply_accumulate(
+                ast, target_stage
+            )
+        ):
+            return None
+        roots = self.ray_query_search_roots(ast, target_stage)
+        declared_types = {}
+        for root in roots:
+            for node in self.walk_ast(root):
+                if isinstance(node, VariableNode):
+                    declared = getattr(node, "vtype", None)
+                elif isinstance(node, ParameterNode):
+                    declared = node.param_type
+                else:
+                    continue
+                declared_types.setdefault(node.name, set()).add(
+                    self.type_name_string(declared)
+                )
+        bool_names = {
+            name for name, types in declared_types.items() if types == {"bool"}
+        }
+        for root in roots:
+            for node in self.walk_ast(root):
+                if isinstance(node, WaveOpNode):
+                    operation = node.operation
+                elif isinstance(node, FunctionCallNode):
+                    operation = self.glsl_wave_operation_name(
+                        self.function_call_name(node)
+                    )
+                else:
+                    continue
+                if operation == "WaveActiveAllEqual" and not (
+                    len(node.arguments) == 1
+                    and self.glsl_is_bool_vote_operand(node.arguments[0], bool_names)
+                ):
+                    return None
+        return "" if (self.glsl_version_number(version_line) or 0) >= 460 else "ARB"
+
+    def glsl_is_bool_vote_operand(self, node, bool_names):
+        """Whether ``node`` is a scalar bool: a bool literal, a name declared only as ``bool``, or ``!``, ``&&`` and
+        ``||`` of such operands."""
+        if isinstance(node, LiteralNode):
+            return isinstance(node.value, bool)
+        if isinstance(node, (IdentifierNode, VariableNode)):
+            return node.name in bool_names
+        if isinstance(node, UnaryOpNode):
+            return node.operator == "!" and self.glsl_is_bool_vote_operand(
+                node.operand, bool_names
+            )
+        if isinstance(node, BinaryOpNode):
+            operator = self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            )
+            return (
+                operator in {"&&", "||"}
+                and self.glsl_is_bool_vote_operand(node.left, bool_names)
+                and self.glsl_is_bool_vote_operand(node.right, bool_names)
+            )
+        return False
 
     def glsl_wave_size_attribute(self, attribute):
         name = str(getattr(attribute, "name", "")).strip().lower()
@@ -9430,6 +9527,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -9689,6 +9787,9 @@ class GLSLCodeGen(
         )
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
+        self.current_glsl_group_vote_suffix = self.glsl_group_vote_suffix(
+            ast, target_stage
+        )
         code += f"{version_line}\n"
         code += source_license_comments(ast, "opengl")
         for line in self.glsl_stage_extension_lines(ast, target_stage):
@@ -44685,7 +44786,14 @@ complex64_t crossgl_complex64_mod_assign(
             helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
             return f"{helper}({value}, {mask})"
 
-        mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if (
+            group_vote_suffix is not None
+            and operation in self.GLSL_GROUP_VOTE_FUNCTIONS
+        ):
+            mapped = self.GLSL_GROUP_VOTE_FUNCTIONS[operation] + group_vote_suffix
+        else:
+            mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
                 diagnostic_operation, "is not recognized by the OpenGL backend"

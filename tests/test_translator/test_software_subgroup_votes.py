@@ -135,7 +135,7 @@ def test_native_votes_remain_available(tmp_path, target):
     )
     assert "software_subgroup" not in generated and "SoftwareSubgroup" not in generated
     assert (
-        "WaveActiveAllTrue(" if target == "directx" else "subgroupAll("
+        "WaveActiveAllTrue(" if target == "directx" else "allInvocationsARB("
     ) in generated
     if target == "directx":
         _compile(generated, target, tmp_path)
