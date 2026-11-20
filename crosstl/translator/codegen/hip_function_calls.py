@@ -167,6 +167,9 @@ class HipFunctionCallMixin:
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
+        union_constructor = self.native_unions.constructor(func_name, raw_args, None)
+        if union_constructor is not None:
+            return union_constructor
         if func_name in self.structs_by_name:
             # The structure has no constructor; aggregate initialization sets its members in order.
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"

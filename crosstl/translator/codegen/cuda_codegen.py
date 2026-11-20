@@ -60,6 +60,7 @@ from .cuda_tables import (
 )
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
+from .cuda_unions import NativeUnions
 from .cuda_vector_types import CudaVectorTypeMixin
 from .cuda_visitor import CudaVisitorMixin
 from .cuda_wave_ops import CudaWaveOpMixin
@@ -215,6 +216,7 @@ class CudaCodeGen(
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
@@ -364,6 +366,7 @@ class CudaCodeGen(
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.structs_by_name = self.collect_structs_by_name(ast_node)
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
@@ -952,6 +955,13 @@ class CudaCodeGen(
         raw_args = list(getattr(node, "arguments", []) or [])
         args = [self.visit(arg) for arg in raw_args]
 
+        union_constructor = self.native_unions.constructor(
+            constructor_type,
+            raw_args,
+            getattr(node, "named_arguments", None),
+        )
+        if union_constructor is not None:
+            return union_constructor
         if constructor_type in self.structs_by_name:
             args = self.cuda_struct_constructor_brace_arguments(node, constructor_type)
             mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)

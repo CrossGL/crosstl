@@ -24,7 +24,7 @@ class HipDeclarationMixin:
     def visit_StructNode(self, node: StructNode) -> str:
         if getattr(node, "is_cbuffer", False):
             return self.emit_cbuffer_members_as_constant_memory(node)
-        self.add_line(f"struct {node.name}")
+        self.add_line(f"{self.native_unions.struct_keyword(node)} {node.name}")
         self.add_line("{")
         self.indent_level += 1
 
@@ -64,6 +64,9 @@ class HipDeclarationMixin:
         self.struct_member_semantics[node.name] = member_semantics
         self.indent_level -= 1
         self.add_line("};")
+        layout_assertion = self.native_unions.layout_assertion(node)
+        if layout_assertion:
+            self.add_line(layout_assertion)
         self.add_line()
         return ""
 
