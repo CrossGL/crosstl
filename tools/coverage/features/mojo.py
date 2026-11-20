@@ -30,9 +30,17 @@ from .. import spellings
 from ..execution import THREADS
 from ..model import REDUCE_CLOSURE, VOID, Feature, Param, Signature, Type
 from .common import prototype
+from .mojo_source import (
+    Definition,
+    argument_default,
+    compile_parameters,
+    definitions,
+    exports,
+    methods,
+    public,
+    split_commas,
+)
 
-_EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
-_DEFINITION = re.compile(r"^def\s+(\w+)\s*", re.M)
 # The DType names a probe can spell, and the scalar type of :mod:`..model` each one is.
 _DTYPES = {
     "float32": "float",
@@ -112,78 +120,6 @@ _POINTER = re.compile(r"(?:Mut|Imm|Unsafe)?Pointer\[(.*)\]")
 # call infers, which MAX's memory barriers accept shared memory for (sync.mojo, ``_mbarrier_impl``).
 _SHARED = re.compile(r"address_space=(?:AddressSpace)?\.SHARED")
 
-Definition = tuple[str, str, str, str]
-
-
-def exports(init: str, module: str, functions: bool = True) -> list[str]:
-    """The function names a package's ``__init__.mojo`` imports from ``module``, in file order; every name it imports
-    unless ``functions``."""
-    names = []
-    for source, imported in _EXPORTS.findall(init):
-        if source != module:
-            continue
-        for name in re.split(r"[\s,()]+", imported):
-            if name and (name[0].islower() or not functions) and name not in names:
-                names.append(name)
-    return names
-
-
-def _split(text: str) -> list[str]:
-    """``text`` split at its top-level commas."""
-    parts, depth, start = [], 0, 0
-    for index, char in enumerate(text):
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "," and depth == 0:
-            parts.append(text[start:index].strip())
-            start = index + 1
-    parts.append(text[start:].strip())
-    return [part for part in parts if part]
-
-
-def _group(text: str, start: int, closing: str) -> tuple[str, int]:
-    """The text inside the bracket group that opens at ``text[start]``, and the index just past it."""
-    opening, depth = text[start], 0
-    for index in range(start, len(text)):
-        if text[index] == opening:
-            depth += 1
-        elif text[index] == closing:
-            depth -= 1
-            if depth == 0:
-                return text[start + 1 : index], index + 1
-    raise ValueError(f"unbalanced {opening}{closing} at offset {start}")
-
-
-def definitions(text: str) -> dict[str, Definition]:
-    """``name -> (parameters, arguments, result, body)`` for the first module-level definition of each name.
-
-    ``body`` starts with the header's ``where`` clause, so a constraint written there or asserted in the body is
-    found the same way.
-    """
-    found: dict[str, Definition] = {}
-    for match in _DEFINITION.finditer(text):
-        name, position = match.group(1), match.end()
-        if name in found:
-            continue
-        parameters = ""
-        if text[position] == "[":
-            parameters, position = _group(text, position, "]")
-        arguments, position = _group(text, position, ")")
-        header_end = text.index(":\n", position)
-        tail = text[position:header_end]
-        result = re.sub(r"\swhere\s.*", "", tail, flags=re.S).strip()
-        following = re.search(r"^(?=[^\s#])", text[header_end + 2 :], re.M)
-        body_end = header_end + 2 + (following.start() if following else len(text))
-        found[name] = (
-            parameters,
-            arguments,
-            result.removeprefix("->").strip(),
-            tail + text[header_end:body_end],
-        )
-    return found
-
 
 def mojo_type(
     spelling: str,
@@ -208,7 +144,7 @@ def mojo_type(
         return pair
     simd = re.fullmatch(r"(?:SIMD|Scalar)(?:\[(.*)\])?", spelling)
     if simd:
-        dtype = _split(simd.group(1) or "")[:1]
+        dtype = split_commas(simd.group(1) or "")[:1]
         # ``Scalar[val.dtype]``: the element type of the argument ``val``.
         argument = re.fullmatch(r"(\w+)\.dtype", dtype[0]) if dtype else None
         if argument and argument.group(1) in arguments:
@@ -232,7 +168,7 @@ def _pair(
     match = re.fullmatch(r"(Tuple|StaticTuple)\[(.*)\]", spelling)
     if not match:
         return None
-    parts = _split(match.group(2))
+    parts = split_commas(match.group(2))
     if match.group(1) == "StaticTuple":
         parts = [parts[0]] * 2 if len(parts) == 2 and parts[1] == "2" else []
     kinds = {mojo_type(part, element, generics, arguments) for part in parts}
@@ -280,48 +216,6 @@ def _pinned(parameter: str, default: str, body: str) -> str | None:
     return None
 
 
-def _parameters(text: str) -> list[tuple[str, str, bool, str]]:
-    """``(name, kind, required, default)`` per compile-time parameter.
-
-    Parameters before ``//`` are inferred from the arguments, and a parameter with a default needs no value, so
-    neither is required.
-    """
-    parts = _split(re.sub(r"#[^\n]*", "", text))
-    inferred = "//" in parts
-    result = []
-    for part in parts:
-        if part == "//":
-            inferred = False
-            continue
-        if part == "*":
-            continue
-        name, _, rest = part.partition(":")
-        kind, _, default = rest.partition("=")
-        result.append(
-            (
-                name.strip(),
-                kind.strip(),
-                not inferred and not default.strip(),
-                default.strip(),
-            )
-        )
-    return result
-
-
-def _default(part: str) -> tuple[str, str]:
-    """An argument's declaration and its default value, split at the first ``=`` outside brackets, as in
-    ``ptr: MutPointer[Scalar[dtype], _, address_space=_]``, which has none."""
-    depth = 0
-    for index, char in enumerate(part):
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "=" and depth == 0:
-            return part[:index], part[index + 1 :]
-    return part, ""
-
-
 def signature(
     name: str,
     definition: Definition,
@@ -338,7 +232,7 @@ def signature(
     """
     parameters, arguments, result, body = definition
     element = _element(body, default)
-    declared = _parameters(parameters)
+    declared = compile_parameters(parameters)
     # A generic constrained to a reduction function is the type of the function the probe passes.
     closures = {n for n, kind, _, _ in declared if kind == REDUCE_CLOSURE}
     generics = {
@@ -348,12 +242,12 @@ def signature(
     by_name: dict[str, Type] = {}
     passed: list[str] = []
     result_type = None
-    for part in _split(arguments):
+    for part in split_commas(arguments):
         if part == "*":
             break  # keyword-only arguments follow, and the probe passes none
         if part == "/" or part.startswith("*"):
             continue  # the positional-only marker, or variadic arguments the probe leaves empty
-        declaration, default_value = _default(part)
+        declaration, default_value = argument_default(part)
         words, _, kind = declaration.partition(":")
         convention, _, local = words.strip().rpartition(" ")
         spelled = re.sub(r"\s+", " ", kind.strip())
@@ -364,7 +258,7 @@ def signature(
             # ``Pointer[mut=True, type, _, address_space=.SHARED]`` names its mutability before the pointee, and
             # ``Atomic[Scalar[dtype], scope=_]`` its scope after the value.
             held = (pointer or receiver).group(1)
-            pointee = [p for p in _split(held) if "=" not in p]
+            pointee = [p for p in split_commas(held) if "=" not in p]
             mapped = mojo_type(pointee[0], element, generics, by_name)
             space = re.search(r"address_space=(\w+)\b", held)
             shared = bool(_SHARED.search(held)) or bool(
@@ -571,42 +465,3 @@ def _imported(
 ) -> Callable[[str], Naming]:
     """A function a probe imports by name from ``package``."""
     return lambda name: (name, f"{package}.{name}", literals, None)
-
-
-_METHOD = re.compile(r"^((?:@[^\n]*\n)*)def\s+(\w+)", re.M)
-
-
-def methods(
-    text: str, struct: str
-) -> tuple[dict[str, Definition], dict[str, Definition]]:
-    """The definitions of the public static methods of the struct ``struct`` by name, and those of the public methods
-    only its values have, in file order; an instance method's arguments start with ``self``.
-    """
-    found = re.search(rf"^struct\s+{struct}\b", text, re.M)
-    if not found:
-        return {}, {}
-    position = found.end()
-    if text[position] == "[":
-        _, position = _group(text, position, "]")
-    header_end = text.index(":\n", position) + 2
-    following = re.search(r"^(?=[^\s#])", text[header_end:], re.M)
-    end = header_end + (following.start() if following else len(text))
-    body = re.sub(r"^    ", "", text[header_end:end], flags=re.M)
-    static: dict[str, Definition] = {}
-    instance: dict[str, Definition] = {}
-    for match in _METHOD.finditer(body):
-        decorators, name = match.groups()
-        if name.startswith("_"):
-            continue
-        kept = static if "@staticmethod" in decorators else instance
-        kept.setdefault(name, definitions(body[match.start(2) - 4 :])[name])
-    return static, {n: d for n, d in instance.items() if n not in static}
-
-
-def public(text: str) -> list[str]:
-    """The names of a module's module-level definitions that do not start with an underscore, in file order."""
-    names = []
-    for name in _DEFINITION.findall(text):
-        if not name.startswith("_") and name not in names:
-            names.append(name)
-    return names
