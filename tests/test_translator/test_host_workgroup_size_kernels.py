@@ -15,6 +15,7 @@ from crosstl.translator.host_workgroup_size import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics.warp import CudaWarpIntrinsicUnsupportedError
 from tests.spirv_friendly_names import translate_spirv
 
 SIZES = {
@@ -118,7 +119,6 @@ def _require_static_sizes(crossgl):
     [
         pytest.param(CUDA_SHARED, ".cu", "workgroup variable tile", id="cuda-shared"),
         pytest.param(CUDA_SHARED, ".hip", "workgroup variable tile", id="hip-shared"),
-        pytest.param(CUDA_WARP, ".cu", "calls Wave", id="cuda-shuffle"),
         pytest.param(OPENCL_LOCAL, ".cl", "workgroup variable tile", id="opencl-local"),
     ],
 )
@@ -130,6 +130,23 @@ def test_size_dependent_kernel_is_refused_without_the_host_size(
         _require_static_sizes(_translate(tmp_path, source, suffix, "cgl"))
     code = _translate(tmp_path, source, suffix, "directx", format_output=False)
     assert HOST_NUMTHREADS in code
+
+
+def test_warp_shuffle_kernel_needs_the_host_size(tmp_path):
+    """A CUDA warp is 32 consecutive threads of the block, so the shuffle's exchange needs the block size: HLSL's
+    driver-defined wave cannot stand in for it, and without a size every target refuses the kernel.
+    """
+    with pytest.raises(HostDefinedWorkgroupSizeError, match="calls __shfl_down_sync"):
+        _require_static_sizes(_translate(tmp_path, CUDA_WARP, ".cu", "cgl"))
+    with pytest.raises(
+        CudaWarpIntrinsicUnsupportedError, match="no declared workgroup size"
+    ):
+        _translate(tmp_path, CUDA_WARP, ".cu", "directx", format_output=False)
+    code = _translate(
+        tmp_path, CUDA_WARP, ".cu", "directx", threadgroup_size=[64, 1, 1]
+    )
+    assert _size(code, "directx") == (64, 1, 1)
+    assert "Wave" not in code and "GroupMemoryBarrierWithGroupSync" in code
 
 
 @pytest.mark.parametrize("backend", sorted(SIZES))
