@@ -13,7 +13,6 @@
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.generate_expression": 912,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.generate_function": 316,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.render_program": 592,
-  "crosstl/backend/Metal/function_specialization.py::_explicit_template_function_specialization_for_selected_overload": 466,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._elide_used_resolved_static_data_members": 367,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._find_explicit_template_function_calls": 344,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._find_explicit_template_struct_instantiations": 602,
