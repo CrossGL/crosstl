@@ -6610,6 +6610,7 @@ jobs:
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT,
               MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+              MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES,
               MLX_VULKAN_FRONTIER_SOURCES,
           )
 
@@ -6646,8 +6647,11 @@ jobs:
           opengl_toolchain_frontier_count = len(
               opengl_toolchain_frontier_sources
           )
-          opengl_blocked_sources = set(
+          opengl_workgroup_frontier_sources = set(
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+          )
+          opengl_blocked_sources = set(
+              MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES
           )
           # One OpenGL artifact per kernel: a GLSL unit holds one entry per stage.
           opengl_blocked_artifact_count = (
@@ -7226,7 +7230,11 @@ jobs:
           opengl = checks["opengl-frontier"]
           if (
               opengl["status"]
-              != "passed-with-expected-workgroup-blockers"
+              != (
+                  "passed-with-expected-workgroup-blockers"
+                  if opengl_blocked_artifact_count
+                  else "passed"
+              )
               or set(opengl["sources"]) != opengl_frontier_sources
               or opengl["sourceCount"] != opengl_frontier_count
               or opengl["artifactGranularity"] != "entry-point"
@@ -7237,6 +7245,8 @@ jobs:
               != opengl_toolchain_frontier_sources
               or opengl["translatedArtifactCount"]
               != MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
+              or set(opengl["workgroupFrontierSources"])
+              != opengl_workgroup_frontier_sources
               or set(opengl["workgroupBlockedSources"])
               != opengl_blocked_sources
               or opengl["workgroupFrontierArtifactCount"]
@@ -7283,9 +7293,9 @@ jobs:
                   "OpenGL index-range portability evidence is incomplete"
               )
           opengl_dispatch_evidence = opengl["dynamicWorkgroupDispatchEvidence"]
-          if set(opengl_dispatch_evidence) != opengl_blocked_sources:
-              raise SystemExit("OpenGL workgroup blocker source join is incomplete")
-          for source in opengl_blocked_sources:
+          if set(opengl_dispatch_evidence) != opengl_workgroup_frontier_sources:
+              raise SystemExit("OpenGL dynamic-workgroup source join is incomplete")
+          for source in opengl_workgroup_frontier_sources:
               expected_evidence = MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source]
               observed_evidence = opengl_dispatch_evidence[source]
               if any(
@@ -7304,7 +7314,7 @@ jobs:
                   )
               ):
                   raise SystemExit(
-                      f"OpenGL workgroup blocker evidence changed for {source}"
+                      f"OpenGL dynamic-workgroup evidence changed for {source}"
                   )
           if os.environ["RUNNER_OS"] == "Linux":
               validated_sources = set(opengl["toolchainValidatedSources"])

@@ -1958,7 +1958,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
     assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
     assert "OpenGL target-split frontier accounting is incomplete" in mlx_porting
-    assert "OpenGL workgroup blocker evidence changed" in mlx_porting
+    assert "OpenGL dynamic-workgroup evidence changed" in mlx_porting
+    assert "OpenGL dynamic-workgroup source join is incomplete" in mlx_porting
+    assert "MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES" in mlx_porting
     assert "OpenGL frontier toolchain must validate every emitted source" in (
         mlx_porting
     )
