@@ -225,15 +225,13 @@ def _require_summary(
         and summary.get("artifactCount") == artifact_count
         and summary.get("translatedCount") == translated_count
         and summary.get("failedCount") == failed_count
-        and summary.get("diagnosticCounts")
-        == {
+        and summary.get("diagnosticCounts") == {
             "error": sum(diagnostics_by_code.values()),
             "note": 0,
             "warning": 0,
         }
         and dict(observed_by_code or {}) == dict(diagnostics_by_code)
-        and summary.get("artifactsByTarget")
-        == {
+        and summary.get("artifactsByTarget") == {
             target: {
                 "artifactCount": artifact_count,
                 "translatedCount": translated_count,
@@ -290,8 +288,7 @@ def _require_workgroup_diagnostic(diagnostic: Mapping[str, Any], entry: str) -> 
         and diagnostic.get("message") == WORKGROUP_SIZE_REQUIRED_MESSAGE
         and diagnostic.get("missingCapabilities")
         == ["execution.workgroup-size-specialization"]
-        and execution
-        == {
+        and execution == {
             "reason": "consumed-source-value-unconfigured",
             "sourceEntryPoints": [entry],
         }
