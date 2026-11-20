@@ -35,6 +35,10 @@ from .glsl_interface_block_io import (
 )
 from .glsl_mesh_locations import mesh_fragment_input_layouts
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
+from .glsl_spirv_varying_locations import (
+    spirv_location_prefixed,
+    spirv_struct_varying_locations,
+)
 from .glsl_stage_builtin_members import (
     fragment_member_builtin_alias,
     fragment_parameter_builtin_expression,
@@ -49,10 +53,6 @@ from .glsl_stage_distances import (
     distance_private_output_declaration,
 )
 from .glsl_stage_output_values import builtin_output_value
-from .glsl_spirv_varying_locations import (
-    spirv_location_prefixed,
-    spirv_struct_varying_locations,
-)
 from .glsl_vertex_inputs import (
     vertex_input_builtin,
     vertex_input_layouts,

@@ -142,6 +142,7 @@ from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
 )
+from .glsl_spirv_varying_locations import spirv_location_macro_definition
 from .glsl_stage_distances import distance_output_epilogue
 from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
@@ -152,7 +153,6 @@ from .glsl_stage_output_values import (
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
-from .glsl_spirv_varying_locations import spirv_location_macro_definition
 from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
 from .image_access_contracts import (
     collect_function_image_access_requirements,

@@ -14,13 +14,13 @@ from .array_utils import (
 )
 from .clip_position_defaults import default_clip_position_member
 from .glsl_refusals import patch_parameter_refusal_reason
-from .glsl_stage_builtin_members import note_vertex_builtin_output
-from .glsl_stage_distances import distance_private_output_declaration
 from .glsl_spirv_varying_locations import (
     spirv_entry_input_locations,
     spirv_entry_output_locations,
     spirv_location_prefixed,
 )
+from .glsl_stage_builtin_members import note_vertex_builtin_output
+from .glsl_stage_distances import distance_private_output_declaration
 from .glsl_vertex_inputs import vertex_parameter_layouts
 from .image_access_contracts import normalized_image_access
 from .interface_conflicts import InterfaceLocationConflictError
