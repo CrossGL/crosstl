@@ -267,6 +267,12 @@ class Dialect:
         """The workgroup variable ``name``, for a parameter that takes one."""
         return name
 
+    def shared_pointer(self, kind: Type, name: str, value: str) -> Handle:
+        """A variable ``name`` of ``kind`` that the compute workgroup shares, set to ``value``, and the pointer to it,
+        for a parameter that takes one."""
+        argument = self.address(name)
+        return Handle(argument, (f"{name} = {value};",), (self.workgroup(kind, name),))
+
     def constant_memory(self, kind: Type, name: str) -> str:
         """The declaration of a variable ``name`` in constant memory, which the host sets, for a parameter that takes
         its address."""

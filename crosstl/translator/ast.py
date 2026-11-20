@@ -4,6 +4,7 @@ from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+from .ast_copy import node_deepcopy
 from .cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
@@ -18,6 +19,9 @@ class ASTNode:
         self.source_location = source_location
         self.annotations = annotations or {}
         self.parent = None
+
+    # The same copy as ``copy.deepcopy``'s default protocol, built directly (:mod:`.ast_copy`).
+    __deepcopy__ = node_deepcopy
 
     def accept(self, visitor):
         """Dispatch this node to a visitor method named for its class."""

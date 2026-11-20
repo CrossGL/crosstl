@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from crosstl.backend.Metal import instantiation_memo
-from crosstl.backend.Metal import preprocessor as preprocessor_module
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
 SOURCE = """
@@ -184,13 +183,28 @@ def test_concurrent_scans_agree():
     assert results == [expected] * 8
 
 
-def _class_methods(tree):
-    cls = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "MetalPreprocessor"
-    )
-    return {node.name: node for node in cls.body if isinstance(node, ast.FunctionDef)}
+def _class_methods():
+    """Method definitions as Python resolves them on ``MetalPreprocessor``.
+
+    The class body is split into mixins in ``crosstl.backend.Metal.preprocessing``,
+    so the class and each of those mixins are parsed, in MRO order.
+    """
+    methods = {}
+    for owner in MetalPreprocessor.__mro__:
+        if owner is not MetalPreprocessor and not owner.__module__.startswith(
+            "crosstl.backend.Metal.preprocessing."
+        ):
+            continue
+        tree = ast.parse(Path(inspect.getfile(owner)).read_text("utf-8"))
+        cls = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == owner.__name__
+        )
+        for node in cls.body:
+            if isinstance(node, ast.FunctionDef):
+                methods.setdefault(node.name, node)
+    return methods
 
 
 def _self_attributes(function):
@@ -210,8 +224,7 @@ def test_memo_key_names_every_state_the_scan_reads():
     method, a class constant, a cache or one of the memo's state attributes,
     and no reachable method may assign preprocessor state.
     """
-    tree = ast.parse(Path(inspect.getfile(preprocessor_module)).read_text("utf-8"))
-    methods = _class_methods(tree)
+    methods = _class_methods()
     reachable, pending = set(), ["_scan_project_template_instantiations"]
     while pending:
         name = pending.pop()

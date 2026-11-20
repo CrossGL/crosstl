@@ -146,6 +146,13 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
     ]
+    # Slang functions SPIR-V lacks compile for HLSL or CUDA, which DXC or nvcc then checks.
+    if "slang" in languages:
+        missing += [
+            f"slang for {target} ({tool})"
+            for target, tool in validators.SLANG_SOURCE_TARGETS.items()
+            if not validators.command(tool)
+        ]
     # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
         gap

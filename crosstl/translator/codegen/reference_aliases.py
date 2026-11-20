@@ -345,8 +345,11 @@ class _Lowering:
         return self.ast
 
 
-def lower_reference_aliases(ast):
-    """Specialize identical references without mutating the caller's source AST."""
+def lower_reference_aliases(ast, copy=True):
+    """Specialize identical references without mutating the caller's source AST.
+
+    With ``copy=False`` the caller owns ``ast`` and nothing else reads it, so it is rewritten in place.
+    """
     if not isinstance(ast, ASTNode):
         return ast
-    return _Lowering(deepcopy(ast)).run()
+    return _Lowering(deepcopy(ast) if copy else ast).run()

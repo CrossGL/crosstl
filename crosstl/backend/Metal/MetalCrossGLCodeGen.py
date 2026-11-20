@@ -20,6 +20,7 @@ from .aggregate_scalar_conversions import (
 )
 from .alignment_specifiers import MetalAlignmentSpecifiers
 from .buffer_layout_import import MetalBufferLayoutImport
+from .builtin_operator_operands import operands_have_no_class_type
 from .color_attachments import (
     color_attachment_semantic,
     enumerator_index_values,
@@ -818,6 +819,7 @@ class MetalToCrossGLConverter(
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
+        self.required_metal_precise_power_widths = set()
         self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
@@ -1090,6 +1092,7 @@ class MetalToCrossGLConverter(
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
+        self.required_metal_precise_power_widths = set()
         self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
@@ -2940,6 +2943,9 @@ class MetalToCrossGLConverter(
             # pointee is an aggregate. Unrelated aggregate value overloads are
             # not candidates for this operation and must not intercept it.
             return None
+        if operands_have_no_class_type(self, arguments, argument_types):
+            # [over.match.oper]/1: the built-in operator (builtin_operator_operands).
+            return None
         ranked = []
         for function in candidates:
             ranks = []
@@ -3015,11 +3021,14 @@ class MetalToCrossGLConverter(
         return winners[0][1]
 
     def generate_metal_power_call(self, expression, is_main=False):
-        if (
-            self.metal_math_builtin_namespace_mode(expression.name) == "fast"
-            or str(expression.name).rsplit("::", 1)[-1] != "pow"
-        ):
+        mode = self.metal_math_builtin_namespace_mode(expression.name)
+        if mode == "fast" or str(expression.name).rsplit("::", 1)[-1] != "pow":
             return None
+        # ``precise::pow`` promises 16 ulp (MSL Table 7.2), which no target's own ``pow`` does: GLSL, HLSL and
+        # SPIR-V inherit the error of ``exp2(y * log2(x))``. Its finite path therefore always runs the portable
+        # binary32 power over the whole normal range, while an unqualified ``pow`` keeps the target's unless the
+        # portable-finite profile is selected.
+        precise = mode == "precise"
         selected = self.selected_metal_callable(expression)
         bfloat_wrapper = self.is_materialized_metal_stdlib_wrapper(selected) and (
             self.normalized_metal_type(
@@ -3056,7 +3065,11 @@ class MetalToCrossGLConverter(
                 "global initializers cannot call the runtime power helper",
                 getattr(expression, "source_location", None),
             )
-        self.required_metal_power_widths.add(width)
+        (
+            self.required_metal_precise_power_widths
+            if precise
+            else self.required_metal_power_widths
+        ).add(width)
         mapped = "float" if width == 1 else f"vec{width}"
         parameters = list(getattr(selected, "params", []) or [])
         arguments = []
@@ -3073,28 +3086,61 @@ class MetalToCrossGLConverter(
             ) != self.metal_source_overload_type_identity(parameter_type):
                 value = f"{self.map_type(parameter_type)}({value})"
             arguments.append(f"{mapped}({value})")
-        result = f"{self.metal_power_helper_name(width)}({', '.join(arguments)})"
+        result = (
+            f"{self.metal_power_helper_name(width, precise)}({', '.join(arguments)})"
+        )
         if element != "float":
             result = f"{self.map_type(result_type)}({result})"
         return result
 
-    def metal_power_helper_name(self, width):
+    def metal_power_helper_name(self, width, precise=False):
         suffix = "" if width == 1 else str(width)
+        if precise:
+            return self.metal_precise_math_unique_helper_name(
+                f"precise-power-float{suffix}",
+                f"__crossgl_metal_precise_power_float{suffix}",
+            )
         return self.metal_precise_math_unique_helper_name(
             f"power-float{suffix}", f"__crossgl_metal_power_float{suffix}"
         )
 
     def generate_metal_power_support_code(self, indent=0):
-        if not self.required_metal_power_widths:
-            return ""
-        scalar = self.metal_power_helper_name(1)
-        positive = "pow"
-        support = ""
-        if self.binary32_power_accuracy_profile == "portable-finite":
-            positive = self.metal_precise_math_unique_helper_name(
-                "power-positive-float", "__crossgl_metal_power_positive_float"
+        variants = [
+            (precise, widths)
+            for precise, widths in (
+                (False, self.required_metal_power_widths),
+                (True, self.required_metal_precise_power_widths),
             )
-            support = binary32_power_support(positive)
+            if widths
+        ]
+        if not variants:
+            return ""
+        code = ""
+        licensed = False
+        for precise, widths in variants:
+            positive = "pow"
+            if precise:
+                positive = self.metal_precise_math_unique_helper_name(
+                    "precise-power-positive-float",
+                    "__crossgl_metal_precise_power_positive_float",
+                )
+                code += binary32_power_support(
+                    positive, boundaries="computed", notice=not licensed
+                )
+                licensed = True
+            elif self.binary32_power_accuracy_profile == "portable-finite":
+                positive = self.metal_precise_math_unique_helper_name(
+                    "power-positive-float", "__crossgl_metal_power_positive_float"
+                )
+                code += binary32_power_support(positive, notice=not licensed)
+                licensed = True
+            code += self.metal_power_wrapper_code(precise, widths, positive)
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def metal_power_wrapper_code(self, precise, widths, positive):
+        """The IEEE special cases of ``pow`` around ``positive``, which computes finite positive powers."""
+        scalar = self.metal_power_helper_name(1, precise)
         operand_policy = """    // Keep existing subnormal behavior until a source policy is selected.
     if ((magnitude != 0u && magnitude < 0x00800000u) ||
         (power != 0u && power < 0x00800000u)) {
@@ -3114,7 +3160,7 @@ class MetalToCrossGLConverter(
         power = 0u;
     }
 """
-        code = support + f"""@metal_static
+        code = f"""@metal_static
 float {scalar}(float base, float exponent) {{
     uint a = asuint(base);
     uint b = asuint(exponent);
@@ -3158,17 +3204,16 @@ float {scalar}(float base, float exponent) {{
     return asfloat(asuint(result) | sign);
 }}
 """
-        for width in sorted(self.required_metal_power_widths - {1}):
+        for width in sorted(widths - {1}):
             arguments = ", ".join(
                 f"{scalar}(base.{lane}, exponent.{lane})" for lane in "xyzw"[:width]
             )
             code += (
-                f"@metal_static\nvec{width} {self.metal_power_helper_name(width)}"
+                f"@metal_static\nvec{width} {self.metal_power_helper_name(width, precise)}"
                 f"(vec{width} base, vec{width} exponent) {{\n"
                 f"    return vec{width}({arguments});\n}}\n"
             )
-        pad = "    " * indent
-        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+        return code
 
     def map_semantic(self, semantic, *, context=None):
         """Map Metal attributes to CrossGL semantic annotation syntax."""
