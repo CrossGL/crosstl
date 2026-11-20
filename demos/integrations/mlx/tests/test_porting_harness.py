@@ -2447,14 +2447,14 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["workgroup_frontier_translated_artifact_count"] == (
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
     )
-    assert opengl_frontier["workgroup_blocked_artifact_count"] == 53
+    assert opengl_frontier["workgroup_blocked_artifact_count"] == 39
     assert opengl_frontier["workgroup_blocked_diagnostic"] == (
         module.entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE
     )
     assert opengl_frontier["clean_project_diagnostic_count"] == 0
     assert len(module.MLX_OPENGL_FRONTIER_SOURCES) == 8
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 496
-    assert opengl_frontier["spirv_validated_artifact_count"] == 496
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 510
+    assert opengl_frontier["spirv_validated_artifact_count"] == 510
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
@@ -4349,9 +4349,9 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     # One artifact per kernel: 455 clean-frontier kernels and 94 dynamic-workgroup ones.
     assert status["artifact_count"] == 455 + 94
     assert status["translated_sources"] == list(expected_sources)
-    # Every translated kernel is validated: 455 clean ones and 41 of the dynamic ones.
-    assert status["glslang_compiled_artifact_count"] == 455 + 41
-    assert status["spirv_validated_artifact_count"] == 455 + 41
+    # Every translated kernel is validated: 455 clean ones and 55 of the dynamic ones.
+    assert status["glslang_compiled_artifact_count"] == 455 + 55
+    assert status["spirv_validated_artifact_count"] == 455 + 55
     assert status["runtime_integration_included"] is False
     assert status["runtime_parity_claimed"] is False
 
@@ -10179,10 +10179,10 @@ def test_opengl_index_range_contract_is_documented_as_a_portability_precondition
 
     assert "24 source-qualified index-range assertions" in normalized_readme
     assert "24 configured index-range assertions" in normalized_readme
-    assert "with 15 source-qualified index-range assertions" in normalized_readme
-    assert "The dynamic-workgroup frontier supplies 15 more" in normalized_readme
+    assert "with 28 source-qualified index-range assertions" in normalized_readme
+    assert "The dynamic-workgroup frontier supplies 28 more" in normalized_readme
     assert len(module.MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS) == 24
-    assert len(module.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS) == 15
+    assert len(module.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS) == 28
     assert "24 audited index-range assertions" not in normalized_readme
     assert "exact assertion count and content" in normalized_readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme

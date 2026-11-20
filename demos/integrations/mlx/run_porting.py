@@ -643,9 +643,14 @@ MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
     ),
     # The row kernels rebase each input to `gid * uint64(axis_size) + lid * N_READS` and then read `ptr + i`. MLX
     # dispatches one threadgroup per row of a contiguous array, so every offset is an element index into that array.
+    # The looped variants rebase to the row start `gid * uint64(axis_size)` and walk the row with an `offset`
+    # (logsumexp, softmax) or `r` (rms_norm) stride; each complete `ptr + offset + i` or `ptr + i + r` key is the
+    # same element index, and the relative `i + r` stays below `axis_size`.
     MLX_LOGSUMEXP_SOURCE: (
         "gid * uint64(axis_size) + lid * 4",
         "in_ + i",
+        "gid * uint64(axis_size)",
+        "in_ + offset + i",
     ),
     MLX_RMS_NORM_SOURCE: (
         "gid * uint64(axis_size) + lid * RMS_N_READS",
@@ -654,6 +659,14 @@ MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
         "out_ + i",
         "gx + i",
         "gw + i",
+        "i + r",
+        "r + i",
+        "x + i + r",
+        "x + r + i",
+        "out_ + r + i",
+        "g + i + r",
+        "gx + i + r",
+        "gw + i + r",
     ),
     # sdpa_vector rebases the key and value pointers by head, SIMD group and lane strides, then reads `ptr + j`.
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: (
@@ -666,6 +679,9 @@ MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
         "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
         "in_ + i",
         "out_ + i",
+        "gid * uint64(axis_size)",
+        "in_ + offset + i",
+        "out_ + offset + i",
     ),
 }
 MLX_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
@@ -971,35 +987,44 @@ MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT = sum(
 # threads_per_threadgroup needs a concrete workgroup size. Every other entry translates once
 # MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS bound its uint64_t pointer offsets to
 # the int range OpenGL indexes with.
+#
+# MLX dispatches each looped row kernel with [maxTotalThreadsPerThreadgroup, 1, 1]
+# (MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE), which is 1024 for these pipelines on Apple GPUs,
+# the size the current-tree parity suites dispatch them with. OpenGL 4.3 and later guarantee
+# 1024 for both GL_MAX_COMPUTE_WORK_GROUP_SIZE[0] and GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, so
+# these entry rules give the looped kernels that size on every conforming implementation. The
+# block kernels match no rule and keep the host-chosen size MLX derives from axis_size.
+MLX_OPENGL_LOOPED_WORKGROUP_SIZE = ("1024", "1", "1")
+MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_RULES = {
+    MLX_LOGSUMEXP_SOURCE: {"looped_logsumexp_*": MLX_OPENGL_LOOPED_WORKGROUP_SIZE},
+    MLX_RMS_NORM_SOURCE: {
+        "rms_looped*": MLX_OPENGL_LOOPED_WORKGROUP_SIZE,
+        "vjp_rms_looped*": MLX_OPENGL_LOOPED_WORKGROUP_SIZE,
+    },
+    MLX_SOFTMAX_SOURCE: {"looped_softmax_*": MLX_OPENGL_LOOPED_WORKGROUP_SIZE},
+}
 MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES = {
     MLX_ARG_REDUCE_SOURCE: {entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 24},
-    MLX_LOGSUMEXP_SOURCE: {
-        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 3,
-        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 3,
-    },
-    MLX_RMS_NORM_SOURCE: {
-        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 6,
-        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 6,
-    },
+    MLX_LOGSUMEXP_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 6},
+    MLX_RMS_NORM_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 12},
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
         entry_frontier.ENTRY_OUTCOME_TRANSLATED: 27,
         entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 15,
     },
-    MLX_SOFTMAX_SOURCE: {
-        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 5,
-        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 5,
-    },
+    MLX_SOFTMAX_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 10},
 }
 _MLX_FLOAT_TYPE_NAMES = ("float32", "float16", "bfloat16")
 MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
+    # Listed in materialization order: each type instantiates every kernel of its family.
     MLX_LOGSUMEXP_SOURCE: tuple(
-        f"block_logsumexp_{type_name}" for type_name in _MLX_FLOAT_TYPE_NAMES
+        f"{kind}_logsumexp_{type_name}"
+        for type_name in _MLX_FLOAT_TYPE_NAMES
+        for kind in ("block", "looped")
     ),
-    # Listed in materialization order: each type instantiates both kernels.
     MLX_RMS_NORM_SOURCE: tuple(
         f"{prefix}{type_name}"
         for type_name in _MLX_FLOAT_TYPE_NAMES
-        for prefix in ("rms", "vjp_rms")
+        for prefix in ("rms", "vjp_rms", "rms_looped", "vjp_rms_looped")
     ),
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: tuple(
         entry
@@ -1022,9 +1047,16 @@ MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
         )
     ),
     MLX_SOFTMAX_SOURCE: (
-        *(f"block_softmax_{type_name}" for type_name in _MLX_FLOAT_TYPE_NAMES),
-        "block_softmax_precise_float16",
-        "block_softmax_precise_bfloat16",
+        *(
+            f"{kind}_softmax_{type_name}"
+            for type_name in _MLX_FLOAT_TYPE_NAMES
+            for kind in ("block", "looped")
+        ),
+        *(
+            f"{kind}_softmax_precise_{type_name}"
+            for type_name in ("float16", "bfloat16")
+            for kind in ("block", "looped")
+        ),
     ),
 }
 MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT = sum(
@@ -6847,6 +6879,9 @@ def _run_frontier_project(
     metal_source_options: Mapping[str, int | str] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
     dispatch_contracts: Sequence[str] | None = None,
+    entry_workgroup_size_rules: (
+        Mapping[str, Mapping[str, Sequence[str | int]]] | None
+    ) = None,
 ) -> tuple[CommandResult, dict[str, Any], Path, Path]:
     config_path = config_dir / f"{command_name}.toml"
     report_path = report_dir / f"{command_name}.json"
@@ -6862,6 +6897,7 @@ def _run_frontier_project(
         metal_source_options=metal_source_options,
         index_range_assertions=index_range_assertions,
         dispatch_contracts=dispatch_contracts,
+        entry_workgroup_size_rules=entry_workgroup_size_rules,
     )
     # Exact project artifacts must not depend on the host's optional
     # clang-format version. Keep these evidence-producing translations on the
@@ -7932,6 +7968,7 @@ def _check_opengl_frontier(
             output_dir=blocked_output_dir,
             check=False,
             index_range_assertions=MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS,
+            entry_workgroup_size_rules=MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_RULES,
         )
     )
     _require(
@@ -7953,10 +7990,16 @@ def _check_opengl_frontier(
         expected_outcomes=MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES,
         translated_entries=MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES,
     )
+    entry_rule_evidence = entry_frontier.require_entry_rule_sizes(
+        blocked_artifacts,
+        MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_RULES,
+        label="OpenGL dynamic-workgroup frontier",
+    )
     dispatch_evidence = {
         source: {
             **MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source],
             **entry_evidence[source],
+            **entry_rule_evidence.get(source, {}),
             "sourceEntryPointIdentityStatus": "matched-materialized-host-names",
         }
         for source in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES

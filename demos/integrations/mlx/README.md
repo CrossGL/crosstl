@@ -3650,9 +3650,16 @@ The current harness verifies:
   `spirv-val`. Their project configuration supplies 24 source-qualified
   index-range assertions, and the portability report must reproduce the exact
   assertion count and content. The other five sources run as a second project
-  with 15 source-qualified index-range assertions. Each of their 94 kernels gets
-  its own artifact: 41 translate and pass the same validators, and the 53 that
-  consume `threads_per_threadgroup` produce the exact fail-closed workgroup-size
+  with 28 source-qualified index-range assertions. Each of their 94 kernels gets
+  its own artifact. The 14 looped kernels of `logsumexp.metal`, `rms_norm.metal`
+  and `softmax.metal`, which MLX dispatches with
+  `[maxTotalThreadsPerThreadgroup, 1, 1]`, receive that dispatch as 1024 threads
+  through `project.entry_workgroup_size_rules`. 1024 is the size the parity
+  suites use on Apple GPUs, and OpenGL 4.3 guarantees it for
+  `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`. The block kernels keep the
+  host-chosen size. 55 kernels translate and pass the same validators. The 39
+  that still consume an unconfigured `threads_per_threadgroup` (24 `arg_reduce`
+  and 15 attention kernels) produce the exact fail-closed workgroup-size
   diagnostic and no target file. This is native artifact validation only; the
   gate does not run the kernels or establish runtime parity;
 - a separate bounded OpenGL dispatch-contract proof for the actual pinned
@@ -5109,19 +5116,25 @@ inclusive bounds `[0, 2147483647]`. The expressions are `offset + i`, `a_idx`,
 `batch_idx * offset_stride`, `freq_stride * pos.x`, `in_index_1`, `in_index_2`,
 `out_index_1`, and `out_index_2` for `rope.metal`; and `offset + i`, `a_idx`,
 `b_idx`, `c_idx`, `bidx`, `cidx`, `out_idx`, `out_idx++`, `idx.x`, `idx.y`, and
-`idx.z` for `ternary.metal`. The dynamic-workgroup frontier supplies 15 more,
-with the same bounds: `gid * uint64(axis_size) + lid * 4` and `in_ + i` for
-`logsumexp.metal`; `gid * uint64(axis_size) + lid * RMS_N_READS`, `x + i`,
-`g + i`, `out_ + i`, `gx + i`, and `gw + i` for `rms_norm.metal`; the key and
+`idx.z` for `ternary.metal`. The dynamic-workgroup frontier supplies 28 more,
+with the same bounds: `gid * uint64(axis_size) + lid * 4`, `in_ + i`,
+`gid * uint64(axis_size)`, and `in_ + offset + i` for `logsumexp.metal`;
+`gid * uint64(axis_size) + lid * RMS_N_READS`, `x + i`, `g + i`, `out_ + i`,
+`gx + i`, `gw + i`, `i + r`, `r + i`, `x + i + r`, `x + r + i`, `out_ + r + i`,
+`g + i + r`, `gx + i + r`, and `gw + i + r` for `rms_norm.metal`; the key and
 value rebases
 `kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread`
 and
 `kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread`,
 `keys + j`, and `values + j` for `scaled_dot_product_attention.metal`; and
-`gid * uint64(axis_size) + lid * SOFTMAX_N_READS`, `in_ + i`, and `out_ + i` for
-`softmax.metal`. Without them, OpenGL refuses 29 of those kernels: it indexes
+`gid * uint64(axis_size) + lid * SOFTMAX_N_READS`, `in_ + i`, `out_ + i`,
+`gid * uint64(axis_size)`, `in_ + offset + i`, and `out_ + offset + i` for
+`softmax.metal`. Without them, OpenGL refuses 43 of those kernels: it indexes
 storage with `int`, and their `uint64_t` row and head offsets have no proven
-32-bit range. MLX dispatches these kernels over contiguous arrays, so each
+32-bit range. The looped row kernels rebase to the row start
+`gid * uint64(axis_size)` and walk the row with an `offset` or `r` stride, so
+their complete keys name the same element index and the relative `i + r` stays
+below `axis_size`. MLX dispatches these kernels over contiguous arrays, so each
 offset is an element index into one array. These records are explicit MLX
 host/runtime portability preconditions for OpenGL. They are not inferred guarantees, CrossTL
 does not enforce them at runtime, and they do not establish runtime integration

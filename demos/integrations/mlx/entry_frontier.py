@@ -8,6 +8,7 @@ in discovery order, under the unit's output directory, with its own outcome and 
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 from collections import Counter
 from pathlib import Path
@@ -22,6 +23,7 @@ __all__ = [
     "require",
     "require_clean_entry_frontier",
     "require_entry_outcome_frontier",
+    "require_entry_rule_sizes",
 ]
 
 ENTRY_OUTCOME_TRANSLATED = "translated"
@@ -425,3 +427,60 @@ def require_entry_outcome_frontier(
         f"{label} reported diagnostics that name no refused entry",
     )
     return evidence, by_source
+
+
+def require_entry_rule_sizes(
+    artifacts_by_source: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    entry_rules: Mapping[str, Mapping[str, Sequence[str]]],
+    *,
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Every translated entry an entry workgroup-size rule names reports that rule and its size; no other entry does.
+
+    ``entry_rules`` maps a source to its ``project.entry_workgroup_size_rules`` table. An entry the table names must
+    report one execution entry whose ``workgroupSize`` is the rule's constant components and whose ``rule`` records
+    the matching pattern. An entry it does not name must report no project workgroup size, because the host keeps
+    choosing it. Returns the sized and host-sized entries by source.
+    """
+    evidence: dict[str, dict[str, Any]] = {}
+    for source, rules in sorted(entry_rules.items()):
+        artifacts = artifacts_by_source.get(source)
+        require(artifacts is not None, f"{label} has no artifacts for {source}")
+        sized: dict[str, list[int]] = {}
+        host_sized: list[str] = []
+        for entry, artifact in artifacts.items():
+            if artifact.get("status") != ENTRY_OUTCOME_TRANSLATED:
+                continue
+            patterns = [pattern for pattern in rules if fnmatch.fnmatchcase(entry, pattern)]
+            execution = artifact.get("execution")
+            entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
+            if not patterns:
+                require(
+                    not entries,
+                    f"{label} reports a project workgroup size for host-sized {source}:{entry}",
+                )
+                host_sized.append(entry)
+                continue
+            require(len(patterns) == 1, f"{label} entry rules overlap for {source}:{entry}")
+            expected = [int(component) for component in rules[patterns[0]]]
+            rule = entries[0].get("rule") if isinstance(entries, list) and len(entries) == 1 else None
+            require(
+                isinstance(rule, Mapping)
+                and entries[0].get("sourceEntryPoint") == entry
+                and entries[0].get("workgroupSize") == expected
+                and rule.get("entryPattern") == patterns[0]
+                and rule.get("components") == [str(component) for component in rules[patterns[0]]],
+                f"{label} entry rule size changed for {source}:{entry}",
+            )
+            sized[entry] = expected
+        for pattern in rules:
+            require(
+                any(fnmatch.fnmatchcase(entry, pattern) for entry in sized),
+                f"{label} entry rule {pattern!r} sized no translated entry of {source}",
+            )
+        evidence[source] = {
+            "entryRules": {pattern: list(components) for pattern, components in sorted(rules.items())},
+            "ruleSizedEntryPoints": sized,
+            "hostSizedEntryPoints": host_sized,
+        }
+    return evidence
