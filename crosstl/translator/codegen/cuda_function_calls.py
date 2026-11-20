@@ -262,6 +262,9 @@ class CudaFunctionCallMixin:
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
+        union_constructor = self.native_unions.constructor(func_name, raw_args, None)
+        if union_constructor is not None:
+            return union_constructor
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
             if func_name in self.structs_by_name:

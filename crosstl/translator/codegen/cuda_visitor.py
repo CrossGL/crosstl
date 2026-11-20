@@ -237,7 +237,7 @@ class CudaVisitorMixin:
         }
 
     def visit_StructNode(self, node):
-        self.emit(f"struct {node.name} {{")
+        self.emit(f"{self.native_unions.struct_keyword(node)} {node.name} {{")
         self.indent_level += 1
 
         members = getattr(node, "members", [])
@@ -292,6 +292,9 @@ class CudaVisitorMixin:
         self.struct_member_image_accesses[node.name] = member_image_accesses
         self.indent_level -= 1
         self.emit("};")
+        layout_assertion = self.native_unions.layout_assertion(node)
+        if layout_assertion:
+            self.emit(layout_assertion)
 
     def visit_EnumNode(self, node):
         self.emit(f"enum {node.name} {{")
