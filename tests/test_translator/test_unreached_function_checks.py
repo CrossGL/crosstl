@@ -81,6 +81,26 @@ shader P {
 }
 """
 
+NEVER_CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL = """
+shader P {
+    generic<T> void gen(T x) { return nosuch(x); }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = outp[3]; }
+    }
+}
+"""
+
+CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL = """
+shader P {
+    generic<T> void gen(T x) { return nosuch(x); }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = outp[3]; gen(1.0); }
+    }
+}
+"""
+
 
 def _program(source):
     return Parser(Lexer(source).get_tokens()).parse()
@@ -139,3 +159,18 @@ def test_unused_primary_specialization_is_refused(target):
 @pytest.mark.parametrize("target", TARGETS)
 def test_valid_unreached_helper_still_translates(target):
     apply_rule_carrying(_program(UNUSED_VALID_HELPER), "cgl", target)
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_never_called_generic_function_body_is_not_refused(target):
+    apply_rule_carrying(
+        _program(NEVER_CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL), "cgl", target
+    )
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_called_generic_function_body_is_still_refused(target):
+    with pytest.raises(UndeclaredFunctionError):
+        apply_rule_carrying(
+            _program(CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL), "cgl", target
+        )

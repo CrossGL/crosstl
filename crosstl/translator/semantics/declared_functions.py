@@ -15,10 +15,10 @@ to map. A name reserved to the implementation (``__builtin_ctz``, ``__cgl_wrap_a
 a call (``spirvSDot``) is refused by :mod:`.spirv_instructions` with its own diagnostic.
 
 As for undeclared types (:mod:`.declared_types`), every call is checked — none of the generators drops the
-functions no stage entry reaches — skipping, for a target that instantiates generic structures, the generic
-structures no code names, and only plain names: a callee with a namespace or member qualifier
-(``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve themselves. Explicit
-generic arguments (``pick<float>(x)``) are not part of the name.
+functions no stage entry reaches — skipping the generic functions no code calls, for a target that instantiates
+generic structures the generic structures no code names, and only plain names: a callee with a namespace or
+member qualifier (``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve
+themselves. Explicit generic arguments (``pick<float>(x)``) are not part of the name.
 """
 
 from __future__ import annotations
@@ -151,17 +151,55 @@ def _unused_static_members(program, skip):
     return {id(member) for member in pending}
 
 
+def _never_called_generic_functions(program, skip):
+    """Ids of the generic functions no code calls, which the generators only emit through call sites.
+
+    The mirror of :func:`~.declared_types._uninstantiated_templates`: a generic function is written to the output
+    only when a call instantiates it, so a body nothing calls never reaches the generated output, and the plain
+    callee spellings the qualified-member lowering leaves behind inside it (``CTile::Frag_t::mma`` where ``CTile``
+    is a parameter cannot be resolved, so the call stays a bare ``mma``) must not be refused. A name used anywhere
+    outside the generic bodies counts as a call — through another generic body only once that body is live itself,
+    following the same fixed point the unused static members follow.
+    """
+    generic = {}
+    for node in _nodes(program, skip):
+        if (
+            isinstance(node, A.FunctionNode)
+            and isinstance(node.name, str)
+            and getattr(node, "generic_params", None)
+        ):
+            generic.setdefault(node.name, []).append(node)
+    every = {id(function) for group in generic.values() for function in group}
+    if not every:
+        return set()
+    hidden = set(skip) | every
+    used = _used_names(program, hidden)
+    live = set()
+    pending = sorted(used & generic.keys())
+    while pending:
+        name = pending.pop()
+        for function in generic.get(name, []):
+            if id(function) in live:
+                continue
+            live.add(id(function))
+            used = _used_names(function, hidden - {id(function)})
+            pending.extend(sorted(used & generic.keys()))
+    return every - live
+
+
 def undeclared_function_calls(program, target=None):
     """``(name, call)`` for each call in ``program`` whose plain callee is neither declared nor built in.
 
     Every function body is read: none of the generators drops the functions no stage entry reaches, so a call in
-    such a function reaches the generated output too. Static structure members nothing names are not read, and for
-    a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the generic structures no code names are not
-    read either, because those generators emit a generic structure only through the instantiations it names.
+    such a function reaches the generated output too. The generic functions no code calls are not read — those
+    generators emit a generic function only through the calls that instantiate it. Static structure members
+    nothing names are not read, and for a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the
+    generic structures no code names are not read either, because those generators emit a generic structure only
+    through the instantiations it names.
     """
     declared = declared_function_names(program)
     calls = []
-    skip = set()
+    skip = _never_called_generic_functions(program, set())
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     skip |= _unused_static_members(program, skip)
