@@ -251,6 +251,11 @@ class MetalTopLevelParsingMixin:
                 if component
             )
             self.namespace_scope_stack.append(components)
+            # ``namespace a::b {`` declares ``a`` and ``a::b``; record every enclosing level.
+            parts = self.current_namespace().split("::")
+            for depth in range(1, len(parts) + 1):
+                if parts[depth - 1]:
+                    self.declared_namespaces.add("::".join(parts[:depth]))
         elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 

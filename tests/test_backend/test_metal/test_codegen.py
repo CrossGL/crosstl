@@ -6424,9 +6424,11 @@ def test_codegen_mlx_steel_const_function_constants_from_fft():
     # Repo: https://github.com/ml-explore/mlx
     # Commit: e9e20fa69184bd38cc0ca12bd9a854c059e59588
     # Path: mlx/backend/metal/kernels/fft.h
+    # STEEL_CONST is defined in mlx/backend/metal/kernels/steel/defines.h at the
+    # same commit.
     code = """
     #include <metal_common>
-    #include "mlx/backend/metal/kernels/steel/defines.h"
+    #define STEEL_CONST static constant constexpr const
     using namespace metal;
 
     STEEL_CONST bool inv_ [[function_constant(0)]];
@@ -6439,7 +6441,7 @@ def test_codegen_mlx_steel_const_function_constants_from_fft():
         return value * float(elems_per_thread_);
     }
     """
-    crossgl = convert(code)
+    crossgl = convert(MetalPreprocessor().preprocess(code))
 
     assert "constant bool inv_ @function_constant(0);" in crossgl
     assert "constant int elems_per_thread_ @function_constant(2);" in crossgl
