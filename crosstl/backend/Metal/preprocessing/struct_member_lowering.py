@@ -12,6 +12,9 @@ from typing import (
 )
 
 from ..declarator_lists import split_struct_declarator_lists
+from ..integral_constant_locals import (
+    fold_concrete_function_integral_constant_arithmetic,
+)
 from ..qualified_member_types import resolve_qualified_struct_member_types
 from ..static_member_constants import resolve_retained_static_member_owners
 from .support import (
@@ -87,6 +90,10 @@ class MetalStructMemberLoweringMixin:
         # member method call (MetalStructMethodError) is re-raised so the
         # pipeline reports the kernel as a translation FAILURE instead of leaving
         # a dangling call.
+        # Lowered calls type their arguments. A value computed from a compile-time loop index exists only once the
+        # loop is expanded, and `auto m = mm * Int<4>{};` must already read `Int<4>{}`.
+        code = self._lower_concrete_const_for_loop_callbacks(code)
+        code = fold_concrete_function_integral_constant_arithmetic(self, code)
         evaluated = (
             self._evaluate_static_assertions(code)
             if self._fail_closed_static_assertions

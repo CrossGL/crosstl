@@ -1607,6 +1607,7 @@ jobs:
           CROSTL_REQUIRE_METAL_MEMBER_CALL_ARGUMENTS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_ALIAS_DEDUCTION: "1"
           CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_ARITHMETIC: "1"
+          CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_LOCALS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_OVERLOAD_NAMES: "1"
           CROSTL_REQUIRE_PRIVATE_POINTER_ARRAY_PARAMETER_VIEWS: "1"
           CROSTL_REQUIRE_METAL_LOCAL_CONDITIONAL_ALIASES: "1"
@@ -1694,6 +1695,7 @@ jobs:
               tests/test_translator/test_metal_member_call_arguments.py \
               tests/test_translator/test_metal_member_alias_deduction.py \
               tests/test_translator/test_metal_integral_constant_arithmetic.py \
+              tests/test_translator/test_metal_integral_constant_locals.py \
               tests/test_translator/test_metal_member_overload_names.py \
               tests/test_translator/test_private_pointer_array_parameter_views.py \
               tests/test_translator/test_metal_local_conditional_aliases.py \
