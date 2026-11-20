@@ -230,7 +230,7 @@ class FakeFrontier:
                     }
                     for source in clean_sources
                 },
-                module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
+                module.MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS,
             ),
             "opengl-workgroup-frontier": _report(
                 module,
@@ -238,7 +238,7 @@ class FakeFrontier:
                 self.work_dir / "out-opengl-workgroup-frontier",
                 module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
                 module.MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES,
-                (),
+                module.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS,
             ),
         }
         self.commands = []
@@ -297,12 +297,42 @@ def test_pinned_entry_outcomes_cover_every_discovered_entry(harness):
     counts = harness.MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS
     assert harness.MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT == 455
     assert harness.MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT == 94
-    assert harness.MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT == 12
+    assert harness.MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT == 41
     for source, outcomes in harness.MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES.items():
         assert sum(outcomes.values()) == counts[source]
         assert outcomes.get("translated", 0) == len(
             harness.MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES.get(source, ())
         )
+
+
+def test_index_range_assertions_are_split_by_frontier(harness):
+    translated = harness.MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS
+    dynamic = harness.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS
+
+    def key(assertion):
+        return tuple(sorted(assertion.items()))
+
+    assert sorted(map(key, (*translated, *dynamic))) == sorted(
+        map(key, harness.MLX_OPENGL_INDEX_RANGE_ASSERTIONS)
+    )
+    assert {assertion["source"] for assertion in translated} <= set(
+        harness.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+    )
+    # The row kernels and sdpa_vector need their pointer rebases bounded; arg_reduce has none.
+    assert {assertion["source"] for assertion in dynamic} == {
+        harness.MLX_LOGSUMEXP_SOURCE,
+        harness.MLX_RMS_NORM_SOURCE,
+        harness.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+        harness.MLX_SOFTMAX_SOURCE,
+    }
+    assert len(dynamic) == 15
+    assert {(a["minimum"], a["maximum"]) for a in dynamic} == {(0, (1 << 31) - 1)}
+    # No dynamic-workgroup entry is refused for its index type any more.
+    for outcomes in harness.MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES.values():
+        assert set(outcomes) <= {
+            "translated",
+            harness.entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE,
+        }
 
 
 def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monkeypatch):
@@ -311,7 +341,16 @@ def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monke
     result = fake.check(monkeypatch, require_toolchain=True)
 
     sdpa = harness.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
-    toolchain_sources = [*harness.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES, sdpa]
+    blocked_translated = {
+        harness.MLX_LOGSUMEXP_SOURCE: 3,
+        harness.MLX_RMS_NORM_SOURCE: 6,
+        sdpa: 27,
+        harness.MLX_SOFTMAX_SOURCE: 5,
+    }
+    toolchain_sources = [
+        *harness.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+        *blocked_translated,
+    ]
     assert result["status"] == "passed-with-expected-workgroup-blockers"
     assert result["artifactGranularity"] == "entry-point"
     assert result["artifactCount"] == 455 + 94
@@ -321,13 +360,13 @@ def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monke
         for source in harness.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
     }
     assert result["workgroupFrontierArtifactCount"] == 94
-    assert result["workgroupFrontierTranslatedArtifactCount"] == 12
-    assert result["workgroupBlockedArtifactCount"] == 82
-    assert result["expectedProjectErrorCount"] == 82
+    assert result["workgroupFrontierTranslatedArtifactCount"] == 41
+    assert result["workgroupBlockedArtifactCount"] == 53
+    assert result["expectedProjectErrorCount"] == 53
     assert result["toolchainSources"] == toolchain_sources
     assert result["toolchainValidatedSources"] == toolchain_sources
-    assert result["toolchainArtifactCount"] == 467
-    assert result["toolchainValidatedArtifactCount"] == 467
+    assert result["toolchainArtifactCount"] == 496
+    assert result["toolchainValidatedArtifactCount"] == 496
     assert result["nativeValidationStatus"] == "validated"
     assert {
         source: len(outputs)
@@ -337,11 +376,11 @@ def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monke
             source: harness.MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS[source]
             for source in harness.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
         },
-        sdpa: 12,
+        **blocked_translated,
     }
     assert result["specializationConstants"] == {
         source: harness.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[source]
-        for source in (harness.MLX_ROPE_SOURCE, sdpa)
+        for source in (harness.MLX_ROPE_SOURCE, harness.MLX_RMS_NORM_SOURCE, sdpa)
     }
     for source, evidence in result["dynamicWorkgroupDispatchEvidence"].items():
         assert evidence["entryOutcomes"] == dict(
@@ -360,7 +399,7 @@ def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monke
             assert evidence[key] == value
     names = [name for name, _command in fake.commands]
     assert names[:2] == ["opengl-frontier", "opengl-workgroup-frontier"]
-    assert len(names) == 2 + 2 * 467
+    assert len(names) == 2 + 2 * 496
     glslang = fake.commands[2][1]
     assert glslang[:7] == [
         TOOLS["glslangValidator"],
@@ -375,12 +414,14 @@ def test_opengl_frontier_validates_every_entry_artifact(harness, tmp_path, monke
     assert fake.commands[3][1][3] == glslang[-1]
     config = (fake.config_dir / "opengl-frontier.toml").read_text(encoding="utf-8")
     assert config.count("[[project.index_range_assertions]]") == len(
-        harness.MLX_OPENGL_INDEX_RANGE_ASSERTIONS
+        harness.MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS
     )
     blocked_config = (fake.config_dir / "opengl-workgroup-frontier.toml").read_text(
         encoding="utf-8"
     )
-    assert "[[project.index_range_assertions]]" not in blocked_config
+    assert blocked_config.count("[[project.index_range_assertions]]") == len(
+        harness.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS
+    )
 
 
 def test_opengl_frontier_skips_toolchain_when_not_required(
@@ -529,40 +570,84 @@ def _drift_workgroup_reason(_module, report, _files):
     ] = "aggregate-entry-size-unproven"
 
 
-def _drift_index_reason(_module, report, _files):
-    diagnostic = next(
+def _translated_artifact(report, source):
+    return next(
+        artifact
+        for artifact in report["artifacts"]
+        if artifact["source"] == source and artifact["status"] == "translated"
+    )
+
+
+def _refuse(module, report, files, artifact, code):
+    diagnostic = _diagnostic(
+        module,
+        code,
+        artifact["entryPoint"]["source"],
+        artifact["source"],
+        artifact["path"],
+    )
+    report["diagnostics"].append(diagnostic)
+    files.pop(artifact["path"])
+    for key in (
+        "generatedHash",
+        "generatedSizeBytes",
+        "specializationConstants",
+        "specializationMaterialization",
+    ):
+        artifact.pop(key, None)
+    artifact["entryPoint"].pop("stage")
+    artifact["status"] = "failed"
+    artifact["error"] = diagnostic["message"]
+
+
+def _refuse_a_translated_entry_for_its_index(module, report, files):
+    """An index-range assertion that stops applying turns a translated entry back into a refusal."""
+    artifact = _translated_artifact(report, module.MLX_LOGSUMEXP_SOURCE)
+    _refuse(
+        module,
+        report,
+        files,
+        artifact,
+        "project.translate.opengl-index-type-unsupported",
+    )
+    summary = report["summary"]
+    summary["translatedCount"] -= 1
+    summary["failedCount"] += 1
+    summary["diagnosticCounts"]["error"] += 1
+    by_code = summary["diagnosticsByCode"]
+    code = "project.translate.opengl-index-type-unsupported"
+    by_code[code] = by_code.get(code, 0) + 1
+    target = summary["artifactsByTarget"]["opengl"]
+    target["translatedCount"] -= 1
+    target["failedCount"] += 1
+
+
+def _move_refusal_between_sources(module, report, files):
+    """Keep every total but translate an arg_reduce entry and refuse a logsumexp one."""
+    refused = _blocked_artifact(report, "project.translate.workgroup-size-required")
+    translated = _translated_artifact(report, module.MLX_LOGSUMEXP_SOURCE)
+    _refuse(
+        module,
+        report,
+        files,
+        translated,
+        "project.translate.workgroup-size-required",
+    )
+    report["diagnostics"] = [
         diagnostic
         for diagnostic in report["diagnostics"]
-        if diagnostic["code"] == "project.translate.opengl-index-type-unsupported"
-    )
-    diagnostic["details"]["indexConversion"]["sourceType"] = "int64_t"
-
-
-def _move_refusal_between_sources(module, report, _files):
-    """Keep every total but give arg_reduce an index refusal and logsumexp a workgroup one."""
-    workgroup = _blocked_artifact(report, "project.translate.workgroup-size-required")
-    index = _blocked_artifact(report, "project.translate.opengl-index-type-unsupported")
-    swapped = {
-        workgroup["path"]: (
-            workgroup,
-            "project.translate.opengl-index-type-unsupported",
-        ),
-        index["path"]: (index, "project.translate.workgroup-size-required"),
+        if diagnostic["details"]["targetArtifact"] != refused["path"]
+    ]
+    text = _generated_glsl({})
+    files[refused["path"]] = text
+    refused.pop("error")
+    refused["status"] = "translated"
+    refused["entryPoint"]["stage"] = "compute"
+    refused["generatedHash"] = {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(text.encode()).hexdigest(),
     }
-    for position, diagnostic in enumerate(report["diagnostics"]):
-        target = swapped.get(diagnostic["details"]["targetArtifact"])
-        if target is None:
-            continue
-        artifact, code = target
-        replacement = _diagnostic(
-            module,
-            code,
-            artifact["entryPoint"]["source"],
-            artifact["source"],
-            artifact["path"],
-        )
-        report["diagnostics"][position] = replacement
-        artifact["error"] = replacement["message"]
+    refused["generatedSizeBytes"] = len(text.encode())
 
 
 @pytest.mark.parametrize(
@@ -572,7 +657,7 @@ def _move_refusal_between_sources(module, report, _files):
         (_move_refusal_between_sources, "entry outcomes changed for .*arg_reduce"),
         (_emit_a_refused_entry, "refused entry contract changed"),
         (_drift_workgroup_reason, "workgroup-size-required diagnostic changed"),
-        (_drift_index_reason, "opengl-index-type-unsupported diagnostic changed"),
+        (_refuse_a_translated_entry_for_its_index, "accounting changed"),
     ),
 )
 def test_opengl_workgroup_frontier_pins_each_entry_outcome(
