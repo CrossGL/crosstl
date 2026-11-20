@@ -115,11 +115,10 @@ SCOPED_IDENTIFIER_PART_TOKENS = (
     }
 )
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
-MACRO_QUALIFIERS = {"METAL_FUNC", "STEEL_CONST", "C10_METAL_CONSTEXPR"}
-MACRO_QUALIFIER_ALIASES = {
-    "STEEL_CONST": ("constant",),
-    "C10_METAL_CONSTEXPR": ("constant", "constexpr"),
-}
+# The Metal standard library headers define METAL_FUNC as ``inline __attribute__((__always_inline__))``. The
+# importer does not read the SDK headers, so it keeps the macro as a function qualifier. Every other macro must
+# be defined in the translated source or in a header on its include path; an undefined one is a syntax error.
+MACRO_QUALIFIERS = {"METAL_FUNC"}
 IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {
     "__restrict",
     "__restrict__",
@@ -149,7 +148,6 @@ KEYWORD_IDENTIFIER_TOKENS = {
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 STRUCT_METHOD_PREFIXES = {"virtual"}
-AGGREGATE_ALIGNMENT_MACROS = {"mittens_DEFAULT_ALIGN"}
 OPERATOR_OVERLOAD_TOKENS = {
     "PLUS",
     "MINUS",

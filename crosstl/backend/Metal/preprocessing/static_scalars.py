@@ -58,7 +58,7 @@ class MetalStaticScalarMixin:
                 continue
             if (
                 re.search(
-                    r"\b(?:constexpr|consteval|C10_METAL_CONSTEXPR)\b",
+                    r"\b(?:constexpr|consteval)\b",
                     declaration_prefix,
                 )
                 is None
@@ -104,8 +104,7 @@ class MetalStaticScalarMixin:
             if not template_parameters:
                 continue
             return_type = re.sub(
-                r"\b(?:constexpr|consteval|inline|static|METAL_FUNC|"
-                r"C10_METAL_CONSTEXPR)\b",
+                r"\b(?:constexpr|consteval|inline|static|METAL_FUNC)\b",
                 " ",
                 declaration_prefix,
             )

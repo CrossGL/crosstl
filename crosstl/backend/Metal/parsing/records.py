@@ -17,7 +17,6 @@ from ..MetalAst import (
     VariableNode,
 )
 from .parser_tables import (
-    AGGREGATE_ALIGNMENT_MACROS,
     GNU_EXTENSION_PREFIXES,
     MACRO_QUALIFIERS,
     STRUCT_METHOD_PREFIXES,
@@ -37,7 +36,6 @@ class MetalRecordParsingMixin:
         self.eat("STRUCT")
         struct_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
-        self.skip_aggregate_alignment_macros()
         unnamed = allow_unnamed and self.current_token[0] == "LBRACE"
         if unnamed:
             name = self.reserve_unnamed_aggregate_name("struct")
@@ -107,7 +105,6 @@ class MetalRecordParsingMixin:
         self.eat("CLASS")
         class_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
-        self.skip_aggregate_alignment_macros()
         if not self.is_current_name_token():
             raise MetalSyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
@@ -808,13 +805,6 @@ class MetalRecordParsingMixin:
         ):
             self.eat("IDENTIFIER")
 
-    def skip_aggregate_alignment_macros(self):
-        while (
-            self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in AGGREGATE_ALIGNMENT_MACROS
-        ):
-            self.eat("IDENTIFIER")
-
     def skip_alignas_specifier_tokens_at(self, idx):
         while idx < len(self.tokens) and self.tokens[idx][0] == "ALIGNAS":
             idx += 1
@@ -831,12 +821,6 @@ class MetalRecordParsingMixin:
         ):
             name_index = self.skip_leading_attribute_tokens_at(declaration_start + 1)
             name_index = self.skip_alignas_specifier_tokens_at(name_index)
-            while (
-                name_index < len(self.tokens)
-                and self.tokens[name_index][0] == "IDENTIFIER"
-                and self.tokens[name_index][1] in AGGREGATE_ALIGNMENT_MACROS
-            ):
-                name_index += 1
             if name_index >= len(self.tokens) or not self.is_name_token_at(name_index):
                 self.skip_nested_aggregate_declaration()
                 return None
