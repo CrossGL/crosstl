@@ -37,7 +37,6 @@ from ..ast import (
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
-    PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -60,11 +59,9 @@ from ..matrix_shape import (
 from ..refusals import OpenGLRefusal
 from ..source_licenses import source_license_comments
 from ..structure_conversions import StructureConversionKind
+from ..unhandled import UNHANDLED
 from ..validation import expression_debug_name
-from ..vulkan_memory_scope import declares_vulkan_memory_model
 from .array_utils import (
-    collect_literal_int_constants,
-    collect_struct_member_types,
     evaluate_literal_int_expression,
     fold_array_type_counts,
     format_c_style_array_declaration,
@@ -78,52 +75,23 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
-from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
-    collect_enum_struct_variant_fields,
-    collect_enum_type_names,
-    collect_enum_variant_constants,
-    collect_enum_variant_constructor_fields,
-    collect_enum_variant_constructors,
-    collect_generic_enum_specialization_member_types,
-    collect_generic_enum_specializations,
-    collect_generic_enum_struct_definitions,
-    collect_generic_enum_variant_constants,
-    collect_plain_enums,
-    collect_struct_payload_enums,
     infer_enum_constructor_type,
     sanitize_type_name,
 )
-from .exponent_builtins import emit_glsl_exponent_helpers
 from .generic_concrete_call_results import concrete_overload_results_differ
-from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generic_function_call_name,
-    generic_function_emission_list,
     generic_function_parameters,
     numeric_trait_method_result_type,
-    prepare_generic_function_specializations,
-)
-from .generic_global_types import (
-    collect_constant_and_cbuffer_member_types,
-    glsl_preliminary_global_variable_types,
 )
 from .generic_struct_utils import (
-    collect_generic_struct_definitions,
-    collect_generic_struct_specialization_member_types,
-    collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
-from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
-from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_guarded_offsets import call_offset_relation
-from .glsl_helper_stage_guards import (
-    glsl_helper_stage_macros,
-    wrap_glsl_helper_stage_guard,
-)
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -131,19 +99,12 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
-from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
-from .glsl_refusals import input_attachment_refusal_reason
-from .glsl_shadow_lod import require_shadow_lod_extension
-from .glsl_specialization_dependents import (
-    constant_source_name,
-    partition_constants_by_specialization_dependency,
-)
 from .glsl_stage_distances import distance_output_epilogue
-from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
@@ -152,10 +113,7 @@ from .glsl_stage_output_values import (
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
-from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
 from .image_access_contracts import (
-    collect_function_image_access_requirements,
-    collect_function_parameter_names,
     image_access_satisfies_requirement,
     is_image_atomic_operation,
     is_projected_texture_basic_offset_operation,
@@ -208,6 +166,7 @@ from .opengl_fixed_array_parameters import OpenGLFixedArrayParameterMixin
 from .opengl_function_intervals import OpenGLFunctionIntervalMixin
 from .opengl_function_signatures import OpenGLFunctionSignatureMixin
 from .opengl_global_initializers import OpenGLGlobalInitializerMixin
+from .opengl_global_resources import OpenGLGlobalResourceMixin
 from .opengl_image_operations import OpenGLImageOperationMixin
 from .opengl_interface_blocks import OpenGLInterfaceBlockMixin
 from .opengl_local_identifiers import OpenGLLocalIdentifierMixin
@@ -219,7 +178,10 @@ from .opengl_numeric_helpers import OpenGLNumericHelperMixin
 from .opengl_private_pointer_bindings import OpenGLPrivatePointerBindingMixin
 from .opengl_private_pointer_intervals import OpenGLPrivatePointerIntervalMixin
 from .opengl_private_pointer_layouts import OpenGLPrivatePointerLayoutMixin
+from .opengl_program_emission import OpenGLProgramEmissionMixin
+from .opengl_program_emission_state import OpenGLResourceEmission, OpenGLStructEmission
 from .opengl_program_options import OpenGLProgramOptionMixin
+from .opengl_program_preparation import OpenGLProgramPreparationMixin
 from .opengl_program_structure import OpenGLProgramStructureMixin
 from .opengl_resource_bindings import OpenGLResourceBindingMixin
 from .opengl_resource_specializations import OpenGLResourceSpecializationMixin
@@ -230,6 +192,7 @@ from .opengl_stage_members import OpenGLStageMemberMixin
 from .opengl_storage_pointer_bindings import OpenGLStoragePointerBindingMixin
 from .opengl_storage_pointer_declarations import OpenGLStoragePointerDeclarationMixin
 from .opengl_storage_reinterpretation import OpenGLStorageReinterpretationMixin
+from .opengl_struct_declarations import OpenGLStructDeclarationMixin
 from .opengl_structured_buffers import OpenGLStructuredBufferMixin
 from .opengl_subgroup_control_flow import OpenGLSubgroupControlFlowMixin
 from .opengl_tables import OpenGLTableMixin
@@ -281,37 +244,16 @@ from .opengl_values import (  # noqa: F401  (also imported from this module)
 from .opengl_wave_operations import OpenGLWaveOperationMixin
 from .opengl_workgroup_pointers import OpenGLWorkgroupPointerMixin
 from .pointer_reinterpret import PointerReinterpretationError, scalar_storage_layout
-from .private_vector_views import lower_private_vector_views
-from .reference_aliases import lower_reference_aliases
-from .resource_aggregates import lower_resource_aggregates
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
-from .sampler_pairs import COMBINED_SAMPLER_PAIRS, lower_combined_sampler_pairs
 from .scalar_return_bounds import aggregate_call_intervals
 from .specialized_workgroup_size import has_specialized_workgroup_size
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
-    collect_stage_local_structs,
-    collect_stage_local_variables,
     compute_local_size,
-    deduplicate_named_declarations,
-    function_entry_execution_config,
-    function_stage_name,
-    normalize_stage_name,
-    order_functions_by_dependencies,
-    requested_stage_name,
-    should_emit_qualified_function,
-    stage_matches,
-)
-from .subgroup_control_flow import (
-    converge_subgroup_bounded_loops,
-    converge_subgroup_conditional_calls,
-    converge_subgroup_divergent_barriers,
-    converge_subgroup_early_exits,
-    converge_subgroup_guarded_returns,
 )
 from .subgroup_loop_carried import loop_carried_names
 from .subgroup_reassignments import ReassignmentFlow
@@ -367,6 +309,10 @@ class GLSLCodeGen(
     GLSLHlslResourceMixin,
     OpenGLExpressionFormMixin,
     OpenGLCallExpressionMixin,
+    OpenGLProgramPreparationMixin,
+    OpenGLProgramEmissionMixin,
+    OpenGLGlobalResourceMixin,
+    OpenGLStructDeclarationMixin,
 ):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
@@ -2773,1002 +2719,65 @@ class GLSLCodeGen(
         return name == "wavesize"
 
     def _generate_program_attempt(self, ast, target_stage, early_exits):
-        ast = lower_resource_aggregates(
-            ast,
-            storage_pointer_parameters=True,
-            workgroup_access_assertions=self.workgroup_access_assertions,
+        ast = self.lower_glsl_program_ast(ast, target_stage, early_exits)
+        target_stage = self.reset_glsl_program_state(ast, target_stage)
+        functions = self.collect_glsl_function_and_constant_facts(ast, target_stage)
+        self.reset_glsl_stage_state(ast, target_stage)
+        structs, generic_function_specializations = (
+            self.collect_glsl_struct_and_generic_facts(ast, target_stage, functions)
         )
-        ast = lower_reference_aliases(ast)
-        ast = lower_private_vector_views(ast, "opengl")
-        ast, self.combined_sampler_records = lower_combined_sampler_pairs(
-            ast, self.LOWERING_REFUSAL_TYPE.label
+        self.collect_glsl_enum_and_specialization_facts(
+            generic_function_specializations, structs
         )
-        self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
-            COMBINED_SAMPLER_PAIRS, []
+        self.prepare_glsl_program_identifiers(
+            ast, target_stage, functions, generic_function_specializations, structs
         )
-        self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
-        ast = self.with_glsl_builtin_option_prelude(ast)
-        if self.software_subgroup_width is not None:
-            ast = converge_subgroup_divergent_barriers(
-                ast,
-                self.glsl_software_subgroup_stage_entries(ast, target_stage),
-                self.walk_ast,
-                self.map_operator,
-            )
-            if early_exits:
-                ast = converge_subgroup_early_exits(
-                    ast,
-                    self.glsl_software_subgroup_stage_entries(ast, target_stage),
-                    self.walk_ast,
-                    self.map_operator,
-                )
-            ast = converge_subgroup_guarded_returns(
-                ast, self.walk_ast, self.map_operator
-            )
-            ast = converge_subgroup_bounded_loops(
-                ast,
-                self.glsl_software_subgroup_stage_entries(ast, target_stage),
-                self.walk_ast,
-                self.map_operator,
-            )
-            ast = converge_subgroup_conditional_calls(
-                ast,
-                self.glsl_software_subgroup_stage_entries(ast, target_stage),
-                self.walk_ast,
-                self.map_operator,
-            )
-        target_stage = requested_stage_name(target_stage)
-        self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(
-            ast, target_stage
-        )
-        self.global_type_aliases = self.collect_glsl_type_aliases(ast)
-        self.current_type_aliases = dict(self.global_type_aliases)
-        self.glsl_builtin_option_available = self.glsl_ast_declares_type(ast, "Option")
-        self.validate_stage_main_helper_conflict(ast, target_stage)
-        refuse_repeated_stage_entries(
-            ast, target_stage, self.combined_stage_entry_types()
+        code, cooperative_matrix_support_insertion_index, struct_dependent_constants = (
+            self.generate_glsl_program_header(ast, target_stage, structs)
         )
 
-        self.sampler_variables = set()
-        self.current_sampler_parameters = set()
-        self.glsl_resource_binding_records = []
-        self.glsl_combined_sampler_uses = []
-        self.glsl_sampler_registers = {}
-        self.glsl_float_remainder_types = set()
-        self.glsl_precise_float_remainder_types = set()
-        self.glsl_integer_dot_types = set()
-        self.reset_glsl_emulated_matrices(ast)
-        self.reset_glsl_hlsl_structured_buffers()
-        self.reset_glsl_hlsl_cbuffers()
-        self.glsl_image_usages = self.collect_glsl_image_usages(ast)
-        self.glsl_unknown_format_images = set()
-        self.glsl_formatted_image_load_names = set()
-        self.glsl_write_only_unknown_format_images = set()
-        self.texture_variable_types = {}
-        self.resource_variable_array_sizes = {}
-        self.current_texture_parameters = {}
-        self.current_resource_aliases = {}
-        self.current_glsl_workgroup_pointer_aliases = {}
-        self.current_glsl_storage_pointer_aliases = {}
-        self.glsl_global_workgroup_pointer_aliases = {}
-        self.glsl_global_storage_pointer_aliases = {}
-        self.glsl_storage_pointer_access_requirement_cache = {}
-        self.glsl_storage_pointer_access_requirement_active = set()
-        self.current_glsl_synthetic_local_names = set()
-        self.current_glsl_scalar_array_view_plans = {}
-        self.current_glsl_scalar_array_views = {}
-        self.glsl_fixed_array_vector_pointer_view_helper_ids = set()
-        self.glsl_fixed_array_vector_pointer_view_calls = {}
-        self.glsl_workgroup_pointer_scope_depth = 0
-        self.image_variable_formats = {}
-        self.current_image_format_parameters = {}
-        self.image_variable_accesses = {}
-        self.current_image_access_parameters = {}
-        self.structured_buffer_variable_accesses = {}
-        self.current_structured_buffer_access_parameters = {}
-        self.glsl_buffer_block_variable_names = set()
-        self.glsl_buffer_block_variable_types = {}
-        self.glsl_buffer_block_variable_accesses = {}
-        self.glsl_uniform_block_variable_types = {}
-        self.glsl_interface_value_struct_names = set()
-        self.glsl_interface_block_names_by_qualifier = {}
-        self.global_variable_types = {}
-        self.glsl_global_identifier_names = self.collect_glsl_global_identifier_names(
-            ast, target_stage
-        )
-        self.glsl_module_identifier_names = {}
-        self.glsl_module_generated_identifier_names = {}
-        self.glsl_module_used_identifier_names = set()
-        self.glsl_type_identifier_names = {}
-        self.glsl_generic_enum_constructor_names = {}
-        self.glsl_compile_time_global_node_ids = set()
-        self.glsl_compile_time_bitcast_substitution_node_ids = set()
-        self.glsl_compile_time_bitcast_substitutions = {}
-        self.glsl_active_compile_time_bitcast_substitutions = set()
-        self.glsl_runtime_global_initializer_node_ids = set()
-        self.glsl_stage_runtime_global_initializers = {}
-        self.glsl_unresolved_call_targets = {}
-        self.function_sampler_parameter_indices = (
-            self.collect_function_sampler_parameter_indices(ast)
-        )
-        functions = self.collect_functions(ast)
-        self.glsl_metal_simd_group_placeholder_functions = (
-            self.collect_metal_simd_group_placeholder_functions(functions)
-        )
-        self.preserved_sampler_variables = set()
-        self.preserved_sampler_parameters = {}
-        self.function_return_types = {
-            func.name: self.type_name_string(getattr(func, "return_type", "void"))
-            for func in functions
-            if getattr(func, "name", None)
-        }
-        self.function_parameter_names = collect_function_parameter_names(functions)
-        self.function_parameter_types = self.collect_function_parameter_types(functions)
-        self.function_parameter_infos = self.collect_function_parameter_infos(functions)
-        self.function_definitions = {
-            func.name: func for func in functions if getattr(func, "name", None)
-        }
-        self.validate_glsl_atomic_fences_before_resource_qualifiers(ast, target_stage)
-        self.validate_typed_resource_memory_qualifier_contracts(ast, target_stage)
-        self.glsl_function_overloads_by_name = {}
-        self.glsl_function_target_names = {}
-        self.current_glsl_function_key = None
-        self.current_glsl_source_function_id = None
-        self.current_glsl_source_function_name = None
-        self.glsl_function_stage_contexts = {}
-        self.glsl_function_call_graph = {}
-        self.glsl_function_call_locations = {}
-        self.glsl_function_call_source_edges = {}
-        self.glsl_generic_helper_refusals = {}
-        self.glsl_generic_helper_code = {}
-        self.collect_preserved_nonuniform_sampler_resources(ast, functions)
-        self.validate_glsl_tessellation_control_barriers(ast, target_stage, functions)
-        self.glsl_resource_function_specializations = {}
-        self.glsl_resource_function_call_names = {}
-        self.glsl_resource_specialized_source_names = set()
-        self.glsl_resource_function_call_plans = {}
-        self.glsl_resource_function_semantic_call_plans = {}
-        self.current_glsl_resource_function_call_semantic_locations = {}
-        self.emitted_glsl_resource_specialization_names = set()
-        self.function_private_pointer_array_size_hints = {}
-        self.function_private_pointer_required_spans = {}
-        self.function_private_pointer_parameters = {}
-        self.function_private_pointer_parameter_indices = {}
-        self.function_private_pointer_element_types = {}
-        self.function_private_pointer_read_only_parameters = {}
-        self.function_private_pointer_backing_variants = {}
-        self.function_private_pointer_local_arrays = {}
-        self.function_private_pointer_view_calls = {}
-        self.function_private_pointer_base_names = {}
-        self.function_private_pointer_source_names = {}
-        self.function_private_pointer_full_span_parameters = {}
-        self.function_private_pointer_scalar_access_violations = {}
-        self.glsl_private_pointer_robust_zero_read_variants = {}
-        self.glsl_private_pointer_zero_index_access_ids = set()
-        self.glsl_private_pointer_noop_rebinding_ids = set()
-        self.glsl_private_pointer_base_rebinding_parameters = {}
-        self.current_glsl_private_pointer_variant = {}
-        self.current_glsl_private_pointer_base_names = {}
-        self.current_glsl_private_pointer_function_name = None
-        self.glsl_global_specialization_constants = []
-        self.glsl_specialization_constant_declarations = []
-        self.glsl_runtime_specialization_dependent_ids = set()
-        self.function_image_access_requirements = (
-            collect_function_image_access_requirements(
-                functions,
-                self.function_parameter_names,
-                self.walk_ast,
-                self.function_call_name,
-                self.expression_name,
-            )
-        )
-        self.function_structured_buffer_access_requirements = (
-            self.collect_function_structured_buffer_access_requirements(functions)
-        )
-        constants = list(getattr(ast, "constants", []) or [])
-        self.glsl_constant_types = {
-            node.name: self.type_name_string(
-                self.glsl_specialization_constant_type(node)
-            )
-            for node in constants
-            if getattr(node, "name", None)
-        }
-        self.glsl_specialization_constant_names = {
-            node.name
-            for node in constants + list(getattr(ast, "global_variables", []) or [])
-            if getattr(node, "name", None)
-            and self.glsl_specialization_constant_attributes(node)
-        }
-        # Constants derived from a specialization default remain runtime-dependent.
-        self.literal_int_constants = collect_literal_int_constants(
-            [
-                node
-                for node in constants
-                if getattr(node, "name", None)
-                not in self.glsl_specialization_constant_names
-            ]
-        )
-        # The same constants with every specialization constant at its default value, for checks whose answer
-        # cannot depend on the value.
-        self.glsl_specialization_default_int_constants = (
-            collect_literal_int_constants(constants)
-            if self.glsl_specialization_constant_names
-            else self.literal_int_constants
-        )
-        self.literal_int_vector_constants = (
-            self.collect_literal_int_vector_constants_from_variables(
-                getattr(ast, "global_variables", []),
-                self.literal_int_constants,
-            )
-        )
-        self.literal_int_vector_array_constants = (
-            self.collect_literal_int_vector_array_constants_from_variables(
-                getattr(ast, "global_variables", []),
-                self.literal_int_constants,
-                self.literal_int_vector_constants,
-            )
-        )
-        self.current_compile_time_int_constants = dict(self.literal_int_constants)
-        self.current_compile_time_int_vector_constants = dict(
-            self.literal_int_vector_constants
-        )
-        self.current_compile_time_int_vector_array_constants = dict(
-            self.literal_int_vector_array_constants
-        )
-        self.current_stage_output = None
-        self.current_stage_inputs = {}
-        self.current_stage_outputs = {}
-        self.current_stage_output_member_map = {}
-        self.current_stage_parameter_aliases = {}
-        self.stage_entry_functions_by_stage = {}
-        self.stage_entry_resource_parameter_aliases = {}
-        self.stage_entry_storage_pointer_bindings = {}
-        self.stage_entry_constant_value_parameter_aliases = {}
-        self.stage_entry_resource_declaration_names = set()
-        self.stage_entry_constant_value_cbuffer_names = set()
-        self.current_identifier_aliases = {}
-        self.current_glsl_local_identifier_names = {}
-        self.glsl_hoisted_shared_declarations = []
-        self.glsl_hoisted_shared_aliases_by_declaration = {}
-        self.glsl_hoisted_shared_declaration_ids = set()
-        self.glsl_hoisted_shared_alias_names = set()
-        self.glsl_shared_dimension_constants = {}
-        self.current_target_stage = target_stage
-        self.glsl_tessellation_input_extents = {}
-        self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
-        self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
-            getattr(ast, "preprocessors", None), self.current_glsl_extensions
-        )
-        self.glsl_shadow_lod_extension_used = False
-        self.glsl_stage_builtin_extensions = []
-        stage_names = {
-            stage_name
-            for stage_name in self.glsl_stage_names(ast, target_stage)
-            if stage_name is not None
-        }
-        self.current_glsl_stage_names = stage_names
-        if target_stage is not None:
-            self.current_global_stage_io_stage = target_stage
-        elif len(stage_names) == 1:
-            self.current_global_stage_io_stage = next(iter(stage_names))
-        else:
-            self.current_global_stage_io_stage = None
-        self.emit_stage_guards = self.should_emit_stage_guards(ast, target_stage)
-        self.task_payload_shared_variables = []
-        self.stage_io_used_locations = {}
-        self.stage_io_used_components = {}
-        self.stage_io_declarations = {}
-        self.flattened_stage_variables = set()
-        self.fragment_output_member_layout_maps = {}
-        self.fragment_direct_output_name_maps = {}
-        self.fragment_blend_support_layout_parts = []
-        self.current_function_return_type = None
-        self.current_glsl_precise_return_type = None
-        self.current_glsl_precise_function = False
-        self.current_glsl_precise_captures = None
-        self.current_glsl_ieee_operator_arithmetic = False
-        self.current_glsl_exactness_test_local_ids = {}
-        self.current_glsl_precise_value_writes = {}
-        self.current_stage_return_type = None
-        self.current_stage_entry_type = None
-        fence_stage_names = self.glsl_stage_names(ast, target_stage) - {None}
-        self.glsl_atomic_fence_stage = (
-            next(iter(fence_stage_names)) if len(fence_stage_names) == 1 else None
-        )
-        self.function_fragment_only_requirements = {}
-        self.current_expression_expected_type = None
-        self.current_discarded_expression = None
-        self.match_temp_variable_index = 0
-        self.local_variable_types = {}
-        self.local_variable_source_types = {}
-        self.required_glsl_complex64_helpers = set()
-        self.required_glsl_boolean_order_helpers = set()
-        self.required_glsl_metal_math_helpers = set()
-        self.glsl_exponent_helpers = {}
-        self.glsl_half_helper_names = {}
-        self.glsl_half_bitcast_helper_names = {}
-        self.glsl_bfloat_helper_names = {}
-        self.glsl_bfloat_integer_helper_name = None
-        self.glsl_bfloat_wide_integer_helper_required = False
-        self.glsl_float_selection_helper_names = {}
-        self.glsl_storage_structure_copy_helper_names = {}
-        self.glsl_integer_float_helper_names = {}
-        self.glsl_signed_remainder_helper_names = {}
-        self.glsl_floating_remainder_helper_names = {}
-        self.glsl_generating_global_initializer = False
-        self.required_glsl_trailing_zero_helpers = set()
-        self.glsl_expected_compare_helpers = {}
-        self.glsl_trailing_zero_helper_names = {}
-        self.glsl_trailing_zero_reserved_names = set()
-        self.required_glsl_software_subgroup_helpers = set()
-        self.glsl_software_subgroup_entry_function_id = None
-        self.glsl_software_subgroup_entry_function_name = None
-        self.glsl_software_subgroup_helper_function_ids = set()
-        self.glsl_software_subgroup_candidate_helper_function_ids = set()
-        self.glsl_software_subgroup_omitted_helper_function_ids = set()
-        self.glsl_software_subgroup_uniform_for_node_ids = set()
-        self.glsl_software_subgroup_zero_trip_for_node_ids = set()
-        self.glsl_software_subgroup_workgroup_size = None
-        self.glsl_software_subgroup_workgroup_invocation_count = None
-        self.glsl_software_subgroup_count = None
-        self.glsl_software_subgroup_masked_if_plans = {}
-        self.glsl_software_subgroup_strided_for_plans = {}
-        self.glsl_software_subgroup_id_parameter_names = set()
-        self.glsl_software_subgroup_guard_names = set()
-        self.glsl_software_subgroup_guard_constant_names = set()
-        self.glsl_software_subgroup_result_overrides = {}
-        self.current_glsl_disabled_extensions = set()
-        self.glsl_cooperative_matrix_fragment_contracts = {}
-        self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
-        self.required_glsl_cooperative_matrix_helpers = set()
-        self.current_glsl_exact_subgroup_width = None
-        self.current_structured_buffer_array_parameters = {}
-        self.current_structured_buffer_counter_parameters = {}
-        self.current_structured_buffer_access_parameters = {}
-        self.structured_buffer_instance_members = {}
-        self.structured_buffer_counter_members = {}
-        self.structured_buffer_counter_instances = {}
-        self.glsl_buffer_block_struct_names = set()
-        self.enforce_concrete_glsl_types = False
-        self.generic_type_parameter_names = self.collect_generic_type_parameter_names(
-            ast
-        )
-        structs = deduplicate_named_declarations(
-            list(getattr(ast, "structs", []) or [])
-            + collect_stage_local_structs(ast, target_stage),
-            "struct",
-        )
-        self.structs_by_name = {
-            node.name: node for node in structs if self.is_struct_declaration_node(node)
-        }
-        self.prepare_opengl_descriptor_set_plan()
-        self.struct_member_types = collect_struct_member_types(
-            structs, self.type_name_string
-        )
-        self.remove_glsl_static_struct_member_types(structs)
-        self.union_storage = UnionStorage(self, structs)
-        self.struct_member_name_maps = {}
-        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
-            structs
-        )
-        self.generic_struct_definitions = collect_generic_struct_definitions(
-            structs,
-            excluded_names=set(self.generic_enum_struct_definitions),
-        )
-        self.generic_struct_definitions = self.glsl_instance_generic_struct_definitions(
-            self.generic_struct_definitions
-        )
-        self.generic_enum_specializations = collect_generic_enum_specializations(
-            ast,
-            self.generic_enum_struct_definitions,
-            self.type_name_string,
-        )
-        self.generic_struct_specializations = collect_generic_struct_specializations(
-            ast,
-            self.generic_struct_definitions,
-            self.type_name_string,
-        )
-        self.struct_member_types.update(
-            collect_generic_enum_specialization_member_types(
-                self,
-                self.generic_enum_specializations,
-            )
-        )
-        self.struct_member_types.update(
-            collect_generic_struct_specialization_member_types(
-                self,
-                self.generic_struct_specializations,
-            )
-        )
-        # Generic calls bind type parameters from global arguments; the complete
-        # table, built once declarations are lowered, replaces this one.
-        self.global_variable_types = glsl_preliminary_global_variable_types(
-            self, ast, target_stage
-        )
-        generic_collection_global_types = {
-            **collect_constant_and_cbuffer_member_types(
-                self,
-                ast,
-                cbuffers=self.glsl_cbuffer_nodes(ast, target_stage),
-            ),
-            **self.glsl_constant_types,
-            **self.global_variable_types,
-        }
-        generic_function_specializations = prepare_generic_function_specializations(
-            self,
-            functions,
-            global_types=generic_collection_global_types,
-            ast=ast,
-        )
-        if generic_function_specializations:
-            additional_generic_enum_specializations = (
-                collect_generic_enum_specializations(
-                    list(generic_function_specializations.values()),
-                    self.generic_enum_struct_definitions,
-                    self.type_name_string,
-                )
-            )
-            if additional_generic_enum_specializations:
-                self.generic_enum_specializations.update(
-                    additional_generic_enum_specializations
-                )
-                self.struct_member_types.update(
-                    collect_generic_enum_specialization_member_types(
-                        self,
-                        additional_generic_enum_specializations,
-                    )
-                )
-            additional_generic_struct_specializations = (
-                collect_generic_struct_specializations(
-                    list(generic_function_specializations.values()),
-                    self.generic_struct_definitions,
-                    self.type_name_string,
-                )
-            )
-            if additional_generic_struct_specializations:
-                self.generic_struct_specializations.update(
-                    additional_generic_struct_specializations
-                )
-                self.struct_member_types.update(
-                    collect_generic_struct_specialization_member_types(
-                        self,
-                        additional_generic_struct_specializations,
-                    )
-                )
-        self.function_return_types.update(
-            {
-                func.name: self.type_name_string(getattr(func, "return_type", "void"))
-                for func in generic_function_specializations.values()
-            }
-        )
-        if generic_function_specializations:
-            self.function_definitions.update(
-                {
-                    func.name: func
-                    for func in generic_function_specializations.values()
-                    if getattr(func, "name", None)
-                }
-            )
-            self.function_parameter_names.update(
-                collect_function_parameter_names(
-                    generic_function_specializations.values()
-                )
-            )
-            self.function_parameter_types.update(
-                self.collect_function_parameter_types(
-                    generic_function_specializations.values()
-                )
-            )
-            self.function_parameter_infos.update(
-                self.collect_function_parameter_infos(
-                    generic_function_specializations.values()
-                )
-            )
-        self.plain_enums = collect_plain_enums(structs)
-        self.struct_payload_enums = collect_struct_payload_enums(structs)
-        self.enum_type_names = collect_enum_type_names(self.plain_enums)
-        self.enum_struct_type_names = (
-            collect_enum_type_names(self.struct_payload_enums)
-            | set(self.generic_enum_struct_definitions)
-            | {
-                specialization["struct_name"]
-                for specialization in self.generic_enum_specializations.values()
-            }
-        )
-        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constructors = collect_enum_variant_constructors(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constants = {
-            **collect_enum_variant_constants(
-                self.plain_enums + self.struct_payload_enums
-            ),
-            **collect_generic_enum_variant_constants(
-                self.generic_enum_struct_definitions
-            ),
-        }
-        self.prepare_glsl_specialization_constants(ast)
         (
-            self.resource_array_size_hints,
-            self.function_resource_array_size_hints,
-        ) = self.collect_resource_array_size_hints(ast)
-        self.unsupported_structured_buffer_array_functions = (
-            self.collect_unsupported_structured_buffer_array_functions(functions)
-        )
-        self.function_fragment_only_requirements = (
-            self.collect_fragment_only_function_requirements(
-                self.function_definitions.values()
-            )
-        )
-        emitted_functions = self.glsl_emitted_functions_for_shared_lowering(
-            ast, target_stage
-        )
-        identifier_functions = [
-            func for func in emitted_functions if not generic_function_parameters(func)
-        ] + list(generic_function_specializations.values())
-        self.prepare_glsl_program_identifier_names(
-            ast,
-            structs,
-            identifier_functions,
-            target_stage,
-        )
-        self.prepare_glsl_trailing_zero_helper_names(functions)
-        self.glsl_numeric_helper_reserved_names = {
-            self.glsl_sanitized_identifier_base(name)
-            for function in functions
-            for name in self.collect_glsl_function_local_identifier_names(function)
-        }
-        self.prepare_glsl_enum_identifier_names()
-        self.prepare_glsl_mapped_function_overloads(
-            identifier_functions,
-            reserved_names=self.glsl_overload_reserved_names(ast),
-        )
-        self.prepare_glsl_fixed_array_vector_pointer_views(
-            ast,
-            functions + list(generic_function_specializations.values()),
-        )
-        self.validate_global_resource_shadows(ast)
-        self.validate_glsl_software_subgroup_contract(ast, target_stage)
-        self.enforce_concrete_glsl_types = True
-        code = ""
-        preprocessors = getattr(ast, "preprocessors", []) or []
-        version_line = None
-        extra_lines = []
-        for directive in preprocessors:
-            if not self.should_emit_glsl_preprocessor_directive(directive):
-                continue
-            if isinstance(directive, PreprocessorNode):
-                if directive.directive == "precision":
-                    line = (
-                        f"precision {directive.content};"
-                        if directive.content
-                        else "precision;"
-                    )
-                else:
-                    line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
-            if line.startswith("#version") and version_line is None:
-                version_line = line
-            elif line and self.should_emit_glsl_preprocessor_line(line):
-                extra_lines.append(line)
-        if version_line is None:
-            version_line = self.default_glsl_version_line(ast, target_stage)
-        required_version_line = getattr(self, "glsl_required_version_line", None)
-        if required_version_line is not None:
-            version_line = required_version_line
-        self.glsl_raised_version_line = None
-        self.glsl_emission_requirements = []
-        self.glsl_descriptor_binding_macro_used = False
-        self.current_glsl_version_line = version_line
-        self.current_glsl_disabled_extensions = {
-            match.group(1)
-            for line in extra_lines
-            if (
-                match := re.match(
-                    r"^\s*#extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*disable\b",
-                    line,
-                )
-            )
-        }
-        self.current_glsl_resource_binding_layouts_supported = (
-            self.glsl_resource_binding_layouts_supported(version_line)
-        )
-        exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
-        self.current_glsl_exact_subgroup_width = exact_subgroup_width
-        code += f"{version_line}\n"
-        code += source_license_comments(ast, "opengl")
-        for line in self.glsl_stage_extension_lines(ast, target_stage):
-            if line not in extra_lines:
-                code += f"{line}\n"
-        code += self.prepare_glsl_runtime_specialization_dependents(ast, version_line)
-        if extra_lines:
-            code += "\n".join(extra_lines) + "\n"
-        if exact_subgroup_width is not None:
-            code += (
-                f"#define {self.GLSL_REQUIRED_SUBGROUP_WIDTH_MACRO} "
-                f"{exact_subgroup_width}u\n"
-            )
-        if self.software_subgroup_width is not None:
-            code += (
-                f"#define {self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO} "
-                f"{self.software_subgroup_width}u\n"
-            )
-        cooperative_matrix_support_insertion_index = len(code)
-        code += self.generate_glsl_enum_constants(
-            self.plain_enums + self.struct_payload_enums,
-            qualifier="const",
-        )
-        code += self.generate_glsl_generic_enum_constants(
-            self.generic_enum_struct_definitions,
-            qualifier="const",
-        )
-        leading_constants, struct_dependent_constants = (
-            partition_constants_by_struct_dependency(
-                getattr(ast, "constants", []) or [], structs
-            )
-        )
-        leading_constants, specialization_dependent_constants = (
-            partition_constants_by_specialization_dependency(
-                leading_constants,
-                {
-                    name
-                    for node in self.glsl_specialization_constant_declarations
-                    if (name := constant_source_name(node)) is not None
-                },
-            )
-        )
-        code += self.generate_constants(ast, leading_constants)
-        code += self.generate_glsl_global_specialization_constants()
-        code += self.generate_constants(ast, specialization_dependent_constants)
-        code += self.generate_glsl_wave_helpers(ast, target_stage)
-
-        all_global_vars = [
-            node
-            for node in list(getattr(ast, "global_variables", []) or [])
-            if not self.is_elided_glsl_type_alias_global(node)
-        ]
-        for node in all_global_vars:
-            input_attachment_reason = input_attachment_refusal_reason(node)
-            if input_attachment_reason is not None:
-                self.refuse_lowering(input_attachment_reason)
-        specialization_global_ids = {
-            id(node) for node in self.glsl_global_specialization_constants
-        }
-        global_vars = [
-            node
-            for node in all_global_vars
-            if id(node) not in specialization_global_ids
-        ]
-        empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(global_vars)
-        runtime_initialized_global_vars = [
-            node for node in global_vars if id(node) not in empty_struct_global_ids
-        ]
-        stage_local_resource_vars = collect_stage_local_variables(
-            ast, target_stage, self.is_stage_local_resource_variable
-        )
-        stage_local_interface_vars = self.deduplicate_stage_interface_declarations(
-            collect_stage_local_variables(
-                ast, target_stage, self.is_stage_local_interface_variable
-            )
-        )
-        self.fragment_blend_support_layout_parts = (
-            self.glsl_fragment_output_blend_support_layout_parts(
-                global_vars + stage_local_interface_vars
-            )
-        )
-        self.task_payload_shared_variables = (
-            self.glsl_task_payload_shared_variable_infos(
-                global_vars + stage_local_interface_vars
-            )
-        )
-        self.glsl_interface_block_structs_by_name = {
-            node.name: node
-            for node in structs
-            if isinstance(node, StructNode)
-            and self.is_glsl_interface_block_struct(node)
-        }
-        stage_resource_params = self.collect_stage_entry_resource_parameters(
-            ast,
-            target_stage,
-            global_vars + stage_local_resource_vars,
-        )
-        resource_declaration_nodes = self.deduplicate_resource_declaration_nodes(
-            global_vars + stage_local_resource_vars + stage_resource_params
-        )
-        self.global_variable_types = self.collect_global_variable_types(
-            self.glsl_global_specialization_constants
-            + global_vars
-            + stage_local_resource_vars
-            + stage_local_interface_vars
-            + stage_resource_params
-        )
-        for cbuffer in self.glsl_cbuffer_nodes(ast, target_stage):
-            for member in getattr(cbuffer, "members", []) or []:
-                member_name = getattr(member, "name", None)
-                member_type = getattr(
-                    member, "member_type", getattr(member, "vtype", None)
-                )
-                if not member_name or member_type is None:
-                    continue
-                type_name = self.type_name_string(member_type)
-                if isinstance(member, ArrayNode):
-                    element_type = getattr(member, "element_type", member_type)
-                    size = getattr(member, "size", None)
-                    type_name = f"{self.type_name_string(element_type)}[{size or ''}]"
-                if type_name:
-                    self.global_variable_types.setdefault(member_name, type_name)
-        self.prepare_glsl_compile_time_globals(ast, global_vars)
-        self.function_private_pointer_array_size_hints = (
-            self.collect_private_pointer_array_size_hints(ast)
-        )
-        if self.glsl_private_pointer_robust_zero_read_variants:
-            code += (
-                "// CrossTL policy: statically out-of-bounds reads from "
-                "const private-pointer views return zero.\n"
-                "#define CROSSTL_PRIVATE_POINTER_OOB_READ_ZERO 1\n"
-            )
-        self.glsl_buffer_block_struct_names = (
-            self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
-        )
-        self.layout_bound_struct_uniform_names = (
-            self.collect_layout_bound_struct_uniform_names(resource_declaration_nodes)
-        )
-        self.glsl_interface_value_struct_names = (
-            self.collect_glsl_interface_value_struct_names(
-                ast,
-                structs,
-                global_vars,
-                functions,
-            )
-        )
-        self.prepare_glsl_interface_block_names(ast, target_stage, structs)
-        self.vertex_input_struct_names = self.stage_parameter_struct_names(
-            ast, "vertex"
-        )
-        self.vertex_output_struct_names = self.stage_return_struct_names(ast, "vertex")
-        self.default_clip_position_member_ids = set()
-        self.default_clip_position_member_ids = (
-            self.glsl_default_clip_position_member_ids()
-        )
-        # Stage inputs and outputs become globals in GLSL, where they share one namespace with variables,
-        # functions and the members of unnamed blocks (GLSL 4.60 section 4.2.7). The whole program is consulted so
-        # that stages translated one at a time name their varyings alike.
-        self.stage_io_reserved_value_names = (
-            self.collect_glsl_global_identifier_names(ast, None)
-            | set(self.function_return_types)
-            | glsl_entry_resource_parameter_names(self, ast)
-        )
-        self.fragment_input_struct_names = self.stage_parameter_struct_names(
-            ast, "fragment"
-        )
-        self.fragment_output_struct_names = self.stage_return_struct_names(
-            ast, "fragment"
-        )
-        self.vertex_input_member_names = self.struct_member_names(
-            self.vertex_input_struct_names
-        )
-        self.vertex_input_member_names.update(
-            self.stage_value_parameter_input_names(ast, "vertex")
-        )
-        self.combined_vertex_output_member_names = (
-            self.vertex_output_declaration_names()
-        )
-        self.fragment_input_member_names = self.fragment_input_declaration_names(
-            self.fragment_input_struct_names
-        )
-        self.fragment_input_member_names.update(
-            self.stage_value_parameter_input_names(ast, "fragment")
-        )
-        self.fragment_output_member_name_maps = self.fragment_output_member_maps(ast)
-        self.fragment_output_member_layout_maps = (
-            self.fragment_output_member_layout_maps_for_outputs()
-        )
-        self.stage_entry_functions_by_stage = {
-            stage_name: stage_functions[0]
-            for stage_name in (
-                "vertex",
-                "fragment",
-                "compute",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-                "mesh",
-                "task",
-                "amplification",
-                "object",
-                "ray_generation",
-                "ray_intersection",
-                "ray_closest_hit",
-                "ray_any_hit",
-                "ray_miss",
-                "ray_callable",
-            )
-            for stage_functions in [self.stage_functions(ast, stage_name)]
-            if stage_functions
-        }
-        self.prepare_glsl_runtime_global_initializers(
-            ast,
+            global_vars,
+            empty_struct_global_ids,
             runtime_initialized_global_vars,
-            functions,
+            stage_local_resource_vars,
+            stage_local_interface_vars,
+            resource_declaration_nodes,
+        ) = self.classify_glsl_program_globals(ast, target_stage, structs)
+        (
+            emit_vertex_io,
+            emit_fragment_io,
+            emit_graphics_io,
+            legacy_vertex_names,
+            legacy_fragment_names,
+            data_struct_nodes,
+            stage_io_code,
+            code,
+        ) = self.collect_glsl_stage_interface_facts(
+            ast,
             target_stage,
+            code,
+            functions,
+            global_vars,
+            resource_declaration_nodes,
+            runtime_initialized_global_vars,
+            structs,
         )
-        emit_vertex_io = target_stage in {None, "vertex"}
-        emit_fragment_io = target_stage in {None, "fragment"}
-        emit_graphics_io = target_stage in {None, "vertex", "fragment"}
-        # VSInput, VSOutput and PSInput name stage interfaces by convention only when the program has that stage.
-        program_stage_names = {
-            normalize_stage_name(stage_type)
-            for stage_type in getattr(ast, "stages", {})
-        } | {function_stage_name(func) for func in functions} - {None}
-        legacy_vertex_names = not program_stage_names or "vertex" in program_stage_names
-        self.glsl_program_has_mesh_stage = "mesh" in program_stage_names
-        legacy_fragment_names = (
-            not program_stage_names or "fragment" in program_stage_names
+        structs_emission = OpenGLStructEmission(
+            code,
+            stage_io_code,
+            ast,
+            data_struct_nodes,
+            emit_vertex_io,
+            emit_fragment_io,
+            emit_graphics_io,
+            legacy_vertex_names,
+            legacy_fragment_names,
         )
-        data_struct_nodes = []
-        # Stage inputs and outputs of structure type name the data structures, so they follow them.
-        stage_io_code = ""
         for node in structs:
-            if isinstance(node, StructNode):
-                if node.name in self.generic_enum_struct_definitions:
-                    continue
-                if node.name in self.generic_struct_definitions:
-                    continue
-                if self.is_glsl_interface_block_struct(node):
-                    code += self.generate_glsl_interface_block_declaration(node)
-                    continue
-                if (
-                    node.name in self.glsl_buffer_block_struct_names
-                    and node.name not in self.glsl_interface_value_struct_names
-                ):
-                    continue
-                if (
-                    node.name in self.layout_bound_struct_uniform_names
-                    and node.name not in self.glsl_interface_value_struct_names
-                ):
-                    continue
-                elif (
-                    node.name == "VSInput"
-                    and legacy_vertex_names
-                    or node.name in self.vertex_input_struct_names
-                ):
-                    if emit_vertex_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_stage_input_declarations(node),
-                            "vertex",
-                        )
-                        if self.stage_io_struct_referenced_outside_stage_entries(
-                            ast, node.name
-                        ):
-                            data_struct_nodes.append(node)
-                    elif not emit_graphics_io:
-                        data_struct_nodes.append(node)
-                elif node.name == "VSOutput" and (
-                    legacy_vertex_names or legacy_fragment_names
-                ):
-                    emitted_io = False
-                    if node.name in self.vertex_output_struct_names and emit_vertex_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_vertex_output_declarations(node),
-                            "vertex",
-                        )
-                        emitted_io = True
-                    if (
-                        node.name in self.fragment_input_struct_names
-                        and emit_fragment_io
-                    ):
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_input_declarations(node),
-                            "fragment",
-                        )
-                        emitted_io = True
-                    if (
-                        node.name in self.fragment_output_struct_names
-                        and emit_fragment_io
-                    ):
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_output_declarations(node),
-                            "fragment",
-                        )
-                        emitted_io = True
-                    if not emitted_io:
-                        if emit_vertex_io and legacy_vertex_names:
-                            stage_io_code += self.wrap_stage_guard(
-                                self.generate_legacy_output_declarations(node),
-                                "vertex",
-                            )
-                            if self.stage_io_struct_referenced_outside_stage_entries(
-                                ast, node.name
-                            ):
-                                data_struct_nodes.append(node)
-                        else:
-                            data_struct_nodes.append(node)
-                    elif self.should_emit_flattened_stage_io_struct(
-                        ast, node.name, emitted_io, emit_graphics_io
-                    ):
-                        data_struct_nodes.append(node)
-                elif node.name in self.vertex_output_struct_names:
-                    emitted_io = False
-                    if emit_vertex_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_vertex_output_declarations(node),
-                            "vertex",
-                        )
-                        emitted_io = True
-                    if (
-                        node.name in self.fragment_input_struct_names
-                        and emit_fragment_io
-                    ):
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_input_declarations(node),
-                            "fragment",
-                        )
-                        emitted_io = True
-                    if (
-                        node.name in self.fragment_output_struct_names
-                        and emit_fragment_io
-                    ):
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_output_declarations(node),
-                            "fragment",
-                        )
-                        emitted_io = True
-                    if self.should_emit_flattened_stage_io_struct(
-                        ast, node.name, emitted_io, emit_graphics_io
-                    ):
-                        data_struct_nodes.append(node)
-                elif node.name == "PSInput" and legacy_fragment_names:
-                    if emit_fragment_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_input_declarations(node),
-                            "fragment",
-                        )
-                    elif not emit_graphics_io:
-                        data_struct_nodes.append(node)
-                elif node.name in self.fragment_input_struct_names:
-                    if emit_fragment_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_input_declarations(node),
-                            "fragment",
-                        )
-                        if node.name in self.fragment_output_struct_names:
-                            stage_io_code += self.wrap_stage_guard(
-                                self.generate_fragment_output_declarations(node),
-                                "fragment",
-                            )
-                    if node.name in self.fragment_output_struct_names:
-                        data_struct_nodes.append(node)
-                    elif not emit_graphics_io or (
-                        emit_fragment_io
-                        and self.stage_io_struct_referenced_outside_stage_entries(
-                            ast, node.name
-                        )
-                    ):
-                        data_struct_nodes.append(node)
-                elif node.name in self.fragment_output_struct_names:
-                    if emit_fragment_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_output_declarations(node),
-                            "fragment",
-                        )
-                    if node.name != "PSOutput" or not emit_fragment_io:
-                        data_struct_nodes.append(node)
-                elif node.name == "PSOutput":
-                    if emit_fragment_io:
-                        stage_io_code += self.wrap_stage_guard(
-                            self.generate_fragment_output_declarations(node),
-                            "fragment",
-                        )
-                    else:
-                        data_struct_nodes.append(node)
-                else:
-                    data_struct_nodes.append(node)
+            self.declare_glsl_program_struct(structs_emission, node)
+        code = structs_emission.code
+        stage_io_code = structs_emission.stage_io_code
 
         code += glsl_workgroup_size_declaration_layout(self, ast, target_stage)
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
@@ -3789,779 +2798,257 @@ class GLSLCodeGen(
         self.reserve_explicit_global_resource_bindings(
             resource_declaration_nodes, used_resource_bindings
         )
+        emission = OpenGLResourceEmission(
+            code,
+            empty_struct_global_ids,
+            resource_binding_cursors,
+            used_resource_bindings,
+        )
         for index, node in enumerate(resource_declaration_nodes):
-            vtype, array_size, array_suffix, resource_count = (
-                self.resource_declaration_shape(node)
-            )
+            self.declare_glsl_global_resource(emission, index, node)
+        code = emission.code
 
-            if hasattr(node, "name"):
-                source_var_name = node.name
-            elif hasattr(node, "variable_name"):
-                source_var_name = node.variable_name
+        (
+            combined_stage_entry_names,
+            generated_helper_insertion_index,
+            functions,
+            helper_stage_macros,
+            deferred_top_level_helpers_by_stage,
+            deferred_top_level_helper_ids,
+            called_function_names,
+            code,
+        ) = self.generate_glsl_interface_and_prototypes(
+            ast,
+            target_stage,
+            code,
+            global_vars,
+            stage_local_interface_vars,
+            stage_local_resource_vars,
+        )
+
+        code = self.generate_glsl_program_functions(
+            target_stage,
+            called_function_names,
+            code,
+            combined_stage_entry_names,
+            deferred_top_level_helper_ids,
+            functions,
+            helper_stage_macros,
+        )
+
+        code = self.generate_glsl_program_stages(
+            ast,
+            target_stage,
+            called_function_names,
+            code,
+            combined_stage_entry_names,
+            deferred_top_level_helpers_by_stage,
+        )
+
+        return self.finish_glsl_program(
+            code,
+            cooperative_matrix_support_insertion_index,
+            generated_helper_insertion_index,
+        )
+
+    def declare_glsl_program_struct(self, structs_emission, node):
+        """Declare one program struct as an interface block or stage interface, or queue it as a data struct."""
+        if not isinstance(node, StructNode):
+            return
+        if node.name in self.generic_enum_struct_definitions:
+            return
+        if node.name in self.generic_struct_definitions:
+            return
+        if self.is_glsl_interface_block_struct(node):
+            structs_emission.code += self.generate_glsl_interface_block_declaration(
+                node
+            )
+            return
+        if (
+            node.name in self.glsl_buffer_block_struct_names
+            and node.name not in self.glsl_interface_value_struct_names
+        ):
+            return
+        if (
+            node.name in self.layout_bound_struct_uniform_names
+            and node.name not in self.glsl_interface_value_struct_names
+        ):
+            return
+        elif (
+            node.name == "VSInput"
+            and structs_emission.legacy_vertex_names
+            or node.name in self.vertex_input_struct_names
+        ):
+            if structs_emission.emit_vertex_io:
+                structs_emission.stage_io_code += self.wrap_stage_guard(
+                    self.generate_stage_input_declarations(node),
+                    "vertex",
+                )
+                if self.stage_io_struct_referenced_outside_stage_entries(
+                    structs_emission.ast, node.name
+                ):
+                    structs_emission.data_struct_nodes.append(node)
+            elif not structs_emission.emit_graphics_io:
+                structs_emission.data_struct_nodes.append(node)
+        elif node.name == "VSOutput" and (
+            structs_emission.legacy_vertex_names
+            or structs_emission.legacy_fragment_names
+        ):
+            self.declare_glsl_vertex_output_interface_struct(structs_emission, node)
+        elif node.name in self.vertex_output_struct_names:
+            self.declare_glsl_vertex_output_struct(structs_emission, node)
+        elif node.name == "PSInput" and structs_emission.legacy_fragment_names:
+            if structs_emission.emit_fragment_io:
+                structs_emission.stage_io_code += self.wrap_stage_guard(
+                    self.generate_fragment_input_declarations(node),
+                    "fragment",
+                )
+            elif not structs_emission.emit_graphics_io:
+                structs_emission.data_struct_nodes.append(node)
+        elif node.name in self.fragment_input_struct_names:
+            self.declare_glsl_fragment_input_struct(structs_emission, node)
+        elif node.name in self.fragment_output_struct_names:
+            if structs_emission.emit_fragment_io:
+                structs_emission.stage_io_code += self.wrap_stage_guard(
+                    self.generate_fragment_output_declarations(node),
+                    "fragment",
+                )
+            if node.name != "PSOutput" or not structs_emission.emit_fragment_io:
+                structs_emission.data_struct_nodes.append(node)
+        elif node.name == "PSOutput":
+            if structs_emission.emit_fragment_io:
+                structs_emission.stage_io_code += self.wrap_stage_guard(
+                    self.generate_fragment_output_declarations(node),
+                    "fragment",
+                )
             else:
-                source_var_name = f"var{index}"
-            var_name = self.glsl_global_declaration_identifier_name(
-                node, source_var_name
+                structs_emission.data_struct_nodes.append(node)
+        else:
+            structs_emission.data_struct_nodes.append(node)
+
+    def declare_glsl_global_resource(self, emission, index, node):
+        """Declare one global resource: a buffer block, sampler, structured buffer, constant buffer, opaque resource or plain uniform."""
+        vtype, array_size, array_suffix, resource_count = (
+            self.resource_declaration_shape(node)
+        )
+
+        if hasattr(node, "name"):
+            source_var_name = node.name
+        elif hasattr(node, "variable_name"):
+            source_var_name = node.variable_name
+        else:
+            source_var_name = f"var{index}"
+        var_name = self.glsl_global_declaration_identifier_name(node, source_var_name)
+
+        handled = self.declare_glsl_buffer_block_resource(
+            emission,
+            node,
+            array_suffix,
+            resource_count,
+            source_var_name,
+            var_name,
+            vtype,
+        )
+        if handled is not UNHANDLED:
+            return handled
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        if mapped_type == "sampler":
+            return self.declare_glsl_sampler_resource(
+                emission,
+                node,
+                array_suffix,
+                mapped_type,
+                resource_count,
+                source_var_name,
+                var_name,
             )
-
-            if self.is_glsl_buffer_block_variable(node, vtype):
-                self.record_glsl_buffer_block_variable(var_name, node, vtype)
-                if self.is_shader_record_buffer_block(node):
-                    if self.explicit_resource_binding_index(node) is not None:
-                        raise OpenGLRefusal(
-                            "GLSL shaderRecordEXT buffer blocks cannot declare "
-                            "binding layout qualifiers"
-                        )
-                    declaration = self.glsl_buffer_block_declaration(
-                        node, vtype, var_name, None, array_suffix
-                    )
-                    if declaration is not None:
-                        code += declaration
-                        continue
-
-                binding_namespace = "buffer binding"
-                resource_binding = self.opengl_resource_binding_for_declaration(
-                    node,
-                    used_resource_bindings,
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_count,
-                )
-                declaration = self.glsl_buffer_block_declaration(
-                    node, vtype, var_name, resource_binding, array_suffix
-                )
-                if declaration is not None:
-                    self.reserve_resource_binding_range(
-                        used_resource_bindings,
-                        "OpenGL",
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                        var_name,
-                    )
-                    self.record_glsl_resource_binding(
-                        node,
-                        source_var_name,
-                        var_name,
-                        "buffer-block",
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                    )
-                    code += declaration
-                    self.advance_resource_binding(
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                    )
-                    continue
-
-            mapped_type = self.map_resource_type_with_format(vtype, node)
-            if mapped_type == "sampler":
-                self.explicit_resource_binding_index(node)
-                self.sampler_variables.add(var_name)
-                self.glsl_sampler_registers[var_name] = (
-                    source_var_name,
-                    self.glsl_source_register(node),
-                )
-                if self.should_preserve_sampler_resource(source_var_name):
-                    binding_namespace = "sampler binding"
-                    resource_binding = self.opengl_resource_binding_for_declaration(
-                        node,
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
-                    self.reserve_resource_binding_range(
-                        used_resource_bindings,
-                        "OpenGL",
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                        var_name,
-                    )
-                    self.record_glsl_resource_binding(
-                        node,
-                        source_var_name,
-                        var_name,
-                        "sampler",
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                    )
-                    declaration = format_c_style_array_declaration(
-                        f"{mapped_type}{array_suffix}", var_name
-                    )
-                    layout = self.glsl_resource_layout_prefix(
-                        binding=resource_binding, node=node
-                    )
-                    prefix = f"{layout} " if layout else ""
-                    code += f"{prefix}uniform {declaration};\n"
-                    self.advance_resource_binding(
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_binding,
-                        resource_count,
-                    )
-                continue
-            if self.is_structured_buffer_type(vtype):
-                self.record_structured_buffer_access_metadata(var_name, vtype, node)
+        if self.is_structured_buffer_type(vtype):
+            return self.declare_glsl_structured_buffer_resource(
+                emission,
+                node,
+                array_size,
+                resource_count,
+                source_var_name,
+                var_name,
+                vtype,
+            )
+        if self.is_constant_buffer_type(vtype):
+            return self.declare_glsl_constant_buffer_resource(
+                emission,
+                node,
+                array_suffix,
+                resource_count,
+                source_var_name,
+                var_name,
+                vtype,
+            )
+        if self.is_opaque_resource_type(mapped_type):
+            self.texture_variable_types[var_name] = mapped_type
+            if source_var_name != var_name:
+                self.texture_variable_types[source_var_name] = mapped_type
+            fixed_array_size = self.glsl_resource_array_size_value(array_size)
+            if fixed_array_size is not None:
+                self.resource_variable_array_sizes[var_name] = fixed_array_size
                 if source_var_name != var_name:
-                    self.record_structured_buffer_access_metadata(
-                        source_var_name, vtype, node
+                    self.resource_variable_array_sizes[source_var_name] = (
+                        fixed_array_size
                     )
-                binding_namespace = "buffer binding"
-                resource_binding = self.opengl_resource_binding_for_declaration(
-                    node,
-                    used_resource_bindings,
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_count,
-                )
-                self.reserve_resource_binding_range(
-                    used_resource_bindings,
-                    "OpenGL",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                    var_name,
-                )
-                code += self.structured_buffer_block_declaration(
-                    vtype, var_name, resource_binding, array_size, node
-                )
-                self.record_glsl_resource_binding(
-                    node,
-                    source_var_name,
-                    var_name,
-                    "structured-buffer",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                self.advance_resource_binding(
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                if self.structured_buffer_requires_counter(vtype):
-                    counter_binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
-                    counter_name = self.structured_buffer_counter_resource_name(
-                        var_name
-                    )
-                    self.reserve_resource_binding_range(
-                        used_resource_bindings,
-                        "OpenGL",
-                        binding_namespace,
-                        counter_binding,
-                        resource_count,
-                        counter_name,
-                    )
-                    code += self.structured_buffer_counter_block_declaration(
-                        var_name, counter_binding, array_size
-                    )
-                    self.glsl_resource_binding_records.append(
-                        {
-                            "name": counter_name,
-                            "glslName": counter_name,
-                            "kind": "structured-buffer-counter",
-                            "namespace": "shader-storage-buffer",
-                            "binding": int(counter_binding),
-                            "count": (
-                                max(resource_count, 1)
-                                if isinstance(resource_count, int)
-                                else 1
-                            ),
-                            "register": None,
-                            "of": source_var_name,
-                        }
-                    )
-                    self.advance_resource_binding(
-                        resource_binding_cursors,
-                        binding_namespace,
-                        counter_binding,
-                        resource_count,
-                    )
-                continue
-            if self.is_constant_buffer_type(vtype):
-                self.glsl_uniform_block_variable_types[var_name] = (
-                    self.constant_buffer_element_type(vtype)
-                )
-                if source_var_name != var_name:
-                    self.glsl_uniform_block_variable_types[source_var_name] = (
-                        self.constant_buffer_element_type(vtype)
-                    )
-                binding_namespace = "uniform buffer binding"
-                resource_binding = self.opengl_resource_binding_for_declaration(
-                    node,
-                    used_resource_bindings,
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_count,
-                )
-                self.reserve_resource_binding_range(
-                    used_resource_bindings,
-                    "OpenGL",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                    var_name,
-                )
-                code += self.glsl_constant_buffer_block_declaration(
-                    vtype,
-                    var_name,
-                    resource_binding,
-                    array_suffix,
-                    node=node,
-                )
-                self.record_glsl_resource_binding(
-                    node,
-                    source_var_name,
-                    var_name,
-                    "constant-buffer",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                self.advance_resource_binding(
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                continue
-            if self.is_opaque_resource_type(mapped_type):
-                self.texture_variable_types[var_name] = mapped_type
-                if source_var_name != var_name:
-                    self.texture_variable_types[source_var_name] = mapped_type
-                fixed_array_size = self.glsl_resource_array_size_value(array_size)
-                if fixed_array_size is not None:
-                    self.resource_variable_array_sizes[var_name] = fixed_array_size
-                    if source_var_name != var_name:
-                        self.resource_variable_array_sizes[source_var_name] = (
-                            fixed_array_size
-                        )
+            record_explicit_image_metadata(
+                var_name,
+                node,
+                self.attribute_value_to_string,
+                image_formats=self.image_variable_formats,
+                image_accesses=self.image_variable_accesses,
+            )
+            if source_var_name != var_name:
                 record_explicit_image_metadata(
-                    var_name,
+                    source_var_name,
                     node,
                     self.attribute_value_to_string,
                     image_formats=self.image_variable_formats,
                     image_accesses=self.image_variable_accesses,
                 )
-                if source_var_name != var_name:
-                    record_explicit_image_metadata(
-                        source_var_name,
-                        node,
-                        self.attribute_value_to_string,
-                        image_formats=self.image_variable_formats,
-                        image_accesses=self.image_variable_accesses,
-                    )
-            storage_type = self.float_atomic_storage.declaration(
-                f"{mapped_type}{array_suffix}", var_name
-            )
-            code += self.float_atomic_storage.take_definitions()
-            declaration = format_c_style_array_declaration(storage_type, var_name)
-            if id(node) in empty_struct_global_ids:
-                code += self.generate_glsl_empty_struct_global_declaration(
-                    node,
-                    declaration,
-                    f"{mapped_type}{array_suffix}",
-                )
-                continue
-            if self.is_opaque_resource_type(mapped_type):
-                binding_namespace = (
-                    "image binding"
-                    if self.is_storage_image_type(vtype)
-                    else "texture binding"
-                )
-                resource_binding = self.opengl_resource_binding_for_declaration(
-                    node,
-                    used_resource_bindings,
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_count,
-                )
-                self.reserve_resource_binding_range(
-                    used_resource_bindings,
-                    "OpenGL",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                    var_name,
-                )
-                layout = self.opaque_resource_layout(
-                    mapped_type, resource_binding, node
-                )
-                memory_qualifiers = self.resource_memory_qualifiers(node)
-                if (
-                    var_name in self.glsl_write_only_unknown_format_images
-                    or source_var_name in self.glsl_write_only_unknown_format_images
-                ) and "writeonly" not in memory_qualifiers.split():
-                    memory_qualifiers = " ".join(
-                        part for part in (memory_qualifiers, "writeonly") if part
-                    )
-                precision_qualifiers = self.resource_precision_qualifiers(node)
-                qualifier_parts = []
-                if layout:
-                    qualifier_parts.append(layout)
-                if memory_qualifiers:
-                    qualifier_parts.append(memory_qualifiers)
-                qualifier_parts.append("uniform")
-                if precision_qualifiers:
-                    qualifier_parts.append(precision_qualifiers)
-                code += f"{' '.join(qualifier_parts)} {declaration};\n"
-                self.record_glsl_resource_binding(
-                    node,
-                    source_var_name,
-                    var_name,
-                    ("image" if binding_namespace == "image binding" else "texture"),
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                self.advance_resource_binding(
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-            elif self.is_layout_bound_struct_uniform(node, vtype):
-                self.glsl_uniform_block_variable_types[var_name] = str(
-                    self.resource_base_type(vtype)
-                )
-                if source_var_name != var_name:
-                    self.glsl_uniform_block_variable_types[source_var_name] = str(
-                        self.resource_base_type(vtype)
-                    )
-                binding_namespace = "uniform buffer binding"
-                resource_binding = self.opengl_resource_binding_for_declaration(
-                    node,
-                    used_resource_bindings,
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_count,
-                )
-                self.reserve_resource_binding_range(
-                    used_resource_bindings,
-                    "OpenGL",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                    var_name,
-                )
-                code += self.glsl_struct_uniform_block_declaration(
-                    vtype,
-                    var_name,
-                    resource_binding,
-                    array_suffix,
-                    node=node,
-                )
-                self.record_glsl_resource_binding(
-                    node,
-                    source_var_name,
-                    var_name,
-                    "constant-buffer",
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-                self.advance_resource_binding(
-                    resource_binding_cursors,
-                    binding_namespace,
-                    resource_binding,
-                    resource_count,
-                )
-            else:
-                code += self.generate_global_variable_declaration(
-                    node,
-                    declaration,
-                    vtype,
-                    mapped_type_for_layout=f"{mapped_type}{array_suffix}",
-                )
-
-        interface_var_stages = {
-            id(variable): normalize_stage_name(stage_type)
-            for stage_type, stage in getattr(ast, "stages", {}).items()
-            for variable in getattr(stage, "local_variables", []) or []
-        }
-        for node in stage_local_interface_vars:
-            # A stage's own in/out variables exist only in that stage's section of a combined program, and
-            # take their locations in that stage's interface.
-            owner = interface_var_stages.get(id(node))
-            previous_stage_io_stage = self.current_global_stage_io_stage
-            if owner is not None:
-                self.current_global_stage_io_stage = owner
-            try:
-                declaration = self.generate_stage_local_interface_variable_declaration(
-                    node
-                )
-            finally:
-                self.current_global_stage_io_stage = previous_stage_io_stage
-            code += (
-                declaration
-                if owner is None
-                else self.wrap_stage_guard(declaration, owner)
-            )
-
-        cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
-        if cbuffers:
-            code += "// Constant Buffers\n"
-            code += self.generate_cbuffers(ast, target_stage)
-
-        self.collect_glsl_function_local_shared_declarations(ast, target_stage)
-        self.glsl_global_workgroup_pointer_aliases = (
-            self.collect_glsl_global_shared_bindings(global_vars)
+        storage_type = self.float_atomic_storage.declaration(
+            f"{mapped_type}{array_suffix}", var_name
         )
-        self.glsl_global_storage_pointer_aliases = (
-            self.collect_glsl_storage_pointer_resource_bindings(
-                global_vars + stage_local_resource_vars
+        emission.code += self.float_atomic_storage.take_definitions()
+        declaration = format_c_style_array_declaration(storage_type, var_name)
+        if id(node) in emission.empty_struct_global_ids:
+            emission.code += self.generate_glsl_empty_struct_global_declaration(
+                node,
+                declaration,
+                f"{mapped_type}{array_suffix}",
             )
-        )
-        for node, alias in self.glsl_hoisted_shared_declarations:
-            code += self.generate_glsl_hoisted_shared_declaration(node, alias)
-
-        combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
-        previous_enforce_concrete_glsl_types = self.enforce_concrete_glsl_types
-        self.enforce_concrete_glsl_types = False
-        try:
-            self.prepare_glsl_resource_function_specializations(ast, target_stage)
-        finally:
-            self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
-        generated_helper_insertion_index = len(code)
-        functions = getattr(ast, "functions", [])
-        helper_stage_macros = glsl_helper_stage_macros(self, ast)
-        deferred_top_level_helpers_by_stage = (
-            self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
-        )
-        deferred_top_level_helper_ids = {
-            id(func)
-            for helpers in deferred_top_level_helpers_by_stage.values()
-            for func in helpers
-        }
-        called_function_names = self.collect_called_function_names(ast)
-        top_level_prototype_sources = []
-        for func in functions:
-            if self.should_elide_glsl_function(func):
-                continue
-            if id(func) in deferred_top_level_helper_ids:
-                continue
-            if self.should_skip_unreachable_lowered_member_helper(func):
-                continue
-            if self.should_skip_unresolved_top_level_helper(
-                func,
-                called_function_names,
-            ):
-                continue
-            qualifier_name = function_stage_name(func)
-            if qualifier_name or not should_emit_qualified_function(
-                target_stage, qualifier_name
-            ):
-                continue
-            if getattr(func, "name", None) not in called_function_names:
-                continue
-            if self.glsl_has_resource_function_specializations(
-                getattr(func, "name", None)
-            ) and self.glsl_function_has_structured_buffer_parameter(func):
-                continue
-            top_level_prototype_sources.append(func)
-        code += self.generate_glsl_resource_function_declarations()
-        code += self.generate_glsl_function_declarations(
-            self.glsl_concrete_helper_functions(top_level_prototype_sources)
-        )
-
-        for func in functions:
-            if self.should_elide_glsl_function(func):
-                continue
-            if id(func) in deferred_top_level_helper_ids:
-                continue
-            if self.should_skip_unreachable_lowered_member_helper(func):
-                continue
-            if self.should_skip_unresolved_top_level_helper(
-                func,
-                called_function_names,
-            ):
-                continue
-            qualifier_name = function_stage_name(func)
-
-            if not should_emit_qualified_function(target_stage, qualifier_name):
-                continue
-            if getattr(func, "body", []) is None:
-                continue
-
-            resource_specializations = self.glsl_resource_function_emission_list(
-                getattr(func, "name", None)
+            return
+        if self.is_opaque_resource_type(mapped_type):
+            self.declare_glsl_opaque_resource(
+                emission,
+                node,
+                declaration,
+                mapped_type,
+                resource_count,
+                source_var_name,
+                var_name,
+                vtype,
             )
-            helper_stage_context = (
-                target_stage
-                if target_stage is not None and not qualifier_name
-                else None
+        elif self.is_layout_bound_struct_uniform(node, vtype):
+            self.declare_glsl_layout_bound_struct_uniform(
+                emission,
+                node,
+                array_suffix,
+                resource_count,
+                source_var_name,
+                var_name,
+                vtype,
             )
-            if resource_specializations and qualifier_name not in {
-                "vertex",
-                "fragment",
-                "compute",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-                "mesh",
-                "task",
-                "amplification",
-                "object",
-                "ray_generation",
-                "ray_intersection",
-                "ray_closest_hit",
-                "ray_any_hit",
-                "ray_miss",
-                "ray_callable",
-            }:
-                specialized_code = "".join(
-                    self.generate_function(
-                        specialized_func,
-                        stage_context=helper_stage_context,
-                    )
-                    for specialized_func in resource_specializations
-                )
-                code += wrap_glsl_helper_stage_guard(
-                    self, specialized_code, func, helper_stage_macros
-                )
-            if self.glsl_has_resource_function_specializations(
-                getattr(func, "name", None)
-            ) and self.glsl_function_has_structured_buffer_parameter(func):
-                # GLSL cannot pass storage blocks; every call uses a
-                # specialization bound to its global buffer.
-                continue
-
-            if generic_function_parameters(func):
-                mark_generic_function_emitted(self, func)
-                specialized_code = ""
-                for specialized_func in generic_function_emission_list(self, func):
-                    for (
-                        resource_specialized_func
-                    ) in self.glsl_resource_function_emission_list(
-                        getattr(specialized_func, "name", None)
-                    ):
-                        specialized_code += self.generate_function(
-                            resource_specialized_func,
-                            stage_context=helper_stage_context,
-                        )
-                    if not self.glsl_function_has_target_pointer_parameter(
-                        specialized_func
-                    ):
-                        specialized_code += self.generate_function(
-                            specialized_func,
-                            stage_context=helper_stage_context,
-                        )
-                if qualifier_name in self.GLSL_STAGE_GUARD_MACROS:
-                    code += self.wrap_stage_guard(specialized_code, qualifier_name)
-                else:
-                    code += wrap_glsl_helper_stage_guard(
-                        self, specialized_code, func, helper_stage_macros
-                    )
-                continue
-
-            if (
-                self.glsl_function_has_target_pointer_parameter(func)
-                and not qualifier_name
-            ):
-                continue
-
-            if qualifier_name == "vertex":
-                stage_code = "// Vertex Shader\n"
-                stage_code += self.generate_function(
-                    func,
-                    shader_type="vertex",
-                    entry_name=combined_stage_entry_names.get(id(func)),
-                )
-                code += self.wrap_stage_guard(stage_code, "vertex")
-            elif qualifier_name == "fragment":
-                stage_code = "// Fragment Shader\n"
-                stage_code += self.generate_function(
-                    func,
-                    shader_type="fragment",
-                    entry_name=combined_stage_entry_names.get(id(func)),
-                )
-                code += self.wrap_stage_guard(stage_code, "fragment")
-            elif qualifier_name == "compute":
-                stage_code = "// Compute Shader\n"
-                stage_code += self.generate_function(
-                    func,
-                    shader_type="compute",
-                    execution_config=function_entry_execution_config(func),
-                    entry_name=combined_stage_entry_names.get(id(func)),
-                )
-                code += self.wrap_stage_guard(stage_code, "compute")
-            else:
-                self.refuse_stageless_glsl_entry(func)
-                function_code = self.generate_function(
-                    func,
-                    stage_context=helper_stage_context,
-                )
-                if getattr(func, "name", None) in self.glsl_generic_helper_refusals:
-                    self.glsl_generic_helper_code[func.name] = function_code
-                code += wrap_glsl_helper_stage_guard(
-                    self, function_code, func, helper_stage_macros
-                )
-
-        if hasattr(ast, "stages") and ast.stages:
-            for stage_type, stage in ast.stages.items():
-                stage_name = normalize_stage_name(stage_type)
-                if not stage_matches(target_stage, stage_name):
-                    continue
-
-                stage_code = ""
-                stage_local_functions = list(
-                    getattr(stage, "local_functions", []) or []
-                )
-                deferred_top_level_helpers = deferred_top_level_helpers_by_stage.get(
-                    stage_name, []
-                )
-                ordered_stage_helpers = order_functions_by_dependencies(
-                    stage_local_functions + deferred_top_level_helpers,
-                    self.walk_ast,
-                    self.function_call_name,
-                    FunctionCallNode,
-                )
-                stage_code += self.generate_glsl_function_declarations(
-                    self.glsl_concrete_helper_functions(
-                        [
-                            func
-                            for func in ordered_stage_helpers
-                            if not self.should_elide_glsl_function(func)
-                            and getattr(func, "name", None) in called_function_names
-                        ]
-                    ),
-                    stage_context=stage_name,
-                )
-                for func in ordered_stage_helpers:
-                    if self.should_elide_glsl_function(func):
-                        continue
-                    if self.should_skip_unreachable_lowered_member_helper(func):
-                        continue
-                    if getattr(func, "body", []) is None:
-                        continue
-                    resource_specializations = (
-                        self.glsl_resource_function_emission_list(
-                            getattr(func, "name", None)
-                        )
-                    )
-                    if resource_specializations:
-                        for specialized_func in resource_specializations:
-                            stage_code += self.generate_function(
-                                specialized_func,
-                                stage_context=stage_name,
-                            )
-
-                    if generic_function_parameters(func):
-                        mark_generic_function_emitted(self, func)
-                        for specialized_func in generic_function_emission_list(
-                            self,
-                            func,
-                        ):
-                            for (
-                                resource_specialized_func
-                            ) in self.glsl_resource_function_emission_list(
-                                getattr(specialized_func, "name", None)
-                            ):
-                                stage_code += self.generate_function(
-                                    resource_specialized_func,
-                                    stage_context=stage_name,
-                                )
-                            if not self.glsl_function_has_target_pointer_parameter(
-                                specialized_func
-                            ):
-                                stage_code += self.generate_function(
-                                    specialized_func,
-                                    stage_context=stage_name,
-                                )
-                    elif self.glsl_function_has_target_pointer_parameter(func):
-                        continue
-                    else:
-                        stage_code += self.generate_function(
-                            func,
-                            stage_context=stage_name,
-                        )
-
-                if hasattr(stage, "entry_point"):
-                    stage_code += self.generate_function(
-                        stage.entry_point,
-                        shader_type=stage_name,
-                        execution_config=getattr(stage, "execution_config", None),
-                        stage_layout_qualifiers=getattr(
-                            stage, "layout_qualifiers", None
-                        ),
-                        entry_name=combined_stage_entry_names.get(
-                            id(stage.entry_point)
-                        ),
-                        stage_context=stage_name,
-                    )
-
-                if stage_code:
-                    stage_code = f"// {stage_name.title()} Shader\n" + stage_code
-                    code += self.wrap_stage_guard(stage_code, stage_name)
-
-        generated_helpers = (
-            self.generate_glsl_software_subgroup_support()
-            + self.generate_glsl_trailing_zero_helpers()
-            + self.generate_glsl_boolean_order_helpers()
-            + self.generate_glsl_metal_math_helpers()
-            + emit_glsl_exponent_helpers(self)
-            + self.generate_glsl_half_helpers()
-            + self.generate_glsl_half_bitcast_helpers()
-            + self.generate_glsl_bfloat_helpers()
-            + self.generate_glsl_bfloat_integer_helpers()
-            + self.generate_glsl_float_selection_helpers()
-            + self.generate_glsl_storage_structure_copy_helpers()
-            + self.generate_glsl_integer_float_helpers()
-            + self.generate_glsl_signed_remainder_helpers()
-            + self.generate_glsl_floating_remainder_helpers()
-            + self.generate_glsl_complex64_helpers()
-            + self.generate_glsl_float_remainder_helpers()
-            + self.generate_glsl_integer_dot_helpers()
-            + self.generate_glsl_hlsl_structured_helpers()
-            + self.generate_glsl_expected_compare_helpers()
-            + self.float_atomic_storage.helper_definitions()
-            + self.union_storage.helper_definitions()
-        )
-        if generated_helpers:
-            code = (
-                code[:generated_helper_insertion_index]
-                + generated_helpers
-                + code[generated_helper_insertion_index:]
+        else:
+            emission.code += self.generate_global_variable_declaration(
+                node,
+                declaration,
+                vtype,
+                mapped_type_for_layout=f"{mapped_type}{array_suffix}",
             )
-        cooperative_matrix_support = (
-            self.generate_glsl_cooperative_matrix_software_support()
-            + self.generate_glsl_emulated_matrix_support()
-        )
-        if cooperative_matrix_support:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + cooperative_matrix_support
-                + code[cooperative_matrix_support_insertion_index:]
-            )
-        if self.glsl_descriptor_binding_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + descriptor_binding_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
-        code = self.finish_generic_resource_helper_refusals(code)
-        self.validate_glsl_function_call_graph()
-        code = self.ensure_glsl_version_supports_generated_layouts(code)
-        if getattr(self, "glsl_shadow_lod_extension_used", False):
-            code = require_shadow_lod_extension(code)
-        code = self.ensure_glsl_formatted_image_load_support(code)
-        code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(
-            code, getattr(self, "glsl_stage_builtin_extensions", ())
-        )
-        return self.ensure_glsl_int64_support(code)
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)

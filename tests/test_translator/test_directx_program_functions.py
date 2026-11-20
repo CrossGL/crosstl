@@ -5,7 +5,7 @@ import pytest
 
 import crosstl
 from crosstl.translator import ast as A
-from crosstl.translator.codegen import directx_codegen as directx
+from crosstl.translator.codegen import directx_program_emission
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.hlsl_program_functions import HlslProgramFunctions
 
@@ -163,12 +163,12 @@ def test_an_error_inside_the_analysis_phase_drops_the_kept_list(monkeypatch):
 def test_emission_runs_without_a_kept_list(monkeypatch):
     generator = HLSLCodeGen()
     seen = []
-    license_comments = directx.source_license_comments
+    license_comments = directx_program_emission.source_license_comments
 
     def recording(ast, backend):
         seen.append(generator.hlsl_program_functions)
         return license_comments(ast, backend)
 
-    monkeypatch.setattr(directx, "source_license_comments", recording)
+    monkeypatch.setattr(directx_program_emission, "source_license_comments", recording)
     generator.generate(crosstl.translator.parse(SAMPLED))
     assert seen == [None]
