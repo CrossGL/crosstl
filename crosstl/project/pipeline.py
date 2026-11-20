@@ -12401,6 +12401,8 @@ def _project_workgroup_rule_execution_metadata(
         provenance = fallback_provenance
     else:
         return None
+    target_split_entries: tuple[str, ...] = ()
+    host_names: list[str] = []
     contract_details: dict[str, Any] = {"path": provenance["path"]}
     if fallback_source_pattern is not None and fallback_components is not None:
         contract_details.update(
@@ -12432,8 +12434,13 @@ def _project_workgroup_rule_execution_metadata(
         ]
         # Split artifacts retain one materialization, but rule coverage belongs
         # to the source's complete project selection, including sibling jobs.
+        # When the target holds one entry per artifact (glsl_entry_split), the
+        # siblings are every discovered entry of the unit.
+        selected_entry_points = _resolved_entry_points_for_unit(config, unit)
+        if entry_scoped and not selected_entry_points:
+            target_split_entries = per_entry_split(unit, target)
         rule_entry_points = (
-            _resolved_entry_points_for_unit(config, unit) or host_names
+            selected_entry_points or target_split_entries or host_names
             if entry_scoped
             else host_names
         )
@@ -12457,6 +12464,18 @@ def _project_workgroup_rule_execution_metadata(
                 },
                 materialization_details={"hostNames": sorted(rule_entry_points)},
             )
+    if (
+        target_split_entries
+        and fallback_components is None
+        and host_names
+        and not any(
+            _configured_entry_workgroup_size_rule(config, unit.relative_path, name)
+            for name in host_names
+        )
+    ):
+        # A one-entry artifact of a target split whose entry no rule names keeps
+        # the size the source or the host gives it, as an unconfigured unit does.
+        return None
     joined = _workgroup_materialization_join(
         stages=stages,
         materialization=materialization,
