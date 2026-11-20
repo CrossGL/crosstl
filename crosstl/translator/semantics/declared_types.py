@@ -193,7 +193,8 @@ def _dead_functions(program):
 
     A function is live when it is a stage's entry point, or when a live function, a stage or a module-level
     declaration names it, and an explicit specialization is live when its primary is. The undeclared-name refusal
-    passes read every function regardless, because none of the generators drops an unreached function; only the
+    passes read every function regardless, because no generator drops a plain function or an explicit
+    specialization no stage entry reaches; only the
     passes that specifically model reachability consume this. A program without a stage entry is a library, so
     every function is live.
     Inside :func:`shared_dead_functions` the answer is computed once per program.
@@ -416,8 +417,11 @@ def _call_type_argument_names(call, generic_functions):
 def undeclared_type_uses(program, target=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
-    Every function body is read: none of the generators drops the functions no stage entry reaches, so an
-    undeclared type in such a function reaches the generated output and is refused here the same way. For a
+    Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
+    reaches, so an
+    undeclared type in such a function reaches the generated output and is refused here the same way. The
+    generic functions no code calls are read too, for every target — the Rust generator writes even those, and
+    for the others the type pass prefers the single read-everything shape the plain functions impose. For a
     ``target`` in :data:`INSTANTIATING_TARGETS`, the generic structures nothing names are not read either,
     because those generators never emit them.
     """

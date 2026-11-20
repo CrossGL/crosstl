@@ -14,8 +14,10 @@ built-in functions of the languages the importers read, which an importer may ca
 to map. A name reserved to the implementation (``__builtin_ctz``, ``__cgl_wrap_add``) is never a user function. Whether the target can express a built-in is left to the generators. A SPIR-V operation the importer kept as
 a call (``spirvSDot``) is refused by :mod:`.spirv_instructions` with its own diagnostic.
 
-As for undeclared types (:mod:`.declared_types`), every call is checked — none of the generators drops the
-functions no stage entry reaches — skipping the generic functions no code calls, for a target that instantiates
+As for undeclared types (:mod:`.declared_types`), every call is checked — no generator drops a plain function or
+an explicit specialization no stage entry reaches — skipping the generic functions no code calls, which those
+generators emit only through the calls that instantiate them (the Rust generator writes even those, so for
+``rust`` their bodies are read), for a target that instantiates
 generic structures the generic structures no code names, and only plain names: a callee with a namespace or
 member qualifier (``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve
 themselves. Explicit generic arguments (``pick<float>(x)``) are not part of the name.
@@ -50,6 +52,10 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Targets whose generators write a generic function no call instantiates, so its body reaches the generated
+# output and the names it uses are checked like any other body. Every other generator emits a generic function
+# only through the calls that instantiate it.
+GENERIC_WRITING_TARGETS = frozenset({"rust"})
 
 
 class UndeclaredFunctionError(TranslationDiagnostic):
@@ -154,8 +160,9 @@ def _unused_static_members(program, skip):
 def _never_called_generic_functions(program, skip):
     """Ids of the generic functions no code calls, which the generators only emit through call sites.
 
-    The mirror of :func:`~.declared_types._uninstantiated_templates`: a generic function is written to the output
-    only when a call instantiates it, so a body nothing calls never reaches the generated output, and the plain
+    The mirror of :func:`~.declared_types._uninstantiated_templates`: except under the Rust generator, which
+    writes even a generic function nothing instantiates, a generic function is written to the output only when a
+    call instantiates it, so a body nothing calls never reaches the generated output, and the plain
     callee spellings the qualified-member lowering leaves behind inside it (``CTile::Frag_t::mma`` where ``CTile``
     is a parameter cannot be resolved, so the call stays a bare ``mma``) must not be refused. A name used anywhere
     outside the generic bodies counts as a call — through another generic body only once that body is live itself,
@@ -190,16 +197,20 @@ def _never_called_generic_functions(program, skip):
 def undeclared_function_calls(program, target=None):
     """``(name, call)`` for each call in ``program`` whose plain callee is neither declared nor built in.
 
-    Every function body is read: none of the generators drops the functions no stage entry reaches, so a call in
-    such a function reaches the generated output too. The generic functions no code calls are not read — those
-    generators emit a generic function only through the calls that instantiate it. Static structure members
+    Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
+    reaches, so a call in such a function reaches the generated output too. The generic functions no code calls
+    are not read — those generators emit a generic function only through the calls that instantiate it — except
+    for the Rust generator, which writes even those, so for ``target="rust"`` their bodies are read as well.
+    Static structure members
     nothing names are not read, and for a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the
     generic structures no code names are not read either, because those generators emit a generic structure only
     through the instantiations it names.
     """
     declared = declared_function_names(program)
     calls = []
-    skip = _never_called_generic_functions(program, set())
+    skip = set()
+    if str(target or "").lower() not in GENERIC_WRITING_TARGETS:
+        skip = _never_called_generic_functions(program, skip)
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     skip |= _unused_static_members(program, skip)

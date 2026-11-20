@@ -1,8 +1,10 @@
 """Functions no stage entry reaches are written to the output, so the checks read them.
 
-None of the generators drops a function no stage entry reaches, so an undeclared type, identifier or call in an
+No generator drops a plain function no stage entry reaches, so an undeclared type, identifier or call in an
 unreached helper, and in the explicit specialization of a primary nothing calls, reaches the generated output.
-The undeclared-name checks therefore read every function body instead of only the reached ones.
+The undeclared-name checks therefore read every function body instead of only the reached ones. A generic
+function nothing instantiates is dropped by every generator but Rust, which writes it, so the undeclared-function
+pass skips those bodies for every target but ``rust``.
 """
 
 import pytest
@@ -166,6 +168,16 @@ def test_never_called_generic_function_body_is_not_refused(target):
     apply_rule_carrying(
         _program(NEVER_CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL), "cgl", target
     )
+
+
+@pytest.mark.parametrize("target", ["rust"])
+def test_never_called_generic_function_body_is_refused_on_rust(target):
+    # The Rust generator writes a generic function nothing instantiates, so the undeclared call
+    # in its body reaches the generated output and is refused there.
+    with pytest.raises(UndeclaredFunctionError):
+        apply_rule_carrying(
+            _program(NEVER_CALLED_GENERIC_FUNCTION_WITH_UNDECLARED_CALL), "cgl", target
+        )
 
 
 @pytest.mark.parametrize("target", TARGETS)

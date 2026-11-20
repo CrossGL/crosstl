@@ -14,8 +14,9 @@ Scopes follow CrossGL, which keeps GLSL's rule that a local's scope begins after
 initializer is visible in its condition, update and body, a ``switch`` shares one scope across its cases as C++ and
 GLSL do, and a lambda sees its parameters and captures.
 
-Every function body is checked, as for :mod:`.declared_types`: none of the generators drops the functions no
-stage entry reaches, so a name an unreached function uses reaches the generated output the same way. Names with
+Every function body is checked, as for :mod:`.declared_types`: no generator drops a plain function or an
+explicit specialization no stage entry reaches, so a name an unreached function uses reaches the generated
+output the same way. Names with
 namespace or member qualifiers (``metal::x``,
 ``Kind::A``) are resolved by the importers and generators themselves, and so are callee names, member names,
 attribute arguments, types and ``static_assert`` conditions. Whether a ``gl_`` built-in exists and fits its stage is
