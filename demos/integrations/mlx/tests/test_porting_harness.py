@@ -4614,6 +4614,7 @@ def test_atomic_fence_contract_records_exact_target_failures(tmp_path, monkeypat
     )
     assert result["artifactRecordCount"] == 5
     assert result["failedArtifactCount"] == 5
+    assert module.MLX_FENCE_FAILED_ARTIFACT_COUNT == 5
     assert result["emittedArtifactCount"] == 0
     assert result["requestedContract"] == {
         "memoryFlags": ["mem_device"],

@@ -6578,6 +6578,7 @@ jobs:
               MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
               MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
               MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE,
+              MLX_FENCE_FAILED_ARTIFACT_COUNT,
               MLX_GEMV_SHA256,
               MLX_GEMV_SOURCE,
               MLX_GEMV_SOURCE_SIZE_BYTES,
@@ -6726,8 +6727,13 @@ jobs:
           ):
               raise SystemExit("MLX checkout proof does not match the pinned revision")
           fence = checks["atomic-fence-contract"]
-          if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
-              raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
+          if (
+              fence["failedArtifactCount"] != MLX_FENCE_FAILED_ARTIFACT_COUNT
+              or fence["emittedArtifactCount"] != 0
+          ):
+              raise SystemExit(
+                  "fence contract accounting must refuse every fence artifact and emit none"
+              )
           reference_accessor = checks["reference-accessor-lvalue-identity"]
           expected_directx_required = os.environ["RUNNER_OS"] == "Windows"
           expected_opengl_required = os.environ["RUNNER_OS"] == "Linux"

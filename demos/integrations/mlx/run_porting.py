@@ -1021,6 +1021,11 @@ MLX_FENCE_TARGET_CONTRACTS = {
 MLX_FENCE_ENTRY_POINTS = ("input_coherent", "fence_update", "fence_wait")
 MLX_FENCE_PER_ENTRY_TARGETS = frozenset({"opengl"})
 MLX_REFERENCE_TARGETS = tuple(MLX_FENCE_TARGET_CONTRACTS)
+# One refused artifact per fence kernel on per-entry targets and one per unit elsewhere.
+MLX_FENCE_FAILED_ARTIFACT_COUNT = sum(
+    len(MLX_FENCE_ENTRY_POINTS) if target in MLX_FENCE_PER_ENTRY_TARGETS else 1
+    for target in MLX_REFERENCE_TARGETS
+)
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_EXPECTED_UNIT_COUNT = 42
 FULL_CORPUS_TARGETS = ("directx", "opengl")
