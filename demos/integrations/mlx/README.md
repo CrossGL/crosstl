@@ -3660,8 +3660,13 @@ The current harness verifies:
   host-chosen size. 55 kernels translate and pass the same validators. The 39
   that still consume an unconfigured `threads_per_threadgroup` (24 `arg_reduce`
   and 15 attention kernels) produce the exact fail-closed workgroup-size
-  diagnostic and no target file. This is native artifact validation only; the
-  gate does not run the kernels or establish runtime parity;
+  diagnostic and no target file. The translated kernels use hardware subgroups
+  and size their threadgroup partials for 32-lane SIMD groups, so they compute
+  the source result only on devices whose subgroup width is 32, which the
+  runtime contracts below check before dispatch
+  ([#4707](https://github.com/CrossGL/crosstl/issues/4707)). This is native
+  artifact validation only; the gate does not run the kernels or establish
+  runtime parity;
 - a separate bounded OpenGL dispatch-contract proof for the actual pinned
   `logsumexp.metal` source. The two float32 workloads emit standalone GLSL
   artifacts with workgroup sizes `[32, 1, 1]` and `[288, 1, 1]`, an exact
