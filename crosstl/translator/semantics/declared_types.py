@@ -189,10 +189,13 @@ def _referenced_names(node, skip):
 
 
 def _dead_functions(program):
-    """Ids of the functions no stage entry reaches, which the generators drop; none when there is no entry.
+    """Ids of the functions no stage entry reaches; none when there is no entry.
 
     A function is live when it is a stage's entry point, or when a live function, a stage or a module-level
-    declaration names it. A program without a stage entry is a library, so every function is checked.
+    declaration names it, and an explicit specialization is live when its primary is. The undeclared-name refusal
+    passes read every function regardless, because none of the generators drops an unreached function; only the
+    passes that specifically model reachability consume this. A program without a stage entry is a library, so
+    every function is live.
     Inside :func:`shared_dead_functions` the answer is computed once per program.
     """
     cache = _DEAD_FUNCTIONS.get()
@@ -413,14 +416,14 @@ def _call_type_argument_names(call, generic_functions):
 def undeclared_type_uses(program, target=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
-    Functions no stage entry reaches are not read: they cannot change what the program computes, and translation
-    for a selected entry point drops them (a project's explicit specialization that was materialized under another
-    name keeps its unresolved parameter types, for example). For a ``target`` in :data:`INSTANTIATING_TARGETS`, the
-    generic structures no live code names are not read either, because those generators never emit them.
+    Every function body is read: none of the generators drops the functions no stage entry reaches, so an
+    undeclared type in such a function reaches the generated output and is refused here the same way. For a
+    ``target`` in :data:`INSTANTIATING_TARGETS`, the generic structures nothing names are not read either,
+    because those generators never emit them.
     """
     declared, bounds, values, declared_values = _type_use_context(program)
     uses = []
-    skip = _dead_functions(program) | bounds | values
+    skip = bounds | values
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     generic_functions = _generic_function_names(program)

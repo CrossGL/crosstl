@@ -14,9 +14,9 @@ built-in functions of the languages the importers read, which an importer may ca
 to map. A name reserved to the implementation (``__builtin_ctz``, ``__cgl_wrap_add``) is never a user function. Whether the target can express a built-in is left to the generators. A SPIR-V operation the importer kept as
 a call (``spirvSDot``) is refused by :mod:`.spirv_instructions` with its own diagnostic.
 
-As for undeclared types (:mod:`.declared_types`), only calls in code a stage entry can reach are checked (every
-function of a program without entries), skipping, for a target that instantiates generic structures, the generic
-structures no live code names, and only plain names: a callee with a namespace or member qualifier
+As for undeclared types (:mod:`.declared_types`), every call is checked — none of the generators drops the
+functions no stage entry reaches — skipping, for a target that instantiates generic structures, the generic
+structures no code names, and only plain names: a callee with a namespace or member qualifier
 (``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve themselves. Explicit
 generic arguments (``pick<float>(x)``) are not part of the name.
 """
@@ -36,7 +36,6 @@ from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .declared_types import (
     INSTANTIATING_TARGETS,
     _add_declared_type_name,
-    _dead_functions,
     _nodes,
     _short,
     _uninstantiated_templates,
@@ -153,15 +152,16 @@ def _unused_static_members(program, skip):
 
 
 def undeclared_function_calls(program, target=None):
-    """``(name, call)`` for each call in live code of ``program`` whose plain callee is neither declared nor built in.
+    """``(name, call)`` for each call in ``program`` whose plain callee is neither declared nor built in.
 
-    Live code is every function a stage entry reaches and every initialized static structure member live code names.
-    For a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the generic structures no live code names are
-    not live either, because those generators emit a generic structure only through the instantiations it names.
+    Every function body is read: none of the generators drops the functions no stage entry reaches, so a call in
+    such a function reaches the generated output too. Static structure members nothing names are not read, and for
+    a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the generic structures no code names are not
+    read either, because those generators emit a generic structure only through the instantiations it names.
     """
     declared = declared_function_names(program)
     calls = []
-    skip = set(_dead_functions(program))
+    skip = set()
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     skip |= _unused_static_members(program, skip)
