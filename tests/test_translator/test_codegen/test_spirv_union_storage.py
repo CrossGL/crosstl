@@ -204,7 +204,7 @@ def test_unions_in_buffers_and_uniform_blocks_keep_the_source_layout(backend, tm
 def test_the_callers_program_keeps_its_union():
     ast = parse(PUNNING)
     WGSLCodeGen().generate(ast)
-    (bits,) = [struct for struct in ast.structs if struct.name == "Bits"]
+    (bits,) = (struct for struct in ast.structs if struct.name == "Bits")
     assert [member.name for member in bits.members] == ["f", "u", "i"]
 
 
