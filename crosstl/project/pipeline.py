@@ -54,6 +54,7 @@ from crosstl.backend.Metal.integral_constant_tags import (
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
 )
+from crosstl.backend.Metal.mpp_matmul2d import lower_matmul2d_operations
 from crosstl.backend.Metal.orphaned_explicit_specializations import (
     prune_orphaned_explicit_specializations,
 )
@@ -22549,6 +22550,10 @@ def _project_template_materialization_for_artifact(
         base_preprocessor_kwargs["promote_derived_pointer_members"] = source_options[
             "promote_derived_pointer_members"
         ]
+    if "cooperative_tensor_layout" in source_options:
+        base_preprocessor_kwargs["cooperative_tensor_layout"] = source_options[
+            "cooperative_tensor_layout"
+        ]
     materialization_work_limit = _metal_template_materialization_work_limit(
         source_options
     )
@@ -22675,6 +22680,7 @@ def _project_template_materialization_for_artifact(
         if cached is not None:
             return cached
         preprocessor._configure_integral_constant_contracts(preprocessed)
+        preprocessed = lower_matmul2d_operations(preprocessor, preprocessed)
         preprocessed = _canonicalize_metal_struct_template_aliases(
             preprocessor,
             preprocessed,

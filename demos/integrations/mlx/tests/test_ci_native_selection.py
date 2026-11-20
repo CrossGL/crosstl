@@ -57,7 +57,7 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead, runner_os)
             for step in steps[failed_index + 1 :]
             if "!cancelled()" in step.get("if", "")
         ]
-        assert len(independent) == 34
+        assert len(independent) == 35
         assert independent == [
             step for step in steps[failed_index + 1 : -1] if step != comparison
         ]

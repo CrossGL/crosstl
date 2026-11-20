@@ -118,6 +118,10 @@ from .member_address_types import (
 from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
 from .method_arity import accepts_argument_count, named_parameter_arguments
+from .mpp_matmul2d import (
+    lower_matmul2d_operations,
+    validate_cooperative_tensor_layout,
+)
 from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
@@ -1196,6 +1200,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         template_specialization_limit_source: Optional[str] = None,
         promote_derived_pointer_members: bool = False,
         group_non_type_template_substitutions: bool = True,
+        cooperative_tensor_layout: Optional[str] = None,
     ):
         super().__init__(
             include_paths=include_paths,
@@ -1208,6 +1213,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 "Metal promote_derived_pointer_members must be a boolean"
             )
         self.promote_derived_pointer_members = promote_derived_pointer_members
+        # The lane layout of matmul2d cooperative tensors (mpp_matmul2d.py).
+        self.cooperative_tensor_layout = validate_cooperative_tensor_layout(
+            cooperative_tensor_layout
+        )
         if not isinstance(group_non_type_template_substitutions, bool):
             raise MetalSourceRefusal(
                 "Metal group_non_type_template_substitutions must be a boolean"
@@ -1354,6 +1363,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
+        processed = lower_matmul2d_operations(self, processed)
         # Assertions over constexpr aggregates and operators, such as MLX's
         # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
         # their operators are still spelled as in the source, as template materialization decides them; an

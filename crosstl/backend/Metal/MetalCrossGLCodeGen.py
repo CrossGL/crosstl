@@ -143,6 +143,7 @@ from .preprocessor import (
 from .scalar_type_identity import canonical_scalar_type_spelling
 from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
+from .simdgroup_lane_queries import generate_simdgroup_lane_query
 from .sparse_color import (
     METAL_SPARSE_TEXTURE_METHODS,
     import_sparse_color_assignment,
@@ -12959,6 +12960,9 @@ class MetalToCrossGLConverter(
             )
             if cooperative_matrix_call is not None:
                 return cooperative_matrix_call
+            lane_query = generate_simdgroup_lane_query(self, expr)
+            if lane_query is not None:
+                return lane_query
             constructor_arguments = expr.args
             if (
                 getattr(expr, "is_braced_constructor", False)
