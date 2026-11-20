@@ -78,21 +78,8 @@ jobs:
             exit 0
           fi
           # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
-          # base, so this lists exactly the files the change touches.
-          changed="$(git diff --name-only HEAD^1 HEAD)"
-          engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
-          declare -A paths=(
-            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
-            [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
-            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/|tests/conformance/(runner\.py|runtimes\.py|interface\.py|vkrun\.c)$'
-          )
-          for leg in "${legs[@]}"; do
-            if grep -Eq "^($engine|${paths[$leg]})" <<<"$changed"; then
-              echo "$leg=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$leg=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
+          # base, so this lists exactly the files the change touches. tools/coverage/legs.py says which legs they reach.
+          git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang, OpenCL C)
