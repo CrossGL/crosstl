@@ -200,6 +200,8 @@ class CudaImportNameMixin:
                 type_name = normalized_type[len(prefix) :].strip()
                 if "*" in type_name:
                     return self.convert_cuda_pointer_type(type_name)
+                if "[" in type_name:
+                    return self.convert_cuda_type_to_crossgl(type_name)
                 return self.sanitize_crossgl_type_identifier(type_name)
         return None
 
