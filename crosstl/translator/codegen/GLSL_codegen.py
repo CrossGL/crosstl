@@ -119,6 +119,7 @@ from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -136,7 +137,6 @@ from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
-from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_refusals import input_attachment_refusal_reason
 from .glsl_shadow_lod import require_shadow_lod_extension
 from .glsl_specialization_dependents import (
