@@ -26,6 +26,7 @@ from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
 )
+from .barrier_peephole import merge_adjacent_cuda_barriers
 from .c_reference_parameters import is_output_parameter, reference_declarator
 from .comma_expressions import (
     CommaExpressionVisitorMixin,
@@ -730,7 +731,9 @@ class HipCodeGen(
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
         refuse_cooperative_matrices(node, label="HIP", target="hip")
-        return self.refusals.run(self.render_checked_program, node)
+        return merge_adjacent_cuda_barriers(
+            self.refusals.run(self.render_checked_program, node)
+        )
 
     def render_checked_program(self, node):
         """Render the program and refuse each built-in type and function of another language it still names."""

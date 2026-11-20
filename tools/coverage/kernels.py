@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import re
 
-from .dialect import Buffer, Dialect, ProbeError
-from .model import GENERIC_POINTER, Type
+from .dialect import Buffer, Dialect, Handle, ProbeError
+from .model import GENERIC_POINTER, SCHEDULE_MASK, SCHEDULE_MASK_VALUE, Type
 
 
 class CUDA(Dialect):
@@ -183,6 +183,26 @@ class Mojo(Dialect):
     def address(self, name: str) -> str:
         # A ``mut`` argument is passed by reference without an operator.
         return name
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        if kind.opaque != SCHEDULE_MASK:
+            return None
+        return Handle(
+            SCHEDULE_MASK_VALUE,
+            declarations=(f"from max.gpu.sync import {SCHEDULE_MASK}",),
+        )
+
+    def shared_pointer(self, kind: Type, name: str, value: str) -> Handle:
+        # Mojo has no global variables: a kernel allocates workgroup memory, and the allocation is its pointer.
+        allocation = f"stack_allocation[1, {self.type(kind)}, address_space=AddressSpace.SHARED]()"
+        return Handle(
+            name,
+            (f"var {name} = {allocation}", f"{name}[0] = {value}"),
+            (
+                "from std.memory import stack_allocation",
+                "from max.gpu.memory import AddressSpace",
+            ),
+        )
 
     def active(self, body: list[str], skipped: int) -> list[str]:
         return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]

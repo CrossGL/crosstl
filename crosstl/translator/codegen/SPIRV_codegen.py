@@ -216,6 +216,7 @@ from .spirv_interface_locations import (
     plan_struct_member_locations,
 )
 from .spirv_invariant_outputs import decorate_invariant_builtin_output
+from .spirv_literal_context import is_literal_operand
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -7934,7 +7935,19 @@ class VulkanSPIRVCodeGen(
 
             return self.process_array_literal(arg, target_type)
 
-        return self.process_expression(arg)
+        # A literal argument takes its parameter's type when it is known, never the enclosing expression's: in
+        # uint(max(0, v)) the 0 stays int, so the maximum stays signed. Other arguments keep the context.
+        previous_expected_type = self.current_expression_expected_type
+        if is_literal_operand(arg):
+            self.current_expression_expected_type = (
+                self.type_name_string(expected_type)
+                if expected_type is not None
+                else None
+            )
+        try:
+            return self.process_expression(arg)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
 
     def value_array_argument_object(self, value, expected_type):
         """Pass a by-value array held in a member or element through its own Function variable.
@@ -30328,8 +30341,26 @@ class VulkanSPIRVCodeGen(
                     left = self.process_expression(expr.left)
                     right = self.process_expression(expr.right)
             else:
-                left = self.process_expression(expr.left)
-                right = self.process_expression(expr.right)
+                # A literal operand takes the other operand's type, or its own when that is unknown, never the
+                # enclosing expression's: in uint(v % 3) and (v > 0) ? 1u : 0u the literal stays int, so the
+                # operation stays signed. Operations without a literal operand keep the enclosing context, which
+                # loads and constructors read.
+                previous_expected_type = self.current_expression_expected_type
+                if is_literal_operand(expr.left) or is_literal_operand(expr.right):
+                    operand_type = self.bitwise_expression_operand_type(
+                        self.infer_expression_result_type(expr.left),
+                        self.infer_expression_result_type(expr.right),
+                    )
+                    self.current_expression_expected_type = (
+                        self.type_name_string(operand_type)
+                        if operand_type is not None
+                        else None
+                    )
+                try:
+                    left = self.process_expression(expr.left)
+                    right = self.process_expression(expr.right)
+                finally:
+                    self.current_expression_expected_type = previous_expected_type
 
             if left is None or right is None:
                 self.refuse_lowering(
