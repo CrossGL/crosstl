@@ -150,6 +150,7 @@ from crosstl.translator.codegen.array_utils import prepend_array_dimension
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.entry_selection import prepare_entry_scoped_target
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
+from crosstl.translator.codegen.host_workgroup_size_ids import is_host_sized_workgroup
 from crosstl.translator.codegen.index_range_contracts import (
     IndexRangeAssertion,
     parse_index_range_assertions,
@@ -27818,6 +27819,7 @@ def _project_workgroup_execution_metadata(
         else _configured_workgroup_size(config, variant)
     )
     consumed_entries: list[str] = []
+    host_sized_entries: set[str] = set()
     source_sizes: dict[str, tuple[int, int, int]] = {}
     source_paths: dict[str, str] = {}
     source_location = None
@@ -27841,6 +27843,8 @@ def _project_workgroup_execution_metadata(
                     source_location = getattr(parameter, "source_location", None)
 
         execution_config = dict(getattr(stage, "execution_config", {}) or {})
+        if is_host_sized_workgroup(execution_config):
+            host_sized_entries.add(entry_name)
         source_size, source_path, invalid = _crossgl_execution_workgroup_size(
             execution_config
         )
@@ -27952,13 +27956,19 @@ def _project_workgroup_execution_metadata(
             )
 
     effective_size = configured_size or source_size
-    if effective_size is None and consumed_entries:
+    # An entry the source's host sizes at dispatch (`@ host_workgroup_size`) reads the size its
+    # target generator emits for the host to choose, or that generator refuses it; only a size no
+    # host sets needs a concrete one here.
+    unsized_consumers = [
+        entry for entry in consumed_entries if entry not in host_sized_entries
+    ]
+    if effective_size is None and unsized_consumers:
         raise ProjectWorkgroupSizeError(
             "A consumed threads_per_threadgroup value requires a concrete project "
             "workgroup_size or source execution size for this target.",
             code="project.translate.workgroup-size-required",
             reason="consumed-source-value-unconfigured",
-            source_entry_points=consumed_entries,
+            source_entry_points=unsized_consumers,
             source_location=source_location,
         )
     if effective_size is None:
