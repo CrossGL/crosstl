@@ -132,8 +132,8 @@ def test_split_entry_rules_still_reject_a_pattern_no_entry_matches(tmp_path):
     )
 
 
-def test_split_entry_rules_leave_an_unnamed_consuming_entry_closed(tmp_path):
-    _repo, report = _translate(tmp_path, {"tile_*": ["64", "1", "1"]})
+def test_split_entry_rules_leave_an_unnamed_consuming_entry_host_sized(tmp_path):
+    repo, report = _translate(tmp_path, {"tile_*": ["64", "1", "1"]})
     payload = report.to_json()
 
     artifacts = _artifacts_by_entry(payload)
@@ -142,8 +142,16 @@ def test_split_entry_rules_leave_an_unnamed_consuming_entry_closed(tmp_path):
         entry["workgroupSize"]
         for entry in artifacts["tile_float"]["execution"]["entryPoints"]
     ] == [[64, 1, 1]]
-    assert artifacts["strided_float"]["status"] == "failed"
-    assert "project.translate.workgroup-size-required" in _error_codes(payload)
+    # The rule names only tile_*, so strided_float keeps the host-chosen size: it reads
+    # gl_WorkGroupSize from the CROSSGL_WORKGROUP_SIZE_* macros instead of taking 64.
+    strided = artifacts["strided_float"]
+    assert strided["status"] == "translated"
+    assert strided.get("execution") is None
+    code = (repo / strided["path"]).read_text(encoding="utf-8")
+    assert "gl_WorkGroupSize" in code
+    assert "CROSSGL_WORKGROUP_SIZE_X" in code
+    assert "local_size_x = 64" not in code
+    assert _error_codes(payload) == []
 
 
 @pytest.mark.parametrize("target", ("directx", "metal"))
