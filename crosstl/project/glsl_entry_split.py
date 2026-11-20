@@ -17,9 +17,10 @@ from crosstl.translator.entry_discovery import ENTRY_DISCOVERY_AVAILABLE
 
 __all__ = ["holds_one_entry_per_stage", "host_sizes_unit", "per_entry_split"]
 
+# Unit-wide size rules. ``entry_workgroup_size_rules`` is absent: each of its rules names the entries it sizes, so
+# every split artifact resolves the rule of its own entry, and an entry no rule names keeps its source or host size.
 _HOST_SIZE_RULES = (
     "workgroup_size_rules",
-    "entry_workgroup_size_rules",
     "subgroup_width_rules",
 )
 

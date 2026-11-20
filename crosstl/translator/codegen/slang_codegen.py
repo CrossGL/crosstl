@@ -44,7 +44,7 @@ from .builtin_result_types import (
     boolean_builtin_result_type,
     builtin_call_result_type,
 )
-from .c_family_operands import postfix_operand, prefix_unary_operand
+from .c_family_operands import postfix_operand
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
@@ -65,28 +65,22 @@ from .enum_utils import (
     collect_plain_enums,
     collect_struct_payload_enums,
     enum_value_expression,
-    generate_enum_constructor_call,
-    generate_enum_constructor_expression,
     generic_enum_specialized_type_name,
 )
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
     iter_function_nodes,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
-    reject_unresolved_generic_function_call,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .generic_pointer_spaces import (
     assign_generic_pointer_spaces,
     refuse_written_generic_pointers,
 )
-from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .hlsl_array_value_arguments import HlslArrayValueArguments
@@ -96,18 +90,18 @@ from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import infer_match_expression_result_type
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
-from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .slang_buffer_block_types import SlangBufferBlockTypesMixin
-from .slang_buffer_lengths import slang_glsl_buffer_block_length
 from .slang_byte_address_words import SlangThreeComponentAccess
-from .slang_constant_references import slang_constant_reference_parameter
+from .slang_call_expressions import SlangCallExpressionMixin
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
     slang_member_modifier_prefix,
 )
 from .slang_declarations import SlangDeclarationsMixin
+from .slang_expression_nodes import SlangExpressionNodeMixin
 from .slang_expression_parts import SlangExpressionPartsMixin
+from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
 from .slang_glsl_buffer_access import SlangGlslBufferAccessMixin
 from .slang_image_resources import SlangImageResourcesMixin
@@ -122,7 +116,6 @@ from .slang_resource_bindings import SlangResourceBindingsMixin
 from .slang_resource_calls import SlangResourceCallsMixin
 from .slang_resource_memory import (
     helper_resource_argument_names,
-    slang_resource_parameter_memory_prefix,
 )
 from .slang_semantics import SlangSemanticsMixin
 from .slang_stage_attributes import SlangStageAttributesMixin
@@ -136,7 +129,6 @@ from .slang_texture_queries import SlangTextureQueriesMixin
 from .slang_texture_sampling import SlangTextureSamplingMixin
 from .slang_value_types import SlangValueTypesMixin
 from .slang_varying_locations import (
-    entry_parameter_location_prefix,
     fragment_output_location_node_ids,
     location_attribute_index,
     struct_member_location_prefix,
@@ -146,11 +138,9 @@ from .slang_wave_mesh_ops import SlangWaveMeshOpsMixin
 from .slang_wave_shuffles import (
     SLANG_WAVE_SHUFFLE_ARITIES,
     as_type_target,
-    slang_subgroup_parameter_alias,
 )
 from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .slang_workgroup_size import SlangWorkgroupSizeConstants
-from .stage_utils import is_fragment_output_parameter
 from .storage_parameter_texels import StorageParameterTexels
 
 
@@ -179,6 +169,9 @@ class SlangCodeGen(
     SlangTextureQueriesMixin,
     SlangPreciseFunctionMixin,
     LoweringRefusalMixin,
+    SlangCallExpressionMixin,
+    SlangExpressionNodeMixin,
+    SlangFunctionPartsMixin,
 ):
     """Emit Slang shader source from the shared CrossGL AST."""
 
@@ -1137,70 +1130,18 @@ class SlangCodeGen(
             getattr(node, "_generic_substitutions", {}) or {}
         )
         self.expression_temp_names = set()
-        if hasattr(node, "return_type"):
-            ret_type_name = self.convert_type_node_to_string(node.return_type)
-            ret_type = self.convert_type(ret_type_name)
-        else:
-            ret_type_name = "void"
-            ret_type = "void"
-
-        semantic = self.function_return_semantic(node)
-        if shader_type is not None and semantic is None:
-            semantic = self.default_slang_stage_return_semantic(shader_type, ret_type)
-        body = getattr(node, "body", [])
-        body_statements = self.get_statements(body)
-        param_list = getattr(node, "parameters", getattr(node, "params", []))
-        param_list = self.slang_merge_function_parameters(
-            param_list, extra_parameters, shader_type
+        (
+            semantic,
+            body_statements,
+            param_list,
+            fragment_output_rewrite,
+            hull_output_rewrite,
+            builtin_return_rewrite,
+            ret_type_name,
+            ret_type,
+        ) = self.slang_function_return_plan(
+            node, shader_type, stage_role, extra_parameters
         )
-        fragment_output_rewrite = None
-        if self.convert_type(ret_type_name) == "void" and semantic is None:
-            for parameter in param_list:
-                parameter_semantic = self.semantic_from_node(parameter)
-                if is_fragment_output_parameter(
-                    shader_type,
-                    parameter,
-                    parameter_semantic,
-                ):
-                    ret_type_name = self.slang_parameter_type_name(parameter)
-                    ret_type = self.convert_type(ret_type_name)
-                    semantic = parameter_semantic
-                    fragment_output_rewrite = {
-                        "parameter": parameter,
-                        "local_name": getattr(parameter, "name", None),
-                        "return_type_name": ret_type_name,
-                    }
-                    break
-        if fragment_output_rewrite is not None:
-            output_parameter = fragment_output_rewrite["parameter"]
-            param_list = [
-                parameter
-                for parameter in param_list
-                if parameter is not output_parameter
-            ]
-        self.validate_slang_return_semantic(
-            shader_type, semantic, stage_role, ret_type_name
-        )
-        self.validate_slang_struct_return_semantics(
-            shader_type, ret_type_name, stage_role=stage_role
-        )
-        hull_output_rewrite = None
-        if stage_role != "patch_constant":
-            hull_output_rewrite = self.slang_stage_hull_output_rewrite(
-                body_statements, shader_type, ret_type_name, semantic, param_list
-            )
-        if hull_output_rewrite is not None:
-            ret_type_name = hull_output_rewrite["return_type_name"]
-            ret_type = self.convert_type(ret_type_name)
-            semantic = None
-
-        builtin_return_rewrite = self.slang_stage_builtin_return_rewrite(
-            body_statements, shader_type, ret_type_name, semantic
-        )
-        if builtin_return_rewrite is not None:
-            ret_type_name = builtin_return_rewrite["return_type_name"]
-            ret_type = self.convert_type(ret_type_name)
-            semantic = builtin_return_rewrite["semantic"]
 
         self.current_function_return_type = ret_type_name
         self.current_shader_type = shader_type
@@ -1236,165 +1177,9 @@ class SlangCodeGen(
             )
         else:
             self.validate_slang_ray_query_calls(node, "function", effective_param_list)
-        params = []
-        local_alias_declarations = []
-        emitted_param_names = set()
-        if effective_param_list:
-            if effective_param_list and hasattr(effective_param_list[0], "name"):
-                for param in effective_param_list:
-                    if hasattr(param, "param_type"):
-                        param_type_name = self.convert_type_node_to_string(
-                            param.param_type
-                        )
-                        self.register_variable_type(param.name, param_type_name, param)
-                        param_type = self.map_resource_type_with_format(
-                            param_type_name, param
-                        )
-                    elif hasattr(param, "vtype"):
-                        param_type_name = param.vtype
-                        self.register_variable_type(param.name, param_type_name, param)
-                        param_type = self.map_resource_type_with_format(
-                            param_type_name, param
-                        )
-                    else:
-                        param_type_name = "float"
-                        param_type = "float"
-                    semantic = self.semantic_from_node(param)
-                    dispatch_thread_id_bridge = (
-                        self.slang_compute_global_invocation_id_parameter_bridge(
-                            param,
-                            param_type,
-                            semantic,
-                            emitted_param_names,
-                            effective_param_list,
-                        )
-                        if shader_type == "compute"
-                        else None
-                    )
-                    intrinsic_alias = self.slang_num_workgroups_parameter_alias(
-                        param, param_type, semantic, shader_type
-                    )
-                    if intrinsic_alias is None:
-                        intrinsic_alias = self.slang_helper_invocation_parameter_alias(
-                            param, param_type, semantic, shader_type
-                        )
-                    if intrinsic_alias is None:
-                        intrinsic_alias = slang_subgroup_parameter_alias(
-                            self, param, param_type, semantic
-                        )
-                    if intrinsic_alias is not None:
-                        local_alias_declarations.append(intrinsic_alias)
-                        emitted_param_names.add(param.name)
-                        continue
-                    if dispatch_thread_id_bridge is not None:
-                        declaration, local_alias, native_name = (
-                            dispatch_thread_id_bridge
-                        )
-                        self.register_variable_type(native_name, "uint3", param)
-                        self.register_variable_type(param.name, param_type_name, param)
-                        params.append(declaration)
-                        local_alias_declarations.append(local_alias)
-                        emitted_param_names.add(native_name)
-                        continue
-
-                    declaration = format_c_style_array_declaration(
-                        param_type, param.name
-                    )
-                    declaration = (
-                        slang_resource_parameter_memory_prefix(self, param_type, param)
-                        + declaration
-                    )
-                    ray_declaration = self.slang_ray_stage_parameter_declaration(
-                        declaration, param, shader_type
-                    )
-                    if ray_declaration is not None:
-                        params.append(ray_declaration)
-                        continue
-                    mesh_payload_declaration = (
-                        self.slang_mesh_payload_parameter_declaration(
-                            declaration, param, shader_type
-                        )
-                    )
-                    if mesh_payload_declaration is not None:
-                        params.append(mesh_payload_declaration)
-                        continue
-                    mesh_output_declaration = (
-                        self.slang_mesh_output_parameter_declaration(
-                            declaration, param, shader_type
-                        )
-                    )
-                    if mesh_output_declaration is not None:
-                        params.append(mesh_output_declaration)
-                        continue
-                    constant_reference = (
-                        slang_constant_reference_parameter(self, param)
-                        if shader_type is not None
-                        else None
-                    )
-                    if constant_reference is not None:
-                        declaration, value_type = constant_reference
-                        self.register_variable_type(param.name, value_type, param)
-                        params.append(declaration)
-                        emitted_param_names.add(param.name)
-                        continue
-                    if shader_type is not None and str(param_type).rstrip().endswith(
-                        "&"
-                    ):
-                        # A Metal ``constant T& x [[buffer(n)]]`` argument; ``T &x`` is no Slang entry parameter.
-                        self.refuse_lowering(
-                            f"Slang entry parameter '{param.name}' has the reference type "
-                            f"{param_type}, which a Slang entry point cannot take"
-                        )
-                    declaration = (
-                        entry_parameter_location_prefix(
-                            self, param, semantic, shader_type
-                        )
-                        + self.slang_stage_parameter_qualifier_prefix(
-                            param, shader_type
-                        )
-                        + declaration
-                    )
-                    declaration = self.apply_slang_resource_binding_decorations(
-                        declaration, param, param_type_name
-                    )
-                    params.append(
-                        declaration + self.semantic_suffix(semantic, shader_type)
-                    )
-                    emitted_param_names.add(param.name)
-            else:
-                for param_type, param_name in effective_param_list:
-                    self.register_variable_type(param_name, param_type)
-                    params.append(
-                        f"{self.map_resource_type_with_format(param_type)} {param_name}"
-                    )
-
-        for (
-            param_type,
-            param_name,
-            semantic,
-        ) in self.slang_implicit_stage_parameters(
-            body_statements, shader_type, effective_param_list, stage_role=stage_role
-        ):
-            self.register_variable_type(param_name, param_type)
-            params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
-
-        if shader_type is None:
-            existing_param_names = {
-                getattr(param, "name", None) for param in effective_param_list or []
-            }
-            for parameter in self.required_slang_stage_parameters(
-                getattr(node, "name", None)
-            ):
-                name = getattr(parameter, "name", None)
-                if not name or name in existing_param_names:
-                    continue
-                existing_param_names.add(name)
-                self.register_variable_type(
-                    name, self.slang_parameter_type_name(parameter), parameter
-                )
-                params.append(
-                    self.slang_stage_parameter_dependency_declaration(parameter)
-                )
+        params, local_alias_declarations = self.slang_function_parameter_declarations(
+            node, shader_type, stage_role, body_statements, effective_param_list
+        )
 
         params_str = ", ".join(params)
         identifier_aliases = self.slang_stage_system_value_aliases(
@@ -1419,45 +1204,21 @@ class SlangCodeGen(
         self.identifier_aliases = identifier_aliases
         self.current_hull_output_rewrite = hull_output_rewrite
 
-        result = ""
-        if (
-            builtin_return_rewrite is not None
-            and builtin_return_rewrite["mode"] == "struct"
-        ):
-            result += self.generate_slang_builtin_output_struct(builtin_return_rewrite)
-            result += "\n\n"
-        if shader_type and emit_stage_decorations:
-            self.validate_slang_stage_attributes(node, shader_type)
-            result += self.generate_slang_stage_numthreads(
-                node, shader_type, execution_config
-            )
-            result += self.generate_slang_stage_attributes(node, shader_type)
-            shader_stage = self.slang_shader_stage_name(shader_type)
-            result += f'[shader("{shader_stage}")]\n'
-        function_name = entry_name or node.name
-        precise_prefix = "precise " if self.slang_function_is_precise(node) else ""
-        signature = (
-            f"{precise_prefix}{ret_type} {function_name}({params_str}){semantic_str}"
+        result = self.slang_function_definition_text(
+            node,
+            shader_type,
+            execution_config,
+            entry_name,
+            emit_stage_decorations,
+            body_statements,
+            builtin_return_rewrite,
+            fragment_output_rewrite,
+            hull_output_rewrite,
+            local_alias_declarations,
+            params_str,
+            ret_type,
+            semantic_str,
         )
-        if getattr(node, "body", None) is None and not shader_type:
-            # A prototype stays a forward declaration: an empty body would define the function a second time,
-            # which slangc rejects once the definition follows.
-            result += f"{signature};"
-        else:
-            previous_precise_state = self.enter_slang_precise_function(
-                node, body_statements
-            )
-            try:
-                result += self.emit_slang_function_body(
-                    signature,
-                    body_statements,
-                    builtin_return_rewrite,
-                    hull_output_rewrite,
-                    fragment_output_rewrite,
-                    local_alias_declarations,
-                )
-            finally:
-                self.leave_slang_precise_function(previous_precise_state)
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
         self.image_resource_accesses = saved_image_resource_accesses
@@ -1820,54 +1581,11 @@ class SlangCodeGen(
         elif isinstance(node, AssignmentNode):
             return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):
-            hull_output_alias = self.slang_hull_output_array_alias(node)
-            if hull_output_alias is not None:
-                return hull_output_alias
-            block_load = self.generate_glsl_buffer_block_array_load(node)
-            if block_load is not None:
-                return block_load
-            array_expr = getattr(node, "array", getattr(node, "array_expr", None))
-            index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-            matrix_access = self.hlsl_matrix_orientation.subscript(
-                array_expr, index_expr
-            )
-            if matrix_access is not None:
-                return matrix_access
-            array = postfix_operand(self.generate_expression(array_expr))
-            index = self.format_array_access_index(index_expr)
-            return f"{array}[{index}]"
+            return self.generate_slang_array_access_expression(node)
         elif isinstance(node, ArrayLiteralNode):
-            expected_element_type = self.array_literal_element_expected_type(
-                self.current_expression_expected_type
-            )
-            elements = ", ".join(
-                (
-                    self.generate_expression_with_expected(
-                        element, expected_element_type
-                    )
-                    if expected_element_type is not None
-                    else self.generate_expression(element)
-                )
-                for element in node.elements
-            )
-            return f"{{{elements}}}"
+            return self.generate_slang_array_literal_expression(node)
         elif isinstance(node, MemberAccessNode):
-            hull_output_alias = self.slang_hull_output_member_alias(node)
-            if hull_output_alias is not None:
-                return hull_output_alias
-            block_load = self.generate_glsl_buffer_block_member_load(node)
-            if block_load is not None:
-                return block_load
-            object_type = self.expression_result_type(node.object)
-            member_info = self.slang_lowered_struct_resource_member_info(
-                object_type, node.member
-            )
-            if member_info is not None:
-                return member_info["global_name"]
-            obj = postfix_operand(
-                self.generate_expression_without_expected(node.object)
-            )
-            return f"{obj}.{node.member}"
+            return self.generate_slang_member_access_expression(node)
         elif isinstance(node, PointerAccessNode):
             pointer = postfix_operand(self.generate_expression(node.pointer_expr))
             return f"{pointer}->{node.member}"
@@ -1884,244 +1602,15 @@ class SlangCodeGen(
                 node.operation, node.query_expr, node.arguments
             )
         elif isinstance(node, FunctionCallNode):
-            func_expr = getattr(node, "function", None)
-            if func_expr is None:
-                func_expr = node.name
-            clock_name = getattr(func_expr, "name", func_expr)
-            if (
-                clock_name in SHADER_CLOCK_BUILTINS
-                and clock_name not in self.user_function_names
-            ):
-                return refuse_shader_clock_call("Slang", clock_name)
-            ray_query_call = self.slang_ray_query_call_parts(node)
-            if ray_query_call is not None:
-                operation, query_expr, args = ray_query_call
-                return self.generate_slang_ray_query_expression(
-                    operation, query_expr, args
-                )
-            ray_tracing_call = self.slang_ray_tracing_call_parts(node)
-            if ray_tracing_call is not None:
-                operation, args = ray_tracing_call
-                return self.generate_slang_ray_tracing_call_expression(operation, args)
-            bit_cast_type = as_type_target(getattr(func_expr, "name", func_expr))
-            call_arguments = getattr(node, "arguments", getattr(node, "args", [])) or []
-            if bit_cast_type is not None and len(call_arguments) == 1:
-                return (
-                    f"bit_cast<{self.convert_type(bit_cast_type)}>"
-                    f"({self.generate_expression(call_arguments[0])})"
-                )
-            if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
-                callee = func_expr.name
-            elif isinstance(func_expr, str):
-                callee = func_expr
-            else:
-                callee = self.generate_expression(func_expr)
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                node.args,
-            )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-            static_generic_call = generate_static_generic_numeric_call(self, callee)
-            if static_generic_call is not None:
-                return static_generic_call
-            specialized_callee = generic_function_call_name(self, callee, node.args)
-            if specialized_callee is not None:
-                callee = specialized_callee
-            else:
-                reject_unresolved_generic_function_call(self, callee, "Slang")
-            synchronization_call = self.generate_slang_synchronization_call(
-                callee, node.args, statement_context=False
-            )
-            if synchronization_call is not None:
-                return synchronization_call
-            if callee not in self.user_function_names:
-                glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
-                    callee, node.args
-                )
-                if glsl_block_atomic_call is not None:
-                    return glsl_block_atomic_call
-                resource_call = self.generate_resource_call(
-                    callee,
-                    node.args,
-                    statement_context=self.is_direct_statement_expression(node),
-                )
-                if resource_call is not None:
-                    return resource_call
-            if isinstance(func_expr, MemberAccessNode):
-                geometry_stream_call = self.generate_slang_geometry_stream_member_call(
-                    func_expr,
-                    node.args,
-                    statement_context=self.is_direct_statement_expression(node),
-                )
-                if geometry_stream_call is not None:
-                    return geometry_stream_call
-                block_length = slang_glsl_buffer_block_length(
-                    self, func_expr, node.args
-                )
-                if block_length is not None:
-                    return block_length
-                resource_member_call = self.generate_resource_member_call(
-                    func_expr,
-                    node.args,
-                    statement_context=self.is_direct_statement_expression(node),
-                )
-                if resource_member_call is not None:
-                    return resource_member_call
-            if callee == "mix" and callee not in self.user_function_names:
-                bool_mix = self.generate_bool_mix_call(node.args)
-                if bool_mix is not None:
-                    return bool_mix
-            if (
-                callee == "mod"
-                and len(node.args) == 2
-                and callee not in self.user_function_names
-            ):
-                left = self.generate_expression(node.args[0])
-                right = self.generate_expression(node.args[1])
-                return self.generate_slang_mod_expression(left, right)
-            if callee == "inverse" and callee not in self.user_function_names:
-                if len(node.args) != 1:
-                    fallback_type = self.current_expression_expected_type or "float"
-                    return self.refuse_lowering(
-                        "Slang inverse: requires one argument",
-                        self.zero_value_for_type(fallback_type),
-                    )
-                return self.generate_slang_matrix_inverse_call(node.args[0])
-            if (
-                callee in {"matrixCompMult", "outerProduct"}
-                and callee not in self.user_function_names
-            ):
-                return self.generate_slang_matrix_builtin_call(callee, node.args)
-            if callee == "lambda" and callee not in self.user_function_names:
-                lambda_expr = self.generate_lambda_expression(node.args)
-                if lambda_expr is not None:
-                    return lambda_expr
-                # Written as a call, ``lambda(...)`` would name a function no Slang module declares.
-                return self.refuse_lowering(
-                    "lambda: Slang lambda expressions take typed parameters "
-                    "(`(int x) => x + 1`); this lambda's parameters or body "
-                    "have no Slang spelling",
-                    "lambda()",
-                )
-            enum_constructor = generate_enum_constructor_call(self, callee, node.args)
-            if enum_constructor is not None:
-                return enum_constructor
-            if (
-                isinstance(callee, str)
-                and callee in self.user_struct_names
-                and callee not in self.user_function_names
-            ):
-                args = self.generate_struct_constructor_arguments(callee, node.args)
-                return f"{self.convert_type(callee)}({args})"
-            bitcast_callee = self.slang_bitcast_intrinsic_callee(callee)
-            if isinstance(callee, str) and callee in self.user_function_names:
-                args = self.generate_user_function_arguments(callee, node.args)
-            elif bitcast_callee is not None:
-                args = ", ".join(
-                    [
-                        self.generate_expression_without_expected(arg)
-                        for arg in node.args
-                    ]
-                )
-            else:
-                # The call's own expected type says nothing about its operands.
-                args = ", ".join(
-                    [
-                        self.generate_expression_without_expected(arg)
-                        for arg in node.args
-                    ]
-                )
-            if isinstance(callee, str) and callee not in self.user_function_names:
-                matrix_constructor = self.hlsl_matrix_orientation.constructor(
-                    callee,
-                    node.args,
-                    lambda arg: self.generate_expression_with_expected(arg, None),
-                )
-                if matrix_constructor is not None:
-                    return matrix_constructor
-            callee = self.convert_type(callee)
-            if (
-                callee == "saturate"
-                and len(node.args) == 1
-                and callee not in self.user_function_names
-            ):
-                return f"clamp({args}, 0.0, 1.0)"
-            if (
-                callee == "atan"
-                and len(node.args) == 2
-                and callee not in self.user_function_names
-            ):
-                callee = "atan2"
-            if callee not in self.user_function_names:
-                bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
-                if bit_query is not None:
-                    return bit_query
-                callee = self.slang_callee_name(callee)
-            return f"{callee}({args})"
+            return self.generate_slang_function_call_expression(node)
         elif isinstance(node, ConstructorNode):
-            enum_constructor = generate_enum_constructor_expression(self, node)
-            if enum_constructor is not None:
-                return enum_constructor
-            constructor_type = self.type_name_string(node.constructor_type)
-            if node.named_arguments:
-                fields = list(
-                    self.struct_member_types.get(constructor_type, {}).items()
-                )
-                arguments = named_struct_constructor_arguments(
-                    constructor_type, node, fields
-                )
-                args = ", ".join(
-                    self.generate_expression_with_expected(arg, field_type)
-                    for arg, field_type in arguments
-                )
-                return f"{self.convert_type(constructor_type)}({args})"
-            matrix_constructor = self.hlsl_matrix_orientation.constructor(
-                constructor_type,
-                node.arguments,
-                lambda arg: self.generate_expression_with_expected(arg, None),
-            )
-            if matrix_constructor is not None:
-                return matrix_constructor
-            callee = self.convert_type(constructor_type)
-            args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-            return f"{callee}({args})"
+            return self.generate_slang_constructor_expression(node)
         elif isinstance(node, RayTracingOpNode):
             return self.generate_slang_ray_tracing_op_expression(node)
         elif isinstance(node, UnaryOpNode):
-            if node.op == "*" and self.is_structured_buffer_resource_type(
-                self.expression_result_type(node.operand)
-            ):
-                # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
-                return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
-            operand = self.generate_expression(node.operand)
-            if isinstance(node.operand, BinaryOpNode):
-                operand = f"({operand})"
-            if getattr(node, "is_postfix", False):
-                return f"{postfix_operand(operand)}{node.op}"
-            return f"{node.op}{prefix_unary_operand(node.op, operand)}"
+            return self.generate_slang_unary_expression(node)
         elif isinstance(node, TernaryOpNode):
-            bool_vector_select = self.generate_bool_vector_select_expression(
-                node.condition, node.true_expr, node.false_expr
-            )
-            if bool_vector_select is not None:
-                self.slang_precise_lowered_condition(node.condition)
-                return bool_vector_select
-            condition = self.slang_precise_condition(
-                node.condition, self.generate_expression(node.condition)
-            )
-            if self.current_expression_expected_type is not None:
-                true_expr = self.generate_expression_with_expected(
-                    node.true_expr, self.current_expression_expected_type
-                )
-                false_expr = self.generate_expression_with_expected(
-                    node.false_expr, self.current_expression_expected_type
-                )
-            else:
-                true_expr = self.generate_expression(node.true_expr)
-                false_expr = self.generate_expression(node.false_expr)
-            return f"({condition} ? {true_expr} : {false_expr})"
+            return self.generate_slang_ternary_expression(node)
         elif isinstance(node, MatchNode):
             return self.generate_match_expression(node)
         elif isinstance(node, str):

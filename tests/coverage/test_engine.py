@@ -88,6 +88,73 @@ def test_coverage_json_stores_features_as_rows_and_each_diagnostic_once(tmp_path
     )
 
 
+def _split(tmp_path, data):
+    for name, text in report.site(data).items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return tmp_path / "coverage.json"
+
+
+def test_the_coverage_branch_keeps_each_backends_features_in_its_own_file(tmp_path):
+    data = report.build(
+        [Result(ABS, "output", "supported"), Result(ABS, "input", "wrong", "bad")],
+        ["glsl", "wgsl"],
+        ["output", "input"],
+    )
+    path = _split(tmp_path, data)
+
+    index = {
+        (b["language"], b["direction"]): b
+        for b in json.loads(path.read_text())["backends"]
+    }
+    assert index["glsl", "input"]["file"] == "features/glsl-input.json"
+    assert index["glsl", "input"]["counts"]["wrong"] == 1
+    assert not any("features" in b for b in index.values())
+    # A backend that is not offered has no feature file.
+    assert "file" not in index["wgsl", "input"]
+    stored = json.loads((tmp_path / "features/glsl-input.json").read_text())
+    assert (stored["language"], stored["direction"], stored["details"]) == (
+        "glsl",
+        "input",
+        ["bad"],
+    )
+    assert report.load(path) == data
+
+
+@pytest.mark.parametrize(
+    "name, error",
+    [
+        ("../features/glsl-output.json", "not the name of a feature file"),
+        ("/etc/passwd", "not the name of a feature file"),
+        ("features/glsl-input.json", "holds the features of glsl input"),
+    ],
+)
+def test_loading_reads_only_the_feature_file_of_the_same_backend(tmp_path, name, error):
+    data = report.build(
+        [Result(ABS, "output", "supported"), Result(ABS, "input", "supported")],
+        ["glsl"],
+        ["output", "input"],
+    )
+    path = _split(tmp_path, data)
+    index = json.loads(path.read_text())
+    next(b for b in index["backends"] if b["direction"] == "output")["file"] = name
+    path.write_text(json.dumps(index))
+    with pytest.raises(ValueError, match=error):
+        report.load(path)
+
+
+def test_loading_refuses_a_feature_file_linked_outside_the_report(tmp_path):
+    data = report.build([Result(ABS, "output", "supported")], ["glsl"], ["output"])
+    path = _split(tmp_path / "site", data)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (path.parent / "features/glsl-output.json").replace(outside / "glsl-output.json")
+    (path.parent / "features/glsl-output.json").symlink_to(outside / "glsl-output.json")
+    with pytest.raises(ValueError, match="leads outside"):
+        report.load(path)
+
+
 def test_loading_keeps_features_that_are_already_dictionaries():
     data = {
         "schema": 1,

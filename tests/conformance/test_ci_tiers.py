@@ -247,6 +247,24 @@ def test_harness_job_installs_the_fuzzing_dependency():
     assert "hypothesis==" in install
 
 
+def test_determinism_job_compares_hash_seeds_on_every_tier():
+    job = load("conformance.yml")["jobs"]["determinism"]
+    assert job["runs-on"].startswith("ubuntu-")
+    step = next(
+        step
+        for step in job["steps"]
+        if "tests.conformance.determinism" in step.get("run", "")
+    )
+    assert '--backends "$BACKENDS"' in step["run"] and '--seeds "$SEEDS"' in step["run"]
+    pull_request = (
+        "(github.event_name == 'pull_request' || github.event_name == 'merge_group')"
+    )
+    assert step["env"]["BACKENDS"] == (
+        "${{ " + pull_request + " && 'cgl,metal,directx,opengl,vulkan' || 'all' }}"
+    )
+    assert step["env"]["SEEDS"] == "${{ " + pull_request + " && '0,1' || '0,1,4242' }}"
+
+
 # The plan.
 
 

@@ -76,6 +76,7 @@ class MetalAliasParsingMixin:
         self.eat("EQUALS")
         if self.is_union_alias_start():
             return self.parse_using_union_alias(alias_name)
+        globally_qualified = self.current_token[0] == "SCOPE"
         alias_type, qualifiers = self.parse_type_specifier()
         qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         if self.current_token[0] == "LPAREN":
@@ -106,6 +107,10 @@ class MetalAliasParsingMixin:
             ),
         )
         alias.pointee_qualifiers = list(qualifier_contract["pointee"])
+        # The parser drops a leading ``::`` from type names. Alias-template expansion needs it, because a target
+        # such as ``::metal::array<T, N>`` declared in a namespace that contains its own ``metal`` namespace
+        # names the global one ([basic.lookup.qual]).
+        alias.alias_type_globally_qualified = globally_qualified
         return self.annotate_declaration_scope(alias)
 
     def is_using_declaration_start(self):
@@ -439,7 +444,6 @@ class MetalAliasParsingMixin:
         self.eat("STRUCT")
         struct_attributes = self.parse_attributes()
         alignas_specs = self.parse_alignas_specifiers()
-        self.skip_aggregate_alignment_macros()
         tag_name = None
         if self.is_current_name_token():
             tag_name = self.current_token[1]

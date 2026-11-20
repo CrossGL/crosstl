@@ -109,6 +109,12 @@ class MetalAliasTemplateMixin:
         self.alias_template_using_namespaces = list(
             getattr(ast, "using_namespace_directives", []) or []
         )
+        # The Metal standard library declares ``metal`` and its nested ``fast`` and ``precise`` namespaces.
+        self.alias_template_namespaces = {
+            "metal",
+            "metal::fast",
+            "metal::precise",
+        } | set(getattr(ast, "declared_namespaces", ()) or ())
         self.alias_template_using_declarations = list(
             getattr(ast, "using_declarations", []) or []
         )
@@ -776,7 +782,12 @@ class MetalAliasTemplateMixin:
                 scalar_bindings,
                 pack_bindings,
             )
+            if getattr(declaration, "alias_type_globally_qualified", False):
+                # Look the target up from the global namespace, then drop the ``::`` as the parser does.
+                expanded = f"::{str(expanded).lstrip(':')}"
             resolved = self.materialize_alias_template_type(expanded, required=True)
+            if str(resolved).startswith("::"):
+                resolved = str(resolved)[2:]
         finally:
             self.current_type_resolution_context = previous_context
             self.alias_template_resolution_stack.pop()
@@ -1271,6 +1282,12 @@ class MetalAliasTemplateMixin:
         dependent = self.dependent_alias_type_parts(candidate)
         if dependent is not None:
             owner, member = dependent
+            if self.normalize_qualified_type_name(owner).lstrip(":") in getattr(
+                self, "alias_template_namespaces", ()
+            ):
+                # ``ns::member`` names a member of a namespace, which is a type or a value, never a member of a
+                # dependent type ([basic.lookup.qual]/1), so it is left for ordinary name lookup.
+                return original
             resolved = resolve_member_alias_type(self, owner, member, required)
             if resolved is not None:
                 return f"{resolved}{suffix}"

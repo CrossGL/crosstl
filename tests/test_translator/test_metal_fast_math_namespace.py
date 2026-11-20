@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-import crosstl.backend.Metal.MetalCrossGLCodeGen as metal_frontend
+import crosstl.backend.Metal.crossgl_codegen.expressions as metal_frontend
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
 from crosstl.translator.codegen.lowering_refusals import LoweringRefused

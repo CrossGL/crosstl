@@ -129,7 +129,10 @@ from .simd_group_template_overloads import (
 )
 from .source_analysis_cache import SourceAnalysisCache
 from .specialized_member_types import specialized_member_type_template_names
-from .static_member_constants import materialized_struct_for_template_id
+from .static_member_constants import (
+    materialized_struct_for_template_id,
+    static_member_constant_substituter,
+)
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
@@ -2762,6 +2765,10 @@ class MetalPreprocessor(
             local_type_aliases,
             constexpr_functions,
             include_file_scope=True,
+            # `constexpr short TM = Tile::kRows;` is a constant expression too.
+            static_member_constants=static_member_constant_substituter(
+                self, concrete_structs
+            ),
         )
         resolved_calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         for function_name, template_arguments, span in calls:

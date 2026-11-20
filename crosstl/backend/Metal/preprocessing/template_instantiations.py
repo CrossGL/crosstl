@@ -109,12 +109,11 @@ class MetalTemplateInstantiationMixin:
             template.name: template for template in self._find_template_functions(code)
         }
         for match in re.finditer(
-            r"(?:^|[;\n])\s*(?:(?:template\s+)?\[\[|template\s+(?!<))",
+            r"(?:^|[;\n])\s*(?P<declaration>(?:template\s+)?\[\[|template\s+(?!<))",
             code,
         ):
-            start = match.start()
-            if code[start : start + 1] == ";":
-                start += 1
+            # The declaration starts at its first token, after the separator and blank space before it.
+            start = match.start("declaration")
             declaration_end = self._statement_end(code, start)
             if declaration_end is None:
                 continue

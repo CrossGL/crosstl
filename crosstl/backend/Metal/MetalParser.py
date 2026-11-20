@@ -28,14 +28,12 @@ from .parsing.declarators import MetalDeclaratorParsingMixin
 from .parsing.expressions import MetalExpressionParsingMixin
 from .parsing.functions import MetalFunctionParsingMixin
 from .parsing.parser_tables import (  # noqa: F401
-    AGGREGATE_ALIGNMENT_MACROS,
     CAST_TYPE_QUALIFIER_NAMES,
     CONSTRUCTOR_TYPE_TOKENS,
     GNU_EXTENSION_PREFIXES,
     IDENTIFIER_PREFIX_TYPE_QUALIFIERS,
     IDENTIFIER_TYPE_QUALIFIERS,
     KEYWORD_IDENTIFIER_TOKENS,
-    MACRO_QUALIFIER_ALIASES,
     MACRO_QUALIFIERS,
     OPERATOR_OVERLOAD_TOKENS,
     QUALIFIER_TOKENS,
@@ -240,6 +238,7 @@ class MetalParser(
         self.declaration_context_stack = []
         self.namespace_aliases = {}
         self.namespace_scope_stack = []
+        self.declared_namespaces = set()
         self.using_namespace_directives = []
         self.using_declarations = []
         self.last_struct_type_aliases = []
@@ -567,6 +566,7 @@ class MetalParser(
         shader.using_namespace_directives = list(self.using_namespace_directives)
         shader.using_declarations = list(self.using_declarations)
         shader.namespace_aliases = dict(self.namespace_aliases)
+        shader.declared_namespaces = sorted(self.declared_namespaces)
         shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
         return shader

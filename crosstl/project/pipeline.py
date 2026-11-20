@@ -73,6 +73,7 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project import preprocessed_locations
 from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -12401,6 +12402,8 @@ def _project_workgroup_rule_execution_metadata(
         provenance = fallback_provenance
     else:
         return None
+    target_split_entries: tuple[str, ...] = ()
+    host_names: list[str] = []
     contract_details: dict[str, Any] = {"path": provenance["path"]}
     if fallback_source_pattern is not None and fallback_components is not None:
         contract_details.update(
@@ -12432,8 +12435,13 @@ def _project_workgroup_rule_execution_metadata(
         ]
         # Split artifacts retain one materialization, but rule coverage belongs
         # to the source's complete project selection, including sibling jobs.
+        # When the target holds one entry per artifact (glsl_entry_split), the
+        # siblings are every discovered entry of the unit.
+        selected_entry_points = _resolved_entry_points_for_unit(config, unit)
+        if entry_scoped and not selected_entry_points:
+            target_split_entries = per_entry_split(unit, target)
         rule_entry_points = (
-            _resolved_entry_points_for_unit(config, unit) or host_names
+            selected_entry_points or target_split_entries or host_names
             if entry_scoped
             else host_names
         )
@@ -12457,6 +12465,18 @@ def _project_workgroup_rule_execution_metadata(
                 },
                 materialization_details={"hostNames": sorted(rule_entry_points)},
             )
+    if (
+        target_split_entries
+        and fallback_components is None
+        and host_names
+        and not any(
+            _configured_entry_workgroup_size_rule(config, unit.relative_path, name)
+            for name in host_names
+        )
+    ):
+        # A one-entry artifact of a target split whose entry no rule names keeps
+        # the size the source or the host gives it, as an unconfigured unit does.
+        return None
     joined = _workgroup_materialization_join(
         stages=stages,
         materialization=materialization,
@@ -14199,12 +14219,39 @@ def _is_template_hostile_target(target: str) -> bool:
 def _metal_preprocess_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
-    return memoized_preprocessor_run(
+    text = memoized_preprocessor_run(
         preprocessor,
         code,
         file_path=file_path,
         source_backend="metal",
         run=_expand_metal_without_template_materialization,
+    )
+    _record_metal_line_origins(preprocessor, code, text, file_path=file_path)
+    return text
+
+
+def _record_metal_line_origins(
+    preprocessor: Any, code: str, text: str, *, file_path: str
+) -> None:
+    """Record where each line of ``text`` comes from, so that diagnostics found
+    in it name the line the user wrote. The run reads ``code`` without its
+    leading compiler diagnostics, which moves every line of the unit itself."""
+    origins = list(getattr(preprocessor, "line_origins", None) or ())
+    if not origins:
+        return
+    source = preprocessor._strip_leading_compiler_diagnostics(code)
+    shift = code[: len(code) - len(source)].count("\n") if code.endswith(source) else 0
+
+    def shifted(origin: Any) -> Any:
+        if origin is None or not shift:
+            return origin
+        path, line, site = origin
+        if site is None:
+            return (path, line + shift, None) if path == file_path else origin
+        return (path, line, shifted(site))
+
+    preprocessed_locations.record_preprocessed_text(
+        file_path, code, text, [shifted(origin) for origin in origins]
     )
 
 
@@ -25733,6 +25780,20 @@ def _metal_template_parameter_name(parameter: str) -> str | None:
 def _source_location_at_offset(
     unit: ProjectTranslationUnit, text: str, offset: int, length: int
 ) -> SourceLocation:
+    span = preprocessed_locations.source_span(
+        str(unit.path), unit.relative_path, text, offset, length
+    )
+    if span is not None:
+        return SourceLocation(
+            file=span.file,
+            line=span.line,
+            column=span.column,
+            offset=span.offset,
+            length=span.end_offset - span.offset,
+            end_line=span.end_line,
+            end_column=span.end_column,
+            end_offset=span.end_offset,
+        )
     prefix = text[:offset]
     line = prefix.count("\n") + 1
     previous_newline = prefix.rfind("\n")
