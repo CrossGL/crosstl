@@ -42,7 +42,12 @@ def _primary_template_name(type_text: str) -> str | None:
         return None
     name = re.sub(r"\s+", "", match.group("name"))
     name = re.sub(r"^(?:::)?(?:metal::|std::)", "", name)
-    return _PRIMARY_TEMPLATES.get(name, name)
+    # The result is only compared with another primary-template name and is
+    # never emitted. An alias template maps to the template it names; any
+    # other template-id is a specialization of its own primary template.
+    if name in _PRIMARY_TEMPLATES:
+        return _PRIMARY_TEMPLATES[name]
+    return name
 
 
 def deduction_pattern_mismatch(
