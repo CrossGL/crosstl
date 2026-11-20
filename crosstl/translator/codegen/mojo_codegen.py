@@ -28,29 +28,24 @@ from ..ast import (
     WaveOpNode,
 )
 from ..refusals import MojoRefusal
+from ..unhandled import UNHANDLED
 from .array_utils import collect_literal_int_constants
 from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import type_node_contains_generic_parameter
 from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
-    generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
     iter_function_nodes,
-    numeric_trait_method_result_type,
     prepare_generic_function_specializations,
-    reject_unresolved_generic_function_call,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
-from .lowering_refusals import refuse_unsupported
-from .mojo_bit_functions import generate_mojo_bit_function_call
 from .mojo_builtin_calls import MojoBuiltinCallMixin
+from .mojo_call_expressions import MojoCallExpressionMixin
+from .mojo_expression_nodes import MojoExpressionNodeMixin
 from .mojo_expressions import MojoExpressionMixin
 from .mojo_functions import MojoFunctionMixin
 from .mojo_generic_types import MojoGenericTypeMixin
-from .mojo_integer_promotion import C_PROMOTING_BINARY_OPERATORS, promoted_operand
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
@@ -60,6 +55,7 @@ from .mojo_resource_access import MojoResourceAccessMixin
 from .mojo_resource_calls import MojoResourceCallMixin
 from .mojo_resource_helpers import MojoResourceHelperMixin
 from .mojo_resource_types import MojoResourceTypeMixin
+from .mojo_result_types import MojoResultTypeMixin
 from .mojo_return_aliases import MojoReturnAliasMixin
 from .mojo_semantics import MojoSemanticMixin
 from .mojo_stage_contracts import MojoStageContractMixin
@@ -143,7 +139,6 @@ from .mojo_values import MojoValueMixin
 from .mojo_vector_ops import MojoVectorOpMixin
 from .precise_evaluation import refuse_precise_evaluation
 from .sampler_pairs import canonicalize_separate_textures
-from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .written_function_names import (
     MOJO_CALLABLE_FUNCTION_NAMES,
     MOJO_NON_CALLS,
@@ -245,6 +240,9 @@ class MojoCodeGen(
     MojoMathHelperMixin,
     MojoTypeMixin,
     MojoValueMixin,
+    MojoCallExpressionMixin,
+    MojoExpressionNodeMixin,
+    MojoResultTypeMixin,
 ):
     """Emit Mojo-like shader source from the shared CrossGL AST."""
 
@@ -855,74 +853,15 @@ class MojoCodeGen(
         if is_comma_expression(expr):
             return refuse_comma_expression("Mojo", expr)
         if isinstance(expr, str):
-            if expr in self.expression_identifier_replacements:
-                return self.expression_identifier_replacements[expr]
-            ray_builtin = self.mojo_ray_builtin_expression(expr)
-            if ray_builtin is not None and expr not in self.variable_types:
-                return ray_builtin
-            gpu_builtin = self.mojo_gpu_builtin_expression(expr)
-            if gpu_builtin is not None:
-                return gpu_builtin
-            builtin = self.mojo_builtin_placeholder_expression(expr)
-            if builtin is not None:
-                return builtin
-            mapped_reference = self.map_enum_variant_reference(expr, target_type)
-            if mapped_reference != expr:
-                return mapped_reference
-            return self.mojo_identifier(expr)
+            return self.generate_mojo_string_expression(expr, target_type)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
-            if hasattr(expr, "vtype") and expr.vtype and expr.name:
-                if expr.name in self.expression_identifier_replacements:
-                    return self.expression_identifier_replacements[expr.name]
-                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
-                if ray_builtin is not None and expr.name not in self.variable_types:
-                    return ray_builtin
-                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
-                if gpu_builtin is not None:
-                    return gpu_builtin
-                builtin = self.mojo_builtin_placeholder_expression(expr.name)
-                if builtin is not None:
-                    return builtin
-                return self.mojo_identifier(expr.name)
-            elif hasattr(expr, "name"):
-                if expr.name in self.expression_identifier_replacements:
-                    return self.expression_identifier_replacements[expr.name]
-                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
-                if ray_builtin is not None and expr.name not in self.variable_types:
-                    return ray_builtin
-                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
-                if gpu_builtin is not None:
-                    return gpu_builtin
-                builtin = self.mojo_builtin_placeholder_expression(expr.name)
-                if builtin is not None:
-                    return builtin
-                return self.mojo_identifier(expr.name)
-            else:
-                return str(expr)
+            return self.generate_mojo_variable_expression(expr)
         elif isinstance(expr, BinaryOpNode):
-            comparison = self.generate_vector_comparison(expr)
-            if comparison is not None:
-                return comparison
-            boolean_vector_logical = self.generate_boolean_vector_logical_op(expr)
-            if boolean_vector_logical is not None:
-                return boolean_vector_logical
-            vector_binary = self.generate_vector_binary_op(expr)
-            if vector_binary is not None:
-                return vector_binary
-            numeric_vector_binary = self.generate_numeric_vector_binary_op(
+            return self.generate_mojo_binary_expression(
                 expr, target_type, target_context
             )
-            if numeric_vector_binary is not None:
-                return numeric_vector_binary
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
-            op = self.map_operator(expr.op)
-            if op in C_PROMOTING_BINARY_OPERATORS:
-                left = promoted_operand(self, expr.left, left)
-                right = promoted_operand(self, expr.right, right)
-            return f"({left} {op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
@@ -978,279 +917,15 @@ class MojoCodeGen(
             return self.generate_mesh_op(expr)
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
-            func_expr = getattr(expr, "function", None)
-            if func_expr is None:
-                func_expr = expr.name
-            func_name = None
-            if isinstance(func_expr, MemberAccessNode):
-                member_call = self.generate_member_function_call(func_expr, expr.args)
-                if member_call is not None:
-                    return member_call
-                callee = self.generate_expression(func_expr)
-            elif hasattr(func_expr, "name") and getattr(func_expr, "name", None):
-                # It's an IdentifierNode, extract the name
-                func_name = func_expr.name
-                callee = func_name
-            elif isinstance(func_expr, str):
-                func_name = func_expr
-                callee = func_expr
-            else:
-                callee = self.generate_expression(func_expr)
-
-            if (
-                func_name in SHADER_CLOCK_BUILTINS
-                and not self.is_user_defined_function(func_name)
-            ):
-                return refuse_shader_clock_call("Mojo", func_name)
-
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                expr.args,
+            return self.generate_mojo_function_call_expression(
+                expr, target_type, target_context
             )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-
-            static_generic_call = generate_static_generic_numeric_call(self, func_name)
-            if static_generic_call is not None:
-                return static_generic_call
-
-            if func_name == "lambda":
-                lambda_expr = self.generate_lambda_expression(expr.args)
-                if lambda_expr is not None:
-                    return lambda_expr
-                # A lambda whose parameters or body the helper materialization cannot type has no Mojo spelling:
-                # the CrossGL text of it is not a Mojo expression.
-                refuse_unsupported(
-                    "Mojo",
-                    "lambda",
-                    "lambda whose parameter list or body cannot be materialized as a typed Mojo helper function",
-                    "lambda",
-                )
-
-            enum_constructor = self.generate_enum_variant_constructor_call(
-                func_name, expr.args, target_type
-            )
-            if enum_constructor is not None:
-                return enum_constructor
-
-            specialized_func_name = generic_function_call_name(
-                self,
-                func_name,
-                expr.args,
-            )
-            if specialized_func_name is not None:
-                func_name = specialized_func_name
-                callee = specialized_func_name
-            else:
-                reject_unresolved_generic_function_call(self, func_name, "Mojo")
-
-            if self.is_user_defined_function(func_name):
-                args = self.generate_user_function_call_arguments(func_name, expr.args)
-                call_name = (
-                    self.mojo_identifier(func_name) if func_name is not None else callee
-                )
-                return f"{call_name}({args})"
-
-            reduction = self.generate_boolean_vector_reduction(func_name, expr.args)
-            if reduction is not None:
-                return reduction
-
-            ray_tracing_call = self.generate_ray_tracing_call_expression(
-                func_name, expr.args
-            )
-            if ray_tracing_call is not None:
-                return ray_tracing_call
-
-            if func_name in {"fract", "frac"}:
-                return self.generate_fract_call(expr.args)
-            if (
-                func_name == "roundEven"
-                and len(expr.args) == 1
-                and not self.is_user_defined_function(func_name)
-            ):
-                return self.generate_round_even_call(expr.args[0])
-            if func_name == "mod":
-                return self.generate_mod_call(expr.args)
-            if func_name == "saturate":
-                saturate_call = self.generate_saturate_call(expr.args)
-                if saturate_call is not None:
-                    return saturate_call
-            if func_name in {"degrees", "radians"}:
-                return self.generate_angle_conversion_call(func_name, expr.args)
-            if func_name == "mix":
-                bool_mix_call = self.generate_bool_mix_call(expr.args)
-                if bool_mix_call is not None:
-                    return bool_mix_call
-            if func_name == "clamp":
-                clamp_call = self.generate_clamp_call(expr.args)
-                if clamp_call is not None:
-                    return clamp_call
-            if func_name in {"min", "max"}:
-                min_max_call = self.generate_min_max_call(
-                    func_name, expr.args, target_type
-                )
-                if min_max_call is not None:
-                    return min_max_call
-            if func_name == "smoothstep":
-                smoothstep_call = self.generate_smoothstep_call(expr.args, target_type)
-                if smoothstep_call is not None:
-                    return smoothstep_call
-            if func_name == "atan" and len(expr.args) == 2:
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"atan2({args})"
-            if func_name == "texture":
-                return self.generate_texture_call(expr.args, "sample")
-            if func_name == "textureLod":
-                return self.generate_texture_call(expr.args, "sample_lod")
-            if func_name == "textureGrad":
-                return self.generate_texture_call(expr.args, "sample_grad")
-            if func_name == "textureSize":
-                return self.generate_resource_size_call(expr.args, "texture_size")
-            if func_name == "textureQueryLevels":
-                return self.generate_resource_query_levels_call(expr.args)
-            if func_name == "textureSamples":
-                return self.generate_resource_sample_count_call(
-                    expr.args, "texture_samples"
-                )
-            if func_name == "imageSamples":
-                return self.generate_resource_sample_count_call(
-                    expr.args, "image_samples"
-                )
-            if func_name == "texelFetch":
-                return self.generate_texel_fetch_call(expr.args)
-            if func_name == "texelFetchOffset":
-                return self.generate_texel_fetch_call(expr.args, with_offset=True)
-            if func_name == "imageSize":
-                return self.generate_resource_size_call(expr.args, "image_size")
-            if func_name == "imageLoad":
-                return self.generate_image_load_call(expr.args)
-            if func_name == "imageStore":
-                return self.generate_image_store_call(expr.args)
-            if func_name == "buffer_load":
-                return self.generate_buffer_load_call(expr.args)
-            if func_name == "buffer_store":
-                return self.generate_buffer_store_call(expr.args)
-            if func_name == "buffer_append":
-                return self.generate_buffer_append_call(expr.args)
-            if func_name == "buffer_consume":
-                return self.generate_buffer_consume_call(expr.args)
-            if func_name == "buffer_dimensions":
-                return self.generate_buffer_dimensions_call(expr.args)
-            if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
-                raise MojoRefusal(
-                    f"Unsupported Mojo buffer counter call {func_name}; "
-                    "structured-buffer counters are not available in the Mojo "
-                    "placeholder backend"
-                )
-            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
-            if reinterpret_name is not None:
-                return self.generate_reinterpret_call(reinterpret_name, expr.args)
-            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
-                helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
-                return self.generate_resource_builtin_call(
-                    expr.args, helper_base, return_kind
-                )
-            scalar_atomic = self.generate_scalar_atomic_call(func_name, expr.args)
-            if scalar_atomic is not None:
-                return scalar_atomic
-            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS:
-                return self.generate_image_atomic_call(
-                    expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
-                )
-            if (
-                func_name in MOJO_SYNC_BUILTINS
-                and not expr.args
-                and not self.is_user_defined_function(func_name)
-            ):
-                helper_name = MOJO_SYNC_BUILTINS[func_name]
-                self.required_sync_helpers.add(helper_name)
-                return f"{helper_name}()"
-            if func_name == "__shfl_down_sync":
-                return self.generate_cuda_shuffle_down_call(expr.args)
-            bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
-            if bit_function is not None:
-                return bit_function
-
-            if func_name in self.function_map:
-                func_name = self.function_map[func_name]
-            # Otherwise a program function or a Mojo library function, spelled as it is; a built-in function of
-            # another language left in the output is refused by generate.
-            if func_name in MOJO_MATH_HELPERS:
-                self.required_math_helpers.add(func_name)
-            if func_name in self.scalar_constructor_map:
-                scalar_constructor_name = func_name
-                mapped_constructor_name = self.scalar_constructor_map[func_name]
-                target_dtype = MOJO_SCALAR_DTYPES.get(
-                    self.type_name(scalar_constructor_name)
-                )
-                if target_dtype is not None and len(expr.args) == 1:
-                    arg = self.generate_scalar_constructor_argument(
-                        expr.args[0],
-                        target_dtype,
-                        f"scalar constructor {scalar_constructor_name} argument 1",
-                    )
-                    return f"{mapped_constructor_name}({arg})"
-                func_name = mapped_constructor_name
-
-            vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
-            if vector_constructor_name in self.vector_constructor_info:
-                return self.generate_vector_constructor(
-                    vector_constructor_name, expr.args
-                )
-
-            if func_name in MOJO_MATRIX_TYPES:
-                return self.generate_matrix_constructor(func_name, expr.args)
-
-            if self.generic_struct_mapped_type(func_name) is not None:
-                return self.generate_struct_function_constructor_call(
-                    expr, func_name, target_context, target_type
-                )
-
-            if func_name in self.struct_types:
-                return self.generate_struct_function_constructor_call(
-                    expr, func_name, target_context, target_type
-                )
-
-            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            call_name = (
-                self.mojo_identifier(func_name) if func_name is not None else callee
-            )
-            return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
-            builtin_member = self.generate_builtin_member_access(expr)
-            if builtin_member is not None:
-                return builtin_member
-            obj = self.generate_expression(expr.object)
-            enum_variant = self.map_enum_variant_reference(f"{obj}.{expr.member}")
-            if enum_variant != f"{obj}.{expr.member}":
-                return enum_variant
-            obj_type = self.expression_result_type(expr.object)
-            obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
-            if obj_struct_type is not None and expr.member in obj_fields:
-                return f"{obj}.{self.mojo_identifier(expr.member)}"
-            swizzle_indices = self.get_swizzle_indices(expr.member)
-            if swizzle_indices is not None:
-                return self.generate_swizzle(
-                    expr.object, obj, obj_type, expr.member, swizzle_indices
-                )
-            return f"{obj}.{self.mojo_identifier(expr.member)}"
+            return self.generate_mojo_member_access_expression(expr)
         elif isinstance(expr, TernaryOpNode):
-            bool_vector_select = self.generate_bool_vector_select_expression(
-                expr.condition, expr.true_expr, expr.false_expr
+            return self.generate_mojo_ternary_expression(
+                expr, target_type, target_context
             )
-            if bool_vector_select is not None:
-                return bool_vector_select
-            branch_context = target_context or "ternary expression"
-            condition = self.generate_expression(expr.condition)
-            self.validate_condition_scalar(expr.condition, "ternary condition")
-            true_expr = self.generate_expression(
-                expr.true_expr, target_type, f"{branch_context} true branch"
-            )
-            false_expr = self.generate_expression(
-                expr.false_expr, target_type, f"{branch_context} false branch"
-            )
-            return f"({true_expr} if {condition} else {false_expr})"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 literal_type = getattr(
@@ -1259,22 +934,7 @@ class MojoCodeGen(
                 return self.format_literal(expr.value, literal_type)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            name = getattr(expr, "name", str(expr))
-            if name in self.expression_identifier_replacements:
-                return self.expression_identifier_replacements[name]
-            ray_builtin = self.mojo_ray_builtin_expression(name)
-            if ray_builtin is not None and name not in self.variable_types:
-                return ray_builtin
-            gpu_builtin = self.mojo_gpu_builtin_expression(name)
-            if gpu_builtin is not None:
-                return gpu_builtin
-            builtin = self.mojo_builtin_placeholder_expression(name)
-            if builtin is not None:
-                return builtin
-            mapped_reference = self.map_enum_variant_reference(name, target_type)
-            if mapped_reference != name:
-                return mapped_reference
-            return self.mojo_identifier(name)
+            return self.generate_mojo_identifier_like_expression(expr, target_type)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -1629,233 +1289,12 @@ class MojoCodeGen(
         self.variable_types = value
 
     def expression_result_type(self, expr):
-        if isinstance(expr, str):
-            if expr in MOJO_BUILTIN_PLACEHOLDERS and expr not in self.variable_types:
-                return MOJO_BUILTIN_PLACEHOLDERS[expr][1]
-            return self.identifier_replacement_result_type(
-                expr
-            ) or self.variable_types.get(expr)
-        if isinstance(expr, VariableNode) and hasattr(expr, "name"):
-            if (
-                expr.name in MOJO_BUILTIN_PLACEHOLDERS
-                and expr.name not in self.variable_types
-            ):
-                return MOJO_BUILTIN_PLACEHOLDERS[expr.name][1]
-            return self.identifier_replacement_result_type(
-                expr.name
-            ) or self.variable_types.get(expr.name)
-        if isinstance(expr, ArrayLiteralNode):
-            element_type = self.infer_array_literal_element_type(expr)
-            return self.array_type_name(element_type, len(expr.elements))
-        if isinstance(expr, MatchNode):
-            arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(
-                arms, self.expression_result_type(getattr(expr, "expression", None))
-            )
-            for arm in arms:
-                arm_expr, _ = self.match_arm_value_expression(arm)
-                arm_type = self.expression_result_type(arm_expr)
-                if arm_type is not None:
-                    return arm_type
-            return None
-        if isinstance(expr, ArrayAccessNode):
-            array_type = self.expression_result_type(expr.array)
-            patch_info = self.tessellation_patch_type_info(array_type)
-            if patch_info is not None:
-                _patch_name, element_type, _point_count = patch_info
-                return element_type
-            array_element_type = self.array_element_type(array_type)
-            if array_element_type is not None:
-                return array_element_type
-            pointer_element_type = self.pointer_element_type(array_type)
-            if pointer_element_type is not None:
-                return pointer_element_type
-            matrix_info = self.matrix_type_info(array_type)
-            if matrix_info is not None:
-                dtype, _, rows = matrix_info
-                return self.vector_type_name_for_dtype_width(dtype, rows)
-            vector_info = self.vector_type_info(array_type)
-            if vector_info is not None:
-                return MOJO_DTYPE_INFO[vector_info[0]][0]
-            return None
-        if isinstance(expr, UnaryOpNode):
-            op = self.map_operator(expr.op)
-            operand_type = self.expression_result_type(expr.operand)
-            if op == "not":
-                info = self.vector_type_info(operand_type)
-                if info is not None and info[0] == "DType.bool":
-                    return operand_type
-                return "bool"
-            if op in {"+", "-", "~"}:
-                return operand_type
-            return None
-        if isinstance(expr, BinaryOpNode):
-            left_type = self.expression_result_type(expr.left)
-            right_type = self.expression_result_type(expr.right)
-            return self.binary_expression_result_type(expr.op, left_type, right_type)
-        if isinstance(expr, TernaryOpNode):
-            true_type = self.expression_result_type(expr.true_expr)
-            false_type = self.expression_result_type(expr.false_expr)
-            if true_type == false_type:
-                return true_type
-            if true_type is None:
-                return false_type
-            if false_type is None:
-                return true_type
-            return None
-        if isinstance(expr, FunctionCallNode):
-            member_result_type = self.member_function_result_type(expr)
-            if member_result_type is not None:
-                return member_result_type
-
-            func_name = self.function_call_name(expr)
-            if func_name in {"any", "all"} and not self.is_user_defined_function(
-                func_name
-            ):
-                return "bool"
-            numeric_result_type = numeric_trait_method_result_type(self, expr)
-            if numeric_result_type is not None:
-                return numeric_result_type
-            specialized_func_name = generic_function_call_name(
-                self,
-                func_name,
-                expr.args,
-            )
-            if specialized_func_name in self.function_return_types:
-                return self.selected_function_return_type(
-                    specialized_func_name,
-                    expr.args,
-                )
-            if func_name in self.enum_variant_result_types:
-                return self.enum_variant_result_types[func_name]
-            if func_name in self.struct_types:
-                return func_name
-            if func_name in self.vector_constructor_info:
-                return func_name
-            vector_func_name = self.normalize_generic_vector_type_name(func_name)
-            if vector_func_name in self.vector_constructor_info:
-                return vector_func_name
-            if func_name in MOJO_MATRIX_TYPES:
-                return func_name
-            if func_name in self.function_return_types:
-                return self.selected_function_return_type(func_name, expr.args)
-            if func_name in self.scalar_constructor_map:
-                return func_name
-            if func_name in {"fract", "frac"} and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "roundEven" and len(expr.args) == 1:
-                return self.round_even_result_type(expr.args[0])
-            if func_name in {"inverse", "transpose"} and expr.args:
-                return self.expression_result_type(expr.args[0])
-            if func_name in {"length", "dot"}:
-                return "float"
-            if func_name == "normalize" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"inversesqrt", "inverseSqrt", "rsqrt"} and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"mix", "lerp"} and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"degrees", "radians"} and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"atan", "atan2"} and expr.args:
-                for arg in expr.args:
-                    arg_type = self.expression_result_type(arg)
-                    if self.vector_type_info(arg_type) is not None:
-                        return arg_type
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "pow" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "mod" and expr.args:
-                for arg in expr.args:
-                    arg_type = self.expression_result_type(arg)
-                    if self.vector_type_info(arg_type) is not None:
-                        return arg_type
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"min", "max", "clamp"} and expr.args:
-                for arg in expr.args:
-                    arg_type = self.expression_result_type(arg)
-                    if self.vector_type_info(arg_type) is not None:
-                        return arg_type
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "saturate" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"texture", "textureLod", "textureGrad"}:
-                args = self.strip_split_sampler_arg(expr.args)
-                if args:
-                    resource_type = self.map_type(self.expression_result_type(args[0]))
-                    return self.texture_result_type_name(resource_type)
-                return "vec4"
-            if func_name in {"texelFetch", "texelFetchOffset"}:
-                if expr.args:
-                    resource_type = self.map_type(
-                        self.expression_result_type(expr.args[0])
-                    )
-                    return self.texture_result_type_name(resource_type)
-                return "vec4"
-            if func_name == "textureQueryLevels":
-                return "int"
-            if func_name in {"imageSamples", "textureSamples"}:
-                return "int"
-            if func_name in {"textureSize", "imageSize"} and expr.args:
-                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
-                size_type = self.resource_size_return_type(resource_type)
-                if size_type == "Int32":
-                    return "int"
-                if size_type == "SIMD[DType.int32, 2]":
-                    return "ivec2"
-                if size_type == "SIMD[DType.int32, 4]":
-                    return "ivec3"
-            if func_name == "imageLoad" and expr.args:
-                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
-                return self.image_result_type_name(resource_type)
-            if func_name == "imageStore":
-                return "void"
-            if func_name == "buffer_load" and expr.args:
-                info = self.buffer_resource_info(
-                    self.expression_result_type(expr.args[0])
-                )
-                if info is not None:
-                    return self.buffer_helper_element_type(*info)
-            if func_name == "buffer_consume" and expr.args:
-                info = self.buffer_resource_info(
-                    self.expression_result_type(expr.args[0])
-                )
-                if info is not None:
-                    return info[1]
-            if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
-                return "void"
-            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
-            if reinterpret_name is not None:
-                source_type = (
-                    self.expression_result_type(expr.args[0]) if expr.args else None
-                )
-                return self.reinterpret_return_type_name(reinterpret_name, source_type)
-            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
-                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
-                if return_kind == "float":
-                    return "float"
-                if return_kind == "vec2":
-                    return "vec2"
-                if expr.args:
-                    resource_type = self.map_type(
-                        self.expression_result_type(expr.args[0])
-                    )
-                    if self.is_texture_resource_type(resource_type):
-                        return self.texture_result_type_name(resource_type)
-                return "vec4"
-            if func_name in MOJO_SCALAR_ATOMIC_OPS and expr.args:
-                target_type = self.type_name(self.expression_result_type(expr.args[0]))
-                if target_type in MOJO_SCALAR_ATOMIC_TYPES:
-                    return target_type
-            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS and expr.args:
-                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
-                value_type = self.image_value_type(resource_type)
-                if value_type == "UInt32":
-                    return "uint"
-                return "int"
-            if func_name == "__shfl_down_sync" and len(expr.args) >= 2:
-                return self.expression_result_type(expr.args[1])
-            return self.function_return_types.get(func_name)
+        handled = self.mojo_value_expression_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
+        handled = self.mojo_function_call_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         if isinstance(expr, ConstructorNode):
             return self.convert_type_node_to_string(expr.constructor_type)
         if isinstance(expr, CastNode):
@@ -1882,70 +1321,9 @@ class MojoCodeGen(
                 self.expression_result_type(expr.texture_expr)
             )
             return self.texture_result_type_name(resource_type)
-        if isinstance(expr, TextureOpNode):
-            operation = getattr(expr, "operation", "")
-            if operation in {
-                "SampleCmp",
-                "SampleCmpLevel",
-                "SampleCmpLevelZero",
-                "SampleCmpGrad",
-                "textureCompare",
-                "textureCompareOffset",
-                "textureCompareLod",
-                "textureCompareLodOffset",
-                "textureCompareGrad",
-                "textureCompareGradOffset",
-                "textureCompareProj",
-                "textureCompareProjOffset",
-                "textureCompareProjLod",
-                "textureCompareProjLodOffset",
-                "textureCompareProjGrad",
-                "textureCompareProjGradOffset",
-            }:
-                return "float"
-            if operation == "textureQueryLod":
-                return "vec2"
-            if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
-                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
-                if return_kind == "float":
-                    return "float"
-                if return_kind == "vec2":
-                    return "vec2"
-                resource_type = self.map_type(
-                    self.expression_result_type(expr.texture_expr)
-                )
-                if self.is_texture_resource_type(resource_type):
-                    return self.texture_result_type_name(resource_type)
-                return "vec4"
-            if operation == "textureQueryLevels":
-                return "int"
-            if operation in {"imageSamples", "textureSamples"}:
-                return "int"
-            if operation in {"GetDimensions", "textureSize"}:
-                resource_type = self.map_type(
-                    self.expression_result_type(expr.texture_expr)
-                )
-                size_type = self.resource_size_return_type(resource_type)
-                if size_type == "Int32":
-                    return "int"
-                if size_type == "SIMD[DType.int32, 2]":
-                    return "ivec2"
-                if size_type == "SIMD[DType.int32, 4]":
-                    return "ivec3"
-            if operation in MOJO_ATOMIC_OP_ALIASES:
-                resource_type = self.map_type(
-                    self.expression_result_type(expr.texture_expr)
-                )
-                value_type = self.image_value_type(resource_type)
-                if value_type == "UInt32":
-                    return "uint"
-                return "int"
-            resource_type = self.map_type(
-                self.expression_result_type(expr.texture_expr)
-            )
-            if self.is_texture_resource_type(resource_type):
-                return self.texture_result_type_name(resource_type)
-            return "vec4"
+        handled = self.mojo_texture_operation_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         if isinstance(expr, AtomicOpNode):
             target_type = self.type_name(self.expression_result_type(expr.target))
             if target_type in MOJO_SCALAR_ATOMIC_TYPES:
