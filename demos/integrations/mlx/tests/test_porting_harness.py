@@ -2350,11 +2350,12 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "target-split-with-bounded-dispatch-and-pending-contracts"
     )
     assert frontier["scope"] == "target-split-frontier"
-    assert frontier["translated_artifacts"] == 32
-    assert frontier["failed_artifacts"] == 3
+    assert frontier["translated_artifacts"] == 34
+    assert frontier["failed_artifacts"] == 1
+    # DirectX translates every source; Vulkan refuses only LayerNorm (#2283).
     assert frontier["target_artifacts"] == {
-        "directx": {"translated": 21, "failed": 3},
-        "vulkan": {"translated": 11, "failed": 0},
+        "directx": {"translated": 24, "failed": 0},
+        "vulkan": {"translated": 10, "failed": 1},
     }
     assert frontier["semantic_readiness_status"] == "not-established"
     assert frontier["workgroup_blocked_diagnostic"] == (
@@ -2363,9 +2364,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert frontier["host_dispatch_import_resolved_by"] == (
         module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
-    assert frontier["pending_host_dispatch_sources"] == list(
-        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    )
+    assert frontier["pending_host_dispatch_sources"] == []
+    assert module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES == ()
     assert frontier["excluded_blocked_sources"] == [module.MLX_FENCE_SOURCE]
     assert frontier["runtime_integration_included"] is False
     assert frontier["runtime_parity_claimed"] is False
@@ -2394,15 +2394,16 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert fence["runtime_parity_claimed"] is False
 
     arg_reduce = expected_gaps["arg_reduce_status"]
-    assert arg_reduce["status"] == "target-dependent"
+    assert arg_reduce["status"] == "translated"
     assert arg_reduce["source"] == module.MLX_ARG_REDUCE_SOURCE
     assert arg_reduce["artifact_records"] == len(module.MLX_REFERENCE_TARGETS)
-    assert arg_reduce["translated_artifacts"] == 1
-    assert arg_reduce["failed_artifacts"] == 2
-    assert arg_reduce["translated_targets"] == ["vulkan"]
-    assert arg_reduce["workgroup_blocked_targets"] == ["directx", "opengl"]
-    assert arg_reduce["workgroup_blocked_diagnostic"] == (
-        module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
+    assert arg_reduce["translated_artifacts"] == 3
+    assert arg_reduce["failed_artifacts"] == 0
+    assert arg_reduce["translated_targets"] == ["directx", "opengl", "vulkan"]
+    assert arg_reduce["workgroup_blocked_targets"] == []
+    assert arg_reduce["opengl_artifact_granularity"] == "entry-point"
+    assert arg_reduce["opengl_entry_point_artifacts"] == (
+        module.MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS[module.MLX_ARG_REDUCE_SOURCE]
     )
     assert arg_reduce["host_dispatch_import_resolved_by"] == (
         module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
@@ -2422,9 +2423,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
 
     opengl_frontier = expected_gaps["opengl_frontier_status"]
-    assert opengl_frontier["status"] == (
-        "toolchain-validated-with-expected-workgroup-blockers"
-    )
+    assert opengl_frontier["status"] == "toolchain-validated"
     assert opengl_frontier["sources"] == list(module.MLX_OPENGL_FRONTIER_SOURCES)
     assert opengl_frontier["source_count"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
     assert opengl_frontier["artifact_granularity"] == "entry-point"
@@ -2438,23 +2437,24 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["translated_artifact_count"] == (
         module.MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
     )
-    assert opengl_frontier["workgroup_blocked_sources"] == list(
+    assert opengl_frontier["workgroup_frontier_sources"] == list(
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
+    assert opengl_frontier["workgroup_blocked_sources"] == list(
+        module.MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES
+    )
+    assert module.MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES == ()
     assert opengl_frontier["workgroup_frontier_artifact_count"] == (
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
     )
     assert opengl_frontier["workgroup_frontier_translated_artifact_count"] == (
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
     )
-    assert opengl_frontier["workgroup_blocked_artifact_count"] == 39
-    assert opengl_frontier["workgroup_blocked_diagnostic"] == (
-        module.entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE
-    )
+    assert opengl_frontier["workgroup_blocked_artifact_count"] == 0
     assert opengl_frontier["clean_project_diagnostic_count"] == 0
     assert len(module.MLX_OPENGL_FRONTIER_SOURCES) == 8
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 510
-    assert opengl_frontier["spirv_validated_artifact_count"] == 510
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 549
+    assert opengl_frontier["spirv_validated_artifact_count"] == 549
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
@@ -4239,7 +4239,7 @@ def test_static_constant_materialization_issue_is_active():
     assert issue in module.FULL_CORPUS_TRACKED_ISSUES
 
 
-def test_arg_reduce_remains_in_frontiers_but_fail_closes_native_targets():
+def test_arg_reduce_translates_on_directx_and_vulkan_and_fail_closes_on_opengl():
     module = _load_harness()
 
     assert module.MLX_ARG_REDUCE_SOURCE in (module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
@@ -4247,9 +4247,10 @@ def test_arg_reduce_remains_in_frontiers_but_fail_closes_native_targets():
     assert module.MLX_ARG_REDUCE_SOURCE in (
         module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
-    assert module.MLX_ARG_REDUCE_SOURCE not in (
+    assert module.MLX_ARG_REDUCE_SOURCE in (
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     )
+    assert module.MLX_ARG_REDUCE_SOURCE in module.MLX_VULKAN_FRONTIER_SOURCES
     assert module.MLX_ARG_REDUCE_SOURCE in (
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
@@ -4349,9 +4350,9 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     # One artifact per kernel: 455 clean-frontier kernels and 94 dynamic-workgroup ones.
     assert status["artifact_count"] == 455 + 94
     assert status["translated_sources"] == list(expected_sources)
-    # Every translated kernel is validated: 455 clean ones and 55 of the dynamic ones.
-    assert status["glslang_compiled_artifact_count"] == 455 + 55
-    assert status["spirv_validated_artifact_count"] == 455 + 55
+    # Every kernel translates and is validated: 455 clean ones and all 94 dynamic ones.
+    assert status["glslang_compiled_artifact_count"] == 455 + 94
+    assert status["spirv_validated_artifact_count"] == 455 + 94
     assert status["runtime_integration_included"] is False
     assert status["runtime_parity_claimed"] is False
 
@@ -4453,7 +4454,8 @@ def test_scaled_dot_product_attention_aggregate_stays_fail_closed_with_bounded_p
     assert source in module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     assert source in module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     assert source not in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
-    assert source not in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    assert source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    assert source in module.MLX_VULKAN_FRONTIER_SOURCES
     assert module.OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES == (
         function_constant_issue,
     )
@@ -4468,9 +4470,8 @@ def test_scaled_dot_product_attention_aggregate_stays_fail_closed_with_bounded_p
         evidence["remaining_scope"]["aggregate_directx_opengl_translation_unblocked"]
         is False
     )
-    assert (
-        "separate bounded dispatch manifest"
-        in expected_gaps["directx_toolchain_status"]["directx_toolchain_gaps"][source]
+    assert source not in (
+        expected_gaps["directx_toolchain_status"]["directx_toolchain_gaps"]
     )
 
 
@@ -9018,20 +9019,6 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
             return module.CommandResult(
                 name, list(command), 1, log_dir / "r.out", log_dir / "r.err"
             )
-        if name == "vulkan-workgroup-frontier":
-            assert check is False
-            _write_dynamic_workgroup_report(
-                module,
-                report_dir / f"{name}.json",
-                mlx_root,
-                work_dir / "out-vulkan-workgroup-frontier",
-                target="vulkan",
-                sources=module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-                validated=True,
-            )
-            return module.CommandResult(
-                name, list(command), 1, log_dir / "w.out", log_dir / "w.err"
-            )
         output_dir = (
             work_dir / "out-vulkan-frontier"
             if name == "vulkan-frontier"
@@ -9086,29 +9073,26 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert result["scope"] == "target-split-frontier"
     assert result["vulkanValidationStatus"] == "validated"
     assert result["semanticReadinessStatus"] == "not-established"
-    # Attention is a dynamic-workgroup source, so no Vulkan artifact carries the
-    # local-alias regression until per-entry sizes reach Vulkan.
-    assert (
-        alias_evidence["source"] in module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    )
-    assert result["regressionEvidence"] == []
+    # Attention's host-sized entries translate, so its Vulkan artifact carries the
+    # local-alias regression evidence.
+    assert alias_evidence["source"] in module.MLX_VULKAN_FRONTIER_SOURCES
+    assert result["regressionEvidence"] == [alias_evidence]
     assert result["runtimeParityClaimed"] is False
     assert result["sources"] == list(module.MLX_VULKAN_FRONTIER_SOURCES)
     assert result["trackedRefusals"] == [
-        {"source": source, "code": code, "issue": issue}
-        for source, (code, issue) in module.MLX_VULKAN_FRONTIER_REFUSALS.items()
+        {
+            "source": module.MLX_LAYER_NORM_SOURCE,
+            "code": "project.translate.vulkan-lowering-unsupported",
+            "issue": "https://github.com/CrossGL/crosstl/issues/2283",
+        }
     ]
-    assert result["workgroupBlockedSources"] == list(
-        module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    )
-    # arg_reduce, layer_norm, logsumexp, rms_norm, attention and softmax entries.
-    assert result["workgroupBlockedEntryPointCount"] == 24 + 12 + 6 + 12 + 42 + 10
-    # The refusal project runs only when some source is refused.
-    assert (
-        "vulkan-frontier-refusals" in [name for name, _command in commands]
-    ) is bool(module.MLX_VULKAN_FRONTIER_REFUSALS)
-    assert commands[-1][0] == "vulkan-workgroup-frontier"
-    assert "--validate" in commands[-1][1]
+    assert result["workgroupBlockedSources"] == []
+    assert result["workgroupBlockedReport"] is None
+    assert result["workgroupBlockedEntryPointCount"] == 0
+    names = [name for name, _command in commands]
+    assert "vulkan-frontier-refusals" in names
+    assert "vulkan-workgroup-frontier" not in names
+    assert commands[-1][0] == "vulkan-frontier-refusals"
     assert commands[0][0] == "vulkan-frontier"
     assert "--validate" in commands[0][1]
     assert "--run-toolchains" not in commands[0][1]
@@ -9119,7 +9103,9 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     ).read_text(encoding="utf-8")
     assert 'targets = ["vulkan"]' in toolchain_config
     assert module.MLX_ARANGE_SOURCE in toolchain_config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in toolchain_config
+    # Attention's host-sized entries now translate, so the toolchain validates them.
+    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in toolchain_config
+    assert module.MLX_LAYER_NORM_SOURCE not in toolchain_config
 
 
 def test_reduced_frontier_requires_all_directx_entries_per_artifact(
@@ -9226,18 +9212,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
         returncode = 0
-        if name == "directx-workgroup-frontier":
-            _write_dynamic_workgroup_report(
-                module,
-                report_dir / f"{name}.json",
-                mlx_root,
-                work_dir / "out-directx-workgroup-frontier",
-                target="directx",
-                sources=module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-                validated=True,
-            )
-            returncode = 1
-        elif "layer-norm-dispatch" in name:
+        if "layer-norm-dispatch" in name:
             is_toolchain = name.startswith("validate-")
             output_dir = work_dir / (
                 "out-directx-layer-norm-dispatch-toolchain"
@@ -9488,29 +9463,25 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert set(result["rmsNormDispatchEvidence"]["variants"]) == set(
         module.MLX_RMS_NORM_DISPATCH_VARIANTS
     )
-    assert result["workgroupBlockedSources"] == list(
-        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    )
-    assert all(
-        evidence["sourceEntryPointIdentityStatus"] == "matched-materialized-host-names"
-        for evidence in result["dynamicWorkgroupDispatchEvidence"].values()
-    )
+    # Arg-reduce, attention and softmax translate with host-sized entries, so no
+    # DirectX source is refused for its workgroup size and no blocked run happens.
+    assert result["workgroupBlockedSources"] == []
+    assert result["workgroupBlockedArtifactCount"] == 0
+    assert result["workgroupBlockedReport"] is None
+    assert result["dynamicWorkgroupDispatchEvidence"] == {}
     assert [name for name, _command in commands] == [
         "directx-frontier",
         "directx-layer-norm-dispatch-frontier",
         "directx-logsumexp-dispatch-frontier",
         "directx-rms-norm-dispatch-frontier",
-        "directx-workgroup-frontier",
         "validate-directx-frontier-toolchain",
         "validate-directx-layer-norm-dispatch-toolchain",
         "validate-directx-logsumexp-dispatch-toolchain",
         "validate-directx-rms-norm-dispatch-toolchain",
     ]
     assert all("--no-format" in command for _name, command in commands)
-    assert "--run-toolchains" in commands[5][1]
-    assert "--run-toolchains" in commands[6][1]
-    assert "--run-toolchains" in commands[7][1]
-    assert "--run-toolchains" in commands[8][1]
+    for _name, command in commands[4:]:
+        assert "--run-toolchains" in command
     toolchain_config = (
         config_dir / "validate-directx-frontier-toolchain.toml"
     ).read_text(encoding="utf-8")
@@ -9562,9 +9533,12 @@ def test_directx_bfloat16_lowering_evidence_matches_pinned_report():
     module = _load_harness()
     native_storage_sources = {
         module.MLX_ARANGE_SOURCE,
+        module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
         module.MLX_RANDOM_SOURCE,
         module.MLX_ROPE_SOURCE,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+        module.MLX_SOFTMAX_SOURCE,
         module.MLX_TERNARY_SOURCE,
     }
     assert set(module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE) == set(
@@ -9660,16 +9634,9 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_SOFTMAX_SOURCE,
         module.MLX_TERNARY_SOURCE,
     )
-    expected_sources = (
-        module.MLX_ARANGE_SOURCE,
-        module.MLX_BINARY_TWO_SOURCE,
-        module.MLX_LAYER_NORM_SOURCE,
-        module.MLX_LOGSUMEXP_SOURCE,
-        module.MLX_RANDOM_SOURCE,
-        module.MLX_RMS_NORM_SOURCE,
-        module.MLX_ROPE_SOURCE,
-        module.MLX_TERNARY_SOURCE,
-    )
+    # Every frontier source now reaches DXC: arg-reduce, attention and softmax
+    # as aggregate artifacts of host-sized entries.
+    expected_sources = expected_all_sources
     assert module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
     assert module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES == expected_all_sources
     assert tuple(module.MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS) == (
@@ -9678,12 +9645,15 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     assert tuple(module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS) == expected_sources
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS == {
         module.MLX_ARANGE_SOURCE: 11,
+        module.MLX_ARG_REDUCE_SOURCE: 24,
         module.MLX_BINARY_TWO_SOURCE: 225,
         module.MLX_LAYER_NORM_SOURCE: 2,
         module.MLX_LOGSUMEXP_SOURCE: 2,
         module.MLX_RANDOM_SOURCE: 2,
         module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_ROPE_SOURCE: 18,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
+        module.MLX_SOFTMAX_SOURCE: 10,
         module.MLX_TERNARY_SOURCE: 212,
     }
     assert module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS == {
@@ -9694,12 +9664,13 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
         module.MLX_SOFTMAX_SOURCE: 10,
     }
-    assert len(expected_sources) == 8
+    assert len(expected_sources) == 11
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
     )
-    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 484
-    assert module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT == 21
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 560
+    assert module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT == 24
+    assert module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES == ()
     assert sum(module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS.values()) == 106
     assert {
         source: evidence["specializationCount"]
@@ -9744,10 +9715,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     assert module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     ]["hostLines"].endswith("613-640,685-753")
-    assert set(directx_status["directx_toolchain_gaps"]) == (
-        set(module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
-        | {module.MLX_FENCE_SOURCE}
-    )
+    assert set(directx_status["directx_toolchain_gaps"]) == {module.MLX_FENCE_SOURCE}
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
         for issue in (
@@ -9775,23 +9743,21 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     normalized_readme = " ".join(readme.split())
 
     assert "official DXC v1.9.2602.24 on Windows CI" in readme
-    assert "21-artifact frontier representing eight pinned sources" in (
+    assert "24-artifact frontier representing all 11 pinned sources" in (
         normalized_readme
     )
-    assert "11, 225, 2, 2, 2, 12, 18, and 212 entries respectively" in (
+    assert "11, 24, 225, 2, 2, 2, 12, 18, 42, 10, and 212 entries respectively" in (
         normalized_readme
     )
-    assert "484 generated compute entries" in normalized_readme
-    assert "three pending aggregate sources cover 76 compute entries" in (
-        normalized_readme
-    )
-    assert "no placeholder workgroup size is restored" in normalized_readme
+    assert "560 generated compute entries" in normalized_readme
+    assert "package every host-sized entry of the source" in normalized_readme
+    assert "no placeholder workgroup size is emitted" in normalized_readme
     assert "exact per-source bfloat16 report evidence" in normalized_readme
     assert "`status=exact`, `approximationUsed=false`" in normalized_readme
     assert "`uint-low-16-bits` register representation" in normalized_readme
     assert "round-to-nearest, ties-to-even conversion" in normalized_readme
     assert "`directx.native-16bit-types` capability" in normalized_readme
-    assert "All five aggregate sources require" in normalized_readme
+    assert "All eight aggregate sources require" in normalized_readme
     assert "fails closed if either field is missing or changes" in normalized_readme
     assert "storage, conversion, report, and compiler evidence only" in (
         normalized_readme
@@ -9826,7 +9792,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "profile `cs_6_6`, no `-enable-16bit-types`, and `-WX` passes" in (
         normalized_readme
     )
-    assert "zero warnings across all 484 entry-point runs" in normalized_readme
+    assert "zero warnings across all 560 entry-point runs" in normalized_readme
     assert "two float32 block-reduction workloads" in normalized_readme
     assert "axis sizes 32 and 1025" in normalized_readme
     assert "current-corpus axis-size-32 artifact opts into" in normalized_readme
@@ -10179,10 +10145,10 @@ def test_opengl_index_range_contract_is_documented_as_a_portability_precondition
 
     assert "24 source-qualified index-range assertions" in normalized_readme
     assert "24 configured index-range assertions" in normalized_readme
-    assert "with 28 source-qualified index-range assertions" in normalized_readme
-    assert "The dynamic-workgroup frontier supplies 28 more" in normalized_readme
+    assert "with 39 source-qualified index-range assertions" in normalized_readme
+    assert "The dynamic-workgroup frontier supplies 39 more" in normalized_readme
     assert len(module.MLX_OPENGL_TRANSLATED_FRONTIER_INDEX_RANGE_ASSERTIONS) == 24
-    assert len(module.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS) == 28
+    assert len(module.MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS) == 39
     assert "24 audited index-range assertions" not in normalized_readme
     assert "exact assertion count and content" in normalized_readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
@@ -15103,7 +15069,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
     )
     assert result["scope"]["openglWorkgroupBlockedFrontierSources"] == list(
-        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        module.MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES
     )
 
 
