@@ -76,6 +76,31 @@ jobs:
           python -m tests.conformance.inventory.hlsl --fetch --check
           python -m tests.conformance.inventory >> "$GITHUB_STEP_SUMMARY"
 
+  determinism:
+    name: Hash-seed determinism
+    needs: legs
+    if: needs.legs.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CrossTL
+        run: python -m pip install -e .
+      # Every repository source is translated once per seed, each seed in its own interpreters, and any result that
+      # differs between seeds fails the job (tests/conformance/determinism.py). Pull requests and the merge queue
+      # check CrossGL and the graphics targets under two seeds; other events check every backend under three.
+      - name: Translation output is identical across PYTHONHASHSEED values
+        env:
+          BACKENDS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'cgl,metal,directx,opengl,vulkan' || 'all' }}
+          SEEDS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '0,1' || '0,1,4242' }}
+        run: python -m tests.conformance.determinism --backends "$BACKENDS" --seeds "$SEEDS"
+
   legs:
     name: Select conformance legs
     runs-on: ubuntu-24.04
@@ -344,7 +369,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue can require.
     name: Conformance result
     if: always()
-    needs: [harness, legs, native]
+    needs: [harness, determinism, legs, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
