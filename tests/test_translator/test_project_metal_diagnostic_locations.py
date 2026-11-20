@@ -7,6 +7,7 @@ comes from, and ``crosstl.project.preprocessed_locations`` maps offsets back.
 """
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -92,7 +93,10 @@ def test_hlsl_preprocessor_records_the_origin_of_every_output_line(tmp_path):
     assert len(lines) == len(preprocessor.line_origins)
     by_text = dict(zip(lines, preprocessor.line_origins))
     include_site = (str(main), 2, None)
-    assert by_text["int two = 2;"] == (str(header), 2, include_site)
+    # The header path joins the include directive's own spelling ("inc/values.h"), so on Windows it can mix
+    # separators; compare it as a path.
+    header_file, header_line, header_site = by_text["int two = 2;"]
+    assert (Path(header_file), header_line, header_site) == (header, 2, include_site)
     assert by_text["   over two lines */ int one = 1;"] == (str(main), 4, None)
     # #line changes the presumed line (__LINE__), not the physical origin.
     assert by_text["int three = 3;"] == (str(main), 6, None)
