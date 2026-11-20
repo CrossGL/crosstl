@@ -123,3 +123,68 @@ def test_all_equal_on_a_value_that_is_not_a_boolean_keeps_khr_subgroup_vote():
 
     assert KHR_VOTE in generated and ARB_VOTE not in generated
     assert "bool r = subgroupAllEqual(i);" in generated
+
+
+def _translate(tmp_path, name, source):
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    return crosstl.translate(str(path), backend="opengl")
+
+
+# A uniform-block member ``int flag`` beside a helper's ``bool flag`` parameter: the name is not only a bool, so the
+# vote stays subgroupAllEqual, which takes an int (review of #4666).
+HLSL_BLOCK_MEMBER_SHARING_A_BOOL_NAME = """cbuffer Params : register(b0) { int flag; };
+RWStructuredBuffer<int> outp : register(u0);
+bool negate(bool flag) { return !flag; }
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    outp[id.x] = WaveActiveAllEqual(flag) ? 1 : 0;
+}
+"""
+GLSL_BLOCK_MEMBER_SHARING_A_BOOL_NAME = """#version 450
+#extension GL_KHR_shader_subgroup_vote : require
+layout(local_size_x = 64) in;
+layout(std140, binding = 0) uniform Params { int flag; };
+layout(std430, binding = 1) buffer Out { int outp[]; };
+bool negate(bool flag) { return !flag; }
+void main() {
+    outp[gl_GlobalInvocationID.x] = subgroupAllEqual(flag) ? 1 : 0;
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        ("vote.hlsl", HLSL_BLOCK_MEMBER_SHARING_A_BOOL_NAME),
+        ("vote.comp", GLSL_BLOCK_MEMBER_SHARING_A_BOOL_NAME),
+    ],
+)
+def test_all_equal_on_a_block_member_sharing_a_bool_name_keeps_khr_subgroup_vote(
+    tmp_path, name, source
+):
+    generated = _translate(tmp_path, name, source)
+
+    assert KHR_VOTE in generated and ARB_VOTE not in generated
+    assert "subgroupAllEqual(flag)" in generated
+    _glslang(tmp_path, generated)
+
+
+def test_a_vote_beside_a_subgroup_mask_built_in_keeps_khr_subgroup_vote(tmp_path):
+    source = """#version 450
+#extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Out { uint outp[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    bool odd = (i & 1u) == 1u;
+    bool r = subgroupAll(odd);
+    outp[i] = gl_SubgroupEqMask.x + (r ? 1u : 0u);
+}
+"""
+    generated = _translate(tmp_path, "vote.comp", source)
+
+    assert KHR_VOTE in generated and ARB_VOTE not in generated
+    assert "bool r = subgroupAll(odd);" in generated
+    _glslang(tmp_path, generated)

@@ -31,6 +31,7 @@ from ..ast import (
     BlockNode,
     BreakNode,
     CastNode,
+    ConstantNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -266,7 +267,7 @@ from .glsl_buffer_layout import (
     std430_array_stride,
     std430_value_type_info,
 )
-from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_builtin_extensions import BUILTIN_EXTENSIONS, require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_draw_parameters import (
@@ -8213,18 +8214,25 @@ class GLSLCodeGen(
         ):
             return None
         roots = self.ray_query_search_roots(ast, target_stage)
+        if self.uses_glsl_subgroup_extension_builtin(roots):
+            return None
+        # Every declaration in the program counts, uniform-block and struct members included: a name declared with
+        # any other type, anywhere, is not taken for a bool.
         declared_types = {}
-        for root in roots:
-            for node in self.walk_ast(root):
-                if isinstance(node, VariableNode):
-                    declared = getattr(node, "vtype", None)
-                elif isinstance(node, ParameterNode):
-                    declared = node.param_type
-                else:
-                    continue
-                declared_types.setdefault(node.name, set()).add(
-                    self.type_name_string(declared)
-                )
+        for node in self.walk_ast(ast):
+            if isinstance(node, VariableNode):
+                declared = getattr(node, "vtype", None)
+            elif isinstance(node, ParameterNode):
+                declared = node.param_type
+            elif isinstance(node, StructMemberNode):
+                declared = node.member_type
+            elif isinstance(node, ConstantNode):
+                declared = node.const_type
+            else:
+                continue
+            declared_types.setdefault(node.name, set()).add(
+                self.type_name_string(declared)
+            )
         bool_names = {
             name for name, types in declared_types.items() if types == {"bool"}
         }
@@ -8244,6 +8252,25 @@ class GLSLCodeGen(
                 ):
                     return None
         return "" if (self.glsl_version_number(version_line) or 0) >= 460 else "ARB"
+
+    def uses_glsl_subgroup_extension_builtin(self, roots):
+        """Whether ``roots`` read a built-in a GL_KHR_shader_subgroup extension declares, such as
+        ``gl_SubgroupEqMask``, by name or through a semantic."""
+        for root in roots:
+            for node in self.walk_ast(root):
+                names = []
+                if isinstance(node, IdentifierNode):
+                    names.append(node.name)
+                if isinstance(getattr(node, "name", None), str):
+                    semantic = self.semantic_from_node(node)
+                    if semantic is not None:
+                        names.append(self.map_semantic(semantic))
+                for name in names:
+                    if isinstance(name, str) and BUILTIN_EXTENSIONS.get(
+                        name, ""
+                    ).startswith("GL_KHR_shader_subgroup_"):
+                        return True
+        return False
 
     def glsl_is_bool_vote_operand(self, node, bool_names):
         """Whether ``node`` is a scalar bool: a bool literal, a name declared only as ``bool``, or ``!``, ``&&`` and
