@@ -5,9 +5,7 @@
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.texture_method_descriptor": 403,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.__init__": 364,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.generate_shader": 534,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.describe_hip_runtime_call": 2200,
   "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.format_hip_graph_runtime_call": 528,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.format_hip_runtime_call": 2200,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.__init__": 687,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.generate_expression": 912,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.generate_function": 316,
@@ -92,7 +90,6 @@
  },
  "modules": {
   "crosstl/backend/CUDA/CudaParser.py": 5557,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py": 11430,
   "crosstl/backend/HIP/HipParser.py": 5993,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py": 24579,
   "crosstl/backend/Metal/MetalParser.py": 6037,
