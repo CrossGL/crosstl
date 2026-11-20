@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from crosstl import translate
-from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLSelectOverloadError
+from crosstl.backend.DirectX.select_overload_error import HLSLSelectOverloadError
 from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
 from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,

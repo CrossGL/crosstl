@@ -8,6 +8,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from crosstl.translator.refusals import DirectXSourceRefusal
 
+from ...translator.unhandled import UNHANDLED
 from ..comma_expressions import crossgl_comma_expression
 from ..common_ast import (
     ArrayAccessNode,
@@ -16,13 +17,14 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
-from .byte_address_methods import byte_address_method_expression
+from .crossgl_codegen.call_expressions import CallExpressionMixin
 from .crossgl_codegen.control_flow import ControlFlowMixin
 from .crossgl_codegen.function_statements import FunctionStatementMixin
 from .crossgl_codegen.identifiers_and_attributes import IdentifierAttributeMixin
 from .crossgl_codegen.program_declarations import ProgramDeclarationMixin
 from .crossgl_codegen.resource_methods import ResourceMethodMixin
 from .crossgl_codegen.storage_resources import StorageResourceMixin
+from .crossgl_codegen.texture_method_descriptors import TextureMethodDescriptorMixin
 from .crossgl_codegen.texture_usage import TextureUsageMixin
 from .crossgl_codegen.type_mapping import TypeMappingMixin
 from .crossgl_codegen.value_types import ValueTypeMixin
@@ -32,10 +34,26 @@ from .DirectxParser import *
 from .function_templates import (
     specialization_identifier_renames,
     template_call_result_raw_type,
-    templated_call_name,
 )
 from .hlsl_matrix_import import HLSLMatrixImportMixin, hlsl_matrix_type_map
 from .implicit_vector_truncation import HLSLImplicitVectorTruncationMixin
+from .import_tables import (
+    HLSL_BITWISE_OPERATORS,
+    HLSL_BUFFER_METHODS,
+    HLSL_BYTE_ADDRESS_INTERLOCKED_METHODS,
+    HLSL_FEEDBACK_METHODS,
+    HLSL_FUNCTION_MAP,
+    HLSL_FUNCTION_STATEMENT_SEQUENCES,
+    HLSL_GENERIC_PASSTHROUGH_TYPES,
+    HLSL_INTERLOCKED_FUNCTIONS,
+    HLSL_LEGACY_TEXTURE_FUNCTION_SAMPLER_TYPES,
+    HLSL_SEMANTICS,
+    HLSL_SHADOW_TEXTURE_TYPES,
+    HLSL_STRUCTURED_BUFFER_TYPES,
+    HLSL_TEXTURE_GATHER_COMPARE_COMPONENTS,
+    HLSL_TEXTURE_GATHER_COMPONENTS,
+    HLSL_TEXTURE_METHODS,
+)
 from .namespaces import resolve_namespaces
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .push_constant_offsets import member_offsets as push_constant_member_offsets
@@ -69,20 +87,6 @@ def _renamed(renames, name):
     return name
 
 
-class HLSLSelectOverloadError(ValueError):
-    """Reject select calls whose source overload ownership is unresolved."""
-
-    project_diagnostic_code = "project.translate.hlsl-select-overload-unresolved"
-    missing_capabilities = ("hlsl.select-overload-resolution",)
-
-    def __init__(self):
-        super().__init__(
-            "Cannot resolve a three-argument HLSL select call in the presence "
-            "of a source-defined select overload"
-        )
-        self.reason = "select-overload-ownership-unresolved"
-
-
 class HLSLIntegerConversionError(ValueError):
     """Reject an integer conversion whose source evaluation cannot be retained."""
 
@@ -114,6 +118,8 @@ class HLSLToCrossGLConverter(
     HLSLTrigonometricReductionMixin,
     HLSLValueShapeMixin,
     HLSLImplicitVectorTruncationMixin,
+    CallExpressionMixin,
+    TextureMethodDescriptorMixin,
 ):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
@@ -228,29 +234,8 @@ class HLSLToCrossGLConverter(
         self.source_type_aliases = {}
         self.integer_compound_helpers = {}
         self.integer_helper_reserved_names = set()
-        self.structured_buffer_types = {
-            "Buffer",
-            "ConstantBuffer",
-            "RWBuffer",
-            "StructuredBuffer",
-            "RWStructuredBuffer",
-            "TextureBuffer",
-            "AppendStructuredBuffer",
-            "ConsumeStructuredBuffer",
-        }
-        self.generic_passthrough_types = {
-            "DispatchNodeInputRecord",
-            "RWDispatchNodeInputRecord",
-            "GroupNodeInputRecords",
-            "RWGroupNodeInputRecords",
-            "ThreadNodeInputRecord",
-            "RWThreadNodeInputRecord",
-            "NodeOutput",
-            "NodeOutputArray",
-            "ThreadNodeOutputRecords",
-            "GroupNodeOutputRecords",
-            "NodeOutputRecords",
-        }
+        self.structured_buffer_types = set(HLSL_STRUCTURED_BUFFER_TYPES)
+        self.generic_passthrough_types = set(HLSL_GENERIC_PASSTHROUGH_TYPES)
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -382,260 +367,31 @@ class HLSLToCrossGLConverter(
             "SamplerComparisonState": "comparison_sampler",
         }
         self.type_map.update(self.minimum_precision_type_map())
-        self.shadow_texture_type_map = {
-            "Texture1D": "texture1DShadow",
-            "Texture1DArray": "texture1DArrayShadow",
-            "Texture2D": "texture2DShadow",
-            "Texture2DArray": "texture2DArrayShadow",
-            "TextureCube": "textureCubeShadow",
-            "TextureCubeArray": "textureCubeArrayShadow",
-        }
-        self.function_map = {
-            "countbits": "bitCount",
-            "ddx": "dFdx",
-            "ddx_coarse": "dFdxCoarse",
-            "ddx_fine": "dFdxFine",
-            "ddy": "dFdy",
-            "ddy_coarse": "dFdyCoarse",
-            "ddy_fine": "dFdyFine",
-            "firstbithigh": "findMSB",
-            "firstbitlow": "findLSB",
-            "frac": "fract",
-            "fmod": "fmod",
-            "lerp": "mix",
-            "reversebits": "bitfieldReverse",
-            # HLSL round rounds halfway cases to the nearest even integer (DXC lowers it to Round_ne); CrossGL round
-            # leaves them implementation-defined, as GLSL does.
-            "round": "roundEven",
-            "rsqrt": "inverseSqrt",
-            "atan2": "atan",
-            "EvaluateAttributeAtSample": "interpolateAtSample",
-            "EvaluateAttributeSnapped": "interpolateAtOffset",
-            "EvaluateAttributeCentroid": "interpolateAtCentroid",
-            "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
-            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
-            # which orders buffer and image accesses as well.
-            "GroupMemoryBarrier": "memoryBarrierShared",
-            "DeviceMemoryBarrier": "deviceMemoryBarrier",
-            "AllMemoryBarrier": "allMemoryBarrier",
-        }
-        # A barrier with group sync that orders device memory releases the writes before it and acquires them
-        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
-        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
-        self.function_statement_sequences = {
-            "DeviceMemoryBarrierWithGroupSync": (
-                "deviceMemoryBarrier",
-                "workgroupExecutionBarrier",
-                "deviceMemoryBarrier",
-            ),
-            "AllMemoryBarrierWithGroupSync": (
-                "allMemoryBarrier",
-                "workgroupBarrier",
-                "allMemoryBarrier",
-            ),
-        }
-        self.interlocked_map = {
-            "InterlockedAdd": "atomicAdd",
-            "InterlockedAnd": "atomicAnd",
-            "InterlockedOr": "atomicOr",
-            "InterlockedXor": "atomicXor",
-            "InterlockedMin": "atomicMin",
-            "InterlockedMax": "atomicMax",
-            "InterlockedExchange": "atomicExchange",
-            "InterlockedCompareExchange": "atomicCompareExchange",
-        }
-        self.byte_address_interlocked_method_map = {
-            "InterlockedAdd": "atomicAdd",
-            "InterlockedAnd": "atomicAnd",
-            "InterlockedOr": "atomicOr",
-            "InterlockedXor": "atomicXor",
-            "InterlockedMin": "atomicMin",
-            "InterlockedMax": "atomicMax",
-            "InterlockedExchange": "atomicExchange",
-            "InterlockedCompareExchange": "atomicCompareExchange",
-            "InterlockedCompareStore": "atomicCompareExchange",
-        }
-        self.texture_method_map = {
-            "Sample": "texture",
-            "SampleLevel": "textureLod",
-            "SampleGrad": "textureGrad",
-            "SampleBias": "texture",
-            "SampleCmp": "textureCompare",
-            "SampleCmpLevel": "textureCompareLod",
-            "SampleCmpGrad": "textureCompareGrad",
-            "SampleCmpBias": "textureCompare",
-            # SampleCmpLevelZero compares at mip level 0, with no implicit derivatives.
-            "SampleCmpLevelZero": "textureCompareLod",
-            "Load": "texelFetch",
-            "Gather": "textureGather",
-            "GatherCmp": "textureGatherCompare",
-            "GetDimensions": "texture_dimensions",
-        }
-        self.feedback_method_map = {
-            "WriteSamplerFeedback": "write_sampler_feedback",
-            "WriteSamplerFeedbackBias": "write_sampler_feedback_bias",
-            "WriteSamplerFeedbackGrad": "write_sampler_feedback_grad",
-            "WriteSamplerFeedbackLevel": "write_sampler_feedback_level",
-        }
-        self.texture_gather_component_map = {
-            "GatherRed": "0",
-            "GatherGreen": "1",
-            "GatherBlue": "2",
-            "GatherAlpha": "3",
-        }
-        self.texture_gather_compare_component_map = {
-            "GatherCmpRed": "0",
-            "GatherCmpGreen": "1",
-            "GatherCmpBlue": "2",
-            "GatherCmpAlpha": "3",
-        }
-        self.legacy_texture_function_sampler_types = {
-            "tex1D": {"sampler", "sampler1D"},
-            "tex2D": {"sampler2D", "sampler2D_half", "sampler2D_float"},
-            "tex3D": {"sampler3D"},
-            "texCUBE": {"samplerCUBE", "samplerCube"},
-            "tex2Dlod": {"sampler2D", "sampler2D_half", "sampler2D_float"},
-            "tex2Dbias": {"sampler2D", "sampler2D_half", "sampler2D_float"},
-            "tex2Dgrad": {"sampler2D", "sampler2D_half", "sampler2D_float"},
-        }
-        self.buffer_method_map = {
-            "Load": "buffer_load",
-            "Load2": "buffer_load2",
-            "Load3": "buffer_load3",
-            "Load4": "buffer_load4",
-            "Store": "buffer_store",
-            "Store2": "buffer_store2",
-            "Store3": "buffer_store3",
-            "Store4": "buffer_store4",
-            "Append": "buffer_append",
-            "Consume": "buffer_consume",
-            "IncrementCounter": "buffer_increment_counter",
-            "DecrementCounter": "buffer_decrement_counter",
-            "GetDimensions": "buffer_dimensions",
-        }
-        self.semantic_map = {
-            # System-value semantics - Vertex inputs. SV_VertexID excludes the
-            # draw's base vertex, which gl_VertexID includes; see
-            # crosstl.translator.semantics.relative_vertex_ids.
-            "SV_VertexID": "gl_RelativeVertexID",
-            "SV_InstanceID": "gl_InstanceID",
-            # Shader Model 6.8 draw parameters; DXC lowers them to SPIR-V's
-            # BuiltIn BaseVertex and BaseInstance.
-            "SV_StartVertexLocation": "gl_BaseVertex",
-            "SV_StartInstanceLocation": "gl_BaseInstance",
-            "SV_PrimitiveID": "gl_PrimitiveID",
-            # A mesh primitive's cull flag (GL_EXT_mesh_shader's built-in).
-            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
-            # System-value semantics - Vertex outputs
-            "SV_POSITION": "gl_Position",
-            "SV_Position": "gl_Position",
-            "SV_ClipDistance": "gl_ClipDistance",
-            "SV_CullDistance": "gl_CullDistance",
-            # System-value semantics - Fragment inputs
-            "SV_IsFrontFace": "gl_FrontFacing",
-            "SV_SampleIndex": "gl_SampleID",
-            "SV_Coverage": "gl_SampleMask",
-            # System-value semantics - Fragment outputs
-            "SV_TARGET": "gl_FragColor",
-            "SV_Target": "gl_FragColor",
-            "SV_TARGET0": "gl_FragData[0]",
-            "SV_Target0": "gl_FragData[0]",
-            "SV_TARGET1": "gl_FragData[1]",
-            "SV_Target1": "gl_FragData[1]",
-            "SV_TARGET2": "gl_FragData[2]",
-            "SV_Target2": "gl_FragData[2]",
-            "SV_TARGET3": "gl_FragData[3]",
-            "SV_Target3": "gl_FragData[3]",
-            "SV_TARGET4": "gl_FragData[4]",
-            "SV_Target4": "gl_FragData[4]",
-            "SV_TARGET5": "gl_FragData[5]",
-            "SV_Target5": "gl_FragData[5]",
-            "SV_TARGET6": "gl_FragData[6]",
-            "SV_Target6": "gl_FragData[6]",
-            "SV_TARGET7": "gl_FragData[7]",
-            "SV_Target7": "gl_FragData[7]",
-            "SV_DEPTH": "gl_FragDepth",
-            "SV_Depth": "gl_FragDepth",
-            "SV_DepthGreaterEqual": "gl_FragDepth",
-            "SV_DepthLessEqual": "gl_FragDepth",
-            "SV_StencilRef": "gl_FragStencilRefEXT",
-            # System-value semantics - Compute shader
-            "SV_GroupID": "gl_WorkGroupID",
-            "SV_GroupThreadID": "gl_LocalInvocationID",
-            "SV_DispatchThreadID": "gl_GlobalInvocationID",
-            "SV_GroupIndex": "gl_LocalInvocationIndex",
-            # Geometry shader semantics
-            "SV_GSInstanceID": "gl_InvocationID",
-            "SV_RenderTargetArrayIndex": "gl_Layer",
-            "SV_ViewportArrayIndex": "gl_ViewportIndex",
-            # Tessellation semantics
-            "SV_OutputControlPointID": "gl_InvocationID",
-            "SV_TessFactor": "gl_TessLevelOuter",
-            "SV_InsideTessFactor": "gl_TessLevelInner",
-            "SV_DomainLocation": "gl_TessCoord",
-            # Mesh/Task semantics
-            "SV_ViewID": "gl_ViewIndex",
-            "SV_DispatchMeshID": "mesh_DispatchMeshID",
-            # Raytracing semantics
-            "SV_RayFlags": "rt_RayFlags",
-            "SV_CullMask": "rt_CullMask",
-            "SV_ObjectRayOrigin": "rt_ObjectRayOrigin",
-            "SV_ObjectRayDirection": "rt_ObjectRayDirection",
-            "SV_WorldRayOrigin": "rt_WorldRayOrigin",
-            "SV_WorldRayDirection": "rt_WorldRayDirection",
-            "SV_RayTMin": "rt_RayTMin",
-            "SV_RayTCurrent": "rt_RayTCurrent",
-            "SV_HitKind": "rt_HitKind",
-            "SV_InstanceIndex": "rt_InstanceIndex",
-            "SV_PrimitiveIndex": "rt_PrimitiveIndex",
-            "SV_GeometryIndex": "rt_GeometryIndex",
-            "SV_RayContributionToHitGroupIndex": "rt_RayContributionToHitGroupIndex",
-            "SV_ShaderIndex": "rt_ShaderIndex",
-            # Legacy semantics
-            "FRONT_FACE": "gl_FrontFacing",
-            "PRIMITIVE_ID": "gl_PrimitiveID",
-            "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_RelativeVertexID",
-            # User-defined semantics
-            "POSITION": "Position",
-            "POSITION0": "Position",
-            "NORMAL": "Normal",
-            "NORMAL0": "Normal",
-            "TANGENT": "Tangent",
-            "TANGENT0": "Tangent",
-            "BINORMAL": "Binormal",
-            "BINORMAL0": "Binormal",
-            "TEXCOORD": "TexCoord",
-            "TEXCOORD0": "TexCoord0",
-            "TEXCOORD1": "TexCoord1",
-            "TEXCOORD2": "TexCoord2",
-            "TEXCOORD3": "TexCoord3",
-            "TEXCOORD4": "TexCoord4",
-            "TEXCOORD5": "TexCoord5",
-            "TEXCOORD6": "TexCoord6",
-            "TEXCOORD7": "TexCoord7",
-            "COLOR": "Color",
-            "COLOR0": "Color0",
-            "COLOR1": "Color1",
-            "BLENDWEIGHT": "BlendWeight",
-            "BLENDINDICES": "BlendIndices",
-            "PSIZE": "gl_PointSize",
-            "FOG": "Fog",
-        }
+        self.shadow_texture_type_map = dict(HLSL_SHADOW_TEXTURE_TYPES)
+        self.function_map = dict(HLSL_FUNCTION_MAP)
+        self.function_statement_sequences = dict(HLSL_FUNCTION_STATEMENT_SEQUENCES)
+        self.interlocked_map = dict(HLSL_INTERLOCKED_FUNCTIONS)
+        self.byte_address_interlocked_method_map = dict(
+            HLSL_BYTE_ADDRESS_INTERLOCKED_METHODS
+        )
+        self.texture_method_map = dict(HLSL_TEXTURE_METHODS)
+        self.feedback_method_map = dict(HLSL_FEEDBACK_METHODS)
+        self.texture_gather_component_map = dict(HLSL_TEXTURE_GATHER_COMPONENTS)
+        self.texture_gather_compare_component_map = dict(
+            HLSL_TEXTURE_GATHER_COMPARE_COMPONENTS
+        )
+        self.legacy_texture_function_sampler_types = dict(
+            HLSL_LEGACY_TEXTURE_FUNCTION_SAMPLER_TYPES
+        )
+        self.buffer_method_map = dict(HLSL_BUFFER_METHODS)
+        self.semantic_map = dict(HLSL_SEMANTICS)
         if zero_base_vertex:
             for semantic in ("SV_VertexID", "VERTEX_ID"):
                 self.semantic_map[semantic] = "gl_VertexID"
         self.semantic_map_upper = {
             str(key).upper(): value for key, value in self.semantic_map.items()
         }
-        self.bitwise_op_map = {
-            "&": "bitAnd",
-            "|": "bitOr",
-            "^": "bitXor",
-            "~": "bitNot",
-            "<<": "bitShiftLeft",
-            ">>": "bitShiftRight",
-        }
+        self.bitwise_op_map = dict(HLSL_BITWISE_OPERATORS)
         self.indentation = 0
         self.code = []
         self.shadow_texture_names = set()
@@ -669,386 +425,37 @@ class HLSLToCrossGLConverter(
                 descriptor["dropped_parameters"] = list(parameters)
             return descriptor
 
-        if member in self.feedback_method_map:
-            resource_base = self.raw_type_base(resource_type)
-            if resource_base.startswith("FeedbackTexture"):
-                return {
-                    "member": member,
-                    "function": self.feedback_method_map[member],
-                    "texture_function": self.feedback_method_map[member],
-                    "buffer_function": None,
-                    "component": None,
-                    "usage": None,
-                    "buffer_when_max_args": None,
-                    "resource": "feedback_texture",
-                    "resource_type": resource_type,
-                    "operation": {
-                        "WriteSamplerFeedback": "write_sampler_feedback",
-                        "WriteSamplerFeedbackBias": "write_sampler_feedback_bias",
-                        "WriteSamplerFeedbackGrad": "write_sampler_feedback_grad",
-                        "WriteSamplerFeedbackLevel": "write_sampler_feedback_level",
-                    }[member],
-                }
+        handled = self.texture_feedback_method_descriptor(member, resource_type)
+        if handled is not UNHANDLED:
+            return handled
 
         cube_family_resource = self.raw_type_base(resource_type) in {
             "TextureCube",
             "TextureCubeArray",
         }
 
-        if member == "Load":
-            texture_function = self.texture_method_map[member]
-            buffer_function = self.buffer_method_map[member]
-            resource_base = self.raw_type_base(resource_type)
-            dropped_parameters = []
-            if self.is_byte_address_buffer_type(resource_type):
-                if arg_count == 2:
-                    dropped_parameters.append("status output")
-                return with_dropped_parameters(
-                    {
-                        "member": member,
-                        "function": buffer_function,
-                        "texture_function": texture_function,
-                        "buffer_function": buffer_function,
-                        "component": None,
-                        "usage": "regular",
-                        "buffer_when_max_args": 1,
-                        "resource_type": resource_type,
-                        "diagnostic_kind": "tiled_resource_status",
-                    },
-                    dropped_parameters,
-                )
-            is_multisample = resource_base in {
-                "Texture2DMS",
-                "Texture2DMSArray",
-                "RWTexture2DMS",
-                "RWTexture2DMSArray",
-                "RasterizerOrderedTexture2DMS",
-                "RasterizerOrderedTexture2DMSArray",
-            }
-            if self.is_rw_texture_type(resource_type):
-                function = "imageLoad"
-                if arg_count == (3 if is_multisample else 2):
-                    dropped_parameters.append("status output")
-            elif self.is_sampled_texel_buffer_type(resource_type):
-                function = "texelFetch"
-                if arg_count == 2:
-                    dropped_parameters.append("status output")
-            elif resource_base.startswith(("Texture", "FeedbackTexture")):
-                has_offset = arg_count is not None and arg_count >= (
-                    3 if is_multisample else 2
-                )
-                function = "texelFetchOffset" if has_offset else texture_function
-                if arg_count == (4 if is_multisample else 3):
-                    dropped_parameters.append("status output")
-            else:
-                function = (
-                    buffer_function
-                    if arg_count is not None and arg_count <= 1
-                    else texture_function
-                )
-            return with_dropped_parameters(
-                {
-                    "member": member,
-                    "function": function,
-                    "texture_function": texture_function,
-                    "buffer_function": buffer_function,
-                    "component": None,
-                    "usage": "regular",
-                    "buffer_when_max_args": 1,
-                    "resource_type": resource_type,
-                    "diagnostic_kind": "tiled_resource_status",
-                },
-                dropped_parameters,
-            )
-        if member == "GetDimensions":
-            texture_function = self.texture_method_map[member]
-            buffer_function = self.buffer_method_map[member]
-            use_buffer = self.is_buffer_resource_type(resource_type)
-            if resource_type is None:
-                use_buffer = arg_count is not None and arg_count <= 1
-            return {
-                "member": member,
-                "function": buffer_function if use_buffer else texture_function,
-                "texture_function": texture_function,
-                "buffer_function": buffer_function,
-                "component": None,
-                "usage": "regular" if member == "Load" else None,
-                "buffer_when_max_args": 1,
-            }
-        if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
-            resource_base = self.raw_type_base(resource_type)
-            diagnostic_reason = None
-            if arg_count != 2:
-                diagnostic_reason = "expected sampler and coordinate arguments"
-            elif resource_base and self.is_multisample_texture_type(resource_type):
-                diagnostic_reason = f"{member} is unavailable for multisample textures"
-            elif resource_base and (
-                self.is_rw_texture_type(resource_type)
-                or self.is_buffer_resource_type(resource_type)
-                or not resource_base.startswith("Texture")
-            ):
-                diagnostic_reason = f"{member} is only available on sampled textures"
-
-            descriptor = {
-                "member": member,
-                "function": "textureQueryLod",
-                "texture_function": "textureQueryLod",
-                "buffer_function": None,
-                "component": None,
-                "usage": None if diagnostic_reason else "regular",
-                "buffer_when_max_args": None,
-                "result_component": (
-                    ".y" if member == "CalculateLevelOfDetailUnclamped" else ".x"
-                ),
-            }
-            if resource_type is not None:
-                descriptor["resource_type"] = resource_type
-            if diagnostic_reason:
-                descriptor["diagnostic_reason"] = diagnostic_reason
-                descriptor["fallback_expression"] = "0.0"
-            return descriptor
-        if member == "GetSamplePosition":
-            resource_base = self.raw_type_base(resource_type)
-            diagnostic_reason = None
-            if arg_count != 1:
-                diagnostic_reason = "expected sample-index argument"
-            elif resource_base and resource_base not in {
-                "Texture2DMS",
-                "Texture2DMSArray",
-            }:
-                diagnostic_reason = (
-                    "GetSamplePosition is only available on sampled multisample "
-                    "textures"
-                )
-
-            descriptor = {
-                "member": member,
-                "function": "textureSamplePosition",
-                "texture_function": "textureSamplePosition",
-                "buffer_function": None,
-                "component": None,
-                "usage": None if diagnostic_reason else "regular",
-                "buffer_when_max_args": None,
-                "diagnostic_label": "texture sample-position query",
-            }
-            if resource_type is not None:
-                descriptor["resource_type"] = resource_type
-            if diagnostic_reason:
-                descriptor["diagnostic_reason"] = diagnostic_reason
-                descriptor["fallback_expression"] = "vec2(0.0, 0.0)"
-            return descriptor
-        if member in self.texture_gather_component_map:
-            dropped_parameters = []
-            if cube_family_resource and arg_count == 3:
-                texture_function = "textureGather"
-                dropped_parameters.append("status output")
-            elif arg_count in {3, 4}:
-                texture_function = "textureGatherOffset"
-                if arg_count == 4:
-                    dropped_parameters.append("status output")
-            elif arg_count in {6, 7}:
-                texture_function = "textureGatherOffsets"
-                if arg_count == 7:
-                    dropped_parameters.append("status output")
-            else:
-                texture_function = "textureGather"
-            return with_dropped_parameters(
-                {
-                    "member": member,
-                    "function": texture_function,
-                    "texture_function": texture_function,
-                    "buffer_function": None,
-                    "component": self.texture_gather_component_map[member],
-                    "usage": "regular",
-                    "buffer_when_max_args": None,
-                },
-                dropped_parameters,
-            )
-        if member in self.texture_gather_compare_component_map:
-            component = self.texture_gather_compare_component_map[member]
-            descriptor = {
-                "member": member,
-                "function": "textureGatherCompare",
-                "texture_function": "textureGatherCompare",
-                "buffer_function": None,
-                "component": None,
-                "usage": "comparison",
-                "buffer_when_max_args": None,
-                "diagnostic_label": "texture gather-compare component",
-            }
-            if resource_type is not None:
-                descriptor["resource_type"] = resource_type
-            if component != "0":
-                descriptor["diagnostic_reason"] = (
-                    f"{member} requires a compare-gather component selector; "
-                    "CrossGL only represents the default/red compare gather"
-                )
-                descriptor["fallback_expression"] = "vec4(0.0)"
-                return descriptor
-            if arg_count in {7, 8}:
-                descriptor["diagnostic_reason"] = (
-                    "GatherCmpRed four-offset overload has no CrossGL helper yet"
-                )
-                descriptor["fallback_expression"] = "vec4(0.0)"
-                return descriptor
-
-            dropped_parameters = []
-            resource_base = self.raw_type_base(resource_type)
-            if resource_base in {"TextureCube", "TextureCubeArray"} and arg_count == 4:
-                dropped_parameters.append("status output")
-            elif arg_count in {4, 5}:
-                descriptor["function"] = "textureGatherCompareOffset"
-                descriptor["texture_function"] = "textureGatherCompareOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("status output")
-            return with_dropped_parameters(descriptor, dropped_parameters)
-        if member in self.texture_method_map:
-            texture_function = self.texture_method_map[member]
-            dropped_parameters = []
-            # The Shader Model 5 tiled-resource overloads take a minimum-LOD Clamp after the offset (cube
-            # textures have none) and an optional status output last; CrossGL carries the clamp as the
-            # texture*Clamp operations, so only a status output is still dropped.
-            clamp_overloads = {
-                # member: (operands before the offset, unclamped, clamped, cube clamped)
-                "Sample": (2, "textureOffset", "textureOffsetClamp", "textureClamp"),
-                "SampleBias": (
-                    3,
-                    "textureOffset",
-                    "textureOffsetClamp",
-                    "textureClamp",
-                ),
-                "SampleGrad": (
-                    4,
-                    "textureGradOffset",
-                    "textureGradOffsetClamp",
-                    "textureGradClamp",
-                ),
-                "SampleCmp": (
-                    3,
-                    "textureCompareOffset",
-                    "textureCompareOffsetClamp",
-                    "textureCompareClamp",
-                ),
-                "SampleCmpGrad": (
-                    5,
-                    "textureCompareGradOffset",
-                    "textureCompareGradOffsetClamp",
-                    "textureCompareGradClamp",
-                ),
-            }
-            if member in clamp_overloads and arg_count is not None:
-                operands, offset_form, clamp_form, cube_clamp_form = clamp_overloads[
-                    member
-                ]
-                if cube_family_resource and arg_count in {operands + 1, operands + 2}:
-                    texture_function = cube_clamp_form
-                    if arg_count == operands + 2:
-                        dropped_parameters.append("status output")
-                elif not cube_family_resource and arg_count in {
-                    operands + 1,
-                    operands + 2,
-                    operands + 3,
-                }:
-                    texture_function = (
-                        offset_form if arg_count == operands + 1 else clamp_form
-                    )
-                    if arg_count == operands + 3:
-                        dropped_parameters.append("status output")
-            elif member == "SampleLevel" and cube_family_resource and arg_count == 4:
-                texture_function = "textureLod"
-                dropped_parameters.append("status output")
-            elif member == "SampleLevel" and arg_count in {4, 5}:
-                texture_function = "textureLodOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("status output")
-            elif member == "SampleCmpLevel" and cube_family_resource and arg_count == 5:
-                texture_function = "textureCompareLod"
-                dropped_parameters.append("status output")
-            elif member == "SampleCmpLevel" and arg_count in {5, 6}:
-                texture_function = "textureCompareLodOffset"
-                if arg_count == 6:
-                    dropped_parameters.append("status output")
-            elif (
-                member == "SampleCmpBias"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                    6,
-                }
-            ):
-                texture_function = "textureCompare"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD bias")
-                elif arg_count == 5:
-                    dropped_parameters.extend(["LOD bias", "LOD clamp"])
-                else:
-                    dropped_parameters.extend(
-                        ["LOD bias", "LOD clamp", "status output"]
-                    )
-            elif member == "SampleCmpBias" and arg_count in {4, 5, 6, 7}:
-                if arg_count == 4:
-                    texture_function = "textureCompare"
-                    dropped_parameters.append("LOD bias")
-                else:
-                    texture_function = "textureCompareOffset"
-                    if arg_count == 5:
-                        dropped_parameters.append("LOD bias")
-                    elif arg_count == 6:
-                        dropped_parameters.extend(["LOD bias", "LOD clamp"])
-                    else:
-                        dropped_parameters.extend(
-                            ["LOD bias", "LOD clamp", "status output"]
-                        )
-            elif (
-                member == "SampleCmpLevelZero"
-                and cube_family_resource
-                and arg_count == 4
-            ):
-                texture_function = "textureCompareLod"
-                dropped_parameters.append("status output")
-            elif member == "SampleCmpLevelZero" and arg_count in {4, 5}:
-                texture_function = "textureCompareLodOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("status output")
-            elif member == "Gather" and cube_family_resource and arg_count == 3:
-                texture_function = "textureGather"
-                dropped_parameters.append("status output")
-            elif member == "Gather" and arg_count in {3, 4}:
-                texture_function = "textureGatherOffset"
-                if arg_count == 4:
-                    dropped_parameters.append("status output")
-            elif member == "GatherCmp" and cube_family_resource and arg_count == 4:
-                texture_function = "textureGatherCompare"
-                dropped_parameters.append("status output")
-            elif member == "GatherCmp" and arg_count in {4, 5}:
-                texture_function = "textureGatherCompareOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("status output")
-            usage = (
-                "comparison"
-                if member in {
-                    "SampleCmp",
-                    "SampleCmpLevel",
-                    "SampleCmpGrad",
-                    "SampleCmpBias",
-                    "SampleCmpLevelZero",
-                    "GatherCmp",
-                }
-                else "regular"
-            )
-            return with_dropped_parameters(
-                {
-                    "member": member,
-                    "function": texture_function,
-                    "texture_function": texture_function,
-                    "buffer_function": None,
-                    "component": None,
-                    "usage": usage,
-                    "buffer_when_max_args": None,
-                },
-                dropped_parameters,
-            )
+        handled = self.texture_load_dimension_method_descriptor(
+            member, arg_count, resource_type, with_dropped_parameters
+        )
+        if handled is not UNHANDLED:
+            return handled
+        handled = self.texture_query_method_descriptor(member, arg_count, resource_type)
+        if handled is not UNHANDLED:
+            return handled
+        handled = self.texture_gather_method_descriptor(
+            member,
+            arg_count,
+            resource_type,
+            cube_family_resource,
+            with_dropped_parameters,
+        )
+        if handled is not UNHANDLED:
+            return handled
+        handled = self.texture_sampling_method_descriptor(
+            member, arg_count, cube_family_resource, with_dropped_parameters
+        )
+        if handled is not UNHANDLED:
+            return handled
         return None
 
     def render_identifier(self, name):
@@ -1616,235 +1023,9 @@ class HLSLToCrossGLConverter(
                 return f"{operand}{expr.op}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
-            narrow_texel = not self.read_raw_texel_method_result
-            self.read_raw_texel_method_result = False
-            struct_method_call = self.struct_method_call_expression(expr, is_main)
-            if struct_method_call is not None:
-                return struct_method_call
-            if isinstance(expr.name, MemberAccessNode):
-                obj = self.generate_expression(expr.name.object, is_main)
-                member = expr.name.member
-                method_member = self.templated_method_base(member)
-                rendered_args = [
-                    self.generate_expression(arg, is_main) for arg in expr.args
-                ]
-                args = ", ".join(rendered_args)
-                resource_type = self.expression_raw_type(expr.name.object)
-                resource_base = self.raw_type_base(resource_type)
-                byte_address_access = byte_address_method_expression(
-                    self, member, obj, rendered_args, expr.args, resource_type
-                )
-                if byte_address_access is not None:
-                    return byte_address_access
-                if (
-                    method_member == "GatherCmpRed"
-                    and len(rendered_args) in {7, 8}
-                    and resource_base in {"Texture2D", "Texture2DArray"}
-                ):
-                    call = self.texture_gather_compare_red_offsets_expression(
-                        obj, rendered_args[:7]
-                    )
-                    if len(rendered_args) == 8:
-                        self.resource_method_diagnostic(
-                            method_member, {"dropped_parameters": ["status output"]}
-                        )
-                    return call
-                descriptor = self.resource_method_descriptor(
-                    method_member, len(expr.args), resource_type
-                )
-                if descriptor:
-                    descriptor = self.refine_texture_load_status_descriptor(
-                        method_member, expr.args, descriptor
-                    )
-                    byte_address_atomic = self.byte_address_atomic_method_expression(
-                        obj, rendered_args, descriptor, expr.args, is_main
-                    )
-                    if byte_address_atomic is not None:
-                        call = byte_address_atomic
-                    elif descriptor.get("fallback_expression") is not None:
-                        call = descriptor["fallback_expression"]
-                    else:
-                        method_args = self.resource_method_arguments(
-                            obj,
-                            method_member,
-                            rendered_args,
-                            descriptor,
-                            expr.args,
-                            is_main,
-                        )
-                        call = f"{descriptor['function']}({', '.join(method_args)})"
-                        result_component = descriptor.get("result_component")
-                        if result_component:
-                            call = f"{call}{result_component}"
-                        elif (
-                            narrow_texel
-                            and descriptor["function"] in self.TEXEL_VALUE_FUNCTIONS
-                        ):
-                            call += self.texel_narrowing_suffix(resource_type)
-                    self.resource_method_diagnostic(method_member, descriptor)
-                    return call
-                call = f"{obj}.{member}({args})"
-                if (
-                    self.hlsl_matrix_rows_are_columns()
-                    and self.raytracing_matrix_call_raw_type(expr) is not None
-                ):
-                    return f"transpose({call})"
-                return call
-
-            func_name = (
-                expr.name
-                if isinstance(expr.name, str)
-                else self.generate_expression(expr.name, is_main)
-            )
-            func_name = self.normalize_hlsl_intrinsic_name(func_name)
-            if func_name == "IsHelperLane" and not expr.args:
-                return "gl_HelperInvocation"
-            if func_name == "sizeof":
-                sizeof_value = self.generate_sizeof_expression(expr.args)
-                if sizeof_value is not None:
-                    return sizeof_value
-            if func_name == "CheckAccessFullyMapped":
-                return self.refuse_import(
-                    "DirectX tiled-resource status check CheckAccessFullyMapped: "
-                    "CrossGL has no residency status, so the mapped result is unknown",
-                    "true",
-                )
-            interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
-                func_name, expr.args, is_main
-            )
-            if interlocked_image_atomic is not None:
-                return interlocked_image_atomic
-            interlocked_buffer_atomic = self.interlocked_typed_buffer_atomic_expression(
-                func_name, expr.args, is_main
-            )
-            if interlocked_buffer_atomic is not None:
-                return interlocked_buffer_atomic
-            if func_name in self.interlocked_map:
-                rendered_args = [
-                    self.generate_without_storage_index_lowering(arg, is_main)
-                    for arg in expr.args
-                ]
-            else:
-                rendered_args = [
-                    self.generate_expression(arg, is_main, expected_type=param_type)
-                    for arg, param_type in zip(
-                        expr.args, self.source_parameter_types(func_name, expr.args)
-                    )
-                ]
-            legacy_texture_call = self.legacy_texture_function_call(
-                func_name, expr.args, rendered_args, is_main
-            )
-            if legacy_texture_call is not None:
-                return legacy_texture_call
-            bitcast_call = self.bitcast_intrinsic_expression(
-                func_name, expr.args, rendered_args
-            )
-            if bitcast_call is not None:
-                return bitcast_call
-            if func_name == "select" and len(rendered_args) == 3:
-                if func_name in self.source_function_names:
-                    raise HLSLSelectOverloadError()
-                condition, true_value, false_value = rendered_args
-                return f"select({false_value}, {true_value}, {condition})"
-            if func_name not in self.source_function_names:
-                rendered_args = self.truncate_intrinsic_vector_arguments(
-                    func_name, expr.args, rendered_args
-                )
-            args = ", ".join(rendered_args)
-            matrix_constructor = self.matrix_constructor_expression(
-                func_name, expr.args, is_main
-            )
-            if matrix_constructor is not None:
-                return matrix_constructor
-            if func_name == "mul" and len(expr.args) == 2:
-                return self.mul_call_expression(expr.args, rendered_args)
-            if func_name == "mad" and len(expr.args) == 3:
-                left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
-                right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
-                addend = self.maybe_parenthesize(expr.args[2], rendered_args[2])
-                return f"(({left} * {right}) + {addend})"
-            if func_name == "dst" and len(expr.args) == 2:
-                src0 = self.maybe_parenthesize(expr.args[0], rendered_args[0])
-                src1 = self.maybe_parenthesize(expr.args[1], rendered_args[1])
-                return f"vec4(1.0, {src0}.y * {src1}.y, {src0}.z, {src1}.w)"
-            if func_name == "saturate":
-                if expr.args:
-                    return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"
-                return "clamp(0.0, 0.0, 1.0)"
-            if func_name == "rcp" and len(expr.args) == 1:
-                value = self.maybe_parenthesize(expr.args[0], rendered_args[0])
-                return f"(1.0 / {value})"
-            if (
-                func_name in self.REVOLUTION_REDUCED_INTRINSICS
-                and len(expr.args) == 1
-                and func_name not in self.source_function_names
-            ):
-                return self.trigonometric_call(
-                    func_name, expr.args[0], rendered_args[0]
-                )
-            precise_call = self.precise_intrinsic_call(
-                func_name, expr.args, rendered_args
-            )
-            if precise_call is not None:
-                return precise_call
-            if func_name != "round" or not self.source_function_accepts_argument_count(
-                func_name, len(expr.args)
-            ):
-                func_name = self.crossgl_intrinsic_name(func_name)
-            if func_name in self.interlocked_map:
-                func_name = self.interlocked_map[func_name]
-            integer_shape = source_integer_shape(self.resolve_integer_alias(func_name))
-            if (
-                integer_shape is not None
-                and integer_shape[1] == 64
-                and func_name not in self.source_function_names
-            ):
-                func_name = self.map_type(self.resolve_integer_alias(func_name))
-            if isinstance(func_name, str) and "<" in func_name:
-                func_name = templated_call_name(self, func_name)
-            func_name = self.render_function_identifier(func_name)
-            call = f"{func_name}({args})"
-            if (
-                self.hlsl_matrix_rows_are_columns()
-                and self.raytracing_matrix_call_raw_type(expr) is not None
-            ):
-                return f"transpose({call})"
-            return call
+            return self.generate_function_call_expression(expr, is_main)
         elif isinstance(expr, MemberAccessNode):
-            alias = self.stage_struct_parameter_member_alias(expr)
-            if alias is not None:
-                return self.render_identifier(alias)
-            matrix_swizzle = self.generate_matrix_swizzle(expr, is_main)
-            if matrix_swizzle is not None:
-                return matrix_swizzle
-            obj = None
-            if self.texel_swizzle_reads_element_components(expr.object, expr.member):
-                # Swizzle the four-component texel directly; the selected
-                # components all exist in the declared element type.
-                obj = self.generate_texel_access(expr.object, is_main, narrow=False)
-                if obj is None and isinstance(
-                    expr.object, (FunctionCallNode, TextureSampleNode)
-                ):
-                    self.read_raw_texel_method_result = True
-            if obj is None:
-                obj = self.generate_expression(expr.object, is_main)
-            self.read_raw_texel_method_result = False
-            scalar_splat = self.scalar_splat_swizzle_expression(
-                expr, obj, expected_type
-            )
-            if scalar_splat is not None:
-                return scalar_splat
-            matrix_member = self.matrix_member_expression(expr, is_main)
-            if matrix_member is not None:
-                return matrix_member
-            if isinstance(expr.object, (int, float)):
-                obj = f"({obj})"
-            elif isinstance(
-                expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode, AssignmentNode)
-            ):
-                # Member access binds tighter than any operator.
-                obj = f"({obj})"
-            return f"{obj}.{expr.member}"
+            return self.generate_member_access_expression(expr, is_main, expected_type)
         elif isinstance(expr, ArrayAccessNode):
             texel_access = self.generate_texel_access(expr, is_main)
             if texel_access is not None:
