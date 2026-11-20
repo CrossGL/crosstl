@@ -201,15 +201,10 @@ class MetalStructMethodMixin:
         return tuple(qualifiers)
 
     def _strip_function_qualifier_macros(self, prefix: str) -> str:
-        # Remove Metal function-qualifier MACROS (`METAL_FUNC`, `STEEL_CONST`,
-        # `C10_METAL_CONSTEXPR`) that may precede a member function's return type
-        # and return the remaining, whitespace-collapsed text. An empty result
-        # means the declarator carried no actual return type (a constructor).
-        stripped = re.sub(
-            r"\b(?:METAL_FUNC|STEEL_CONST|C10_METAL_CONSTEXPR)\b",
-            " ",
-            prefix,
-        )
+        # Remove the Metal standard library's function-qualifier macro `METAL_FUNC`, which may precede a member
+        # function's return type, and return the remaining, whitespace-collapsed text. An empty result means the
+        # declarator carried no actual return type (a constructor). Source macros are expanded before this runs.
+        stripped = re.sub(r"\bMETAL_FUNC\b", " ", prefix)
         return re.sub(r"\s+", " ", stripped).strip()
 
     def _struct_member_free_name(

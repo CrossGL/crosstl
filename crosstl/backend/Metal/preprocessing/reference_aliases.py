@@ -20,6 +20,7 @@ from ..forwarding_reference_accessors import (
     forwarded_storage_expression,
     selected_constexpr_body,
 )
+from ..function_parameter_lists import parameter_list_start
 from ..method_arity import named_parameter_arguments
 from ..reference_alias_arguments import call_argument_designates
 from .support import (
@@ -56,11 +57,16 @@ class MetalReferenceAliasMixin:
             return code
         structs_by_name = {struct.name: struct for struct in structs}
         rewrites: List[Tuple[int, int, str]] = []
+        masked = self._mask_comments_and_literals(code)
         for function in self._find_non_template_function_definitions(
             code, excluded_spans
         ):
-            # Include the braces so the body is its own lexical scope.
-            start, end = function.body_span[0] - 1, function.body_span[1] + 1
+            # Include the braces so the body is its own lexical scope, and the
+            # parameter list so parameters are visible receivers.
+            end = function.body_span[1] + 1
+            start = parameter_list_start(
+                masked, function.span[0], function.body_span[0] - 1
+            )
             body = code[start:end]
             rewritten = self._rewrite_local_reference_alias_bindings(
                 body,
@@ -134,9 +140,9 @@ class MetalReferenceAliasMixin:
                 receiver_parts, method_name, arg_open, arg_close, statement_end = (
                     initializer
                 )
-                if len(receiver_parts) < 2:
+                if receiver_parts == ["self"]:
+                    # Accessors of the implicit object stay with method lowering.
                     continue
-
                 receiver_declaration, receiver_type = self._receiver_struct_type_at(
                     working,
                     receiver_parts[0],
@@ -341,7 +347,9 @@ class MetalReferenceAliasMixin:
                 arg_open = cursor
                 break
             return None
-        if len(parts) < 3:
+        # `receiver.accessor(...)`: the receiver is a named value, optionally
+        # reached through a chain of value members.
+        if len(parts) < 2:
             return None
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:

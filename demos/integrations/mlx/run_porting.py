@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from crosstl.project import (
     VulkanComputeRuntime,
     build_project_test_runner_plan,
@@ -34,6 +37,8 @@ from crosstl.project.runtime_verification import (
     build_runtime_test_manifest,
     plan_runtime_test_manifest,
 )
+from demos.integrations.mlx import entry_frontier
+from demos.integrations.mlx.entry_frontier import PortingCheckError
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_REFERENCE_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -915,6 +920,54 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["AccT", "N_READS", "T"],
     },
 }
+# A GLSL compilation unit holds one entry point per stage (GLSL 4.60 section 6.1), so every
+# kernel of an OpenGL frontier unit has its own artifact (crosstl.project.glsl_entry_split).
+MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS = {
+    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+}
+MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT = sum(
+    MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+)
+# Per-entry outcomes of the OpenGL dynamic-workgroup frontier. An entry that consumes
+# threads_per_threadgroup needs a concrete workgroup size; an entry whose uint64_t pointer
+# offset has no proven 32-bit range is refused before that, since OpenGL indexes with int.
+# The sdpa_vector_2pass_2 entries consume neither and translate.
+MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES = {
+    MLX_ARG_REDUCE_SOURCE: {entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 24},
+    MLX_LOGSUMEXP_SOURCE: {
+        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 3,
+        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 3,
+    },
+    MLX_RMS_NORM_SOURCE: {
+        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 6,
+        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 6,
+    },
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 15,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 12,
+        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 15,
+    },
+    MLX_SOFTMAX_SOURCE: {
+        entry_frontier.OPENGL_INDEX_TYPE_UNSUPPORTED_CODE: 5,
+        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 5,
+    },
+}
+MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: tuple(
+        f"sdpa_vector_2pass_2_{dtype}_{head_dim}"
+        for dtype in ("float", "bfloat16_t", "float16_t")
+        for head_dim in (64, 96, 128, 256)
+    ),
+}
+MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT = sum(
+    MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT = sum(
+    len(entries) for entries in MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES.values()
+)
 MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
     "1": False,
     "2": False,
@@ -962,14 +1015,36 @@ MLX_FENCE_TARGET_CONTRACTS = {
         "targetDescription": "Vulkan SPIR-V",
     },
 }
+# A GLSL compilation unit holds one entry point per stage (GLSL 4.60 section 6.1), so project translation gives each
+# kernel of the multi-kernel fence unit its own OpenGL artifact (crosstl.project.glsl_entry_split). Every one of these
+# kernels issues the system-scope fence, so each artifact must be refused.
+MLX_FENCE_ENTRY_POINTS = ("input_coherent", "fence_update", "fence_wait")
+MLX_FENCE_PER_ENTRY_TARGETS = frozenset({"opengl"})
 MLX_REFERENCE_TARGETS = tuple(MLX_FENCE_TARGET_CONTRACTS)
+# One refused artifact per fence kernel on per-entry targets and one per unit elsewhere.
+MLX_FENCE_FAILED_ARTIFACT_COUNT = sum(
+    len(MLX_FENCE_ENTRY_POINTS) if target in MLX_FENCE_PER_ENTRY_TARGETS else 1
+    for target in MLX_REFERENCE_TARGETS
+)
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_EXPECTED_UNIT_COUNT = 42
 FULL_CORPUS_TARGETS = ("directx", "opengl")
-FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = FULL_CORPUS_EXPECTED_UNIT_COUNT * len(
-    FULL_CORPUS_TARGETS
+# HLSL keeps every kernel of a unit in one artifact. OpenGL gets one artifact per discovered kernel, because every
+# corpus unit holds two or more compute kernels; entry discovery finds 17319 of them at MLX_CORPUS_COMMIT 846d176.
+FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET = {
+    "directx": FULL_CORPUS_EXPECTED_UNIT_COUNT,
+    "opengl": 17319,
+}
+FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = sum(
+    FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target] for target in FULL_CORPUS_TARGETS
 )
-FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(FULL_CORPUS_TARGETS)
+FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET = {
+    target: len(MLX_FENCE_ENTRY_POINTS) if target in MLX_FENCE_PER_ENTRY_TARGETS else 1
+    for target in FULL_CORPUS_TARGETS
+}
+FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = sum(
+    FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET.values()
+)
 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
     FULL_CORPUS_EXPECTED_ARTIFACT_COUNT - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
 )
@@ -2711,10 +2786,6 @@ RESOLVED_FRONTIER_ISSUES = (
 )
 
 
-class PortingCheckError(RuntimeError):
-    """Raised when an MLX project-porting check fails."""
-
-
 @dataclass(frozen=True)
 class CommandResult:
     name: str
@@ -3658,6 +3729,13 @@ def _atomic_fence_expected_message(target_contract: Mapping[str, str]) -> str:
     )
 
 
+def _fence_artifact_entries(target: str) -> tuple[str | None, ...]:
+    """Entry points of the fence artifacts for ``target``; ``None`` is one artifact for the whole unit."""
+    if target in MLX_FENCE_PER_ENTRY_TARGETS:
+        return MLX_FENCE_ENTRY_POINTS
+    return (None,)
+
+
 def _validate_atomic_fence_contract_report(
     mlx_root: Path,
     output_dir: Path,
@@ -3673,13 +3751,17 @@ def _validate_atomic_fence_contract_report(
     )
     summary = payload.get("summary", {})
     _require(isinstance(summary, Mapping), "fence contract summary must be an object")
+    expected_artifact_counts = {
+        target: len(_fence_artifact_entries(target)) for target in selected_targets
+    }
+    expected_artifact_total = sum(expected_artifact_counts.values())
     expected_diagnostic_codes = {
-        contract["diagnosticCode"]: 1
+        contract["diagnosticCode"]: expected_artifact_counts[target]
         for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
         if target in selected_targets
     }
     expected_missing_capabilities = {
-        contract["missingCapability"]: 1
+        contract["missingCapability"]: expected_artifact_counts[target]
         for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
         if target in selected_targets
     }
@@ -3696,14 +3778,15 @@ def _validate_atomic_fence_contract_report(
     if exact_report:
         _require(
             summary.get("unitCount") == 1
-            and summary.get("artifactCount") == len(selected_targets)
+            and summary.get("artifactCount") == expected_artifact_total
             and summary.get("translatedCount") == 0
-            and summary.get("failedCount") == len(selected_targets),
-            "fence contract translation must report one failed artifact per target",
+            and summary.get("failedCount") == expected_artifact_total,
+            "fence contract translation must report one failed artifact per target "
+            "and, for one-entry-per-stage targets, per entry",
         )
         _require(
             summary.get("diagnosticCounts") == {
-                "error": len(selected_targets),
+                "error": expected_artifact_total,
                 "note": 0,
                 "warning": 0,
             },
@@ -3739,9 +3822,10 @@ def _validate_atomic_fence_contract_report(
     _require(isinstance(artifacts, list), "fence contract artifacts must be a list")
     if exact_report:
         _require(
-            len(diagnostics) == len(selected_targets)
-            and len(artifacts) == len(selected_targets),
-            "fence contract report must contain one diagnostic and artifact per target",
+            len(diagnostics) == expected_artifact_total
+            and len(artifacts) == expected_artifact_total,
+            "fence contract report must contain one diagnostic and artifact per "
+            "expected artifact",
         )
 
     target_results: dict[str, dict[str, Any]] = {}
@@ -3757,42 +3841,45 @@ def _validate_atomic_fence_contract_report(
                 "Cannot lower CrossGL atomicThreadFence"
             )
         ]
+        expected_entries = _fence_artifact_entries(target)
+        expected_count = len(expected_entries)
         _require(
-            len(target_diagnostics) == 1,
-            f"fence contract report must contain one {target} diagnostic",
+            len(target_diagnostics) == expected_count,
+            f"fence contract report must contain {expected_count} {target} diagnostic(s)",
         )
-        diagnostic = target_diagnostics[0]
         expected_message = _atomic_fence_expected_message(contract)
-        _require(
-            {
-                "severity": diagnostic.get("severity"),
-                "code": diagnostic.get("code"),
-                "message": diagnostic.get("message"),
-                "target": diagnostic.get("target"),
-                "sourceBackend": diagnostic.get("sourceBackend"),
-                "missingCapabilities": diagnostic.get("missingCapabilities"),
-            }
-            == {
-                "severity": "error",
-                "code": contract["diagnosticCode"],
-                "message": expected_message,
-                "target": target,
-                "sourceBackend": "metal",
-                "missingCapabilities": [contract["missingCapability"]],
-            },
-            f"fence contract {target} structured diagnostic changed",
-        )
-        location = diagnostic.get("location", {})
-        _require(
-            isinstance(location, Mapping) and location.get("file") == MLX_FENCE_SOURCE,
-            f"fence contract {target} diagnostic source changed",
-        )
+        for diagnostic in target_diagnostics:
+            _require(
+                {
+                    "severity": diagnostic.get("severity"),
+                    "code": diagnostic.get("code"),
+                    "message": diagnostic.get("message"),
+                    "target": diagnostic.get("target"),
+                    "sourceBackend": diagnostic.get("sourceBackend"),
+                    "missingCapabilities": diagnostic.get("missingCapabilities"),
+                }
+                == {
+                    "severity": "error",
+                    "code": contract["diagnosticCode"],
+                    "message": expected_message,
+                    "target": target,
+                    "sourceBackend": "metal",
+                    "missingCapabilities": [contract["missingCapability"]],
+                },
+                f"fence contract {target} structured diagnostic changed",
+            )
+            location = diagnostic.get("location", {})
+            _require(
+                isinstance(location, Mapping)
+                and location.get("file") == MLX_FENCE_SOURCE,
+                f"fence contract {target} diagnostic source changed",
+            )
         if exact_report:
             target_summary = summary.get("artifactsByTarget", {}).get(target, {})
             _require(
-                target_summary.get("artifactCount") == 1
+                target_summary.get("artifactCount") == expected_count
                 and target_summary.get("translatedCount") == 0
-                and target_summary.get("failedCount") == 1,
+                and target_summary.get("failedCount") == expected_count,
                 f"fence contract {target} artifact summary changed",
             )
 
@@ -3804,34 +3891,48 @@ def _validate_atomic_fence_contract_report(
             and artifact.get("target") == target
         ]
         _require(
-            len(target_artifacts) == 1,
-            f"fence contract report must contain one {target} artifact record",
+            len(target_artifacts) == expected_count,
+            f"fence contract report must contain {expected_count} {target} artifact record(s)",
         )
-        artifact = target_artifacts[0]
+        artifact_entries = []
+        for artifact in target_artifacts:
+            entry_point = artifact.get("entryPoint")
+            artifact_entries.append(
+                entry_point.get("source")
+                if isinstance(entry_point, Mapping)
+                and entry_point.get("target") == "main"
+                else entry_point
+            )
         _require(
-            artifact.get("sourceBackend") == "metal"
-            and artifact.get("status") == "failed"
-            and artifact.get("error") == expected_message,
-            f"fence contract {target} failed artifact record changed",
+            sorted(artifact_entries, key=str) == sorted(expected_entries, key=str),
+            f"fence contract {target} artifact entry points changed",
         )
-        artifact_path = artifact.get("path")
-        _require(
-            isinstance(artifact_path, str) and bool(artifact_path),
-            f"fence contract {target} artifact path is missing",
-        )
-        generated_path = (mlx_root / artifact_path).resolve()
-        _require(
-            _is_relative_to(generated_path, output_root),
-            f"fence contract {target} artifact path escaped its output directory",
-        )
-        _require(
-            not generated_path.exists(),
-            f"fence contract {target} unexpectedly emitted {artifact_path}",
-        )
-        _require(
-            "generatedHash" not in artifact and "generatedSizeBytes" not in artifact,
-            f"fence contract {target} recorded generated artifact metadata",
-        )
+        for artifact in target_artifacts:
+            _require(
+                artifact.get("sourceBackend") == "metal"
+                and artifact.get("status") == "failed"
+                and artifact.get("error") == expected_message,
+                f"fence contract {target} failed artifact record changed",
+            )
+            artifact_path = artifact.get("path")
+            _require(
+                isinstance(artifact_path, str) and bool(artifact_path),
+                f"fence contract {target} artifact path is missing",
+            )
+            generated_path = (mlx_root / artifact_path).resolve()
+            _require(
+                _is_relative_to(generated_path, output_root),
+                f"fence contract {target} artifact path escaped its output directory",
+            )
+            _require(
+                not generated_path.exists(),
+                f"fence contract {target} unexpectedly emitted {artifact_path}",
+            )
+            _require(
+                "generatedHash" not in artifact
+                and "generatedSizeBytes" not in artifact,
+                f"fence contract {target} recorded generated artifact metadata",
+            )
         target_results[target] = {
             "diagnosticCode": contract["diagnosticCode"],
             "missingCapability": contract["missingCapability"],
@@ -3897,8 +3998,12 @@ def _check_atomic_fence_contract(
         "report": _relpath(report_path, mlx_root),
         "source": MLX_FENCE_SOURCE,
         "targets": list(targets),
-        "artifactRecordCount": len(targets),
-        "failedArtifactCount": len(targets),
+        "artifactRecordCount": sum(
+            len(_fence_artifact_entries(target)) for target in targets
+        ),
+        "failedArtifactCount": sum(
+            len(_fence_artifact_entries(target)) for target in targets
+        ),
         "emittedArtifactCount": 0,
         "requestedContract": dict(MLX_FENCE_REQUESTED_CONTRACT),
         "targetContracts": target_results,
@@ -7560,6 +7665,155 @@ def _validate_arange_opengl(
     )
 
 
+def _require_opengl_specialization_constants(
+    mlx_root: Path,
+    artifacts: Sequence[tuple[str, str, Mapping[str, Any]]],
+) -> dict[str, dict[str, int]]:
+    """Function constants each OpenGL entry artifact reflects, by source.
+
+    An entry artifact reflects the function constants its entry uses, with the source's
+    constant ids, and declares exactly those as ``layout(constant_id = N) const``, never
+    as uniforms.
+    """
+    observed: dict[str, dict[str, int]] = {}
+    for source, entry, artifact in artifacts:
+        expected_constants = MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(source)
+        if expected_constants is None:
+            continue
+        reflected_constants = artifact.get("specializationConstants", [])
+        _require(
+            isinstance(reflected_constants, list)
+            and all(isinstance(constant, Mapping) for constant in reflected_constants),
+            f"OpenGL specialization metadata is missing for {source}:{entry}",
+        )
+        reflected_ids = {
+            constant.get("name"): constant.get("id") for constant in reflected_constants
+        }
+        _require(
+            len(reflected_ids) == len(reflected_constants)
+            and all(
+                expected_constants.get(name) == constant_id
+                for name, constant_id in reflected_ids.items()
+            ),
+            f"OpenGL specialization metadata does not match {source}:{entry}",
+        )
+        materialization = artifact.get("specializationMaterialization")
+        _require(
+            not reflected_ids
+            or (
+                isinstance(materialization, Mapping)
+                and materialization.get("mode") == "deferred"
+                and materialization.get("targetSupportsDeferredSpecialization") is True
+            ),
+            f"OpenGL specialization deferral is not recorded for {source}:{entry}",
+        )
+        generated = (mlx_root / str(artifact["path"])).read_text(encoding="utf-8")
+        for name, constant_id in expected_constants.items():
+            declared = (
+                re.search(
+                    rf"layout\s*\(\s*constant_id\s*=\s*{constant_id}\s*\)"
+                    rf"\s*const\s+\w+\s+{re.escape(name)}\s*=",
+                    generated,
+                )
+                is not None
+            )
+            _require(
+                declared == (name in reflected_ids),
+                f"OpenGL artifact {source}:{entry} declaration of specialization id "
+                f"{constant_id} for {name} does not match its reflection",
+            )
+            _require(
+                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated) is None,
+                f"OpenGL artifact lowered specialization input {name} as a uniform",
+            )
+        observed.setdefault(source, {}).update(reflected_ids)
+    return {
+        source: {
+            name: constant_id
+            for name, constant_id in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[
+                source
+            ].items()
+            if name in constants
+        }
+        for source, constants in sorted(observed.items())
+        if constants
+    }
+
+
+def _validate_opengl_frontier_artifacts(
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+    artifacts: Sequence[tuple[str, str, Mapping[str, Any]]],
+) -> dict[str, dict[str, str]]:
+    """Compile every OpenGL entry artifact with glslangValidator and check its SPIR-V."""
+    required_tools = {
+        "glslangValidator": shutil.which("glslangValidator"),
+        "spirv-val": shutil.which("spirv-val"),
+    }
+    missing_tools = sorted(
+        name for name, resolved in required_tools.items() if resolved is None
+    )
+    _require(
+        not missing_tools,
+        "OpenGL frontier validation requires: " + ", ".join(missing_tools),
+    )
+    validation_outputs: dict[str, dict[str, str]] = {}
+    for source, entry, artifact in artifacts:
+        generated_path = mlx_root / str(artifact["path"])
+        stem = Path(source).stem
+        artifact_stem = generated_path.stem
+        command_name = f"validate-opengl-{stem}-{artifact_stem}".replace("_", "-")
+        output_path = work_dir / "validation" / "opengl" / stem / f"{artifact_stem}.spv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        compile_result = _run_command(
+            command_name,
+            [
+                str(required_tools["glslangValidator"]),
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(generated_path),
+                "-o",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            f"OpenGL {stem}:{entry} native compilation failed; inspect "
+            f"{command_name} logs",
+        )
+        _require(
+            output_path.is_file(),
+            f"OpenGL {stem}:{entry} compilation succeeded without producing SPIR-V",
+        )
+        validation_result = _run_command(
+            f"{command_name}-spirv",
+            [
+                str(required_tools["spirv-val"]),
+                "--target-env",
+                "spv1.3",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            validation_result.returncode == 0,
+            f"OpenGL {stem}:{entry} SPIR-V validation failed; inspect "
+            f"{command_name}-spirv logs",
+        )
+        validation_outputs.setdefault(source, {})[entry] = _relpath(
+            output_path, mlx_root
+        )
+    return validation_outputs
+
+
 def _check_opengl_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -7584,26 +7838,18 @@ def _check_opengl_frontier(
         index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
         metal_source_options={"binary16_remainder_profile": "binary32-quotient"},
     )
-    artifacts_by_source = _require_clean_frontier_report(
+    clean_artifacts = entry_frontier.require_clean_entry_frontier(
         mlx_root,
         clean_output_dir,
         payload,
         target="opengl",
-        sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
-        validated=False,
-        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
-    )
-    summary = payload.get("summary", {})
-    diagnostic_counts = summary.get("diagnosticCounts", {})
-    diagnostics = payload.get("diagnostics", [])
-    _require(
-        isinstance(diagnostic_counts, Mapping)
-        and diagnostics == []
-        and all(
-            diagnostic_counts.get(severity) == 0
-            for severity in ("note", "warning", "error")
+        units_by_source=_require_frontier_project_join(
+            payload,
+            target="opengl",
+            sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+            index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
         ),
-        "OpenGL clean frontier translation must have zero project diagnostics",
+        entry_counts=MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS,
     )
 
     blocked_output_dir = work_dir / "out-opengl-workgroup-frontier"
@@ -7625,148 +7871,70 @@ def _check_opengl_frontier(
         blocked_result.returncode == 1,
         "OpenGL dynamic-workgroup frontier must fail with exit code 1",
     )
-    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+    entry_evidence, blocked_artifacts = entry_frontier.require_entry_outcome_frontier(
         mlx_root,
         blocked_output_dir,
         blocked_payload,
         target="opengl",
-        sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-        validated=False,
+        units_by_source=_require_frontier_project_join(
+            blocked_payload,
+            target="opengl",
+            sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        ),
+        entry_counts=MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS,
+        expected_outcomes=MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES,
+        translated_entries=MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES,
     )
-
-    generated_paths: dict[str, Path] = {}
-    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES:
-        artifact_path = artifacts_by_source[source].get("path")
-        _require(
-            isinstance(artifact_path, str),
-            f"OpenGL frontier artifact path is missing for {source}",
-        )
-        generated_path = mlx_root / artifact_path
-        _require(
-            generated_path.is_file(),
-            f"OpenGL frontier artifact is missing: {artifact_path}",
-        )
-        generated_paths[source] = generated_path
-
-    specialization_evidence: dict[str, dict[str, int]] = {}
-    for source, expected_constants in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.items():
-        if source not in artifacts_by_source:
-            continue
-        artifact = artifacts_by_source[source]
-        reflected_constants = artifact.get("specializationConstants", [])
-        _require(
-            isinstance(reflected_constants, list),
-            f"OpenGL specialization metadata is missing for {source}",
-        )
-        reflected_ids = {
-            constant.get("name"): constant.get("id")
-            for constant in reflected_constants
-            if isinstance(constant, Mapping)
+    dispatch_evidence = {
+        source: {
+            **MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source],
+            **entry_evidence[source],
+            "sourceEntryPointIdentityStatus": "matched-materialized-host-names",
         }
-        _require(
-            reflected_ids == expected_constants,
-            f"OpenGL specialization metadata does not match {source}",
-        )
-        materialization = artifact.get("specializationMaterialization")
-        _require(
-            isinstance(materialization, Mapping)
-            and materialization.get("mode") == "deferred"
-            and materialization.get("targetSupportsDeferredSpecialization") is True,
-            f"OpenGL specialization deferral is not recorded for {source}",
-        )
-        generated = generated_paths[source].read_text(encoding="utf-8")
-        for name, constant_id in expected_constants.items():
+        for source in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    }
+    blocked_translated = [
+        (source, entry, artifact)
+        for source in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        for entry, artifact in blocked_artifacts[source].items()
+        if artifact.get("status") == entry_frontier.ENTRY_OUTCOME_TRANSLATED
+    ]
+    clean_translated = [
+        (source, entry, artifact)
+        for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+        for entry, artifact in clean_artifacts[source].items()
+    ]
+    specialization_evidence = _require_opengl_specialization_constants(
+        mlx_root, [*clean_translated, *blocked_translated]
+    )
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES:
+        if source in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS:
             _require(
-                re.search(
-                    rf"layout\s*\(\s*constant_id\s*=\s*{constant_id}\s*\)"
-                    rf"\s*const\s+\w+\s+{re.escape(name)}\s*=",
-                    generated,
-                )
-                is not None,
-                f"OpenGL artifact did not preserve specialization id {constant_id} "
-                f"for {name}",
+                specialization_evidence.get(source)
+                == MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[source],
+                f"OpenGL entry artifacts do not reflect every specialization "
+                f"constant of {source}",
             )
-            _require(
-                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated) is None,
-                f"OpenGL artifact lowered specialization input {name} as a uniform",
-            )
-        specialization_evidence[source] = dict(expected_constants)
 
     validation_status = "not-required"
-    validation_outputs: dict[str, str] = {}
-    toolchain_validated_sources: list[str] = []
+    validation_outputs: dict[str, dict[str, str]] = {}
     if require_toolchain:
-        required_tools = {
-            "glslangValidator": shutil.which("glslangValidator"),
-            "spirv-val": shutil.which("spirv-val"),
-        }
-        missing_tools = sorted(
-            name for name, resolved in required_tools.items() if resolved is None
-        )
-        _require(
-            not missing_tools,
-            "OpenGL frontier validation requires: " + ", ".join(missing_tools),
-        )
-
-        for source, generated_path in generated_paths.items():
-            stem = Path(source).stem
-            command_name = stem.replace("_", "-")
-            output_path = work_dir / "validation" / f"{stem}-opengl.spv"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            compile_result = _run_command(
-                f"validate-{command_name}-opengl",
-                [
-                    str(required_tools["glslangValidator"]),
-                    "--target-env",
-                    "opengl",
-                    "--target-env",
-                    "spirv1.3",
-                    "-S",
-                    "comp",
-                    str(generated_path),
-                    "-o",
-                    str(output_path),
-                ],
-                log_dir=log_dir,
-                check=False,
-            )
-            _require(
-                compile_result.returncode == 0,
-                (
-                    f"OpenGL {stem} native compilation failed; inspect "
-                    f"validate-{command_name}-opengl logs"
-                ),
-            )
-            _require(
-                output_path.is_file(),
-                f"OpenGL {stem} compilation succeeded without producing SPIR-V",
-            )
-            validation_result = _run_command(
-                f"validate-{command_name}-opengl-spirv",
-                [
-                    str(required_tools["spirv-val"]),
-                    "--target-env",
-                    "spv1.3",
-                    str(output_path),
-                ],
-                log_dir=log_dir,
-                check=False,
-            )
-            _require(
-                validation_result.returncode == 0,
-                (
-                    f"OpenGL {stem} SPIR-V validation failed; inspect "
-                    f"validate-{command_name}-opengl-spirv logs"
-                ),
-            )
-            validation_outputs[source] = _relpath(output_path, mlx_root)
-            toolchain_validated_sources.append(source)
-        _require(
-            toolchain_validated_sources == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-            "OpenGL frontier toolchain did not validate every translated source",
+        validation_outputs = _validate_opengl_frontier_artifacts(
+            mlx_root, work_dir, log_dir, [*clean_translated, *blocked_translated]
         )
         validation_status = "validated"
-
+    toolchain_validated_sources = [
+        source
+        for source in (
+            *MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+            *MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES,
+        )
+        if source in validation_outputs
+    ]
+    blocked_artifact_count = (
+        MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
+        - MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
+    )
     return {
         "name": "opengl-frontier",
         "status": "passed-with-expected-workgroup-blockers",
@@ -7776,19 +7944,33 @@ def _check_opengl_frontier(
         "sources": list(MLX_OPENGL_FRONTIER_SOURCES),
         "sourceCount": len(MLX_OPENGL_FRONTIER_SOURCES),
         "target": "opengl",
-        "artifactCount": len(MLX_OPENGL_FRONTIER_SOURCES),
-        "translatedSources": list(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
-        "translatedArtifactCount": len(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
-        "workgroupBlockedSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
-        "workgroupBlockedArtifactCount": len(
-            MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        "artifactGranularity": "entry-point",
+        "artifactCount": (
+            MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT
+            + MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
         ),
+        "translatedSources": list(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
+        "translatedArtifactCount": MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT,
+        "translatedEntryPointCounts": {
+            source: len(clean_artifacts[source])
+            for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+        },
+        "workgroupBlockedSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupFrontierArtifactCount": MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT,
+        "workgroupFrontierTranslatedArtifactCount": len(blocked_translated),
+        "workgroupBlockedArtifactCount": blocked_artifact_count,
         "projectDiagnosticCount": 0,
-        "expectedProjectErrorCount": len(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "expectedProjectErrorCount": blocked_artifact_count,
         "toolchainRequired": require_toolchain,
-        "toolchainSources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+        "toolchainSources": [
+            *MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+            *MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES,
+        ],
+        "toolchainArtifactCount": len(clean_translated) + len(blocked_translated),
         "toolchainValidatedSources": toolchain_validated_sources,
-        "toolchainValidatedArtifactCount": len(toolchain_validated_sources),
+        "toolchainValidatedArtifactCount": sum(
+            len(outputs) for outputs in validation_outputs.values()
+        ),
         "nativeValidationStatus": validation_status,
         "nativeValidator": "glslangValidator",
         "spirvValidator": "spirv-val",
@@ -10871,7 +11053,9 @@ def _translate_full_corpus(
     expected_error_diagnostics_by_code = Counter(
         {
             **{
-                contract["diagnosticCode"]: 1
+                contract[
+                    "diagnosticCode"
+                ]: FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target]
                 for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
                 if target in FULL_CORPUS_TARGETS
             },
@@ -10882,8 +11066,11 @@ def _translate_full_corpus(
     )
     expected_target_counts = {
         target: {
-            "translatedCount": FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
-            "failedCount": 1,
+            "translatedCount": (
+                FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target]
+                - FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target]
+            ),
+            "failedCount": FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target],
         }
         for target in FULL_CORPUS_TARGETS
     }

@@ -1289,7 +1289,7 @@ class MetalLocalDeclarationMixin:
         if paren_end is None:
             return None
         before = header[:paren_start].rstrip()
-        is_constexpr = bool(re.search(r"\b(?:constexpr|C10_METAL_CONSTEXPR)\b", before))
+        is_constexpr = bool(re.search(r"\bconstexpr\b", before))
         name_region = self._strip_function_qualifier_macros(before)
         name_region = re.sub(r"\b(?:constexpr|explicit|inline)\b", " ", name_region)
         name_region = re.sub(r"\s+", " ", name_region).strip()

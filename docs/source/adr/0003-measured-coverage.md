@@ -113,15 +113,18 @@ generator, such as Rust output's missing `#![no_std]`, then stays a gap of that 
 as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
 translation that computes the operation with other instructions does not count. CrossGL probes come from a small
 template layer, `tools/coverage/crossgl/`, and the
-spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
+spelling tables in `tools/coverage/spellings.py` and `tools/coverage/rust_spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.
 
 ### 5. Generated data stays out of `main`
 
 A `coverage` workflow runs on every push to `main` and nightly. It publishes `coverage.json`, `coverage.svg`,
-`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history,
-to an orphan `coverage` branch as a single replaced commit. Only that job has `contents: write`. The README embeds
+`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history, to
+an orphan `coverage` branch as a single replaced commit. No published file may exceed 1 MB, so `coverage.json` keeps
+each row's score and counts, and the row's features go to `features/<language>-<direction>.json`; the publish step
+fails rather than write a larger file. `history.csv` keeps the newest 400 runs that fit in that limit, so more rows
+shorten the history instead of stopping publication. Only that job has `contents: write`. The README embeds
 `coverage.svg` from the `coverage` branch and `COVERAGE.md` embeds the trend. Both charts are plain SVG written by
 small scripts with no plotting dependency. Contributors never run a regeneration step.
 

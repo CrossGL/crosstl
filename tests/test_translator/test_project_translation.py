@@ -19465,7 +19465,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             "reason": "missing-template-arguments",
             "sourceDeclaration": {
                 "file": "shaders/reduction.metal",
-                "line": 5,
+                "line": 7,
                 "column": 1,
                 "name": "reduce_values",
             },
@@ -19747,7 +19747,7 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
                 "reason": "missing-template-arguments",
                 "sourceDeclaration": {
                     "file": "steel_attention_epilogue.metal",
-                    "line": 5,
+                    "line": 7,
                     "column": 1,
                     "name": "BlockMMA",
                 },
@@ -19779,7 +19779,7 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
                 "targetBackend": "opengl",
                 "declarationLocation": {
                     "file": "steel_attention_epilogue.metal",
-                    "line": 5,
+                    "line": 7,
                     "column": 1,
                 },
             }
