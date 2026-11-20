@@ -252,16 +252,22 @@ def run_output(feature: Feature, language: str) -> Result:
         tool = validators.TOOLS[language] if outcome in ("supported", "wrong") else ""
         return Result(feature, "output", outcome, detail, tool, semantic)
 
+    probe, refusal = None, ""
     try:
         probe = probes.build(feature, CROSSGL_DIALECTS.get(language, "crossgl"))
     except probes.NoSpelling as error:
-        return result("refused", str(error))
+        refusal = str(error)
     except probes.ProbeError as error:
         return result("untested", str(error))
-    _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
+    else:
+        _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
+    # As in the input row, a feature the target's compiler rejects in its own probe is untested, even when CrossGL
+    # has no spelling for it: the target lacks the feature, so a refusal would not be a gap of CrossTL's.
     probed, rejected = _native_rejection(feature, language)
     if rejected:
         return result("untested", f"the probe itself is rejected: {rejected}")
+    if probe is None:
+        return result("refused", refusal)
     # The semantic id stays the one :func:`.semantic.lower` found for the usual target.
     feature = probed
     try:

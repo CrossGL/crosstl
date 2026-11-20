@@ -141,6 +141,9 @@ GENERIC_POINTER = "void *"
 # every ALU instruction (max/gpu/sync/sync.mojo).
 SCHEDULE_MASK = "AMDScheduleBarrierMask"
 SCHEDULE_MASK_VALUE = f"{SCHEDULE_MASK}.ALL_ALU"
+# The type of the binary function MAX's generic warp reductions apply (max/gpu/primitives/warp.mojo), which a Mojo
+# probe defines as the sum of its two arguments.
+REDUCE_CLOSURE = "_ReduceClosure"
 # The OpenCL C enumerated types of the synchronization, atomic, event-profiling and enqueue functions, whose arguments
 # are named constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as
 # ``opaque``.
@@ -236,6 +239,7 @@ def tuple_element(opaque: str) -> tuple[Type, int] | None:
 @dataclass(frozen=True)
 class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
+    ``atomic``, an atomic value whose method the probe calls, made of the output buffer's element,
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
     value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
     a uniform, ``workgroup``, a variable the compute workgroup shares, ``workgroup address`` and ``constant address``,
