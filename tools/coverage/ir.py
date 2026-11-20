@@ -1,9 +1,10 @@
 """The CrossGL IR row: which semantic features of any backend CrossGL can express.
 
 Its feature universe is the union of every backend's output features, grouped by semantic id (:mod:`.semantic`); a
-function with no id takes the id of the functions that CrossGL spells the same way, and functions that still have
-none are one semantic feature per CrossGL spelling, named ``crossgl/<function>`` when several languages have it and
-``<language>/<function>`` otherwise. Any other feature without an id is a semantic feature of its own. A semantic
+function with no id takes the id of the GLSL function that SPIRV-Cross writes it for (:data:`.semantic.CROSS_COMPILED`)
+or of the functions that CrossGL spells the same way, and functions that still have none are one semantic feature
+per CrossGL spelling, named ``crossgl/<function>`` when several languages have it and ``<language>/<function>``
+otherwise. Any other feature without an id is a semantic feature of its own. A semantic
 feature is expressible, and counts as ``supported``, when the CrossGL probe of at least one member parses,
 type-checks and translates correctly to that member's backend, or translates to valid SPIR-V whose call has the
 member's semantic id (``expressed``, :func:`.runner.expressed`). Otherwise the row reports a ``wrong`` result before
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from . import spellings
 from .model import Score
-from .semantic import BORROWED
+from .semantic import BORROWED, CROSS_COMPILED
 
 LANGUAGE = "crossgl"
 DIRECTION = "ir"
@@ -57,8 +58,10 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         for feature in backend["features"]:
             function = feature["category"] == "function"
             spelled = _spelled(feature)
+            twin = CROSS_COMPILED.get(language, {}).get(feature["name"], "")
             key = (
                 feature.get("semantic")
+                or ids.get(("glsl", twin))
                 or ids.get((lender, spelled))
                 or (alike.get(spelled, "") if function else "")
             )
