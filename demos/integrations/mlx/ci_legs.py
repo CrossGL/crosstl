@@ -481,7 +481,7 @@ def workflow_legs(workflow):
                 if key not in {"group", "include"}
             },
         }
-        include = [entry for entry in matrix.get("include", []) or []]
+        include = [*matrix.get("include", []) or []]
         for group in groups:
             entry = {"group": group}
             for extra in include:
