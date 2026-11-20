@@ -7,8 +7,8 @@ from .array_utils import (
     format_c_style_array_declaration,
 )
 from .directx_values import (
-    DirectXResourcePointerArrayError,
     HLSL_NULL_WORKGROUP_POINTER_CONTRACT,
+    DirectXResourcePointerArrayError,
 )
 from .hlsl_extension_builtins import (
     hlsl_builtin_input_parameter,
