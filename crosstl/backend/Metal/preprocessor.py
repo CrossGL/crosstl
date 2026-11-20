@@ -126,6 +126,7 @@ from .namespaced_specializations import (
 )
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
+from .overload_deduction import deduction_pattern_mismatch
 from .overload_precedence import exact_template_outranks
 from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
@@ -4273,10 +4274,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        struct_names = {struct.name for struct in structs}
+        alias_bindings = self._source_type_alias_bindings
         split_code = split_struct_declarator_lists(
             code,
-            (struct.name for struct in structs),
+            struct_names
+            | {
+                name
+                for name, bindings in alias_bindings.items()
+                if any(binding.target in struct_names for binding in bindings)
+            },
             self._find_comment_and_literal_spans(code),
+            lambda name, position: name in struct_names
+            or self._resolve_struct_type_alias_at(alias_bindings, name, position)
+            in struct_names,
         )
         if split_code != code:
             # Every receiver of a declarator list now has its own declaration.
@@ -17686,7 +17697,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # unresolved/ambiguous case.
         representative = overloads[0]
         candidates: List[Tuple[_MetalStructMethod, Dict[str, str]]] = []
+        deduced: List[Tuple[_MetalStructMethod, Dict[str, str]]] = []
         for overload in overloads:
+            failures: List[str] = []
             bindings = self._bind_template_method_parameters(
                 overload,
                 concrete_argument_types,
@@ -17696,9 +17709,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 argument_type_aliases=argument_type_aliases,
                 argument_type_position=argument_type_position,
                 argument_type_fallback_position=argument_type_fallback_position,
+                deduction_failures=failures,
             )
             if bindings is not None:
                 candidates.append((overload, bindings))
+                if not failures:
+                    deduced.append((overload, bindings))
+        if len(candidates) > 1 and deduced:
+            # An overload whose deduction fails for some argument is not a
+            # candidate ([temp.deduct.call]/4), so it cannot make a call ambiguous.
+            candidates = deduced
         if not candidates:
             raise MetalStructMethodError(
                 "Cannot lower template member method "
@@ -17845,11 +17865,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         argument_type_position: Optional[int] = None,
         argument_type_fallback_position: Optional[int] = None,
+        deduction_failures: Optional[List[str]] = None,
     ) -> Optional[Dict[str, str]]:
         # Match each declared method-parameter type (which may contain the
         # template parameters) against the inferred concrete argument type and
         # collect consistent bindings. Returns None if any template parameter is
-        # left unbound or a parameter binds inconsistently.
+        # left unbound or a parameter binds inconsistently. Parameter types whose
+        # deduction must fail (overload_deduction.py) are appended to
+        # `deduction_failures` when it is given.
         template_parameter_set = set(method.template_parameters)
         source_type_aliases = self._source_type_alias_bindings
 
@@ -17956,6 +17979,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         }
         if any(not value for value in bindings.values()):
             return None
+        explicitly_bound = set(bindings)
         indirect_pointee_types: List[Tuple[str, str]] = []
         for (
             declared_type,
@@ -18018,6 +18042,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 template_parameter_set,
                 local_bindings,
             )
+            if (
+                deduction_failures is not None
+                and not local_bindings
+                and deduction_pattern_mismatch(
+                    declared_type,
+                    concrete_value_type,
+                    template_parameter_set.difference(explicitly_bound),
+                )
+            ):
+                deduction_failures.append(declared_type)
             for name, value in local_bindings.items():
                 existing = bindings.get(name)
                 if existing is not None and existing != value:
