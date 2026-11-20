@@ -10,10 +10,9 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
-from .gpu_device_globals import (
-    at_file_scope,
-    constant_in_device_memory,
-)
+from ..refusals import CudaRefusal
+from .cuda_constant_folding import device_constant_declaration
+from .gpu_device_globals import at_file_scope
 from .resource_arrays import format_array_declarator
 from .stage_utils import normalize_stage_name
 
@@ -320,7 +319,9 @@ class CudaVisitorMixin:
             declaration += f" = {self.visit(value)}"
         declaration = f"const {declaration}"
         if at_file_scope(self):
-            declaration = constant_in_device_memory(declaration)
+            declaration = device_constant_declaration(
+                self, node.name, const_type, value, declaration, CudaRefusal
+            )
         self.emit(f"{declaration};")
 
     def format_typed_declarator(self, type_name, name, dynamic_array_as_pointer=True):
