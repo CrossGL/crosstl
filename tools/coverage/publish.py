@@ -1,8 +1,9 @@
 """What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
 bounded ``history.csv`` and the trend chart drawn from it.
 
-``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all five files. Only CI
-runs it; contributors never regenerate anything.
+``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes them all, with the
+report's feature rows in ``features/`` (see :func:`tools.coverage.report.site`). Only CI runs it; contributors never
+regenerate anything.
 """
 
 from __future__ import annotations
@@ -10,17 +11,20 @@ from __future__ import annotations
 import csv
 import io
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote
 
 from . import chart, ir, trend
 from .causes import cause, diagnostic, grouped, headline
 from .model import OUTCOMES
-from .report import dumps
+from .report import site
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
 HISTORY_RUNS = 400
 HISTORY_FIELDS = ("date", "commit", "language", "direction", "score", *OUTCOMES)
+# The most bytes a published file may have (ADR 0003, section 5).
+SIZE_LIMIT = 1_000_000
 DETAIL_LIMIT = 160
 # A cause in COVERAGE.md is longer, so that two causes do not read the same once cut.
 CAUSE_LIMIT = 400
@@ -332,8 +336,21 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _csv(rows: Iterable[dict], header: bool = True) -> str:
+    out = io.StringIO()
+    writer = csv.DictWriter(
+        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
+    )
+    if header:
+        writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def history(report: dict, previous: str = "") -> str:
-    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs."""
+    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs that fit in
+    :data:`SIZE_LIMIT` bytes, so that a growing number of rows shortens the history instead of stopping publication.
+    """
     rows = [r for r in csv.DictReader(io.StringIO(previous)) if r.get("date")]
     rows = [
         r
@@ -353,15 +370,18 @@ def history(report: dict, previous: str = "") -> str:
                 **{o: str(row["counts"][o]) for o in OUTCOMES},
             }
         )
-    runs = sorted({(r["date"], r["commit"]) for r in rows})[-HISTORY_RUNS:]
-    kept = set(runs)
-    out = io.StringIO()
-    writer = csv.DictWriter(
-        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
-    )
-    writer.writeheader()
-    writer.writerows(r for r in rows if (r["date"], r["commit"]) in kept)
-    return out.getvalue()
+    sizes: dict[tuple[str, str], int] = {}
+    for r in rows:
+        run = (r["date"], r["commit"])
+        sizes[run] = sizes.get(run, 0) + len(_csv([r], header=False).encode("utf-8"))
+    size = len(_csv([]).encode("utf-8"))
+    kept = set()
+    for run in sorted(sizes, reverse=True)[:HISTORY_RUNS]:
+        size += sizes[run]
+        if size > SIZE_LIMIT:
+            break
+        kept.add(run)
+    return _csv(r for r in rows if (r["date"], r["commit"]) in kept)
 
 
 def write_site(
@@ -370,19 +390,28 @@ def write_site(
     previous_history: str = "",
     repository: str = "CrossGL/crosstl",
 ) -> list[Path]:
-    """Write the five published files into ``directory`` and return their paths."""
-    directory.mkdir(parents=True, exist_ok=True)
+    """Write the published files into ``directory`` and return their paths.
+
+    Raises ``ValueError`` before writing anything if a file would exceed :data:`SIZE_LIMIT`.
+    """
     runs = history(report, previous_history)
     files = {
-        "coverage.json": dumps(report),
+        **site(report),
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
         "history.csv": runs,
         "trend.svg": trend.render(runs),
     }
+    for filename, text in files.items():
+        size = len(text.encode("utf-8"))
+        if size > SIZE_LIMIT:
+            raise ValueError(
+                f"{filename} would be {size} bytes, over the {SIZE_LIMIT}-byte limit for a published file"
+            )
     paths = []
     for filename, text in files.items():
         path = directory / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         paths.append(path)
     return paths

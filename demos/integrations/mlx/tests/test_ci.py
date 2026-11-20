@@ -1933,7 +1933,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX summary identity or status is incorrect" in frontier
     assert "MLX summary check names must be unique" in frontier
     assert "MLX checkout proof does not match the pinned revision" in frontier
-    assert "fence contract accounting must be 3 failed, 0 emitted" in frontier
+    assert (
+        "fence contract accounting must refuse every fence artifact and emit none"
+        in frontier
+    )
+    assert 'fence["failedArtifactCount"] != MLX_FENCE_FAILED_ARTIFACT_COUNT' in frontier
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in frontier
     assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in frontier
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in frontier

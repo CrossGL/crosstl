@@ -2,10 +2,8 @@
 
 import random
 
-from crosstl.backend.Metal.preprocessor import (
-    MetalPreprocessor,
-    _MetalReceiverDeclaration,
-)
+from crosstl.backend.Metal.preprocessing.support import _MetalReceiverDeclaration
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.backend.Metal.receiver_visibility import (
     ReceiverDeclarationSweep,
     visible_receiver_declaration,

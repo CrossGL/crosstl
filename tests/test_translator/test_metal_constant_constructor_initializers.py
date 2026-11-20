@@ -21,6 +21,7 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     translate_project,
 )
+from tests.stage_entry_helpers import translate_each_entry
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -66,19 +67,22 @@ kernel void other(device float* out [[buffer(0)]],
 def _translate(tmp_path, target):
     path = tmp_path / "sum.metal"
     path.write_text(_SOURCE, encoding="utf-8")
-    return crosstl.translate(str(path), backend=target, format_output=False)
+    # GLSL holds one compute entry per unit, so each kernel is its own artifact there.
+    return list(translate_each_entry(path, target, format_output=False).values())
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 def test_constructor_initializer_translates_and_compiles(tmp_path, target):
-    generated = _translate(tmp_path, target)
+    artifacts = _translate(tmp_path, target)
     if target == "metal":
+        (generated,) = artifacts
         assert "init = complex_t_float{float(float(3)), float(float(0))};" in generated
         # The helper's only call was folded, so it is not emitted.
         assert "_2_int" not in generated
     if shutil.which(TOOLS[target]):
-        _, module = _compile(generated, target, tmp_path)
-        assert module.is_file() and module.stat().st_size
+        for generated in artifacts:
+            _, module = _compile(generated, target, tmp_path)
+            assert module.is_file() and module.stat().st_size
 
 
 def test_entry_scoped_round_trip_keeps_initializer_helpers(tmp_path):

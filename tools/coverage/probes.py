@@ -90,6 +90,10 @@ def _storage(scalar: str) -> str:
     return _STORAGE.get(scalar, scalar)
 
 
+# The parameter directions of an atomic operation's operand, which the probe makes of the output buffer's element.
+_ATOMIC_OPERANDS = ("inout", "atomic")
+
+
 class _Builder:
     def __init__(
         self,
@@ -266,10 +270,13 @@ class _Builder:
                     kind = dialect.flat(kind)
                 self.inputs.append((kind, local))
                 arguments.append(dialect.stage_input(local))
-            elif param.direction == "inout":
+            elif param.direction in _ATOMIC_OPERANDS:
                 if output is not None:
                     raise ProbeError("more than one inout parameter")
-                arguments.append(dialect.inout_argument())
+                if param.direction == "atomic":
+                    arguments.append(dialect.atomic_argument(param.type))
+                else:
+                    arguments.append(dialect.inout_argument())
                 output = param.type
             elif param.direction == "buffer":
                 storage = _storage(param.type.scalar)
@@ -303,9 +310,12 @@ class _Builder:
                     self.lines.append(f"{local} = {self.value(param.type)};")
                 arguments.append(dialect.workgroup_argument(local))
             elif param.direction == "workgroup address":
-                self.shared.append(dialect.workgroup(param.type, local))
-                self.lines.append(f"{local} = {self.value(param.type)};")
-                arguments.append(dialect.address(local))
+                shared = dialect.shared_pointer(
+                    param.type, local, self.value(param.type)
+                )
+                self.shared += shared.declarations
+                self.lines += shared.lines
+                arguments.append(shared.argument)
             elif param.direction == "constant address":
                 self.constants.append(dialect.constant_memory(param.type, local))
                 arguments.append(dialect.address(local))
@@ -465,7 +475,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     # call reads no argument still declares an input, unread, for :mod:`.execution` to run it.
     if not buffers and feature.stage == "compute" and execution.runs(feature.language):
         buffers.append((dialect.type(Type("float")), _BUFFERS["float"]))
-    atomic = any(p.direction == "inout" for p in signature.params)
+    atomic = any(p.direction in _ATOMIC_OPERANDS for p in signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
     extra = {"prelude": dialect.enable(feature.extension)} if feature.extension else {}

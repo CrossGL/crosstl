@@ -597,15 +597,20 @@ template <int TAG>
 
 
 def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=False):
+    """A full-corpus report with only the fence refusals: one OpenGL artifact per kernel."""
+    fence_failures = module.FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET
     per_target = {
         target: {
-            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
-            "failedCount": 1,
+            "translatedCount": (
+                module.FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target]
+                - fence_failures[target]
+            ),
+            "failedCount": fence_failures[target],
         }
         for target in module.FULL_CORPUS_TARGETS
     }
     diagnostics_by_code = {
-        contract["diagnosticCode"]: 1
+        contract["diagnosticCode"]: fence_failures[target]
         for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
         if target in module.FULL_CORPUS_TARGETS
     }
@@ -613,7 +618,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
         module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
     )
     missing_capability_counts = {
-        contract["missingCapability"]: 1
+        contract["missingCapability"]: fence_failures[target]
         for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
         if target in module.FULL_CORPUS_TARGETS
     }
@@ -623,15 +628,23 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
     diagnostics = []
     artifacts = []
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
-    for target in module.FULL_CORPUS_TARGETS:
+    fence_artifacts = [
+        (target, entry)
+        for target in module.FULL_CORPUS_TARGETS
+        for entry in module._fence_artifact_entries(target)
+    ]
+    for target, entry in fence_artifacts:
         contract = module.MLX_FENCE_TARGET_CONTRACTS[target]
         message = module._atomic_fence_expected_message(contract)
-        artifact_path = (
-            work_dir
-            / "out-full-corpus"
-            / target
-            / Path(module.MLX_FENCE_SOURCE).with_suffix(extensions[target])
-        ).relative_to(mlx_root)
+        unit_path = Path(module.MLX_FENCE_SOURCE)
+        relative = (
+            unit_path.with_suffix(extensions[target])
+            if entry is None
+            else unit_path.with_suffix("") / f"{entry}{extensions[target]}"
+        )
+        artifact_path = (work_dir / "out-full-corpus" / target / relative).relative_to(
+            mlx_root
+        )
         diagnostics.append(
             {
                 "severity": "error",
@@ -654,16 +667,17 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
                 "missingCapabilities": ["batch.translation"],
             }
         )
-        artifacts.append(
-            {
-                "source": module.MLX_FENCE_SOURCE,
-                "sourceBackend": "metal",
-                "target": target,
-                "path": artifact_path.as_posix(),
-                "status": "failed",
-                "error": message,
-            }
-        )
+        artifact = {
+            "source": module.MLX_FENCE_SOURCE,
+            "sourceBackend": "metal",
+            "target": target,
+            "path": artifact_path.as_posix(),
+            "status": "failed",
+            "error": message,
+        }
+        if entry is not None:
+            artifact["entryPoint"] = {"source": entry, "target": "main"}
+        artifacts.append(artifact)
 
     translated_count = module.FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
     failed_count = module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
@@ -4475,30 +4489,37 @@ def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_pat
 
 
 def _fence_contract_report(module, mlx_root, work_dir):
+    """The report main's translator writes: one OpenGL artifact per fence kernel."""
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
     diagnostics = []
     artifacts = []
+    counts = {}
     for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items():
         message = module._atomic_fence_expected_message(contract)
-        artifact_path = (
-            work_dir
-            / "out-fence-contract"
-            / target
-            / Path(module.MLX_FENCE_SOURCE).with_suffix(extensions[target])
-        ).relative_to(mlx_root)
-        diagnostics.append(
-            {
-                "severity": "error",
-                "code": contract["diagnosticCode"],
-                "message": message,
-                "location": {"file": module.MLX_FENCE_SOURCE},
-                "target": target,
-                "sourceBackend": "metal",
-                "missingCapabilities": [contract["missingCapability"]],
-            }
-        )
-        artifacts.append(
-            {
+        entries = module._fence_artifact_entries(target)
+        counts[target] = len(entries)
+        for entry in entries:
+            unit_path = Path(module.MLX_FENCE_SOURCE)
+            relative = (
+                unit_path.with_suffix(extensions[target])
+                if entry is None
+                else unit_path.with_suffix("") / f"{entry}{extensions[target]}"
+            )
+            artifact_path = (
+                work_dir / "out-fence-contract" / target / relative
+            ).relative_to(mlx_root)
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": contract["diagnosticCode"],
+                    "message": message,
+                    "location": {"file": module.MLX_FENCE_SOURCE},
+                    "target": target,
+                    "sourceBackend": "metal",
+                    "missingCapabilities": [contract["missingCapability"]],
+                }
+            )
+            artifact = {
                 "source": module.MLX_FENCE_SOURCE,
                 "sourceBackend": "metal",
                 "target": target,
@@ -4506,28 +4527,30 @@ def _fence_contract_report(module, mlx_root, work_dir):
                 "status": "failed",
                 "error": message,
             }
-        )
-    target_count = len(module.MLX_FENCE_TARGET_CONTRACTS)
+            if entry is not None:
+                artifact["entryPoint"] = {"source": entry, "target": "main"}
+            artifacts.append(artifact)
+    total = sum(counts.values())
     return {
         "summary": {
             "unitCount": 1,
-            "artifactCount": target_count,
+            "artifactCount": total,
             "translatedCount": 0,
-            "failedCount": target_count,
-            "diagnosticCounts": {"error": target_count, "note": 0, "warning": 0},
+            "failedCount": total,
+            "diagnosticCounts": {"error": total, "note": 0, "warning": 0},
             "diagnosticsByCode": {
-                contract["diagnosticCode"]: 1
-                for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+                contract["diagnosticCode"]: counts[target]
+                for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
             },
             "missingCapabilityCounts": {
-                contract["missingCapability"]: 1
-                for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+                contract["missingCapability"]: counts[target]
+                for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
             },
             "artifactsByTarget": {
                 target: {
-                    "artifactCount": 1,
+                    "artifactCount": counts[target],
                     "translatedCount": 0,
-                    "failedCount": 1,
+                    "failedCount": counts[target],
                 }
                 for target in module.MLX_FENCE_TARGET_CONTRACTS
             },
@@ -4588,8 +4611,15 @@ def test_atomic_fence_contract_records_exact_target_failures(tmp_path, monkeypat
     assert result["status"] == "blocked-as-expected"
     assert result["source"] == module.MLX_FENCE_SOURCE
     assert result["targets"] == ["directx", "opengl", "vulkan"]
-    assert result["artifactRecordCount"] == 3
-    assert result["failedArtifactCount"] == 3
+    # One DirectX and one Vulkan artifact, and one OpenGL artifact per fence kernel.
+    assert module.MLX_FENCE_ENTRY_POINTS == (
+        "input_coherent",
+        "fence_update",
+        "fence_wait",
+    )
+    assert result["artifactRecordCount"] == 5
+    assert result["failedArtifactCount"] == 5
+    assert module.MLX_FENCE_FAILED_ARTIFACT_COUNT == 5
     assert result["emittedArtifactCount"] == 0
     assert result["requestedContract"] == {
         "memoryFlags": ["mem_device"],
@@ -4657,6 +4687,48 @@ def test_atomic_fence_contract_records_exact_target_failures(tmp_path, monkeypat
     ],
 )
 def test_atomic_fence_contract_rejects_diagnostic_drift(
+    tmp_path, monkeypatch, mutation, error
+):
+    module = _load_harness()
+    check = _prepare_fence_contract_check(module, tmp_path, monkeypatch, mutation)
+
+    with pytest.raises(module.PortingCheckError, match=error):
+        module._check_atomic_fence_contract(*check[:5], "python")
+
+
+def _merge_opengl_fence_artifacts(payload, _root):
+    """The pre-split shape: one OpenGL artifact for the whole multi-kernel unit."""
+    opengl = [item for item in payload["artifacts"] if item["target"] == "opengl"]
+    merged = dict(opengl[0])
+    merged.pop("entryPoint")
+    payload["artifacts"] = [
+        item for item in payload["artifacts"] if item["target"] != "opengl"
+    ] + [merged]
+
+
+def _drop_opengl_fence_entry(payload, _root):
+    payload["artifacts"] = [
+        item
+        for item in payload["artifacts"]
+        if item.get("entryPoint", {}).get("source") != "fence_wait"
+    ]
+
+
+def _rename_opengl_fence_entry(payload, _root):
+    for item in payload["artifacts"]:
+        if item.get("entryPoint", {}).get("source") == "fence_wait":
+            item["entryPoint"] = {"source": "fence_wait_2", "target": "main"}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (_merge_opengl_fence_artifacts, "fence contract report must contain one"),
+        (_drop_opengl_fence_entry, "fence contract report must contain one"),
+        (_rename_opengl_fence_entry, "opengl artifact entry points changed"),
+    ],
+)
+def test_atomic_fence_contract_requires_one_opengl_artifact_per_kernel(
     tmp_path, monkeypatch, mutation, error
 ):
     module = _load_harness()
@@ -5619,41 +5691,6 @@ def _write_dynamic_workgroup_report(module, report_path, *args, **kwargs):
     return report
 
 
-def _saved_report_payloads(report_dir, *names):
-    return {
-        name: (report_dir / f"{name}.json").read_text(encoding="utf-8")
-        for name in names
-    }
-
-
-def _restore_fake_report(module, mlx_root, report_dir, name, payloads):
-    payload = payloads.get(name)
-    if payload is not None:
-        report = json.loads(payload)
-        for artifact in report.get("artifacts", []):
-            if artifact.get("status") != "translated":
-                continue
-            generated_path = mlx_root / artifact["path"]
-            generated_path.parent.mkdir(parents=True, exist_ok=True)
-            expected_constants = module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(
-                artifact.get("source"), {}
-            )
-            declarations = [
-                "layout(constant_id = {}) const {} {} = {};".format(
-                    constant_id,
-                    "int" if constant_name == "blocks" else "bool",
-                    constant_name,
-                    "1" if constant_name == "blocks" else "false",
-                )
-                for constant_name, constant_id in expected_constants.items()
-            ]
-            generated_path.write_text(
-                "\n".join(["#version 450 core", *declarations, "void main() {}", ""]),
-                encoding="utf-8",
-            )
-        (report_dir / f"{name}.json").write_text(payload, encoding="utf-8")
-
-
 def test_dynamic_workgroup_config_report_join_is_order_independent(tmp_path):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
@@ -5866,362 +5903,6 @@ def test_dynamic_workgroup_report_accepts_explicitly_unavailable_toolchain(tmp_p
     )
 
     assert set(evidence) == set(sources)
-
-
-def _prepare_opengl_frontier_check(module, tmp_path):
-    mlx_root = tmp_path / "mlx"
-    work_dir = mlx_root / ".crosstl-mlx-porting"
-    config_dir = work_dir / "configs"
-    report_dir = work_dir / "reports"
-    log_dir = work_dir / "logs"
-    for path in (config_dir, report_dir, log_dir):
-        path.mkdir(parents=True, exist_ok=True)
-    _write_clean_frontier_report(
-        module,
-        mlx_root,
-        work_dir / "out-opengl-frontier",
-        report_dir / "opengl-frontier.json",
-        target="opengl",
-        sources=module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
-        index_range_assertions=module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
-    )
-    _write_dynamic_workgroup_report(
-        module,
-        report_dir / "opengl-workgroup-frontier.json",
-        mlx_root,
-        work_dir / "out-opengl-workgroup-frontier",
-        target="opengl",
-        sources=module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-        validated=False,
-    )
-    return mlx_root, work_dir, config_dir, report_dir, log_dir
-
-
-def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
-    tmp_path,
-    monkeypatch,
-):
-    module = _load_harness()
-    paths = _prepare_opengl_frontier_check(module, tmp_path)
-    payloads = _saved_report_payloads(
-        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
-    )
-    commands = []
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        commands.append((name, list(command)))
-        _restore_fake_report(module, paths[0], paths[3], name, payloads)
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text("", encoding="utf-8")
-        stderr_path.write_text("", encoding="utf-8")
-        if name.startswith("validate-") and name.endswith("-opengl"):
-            output_path = Path(command[command.index("-o") + 1])
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(b"\x03\x02\x23\x07")
-        return module.CommandResult(
-            name,
-            list(command),
-            1 if name == "opengl-workgroup-frontier" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    tools = {
-        "glslangValidator": "/tools/glslangValidator",
-        "spirv-val": "/tools/spirv-val",
-    }
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", tools.get)
-
-    result = module._check_opengl_frontier(
-        *paths,
-        "python",
-        require_toolchain=True,
-    )
-
-    assert result["status"] == "passed-with-expected-workgroup-blockers"
-    assert result["sources"] == list(module.MLX_OPENGL_FRONTIER_SOURCES)
-    assert result["sourceCount"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
-    assert result["artifactCount"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
-    assert result["translatedSources"] == list(
-        module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
-    )
-    assert result["workgroupBlockedSources"] == list(
-        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    )
-    assert all(
-        evidence["sourceEntryPointIdentityStatus"] == "matched-materialized-host-names"
-        for evidence in result["dynamicWorkgroupDispatchEvidence"].values()
-    )
-    assert result["projectDiagnosticCount"] == 0
-    assert result["toolchainRequired"] is True
-    assert result["toolchainValidatedSources"] == list(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
-    )
-    assert result["toolchainValidatedArtifactCount"] == len(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
-    )
-    assert result["nativeValidationStatus"] == "validated"
-    assert result["spirvValidator"] == "spirv-val"
-    assert result["specializationConstants"] == {
-        module.MLX_ROPE_SOURCE: module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[
-            module.MLX_ROPE_SOURCE
-        ]
-    }
-    assert result["indexRangeAssertionEvidence"] == {
-        "assertionCount": len(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS),
-        "inclusiveBounds": {
-            "minimum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
-            "maximum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
-        },
-        "expressionsBySource": {
-            source: list(expressions)
-            for source, expressions in (
-                module.MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
-            )
-        },
-        "contractKind": "explicit-host-runtime-portability-preconditions",
-        "inferred": False,
-        "runtimeEnforced": False,
-    }
-    assert result["runtimeIntegrationIncluded"] is False
-    assert [name for name, _command in commands] == [
-        "opengl-frontier",
-        "opengl-workgroup-frontier",
-        "validate-binary-two-opengl",
-        "validate-binary-two-opengl-spirv",
-        "validate-rope-opengl",
-        "validate-rope-opengl-spirv",
-        "validate-ternary-opengl",
-        "validate-ternary-opengl-spirv",
-    ]
-    assert commands[2][1][:5] == [
-        "/tools/glslangValidator",
-        "--target-env",
-        "opengl",
-        "--target-env",
-        "spirv1.3",
-    ]
-    assert commands[3][1][:3] == [
-        "/tools/spirv-val",
-        "--target-env",
-        "spv1.3",
-    ]
-    assert set(result["nativeValidationOutputs"]) == set(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
-    )
-    commands_by_name = dict(commands)
-    for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
-        stem = Path(source).stem
-        command_name = stem.replace("_", "-")
-        generated_path = (
-            paths[1] / "out-opengl-frontier" / "opengl" / Path(source)
-        ).with_suffix(".glsl")
-        output_path = paths[0] / result["nativeValidationOutputs"][source]
-        assert (
-            str(generated_path) in commands_by_name[f"validate-{command_name}-opengl"]
-        )
-        assert (
-            str(output_path)
-            in commands_by_name[f"validate-{command_name}-opengl-spirv"]
-        )
-    config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
-    for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
-        assert source in config
-    assert module.MLX_TERNARY_SOURCE in config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in config
-    assert 'targets = ["opengl"]' in config
-    assert config.count("[[project.index_range_assertions]]") == len(
-        module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS
-    )
-    from crosstl.project import load_project_config
-
-    parsed_config = load_project_config(paths[0], paths[2] / "opengl-frontier.toml")
-    assert (
-        parsed_config.source_options["metal"]["binary16_remainder_profile"]
-        == "binary32-quotient"
-    )
-    assert [
-        assertion.to_json() for assertion in parsed_config.index_range_assertions
-    ] == list(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS)
-    blocked_config = (paths[2] / "opengl-workgroup-frontier.toml").read_text(
-        encoding="utf-8"
-    )
-    for source in module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES:
-        assert source in blocked_config
-    assert "[[project.index_range_assertions]]" not in blocked_config
-
-
-def test_opengl_frontier_skips_toolchain_when_not_required(tmp_path, monkeypatch):
-    module = _load_harness()
-    paths = _prepare_opengl_frontier_check(module, tmp_path)
-    payloads = _saved_report_payloads(
-        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
-    )
-    commands = []
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        commands.append(name)
-        _restore_fake_report(module, paths[0], paths[3], name, payloads)
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text("", encoding="utf-8")
-        stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(
-            name,
-            list(command),
-            1 if name == "opengl-workgroup-frontier" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(
-        module.shutil,
-        "which",
-        lambda name: pytest.fail(f"tool lookup should not run for {name}"),
-    )
-
-    result = module._check_opengl_frontier(
-        *paths,
-        "python",
-        require_toolchain=False,
-    )
-
-    assert commands == ["opengl-frontier", "opengl-workgroup-frontier"]
-    assert result["toolchainRequired"] is False
-    assert result["toolchainValidatedSources"] == []
-    assert result["toolchainValidatedArtifactCount"] == 0
-    assert result["nativeValidationStatus"] == "not-required"
-    assert result["nativeValidationOutputs"] == {}
-
-
-def test_opengl_frontier_requires_every_clean_artifact(tmp_path, monkeypatch):
-    module = _load_harness()
-    paths = _prepare_opengl_frontier_check(module, tmp_path)
-    report_path = paths[3] / "opengl-frontier.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["summary"]["artifactCount"] -= 1
-    report["artifacts"].pop()
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    payloads = _saved_report_payloads(
-        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
-    )
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        _restore_fake_report(module, paths[0], paths[3], name, payloads)
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text("", encoding="utf-8")
-        stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(
-            name,
-            list(command),
-            1 if name == "opengl-workgroup-frontier" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-
-    with pytest.raises(
-        module.PortingCheckError,
-        match="every clean source artifact",
-    ):
-        module._check_opengl_frontier(
-            *paths,
-            "python",
-            require_toolchain=False,
-        )
-
-
-def test_opengl_frontier_requires_zero_project_diagnostics(tmp_path, monkeypatch):
-    module = _load_harness()
-    paths = _prepare_opengl_frontier_check(module, tmp_path)
-    report_path = paths[3] / "opengl-frontier.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["summary"]["diagnosticCounts"]["warning"] = 1
-    report["diagnostics"] = [
-        {
-            "severity": "warning",
-            "code": "project.translate.test-warning",
-            "message": "unexpected warning",
-        }
-    ]
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    payloads = _saved_report_payloads(
-        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
-    )
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        _restore_fake_report(module, paths[0], paths[3], name, payloads)
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text("", encoding="utf-8")
-        stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(
-            name,
-            list(command),
-            1 if name == "opengl-workgroup-frontier" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-
-    with pytest.raises(module.PortingCheckError, match="zero project diagnostics"):
-        module._check_opengl_frontier(
-            *paths,
-            "python",
-            require_toolchain=False,
-        )
-
-
-@pytest.mark.parametrize("drift", ("count", "content"))
-def test_opengl_frontier_requires_exact_index_range_assertion_report(
-    tmp_path,
-    monkeypatch,
-    drift,
-):
-    module = _load_harness()
-    paths = _prepare_opengl_frontier_check(module, tmp_path)
-    report_path = paths[3] / "opengl-frontier.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    if drift == "count":
-        report["project"]["indexRangeAssertionCount"] -= 1
-    else:
-        report["project"]["indexRangeAssertions"][0]["expression"] = "offset + j"
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    payloads = _saved_report_payloads(
-        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
-    )
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        _restore_fake_report(module, paths[0], paths[3], name, payloads)
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text("", encoding="utf-8")
-        stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(
-            name,
-            list(command),
-            1 if name == "opengl-workgroup-frontier" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-
-    with pytest.raises(
-        module.PortingCheckError,
-        match="index-range assertion contract changed",
-    ):
-        module._check_opengl_frontier(
-            *paths,
-            "python",
-            require_toolchain=False,
-        )
 
 
 def _prepare_fft_directx_toolchain_check(module, tmp_path):
@@ -8970,15 +8651,16 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
         ]
     ]
     assert "--run-toolchains" not in commands[0]
+    # One HLSL artifact per unit; one GLSL artifact per kernel, three of them fence kernels.
     assert result["unitCount"] == 42
-    assert result["artifactCount"] == 84
-    assert result["translatedCount"] == 82
-    assert result["failedCount"] == 2
+    assert result["artifactCount"] == 42 + 17319
+    assert result["translatedCount"] == 41 + 17316
+    assert result["failedCount"] == 1 + 3
     assert result["status"] == "passed-with-expected-fence-blockers"
     assert result["jobTimeoutSeconds"] == 120
     assert result["targetCounts"] == {
         "directx": {"translatedCount": 41, "failedCount": 1},
-        "opengl": {"translatedCount": 41, "failedCount": 1},
+        "opengl": {"translatedCount": 17316, "failedCount": 3},
     }
     assert result["fenceContract"]["status"] == "blocked-as-expected"
     assert set(result["fenceContract"]["targetContracts"]) == {
@@ -9137,9 +8819,9 @@ def test_full_corpus_mode_reports_tracked_translation_errors(tmp_path, monkeypat
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
-    assert result["translatedCount"] == 81
-    assert result["failedCount"] == 3
-    assert result["expectedFenceFailureCount"] == 2
+    assert result["translatedCount"] == 40 + 17316
+    assert result["failedCount"] == 2 + 3
+    assert result["expectedFenceFailureCount"] == 1 + 3
     assert result["unexpectedFailedCount"] == 1
     assert result["unexpectedErrorDiagnosticsByCode"] == {
         "project.translate.failed": 1,
@@ -15119,9 +14801,9 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert result["scope"]["metalRoundTripIncluded"] is True
     assert result["repository"]["commit"] == CURRENT_MLX_COMMIT
     assert result["scope"]["fullCorpusExpectedUnitCount"] == 42
-    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 84
-    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 82
-    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 2
+    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 42 + 17319
+    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == (41 + 17316)
+    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 1 + 3
     assert result["scope"]["referenceAccessorProofIncluded"] is False
     assert result["scope"]["referenceAccessorTargets"] == []
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
