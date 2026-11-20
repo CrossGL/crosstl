@@ -725,7 +725,10 @@ generated kernel leaves it to the target's host: HLSL reads the
 ``CROSSGL_WORKGROUP_SIZE_{X,Y,Z}`` macros the host defines when it compiles the
 shader, GLSL reads specialization ids or the same macros, and SPIR-V reads three
 specialization constants. The parameter then observes the size the host sets,
-as it does on Metal, and the artifact records no ``execution`` size. A CrossGL
+as it does on Metal, and the artifact records no ``execution`` size. An HLSL
+file or SPIR-V module that holds several such kernels needs no shared size
+either, because each pipeline the host builds from it sets its own kernel's
+size. A CrossGL
 source has no host-chosen size, so reading ``gl_WorkGroupSize`` without a
 configured size still fails with ``project.translate.workgroup-size-required``.
 

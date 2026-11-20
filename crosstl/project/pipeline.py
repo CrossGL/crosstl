@@ -27923,11 +27923,19 @@ def _project_workgroup_execution_metadata(
         set(source_sizes) == set(source_entry_points)
         and len(distinct_source_sizes) == 1
     )
+    # Each pipeline of an entry its host sizes sets that entry's size, so an artifact whose only
+    # consumers are such entries, and which nothing else sizes, applies no one size to them.
+    consumers_are_host_sized = (
+        configured_size is None
+        and not source_sizes
+        and set(consumed_entries) <= host_sized_entries
+    )
     aggregate_size_is_unproven = (
         selected_entry_point is None
         and len(source_entry_points) > 1
         and not source_proves_shared_size
         and (configured_size is not None or len(consumed_entries) > 1)
+        and not consumers_are_host_sized
     )
     if aggregate_size_is_unproven:
         raise ProjectWorkgroupSizeError(
