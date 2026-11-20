@@ -301,6 +301,28 @@ def test_history_appends_runs_replaces_reruns_and_stays_bounded(monkeypatch):
     assert {r["commit"] for r in _history_rows(third)} == {"aaaa"}
 
 
+def test_history_drops_the_oldest_runs_that_would_take_it_over_the_size_limit(
+    monkeypatch,
+):
+    runs = ""
+    for day in range(10, 20):
+        runs = publish.history(
+            _report(commit=f"c{day}", date=f"2026-10-{day}T03:41:00Z"), runs
+        )
+    assert len({r["commit"] for r in _history_rows(runs)}) == 10
+    size = len(runs.encode("utf-8"))
+    # Room for about half of the runs: the newest ones stay, whole, and the file fits.
+    monkeypatch.setattr(publish, "SIZE_LIMIT", size // 2)
+    kept = publish.history(_report(commit="c20", date="2026-10-20T03:41:00Z"), runs)
+    commits = [r["commit"] for r in _history_rows(kept)]
+    assert len(kept.encode("utf-8")) <= size // 2
+    assert sorted(set(commits)) == [
+        f"c{day}" for day in range(20 - len(set(commits)) + 1, 21)
+    ]
+    assert 3 <= len(set(commits)) < 10
+    assert all(commits.count(c) == 3 for c in set(commits))
+
+
 def test_publish_command_writes_every_file_of_the_coverage_branch(tmp_path):
     report_path = tmp_path / "coverage.json"
     report_path.write_text(json.dumps(_report()))

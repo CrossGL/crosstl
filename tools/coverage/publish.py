@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote
 
@@ -335,8 +336,21 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _csv(rows: Iterable[dict], header: bool = True) -> str:
+    out = io.StringIO()
+    writer = csv.DictWriter(
+        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
+    )
+    if header:
+        writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def history(report: dict, previous: str = "") -> str:
-    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs."""
+    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs that fit in
+    :data:`SIZE_LIMIT` bytes, so that a growing number of rows shortens the history instead of stopping publication.
+    """
     rows = [r for r in csv.DictReader(io.StringIO(previous)) if r.get("date")]
     rows = [
         r
@@ -356,15 +370,18 @@ def history(report: dict, previous: str = "") -> str:
                 **{o: str(row["counts"][o]) for o in OUTCOMES},
             }
         )
-    runs = sorted({(r["date"], r["commit"]) for r in rows})[-HISTORY_RUNS:]
-    kept = set(runs)
-    out = io.StringIO()
-    writer = csv.DictWriter(
-        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
-    )
-    writer.writeheader()
-    writer.writerows(r for r in rows if (r["date"], r["commit"]) in kept)
-    return out.getvalue()
+    sizes: dict[tuple[str, str], int] = {}
+    for r in rows:
+        run = (r["date"], r["commit"])
+        sizes[run] = sizes.get(run, 0) + len(_csv([r], header=False).encode("utf-8"))
+    size = len(_csv([]).encode("utf-8"))
+    kept = set()
+    for run in sorted(sizes, reverse=True)[:HISTORY_RUNS]:
+        size += sizes[run]
+        if size > SIZE_LIMIT:
+            break
+        kept.add(run)
+    return _csv(r for r in rows if (r["date"], r["commit"]) in kept)
 
 
 def write_site(
