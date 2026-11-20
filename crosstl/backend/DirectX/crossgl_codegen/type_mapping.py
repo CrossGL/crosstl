@@ -7,6 +7,7 @@ from crosstl.translator.codegen.stage_distance_layout import distance_semantic_s
 from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
 
 from ..hlsl_matrix_import import crossgl_matrix_type_name
+from ..import_tables import CONSERVATIVE_DEPTH_LAYOUTS
 
 
 class TypeMappingMixin:
@@ -467,6 +468,12 @@ class TypeMappingMixin:
                 else "gl_BaryCoordEXT"
             )
             return f"@ {mapped}"
+        if isinstance(semantic, str):
+            # SV_DepthGreaterEqual and SV_DepthLessEqual write gl_FragDepth with GLSL's conservative depth layout,
+            # which CrossGL spells as a depth_greater or depth_less attribute next to the built-in.
+            conservative_depth = CONSERVATIVE_DEPTH_LAYOUTS.get(semantic.upper())
+            if conservative_depth is not None:
+                return f"@ gl_FragDepth @ {conservative_depth}"
         mapped = self.semantic_map.get(semantic)
         if mapped is None and isinstance(semantic, str):
             semantic_upper = semantic.upper()

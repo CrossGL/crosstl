@@ -302,3 +302,10 @@ HLSL_GENERIC_PASSTHROUGH_TYPES = {
     "GroupNodeOutputRecords",
     "NodeOutputRecords",
 }
+
+# The conservative depth layout CrossGL attaches to ``gl_FragDepth`` for each HLSL depth semantic that promises a
+# direction, keyed by the upper-case semantic.
+CONSERVATIVE_DEPTH_LAYOUTS = {
+    "SV_DEPTHGREATEREQUAL": "depth_greater",
+    "SV_DEPTHLESSEQUAL": "depth_less",
+}
