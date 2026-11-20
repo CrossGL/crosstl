@@ -62,7 +62,6 @@ from .comma_expressions import (
 )
 from .constant_guards import (
     constant_bool_locals,
-    constant_branch_guards,
     guard_bool_value,
 )
 from .counter_loops import any_start_counter_loops
@@ -74,6 +73,13 @@ from .directx_compute_builtins import DirectXComputeBuiltinMixin
 from .directx_cooperative_matrix import DirectXCooperativeMatrixMixin
 from .directx_entry_functions import DirectXEntryFunctionMixin
 from .directx_expression_forms import DirectXExpressionFormMixin
+from .directx_function_state import (
+    HLSL_FUNCTION_BODY_STATE_ATTRIBUTES,
+    HLSL_FUNCTION_STATE_ATTRIBUTES,
+    HLSLFunctionParameterContext,
+    restore_hlsl_function_state,
+    save_hlsl_function_state,
+)
 from .directx_global_declarations import DirectXGlobalDeclarationMixin
 from .directx_glsl_blocks import DirectXGlslBlockMixin
 from .directx_image_arguments import DirectXImageArgumentMixin
@@ -190,7 +196,6 @@ from .hlsl_exact_float_builtins import (
 )
 from .hlsl_extension_builtins import (
     HLSL_GLSL_SYSTEM_VALUES,
-    hlsl_builtin_input_parameter,
     hlsl_stage_builtin_read,
 )
 from .hlsl_function_body_scans import HlslFunctionBodyScans
@@ -199,7 +204,6 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
-from .hlsl_narrow_system_values import hlsl_narrow_compute_system_value_bridge
 from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_ray_queries import hlsl_ray_query_expression
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
@@ -258,10 +262,6 @@ from .private_pointer_alias_views import (
     hlsl_writable_pointer_parameters,
 )
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS
-from .stage_utils import (
-    normalize_stage_name,
-    requests_early_fragment_tests,
-)
 from .standard_constant_types import standard_constant_type
 from .storage_image_texels import (
     TEXEL_COMPONENTS,
@@ -286,6 +286,9 @@ from .texture_residency import (
     TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
+from ..unhandled import UNHANDLED
+from .directx_function_parameters import HLSLFunctionParameterMixin
+from .directx_function_emission import HLSLFunctionEmissionMixin
 
 
 class HLSLCodeGen(
@@ -335,6 +338,8 @@ class HLSLCodeGen(
     DirectXProgramPreparationMixin,
     DirectXProgramEmissionMixin,
     DirectXGlobalDeclarationMixin,
+    HLSLFunctionParameterMixin,
+    HLSLFunctionEmissionMixin,
 ):
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -2507,94 +2512,21 @@ class HLSLCodeGen(
     ):
         """Render a function or stage entry point with HLSL semantics."""
         function_name = getattr(func, "name", None)
-        variants = self.function_private_pointer_backing_variants.get(function_name)
-        if _private_pointer_variant is None and variants:
-            previous_variant = self.current_hlsl_private_pointer_variant
-            previous_base_names = self.current_hlsl_private_pointer_base_names
-            parameters = self.function_private_pointer_parameters[function_name]
-            code = ""
-            try:
-                for variant in variants:
-                    self.current_hlsl_private_pointer_variant = {
-                        parameter.name: variant[index]
-                        for index, parameter in enumerate(parameters)
-                    }
-                    self.current_hlsl_private_pointer_base_names = dict(
-                        self.function_private_pointer_base_names[function_name]
-                    )
-                    code += self.generate_function(
-                        func,
-                        indent=indent,
-                        shader_type=shader_type,
-                        execution_config=execution_config,
-                        entry_name=entry_name,
-                        stage_output_lowering=stage_output_lowering,
-                        stage_node=stage_node,
-                        _private_pointer_variant=variant,
-                        _workgroup_pointer_variant=_workgroup_pointer_variant,
-                    )
-            finally:
-                self.current_hlsl_private_pointer_variant = previous_variant
-                self.current_hlsl_private_pointer_base_names = previous_base_names
-            return code
-
-        workgroup_variants = self.function_hlsl_workgroup_pointer_backing_variants.get(
-            function_name
+        handled = self.generate_hlsl_function_variants(
+            func,
+            indent,
+            shader_type,
+            execution_config,
+            entry_name,
+            stage_output_lowering,
+            stage_node,
+            _private_pointer_variant,
+            _workgroup_pointer_variant,
+            _resource_access_variant,
+            function_name,
         )
-        if _workgroup_pointer_variant is None and workgroup_variants:
-            previous_variant = self.current_hlsl_workgroup_pointer_variant
-            previous_base_names = self.current_hlsl_workgroup_pointer_base_names
-            parameters = self.function_hlsl_workgroup_pointer_parameters[function_name]
-            code = ""
-            try:
-                for variant in workgroup_variants:
-                    self.current_hlsl_workgroup_pointer_variant = {
-                        parameter.name: variant[index]
-                        for index, parameter in enumerate(parameters)
-                    }
-                    self.current_hlsl_workgroup_pointer_base_names = dict(
-                        self.function_hlsl_workgroup_pointer_base_names[function_name]
-                    )
-                    code += self.generate_function(
-                        func,
-                        indent=indent,
-                        shader_type=shader_type,
-                        execution_config=execution_config,
-                        entry_name=entry_name,
-                        stage_output_lowering=stage_output_lowering,
-                        stage_node=stage_node,
-                        _private_pointer_variant=_private_pointer_variant,
-                        _workgroup_pointer_variant=variant,
-                    )
-            finally:
-                self.current_hlsl_workgroup_pointer_variant = previous_variant
-                self.current_hlsl_workgroup_pointer_base_names = previous_base_names
-            return code
-
-        access_variants = self.hlsl_resource_access_function_variants(func)
-        if _resource_access_variant is None and access_variants:
-            previous_promotions = self.current_hlsl_resource_access_promotions
-            code = ""
-            try:
-                for variant in (frozenset(), *access_variants):
-                    self.current_hlsl_resource_access_promotions = (
-                        self.hlsl_resource_access_promotions_for(func, variant)
-                    )
-                    code += self.generate_function(
-                        func,
-                        indent=indent,
-                        shader_type=shader_type,
-                        execution_config=execution_config,
-                        entry_name=entry_name,
-                        stage_output_lowering=stage_output_lowering,
-                        stage_node=stage_node,
-                        _private_pointer_variant=_private_pointer_variant,
-                        _workgroup_pointer_variant=_workgroup_pointer_variant,
-                        _resource_access_variant=variant,
-                    )
-            finally:
-                self.current_hlsl_resource_access_promotions = previous_promotions
-            return code
+        if handled is not UNHANDLED:
+            return handled
 
         code = ""
         code += "  " * indent
@@ -2620,629 +2552,61 @@ class HLSLCodeGen(
         }
         param_names = {getattr(param, "name", None) for param in param_list}
         emitted_param_names = set(param_names)
-        previous_function_return_type = self.current_function_return_type
-        previous_precise_return_type = self.current_hlsl_precise_return_type
-        previous_local_variable_types = self.local_variable_types
-        previous_local_variable_source_types = self.local_variable_source_types
-        previous_identifier_aliases = self.current_identifier_aliases
-        previous_identifier_reserved_names = self.current_identifier_reserved_names
-        previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
-        previous_semantic_stage = self.current_hlsl_semantic_stage
-        previous_function_name = self.current_function_name
-        previous_tail_recursive_call_ids = self.current_hlsl_tail_recursive_call_ids
-        previous_tail_recursive_function = self.current_hlsl_tail_recursive_function
-        previous_resource_pointer_offsets = self.current_hlsl_resource_pointer_offsets
-        previous_resource_pointer_aliases = self.current_hlsl_resource_pointer_aliases
-        previous_generic_function_substitutions = (
-            self.current_generic_function_substitutions
+        saved_function_state = save_hlsl_function_state(
+            self, HLSL_FUNCTION_STATE_ATTRIBUTES
         )
-        previous_glsl_buffer_block_parameters = (
-            self.current_glsl_buffer_block_parameters
+        saved_function_body_state = save_hlsl_function_state(
+            self, HLSL_FUNCTION_BODY_STATE_ATTRIBUTES
         )
-        previous_unsupported_glsl_buffer_block_parameters = (
-            self.current_unsupported_glsl_buffer_block_parameters
+        self.reset_hlsl_function_emission_state(
+            func, entry_name, stage_output_lowering, param_list
         )
-        previous_unsupported_glsl_buffer_block_local_variables = (
-            self.current_unsupported_glsl_buffer_block_local_variables
-        )
-        previous_glsl_buffer_block_parameter_failures = (
-            self.current_glsl_buffer_block_parameter_failures
-        )
-        previous_glsl_buffer_block_parameter_struct_failures = (
-            self.current_glsl_buffer_block_parameter_struct_failures
-        )
-        (
-            self.current_glsl_buffer_block_parameters,
-            self.current_glsl_buffer_block_parameter_failures,
-            self.current_glsl_buffer_block_parameter_struct_failures,
-        ) = self.collect_lowered_glsl_buffer_block_parameters(param_list)
-        self.current_unsupported_glsl_buffer_block_parameters = (
-            self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
-        )
-        self.current_unsupported_glsl_buffer_block_local_variables = set()
-        self.current_generic_function_substitutions = (
-            getattr(func, "_generic_substitutions", {}) or {}
-        )
-        self.current_function_name = getattr(func, "name", None) or entry_name
-        self.current_hlsl_tail_recursive_call_ids = set()
-        self.current_hlsl_tail_recursive_function = None
-        self.local_variable_types = {}
-        self.local_variable_source_types = {}
-        self.current_identifier_aliases = {}
-        self.current_hlsl_resource_pointer_offsets = {}
-        self.current_hlsl_resource_pointer_aliases = {
-            name: dict(binding)
-            for name, binding in self.hlsl_global_groupshared_pointer_aliases.items()
-        }
-        self.current_hlsl_bounded_loop_indices = {}
-        self.current_hlsl_parameter_resource_types = {}
-        # Name of the SV_GroupIndex parameter an explicit @gl_SubgroupID compute
-        # parameter needs injected, populated lazily while emitting parameters and
-        # consumed by the post-loop compute-builtin parameter pass.
-        self.current_hlsl_compute_group_index_param = None
-        self.current_hlsl_compute_subgroup_id_local = None
-        self.current_hlsl_compute_subgroup_id_group_index = None
-        self.current_hlsl_stage_output_lowering = stage_output_lowering
-        self.current_identifier_reserved_names = (
-            self.collect_hlsl_function_identifier_names(func)
-        )
-        if stage_output_lowering is not None:
-            self.current_identifier_aliases.update(stage_output_lowering["aliases"])
-            for local_name_key in ("local_name", "input_local_name"):
-                local_name = stage_output_lowering.get(local_name_key)
-                if local_name is not None:
-                    self.current_identifier_reserved_names.add(local_name)
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
         else:
             qualifier = getattr(func, "qualifier", None)
         effective_shader_type = shader_type or qualifier
         self.current_hlsl_semantic_stage = effective_shader_type
-        promoted_entry_resource_parameter_ids = set()
-        if normalize_stage_name(effective_shader_type) in self.stage_entry_types():
-            promoted_entry_resource_parameter_ids = {
-                id(parameter)
-                for parameter in param_list
-                if self.hlsl_entry_resource_parameter_global_type(parameter, func)
-                is not None
-            }
-            promoted_entry_resource_parameter_ids.update(
-                id(parameter)
-                for parameter in param_list
-                if id(parameter) in self.hlsl_promoted_entry_constant_members
+        promoted_entry_resource_parameter_ids, default_vertex_parameter_semantics = (
+            self.hlsl_entry_parameter_facts(
+                func, effective_shader_type, param_list, parameter_prologue_statements
             )
-            mutable_resource_offsets = (
-                self.hlsl_mutable_resource_pointer_argument_names(func)
-                | self.hlsl_nested_entry_resource_rebase_names(func)
-            )
-            self.apply_hlsl_promoted_entry_resource_parameter_aliases(
-                param_list,
-                promoted_entry_resource_parameter_ids,
-                func,
-                mutable_resource_offsets=mutable_resource_offsets,
-                parameter_prologue_statements=parameter_prologue_statements,
-            )
-        default_vertex_parameter_semantics = {}
-        if effective_shader_type == "vertex":
-            default_vertex_parameter_semantics = (
-                self.hlsl_default_vertex_parameter_semantics(param_list, func)
-            )
+        )
+        signature = HLSLFunctionParameterContext(
+            func,
+            param_list,
+            param_names,
+            emitted_param_names,
+            function_name,
+            effective_shader_type,
+            execution_config,
+            promoted_entry_resource_parameter_ids,
+            default_vertex_parameter_semantics,
+            params,
+            parameter_prologue_statements,
+            parameter_epilogue_statements,
+            sampler_parameters,
+            texture_parameters,
+            image_access_parameters,
+            image_format_parameters,
+            comparison_sampler_parameters,
+            implicit_texture_samplers,
+            implicit_existing_comparison_samplers,
+        )
         for p in param_list:
-            if id(p) in promoted_entry_resource_parameter_ids:
-                continue
-            if self.hlsl_resource_pointer_parameter_is_omitted(func, p):
-                continue
-            self.current_hlsl_resource_pointer_aliases.pop(p.name, None)
-            if hasattr(p, "param_type"):
-                raw_param_type = (
-                    self.type_name_string(p.param_type)
-                    if getattr(p.param_type, "generic_args", None)
-                    else p.param_type
-                )
-            elif hasattr(p, "vtype"):
-                raw_param_type = p.vtype
-            else:
-                raw_param_type = "float"
-            raw_param_type_name = self.type_name_string(raw_param_type)
-            self.local_variable_types[p.name] = raw_param_type_name
-            self.local_variable_source_types[p.name] = raw_param_type_name
+            self.emit_hlsl_function_parameter(signature, p)
 
-            pointer_array_contract = (
-                self.hlsl_resource_pointer_array_parameter_contract(
-                    p, self.hlsl_function_declaration_name(func)
-                )
-            )
-            if pointer_array_contract is not None:
-                if (
-                    normalize_stage_name(effective_shader_type)
-                    in self.stage_entry_types()
-                ):
-                    raise DirectXResourcePointerArrayError(
-                        "DirectX stage entry points cannot expose fixed arrays of "
-                        "storage pointers directly",
-                        function_name=self.hlsl_function_declaration_name(func),
-                        array_name=p.name,
-                        address_space=pointer_array_contract["address_space"],
-                        reason="entry-pointer-array-unsupported",
-                        source_location=getattr(p, "source_location", None),
-                    )
-                declaration_name = self.hlsl_declaration_identifier_name(p.name)
-                params.append(
-                    f"{pointer_array_contract['resource_type']} {declaration_name}"
-                )
-                emitted_param_names.add(declaration_name)
-                self.current_hlsl_parameter_resource_types[p.name] = (
-                    pointer_array_contract["resource_type"]
-                )
-                materialized_function_name = self.hlsl_function_declaration_name(func)
-                mutated = p.name in (
-                    self.function_hlsl_resource_pointer_array_mutated_parameters.get(
-                        materialized_function_name, set()
-                    )
-                )
-                used_names = set(self.current_identifier_reserved_names)
-                used_names.update(emitted_param_names)
-                offset_parameters = []
-                for element_index in range(pointer_array_contract["extent"]):
-                    offset_name = self.hlsl_unique_local_identifier(
-                        f"{p.name}_offset_{element_index}", used_names
-                    )
-                    used_names.add(offset_name)
-                    emitted_param_names.add(offset_name)
-                    self.current_identifier_reserved_names.add(offset_name)
-                    self.local_variable_types[offset_name] = "int64_t"
-                    direction = "inout " if mutated else ""
-                    params.append(f"{direction}int64_t {offset_name}")
-                    offset_parameters.append(offset_name)
-                offset_array_name = self.hlsl_unique_local_identifier(
-                    f"{p.name}_offsets", used_names
-                )
-                used_names.add(offset_array_name)
-                self.current_identifier_reserved_names.add(offset_array_name)
-                self.local_variable_types[offset_array_name] = (
-                    f"int64_t[{pointer_array_contract['extent']}]"
-                )
-                # Metal array parameters decay to by-value pointers to their first
-                # element.  Keep the raw logical offsets intact and carry that view
-                # base separately so local pointer arithmetic and forwarding never
-                # mutate the caller's pointer objects or eagerly index the array.
-                base_parameter_name = self.hlsl_unique_local_identifier(
-                    f"{p.name}_base_offset", used_names
-                )
-                used_names.add(base_parameter_name)
-                emitted_param_names.add(base_parameter_name)
-                self.current_identifier_reserved_names.add(base_parameter_name)
-                self.local_variable_types[base_parameter_name] = "int64_t"
-                params.append(f"int64_t {base_parameter_name}")
-                base_local_name = self.hlsl_unique_local_identifier(
-                    f"{p.name}_base", used_names
-                )
-                used_names.add(base_local_name)
-                self.current_identifier_reserved_names.add(base_local_name)
-                self.local_variable_types[base_local_name] = "int64_t"
-                parameter_prologue_statements.append(
-                    f"int64_t {offset_array_name}[{pointer_array_contract['extent']}];"
-                )
-                for element_index, offset_name in enumerate(offset_parameters):
-                    parameter_prologue_statements.append(
-                        f"{offset_array_name}[{element_index}] = {offset_name};"
-                    )
-                    if mutated:
-                        parameter_epilogue_statements.append(
-                            f"{offset_name} = {offset_array_name}[{element_index}];"
-                        )
-                parameter_prologue_statements.append(
-                    f"int64_t {base_local_name} = int64_t({base_parameter_name});"
-                )
-                array_binding = self.hlsl_narrow_pointer_parameter_alias_binding(
-                    pointer_array_contract,
-                    function_name=materialized_function_name,
-                    parameter_name=p.name,
-                    root=declaration_name,
-                    offset="0",
-                )
-                array_binding.update(
-                    {
-                        "kind": "resource-pointer-array",
-                        "array_name": p.name,
-                        "parameter_name": p.name,
-                        "extent": pointer_array_contract["extent"],
-                        "required_access": pointer_array_contract["access"],
-                        "offset_array": offset_array_name,
-                        "offset_expressions": offset_parameters,
-                        "base_parameter": base_parameter_name,
-                        "base_index": base_local_name,
-                        "parameter_binding": True,
-                        "mutated": mutated,
-                    }
-                )
-                self.current_hlsl_resource_pointer_aliases[p.name] = array_binding
-                continue
-
-            if self.hlsl_workgroup_pointer_declaration(p):
-                root, extent = self.current_hlsl_workgroup_pointer_variant[p.name]
-                base_name = self.current_hlsl_workgroup_pointer_base_names[p.name]
-                params.append(f"int {base_name}")
-                emitted_param_names.add(base_name)
-                self.current_identifier_reserved_names.add(base_name)
-                self.local_variable_types[base_name] = "int"
-                qualifiers = {
-                    str(value).lower() for value in getattr(p, "qualifiers", []) or []
-                }
-                access = (
-                    "read"
-                    if qualifiers.intersection({"const", "constant", "readonly", "in"})
-                    else "read_write"
-                )
-                element_type = self.hlsl_workgroup_pointer_element_type(p)
-                if (root, extent) == HLSL_NULL_WORKGROUP_POINTER_CONTRACT:
-                    self.current_hlsl_resource_pointer_aliases[p.name] = {
-                        **self.hlsl_null_workgroup_pointer_binding(
-                            element_type, offset=base_name
-                        ),
-                        "access": access,
-                        "is_pointer_alias": True,
-                    }
-                    continue
-                self.current_hlsl_resource_pointer_aliases[p.name] = {
-                    "kind": "workgroup-pointer",
-                    "root": root,
-                    "root_kind": "concrete",
-                    "offset": base_name,
-                    "array_size": extent,
-                    "element_type": element_type,
-                    "source_element_type": element_type,
-                    "resource_type": "groupshared",
-                    "access": access,
-                    "is_pointer_alias": True,
-                }
-                continue
-
-            param_decl_type = self.type_name_string(raw_param_type)
-            resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
-                p, function_name
-            )
-            param_type = self.hlsl_workgroup_pointer_parameter_array_type(
-                p, getattr(func, "name", None)
-            )
-            if param_type is None:
-                param_type = self.hlsl_private_pointer_parameter_array_type(
-                    p, getattr(func, "name", None)
-                )
-            if param_type is None and resource_pointer_contract is not None:
-                param_type = resource_pointer_contract["resource_type"]
-            if param_type is None:
-                param_type = self.map_resource_parameter_type_with_hint(
-                    param_decl_type, p, getattr(func, "name", None)
-                )
-            param_type = self.directx_resource_declaration_type(param_type)
-            self.current_hlsl_parameter_resource_types[p.name] = param_type
-            if self.is_texture_type(raw_param_type) or self.is_image_type(
-                raw_param_type
-            ):
-                texture_parameters[p.name] = self.map_resource_type_with_format(
-                    self.resource_base_type(raw_param_type), p
-                )
-                if self.is_image_type(raw_param_type):
-                    record_explicit_image_metadata(
-                        p.name,
-                        p,
-                        self.attribute_value_to_string,
-                        image_formats=image_format_parameters,
-                        image_accesses=image_access_parameters,
-                    )
-            if self.is_sampler_type(raw_param_type):
-                sampler_parameters.add(p.name)
-                if (
-                    p.name in comparison_sampler_parameters
-                    or p.name in implicit_existing_comparison_samplers
-                ):
-                    param_type = param_type.replace(
-                        "SamplerState", "SamplerComparisonState", 1
-                    )
-
-            semantic = self.semantic_from_node(p)
-            if semantic is None:
-                semantic = default_vertex_parameter_semantics.get(id(p))
-            builtin_input = hlsl_builtin_input_parameter(
-                self,
-                p,
-                param_type,
-                semantic,
+        params_str = ", ".join(signature.params)
+        software_subgroup_entry_index, params_str = (
+            self.append_hlsl_required_builtin_parameters(
+                func,
+                execution_config,
                 effective_shader_type,
-                emitted_param_names,
+                param_list,
+                params_str,
+                signature,
             )
-            if builtin_input is not None:
-                declaration, prologue = builtin_input
-                if declaration is not None:
-                    params.append(declaration)
-                parameter_prologue_statements.append(prologue)
-                continue
-            dispatch_thread_id_bridge = None
-            if effective_shader_type == "compute":
-                dispatch_thread_id_bridge = (
-                    self.hlsl_compute_dispatch_thread_id_parameter_bridge(
-                        p, param_type, semantic, emitted_param_names
-                    )
-                )
-            if dispatch_thread_id_bridge is None and effective_shader_type == "compute":
-                dispatch_thread_id_bridge = hlsl_narrow_compute_system_value_bridge(
-                    self, p, param_type, semantic, emitted_param_names
-                )
-            if dispatch_thread_id_bridge is not None:
-                declaration, local_alias = dispatch_thread_id_bridge
-                semantic_attr = self.map_semantic(semantic)
-                params.append(
-                    f"{declaration} {semantic_attr}" if semantic_attr else declaration
-                )
-                parameter_prologue_statements.append(local_alias)
-                continue
-
-            if effective_shader_type == "compute":
-                wave_builtin_prologue = (
-                    self.hlsl_compute_wave_builtin_parameter_prologue(
-                        p,
-                        param_type,
-                        semantic,
-                        func,
-                        execution_config,
-                        param_list,
-                    )
-                )
-                if wave_builtin_prologue is not None:
-                    parameter_prologue_statements.append(wave_builtin_prologue)
-                    continue
-
-                # Value-builtins (gl_WorkGroupSize / gl_NumWorkGroups /
-                # threads_per_grid) have no HLSL parameter system value even on a
-                # stage entry. Lower to a body-local from the matching expression, or
-                # drop the parameter when it is unrepresentable and unused — never
-                # leak an invalid ": <builtin>" entry-point parameter semantic.
-                value_builtin_prologue = (
-                    self.hlsl_compute_value_builtin_parameter_prologue(
-                        p, param_type, semantic, func, execution_config
-                    )
-                )
-                if value_builtin_prologue is self.HLSL_COMPUTE_DROP_PARAMETER:
-                    continue
-                if value_builtin_prologue is not None:
-                    parameter_prologue_statements.append(value_builtin_prologue)
-                    continue
-
-            ray_role = None
-            if effective_shader_type in self.hlsl_ray_stage_types():
-                ray_role = self.hlsl_ray_semantic_role(p)
-            if ray_role:
-                param_type = self.apply_hlsl_ray_parameter_direction(
-                    param_type, ray_role
-                )
-            elif resource_pointer_contract is None:
-                param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
-                param_type = f"{self.hlsl_interpolation_modifier_prefix(p)}{param_type}"
-            declaration = format_c_style_array_declaration(
-                param_type, self.hlsl_declaration_identifier_name(p.name)
-            )
-            emit_semantic = semantic
-            if (
-                ray_role
-                or self.hlsl_non_entry_compute_builtin_semantic(
-                    effective_shader_type, semantic
-                )
-                or (
-                    effective_shader_type == "compute"
-                    and self.hlsl_compute_value_builtin_semantic(semantic)
-                )
-            ):
-                # Ray-payload parameters carry no semantic; GLSL compute/subgroup
-                # builtins on a non-entry helper have no HLSL semantic form (the
-                # value arrives as a plain parameter) and must not leak as ": gl_*".
-                # A value-builtin reaching this point on a compute entry is one the
-                # prologue could not express (no uniform) but the body still uses, so
-                # it is kept as a plain parameter with its invalid semantic stripped.
-                emit_semantic = None
-            semantic_attr = self.map_semantic(emit_semantic)
-            params.append(
-                f"{declaration} {semantic_attr}" if semantic_attr else declaration
-            )
-            if resource_pointer_contract is not None:
-                used_names = set(self.current_identifier_reserved_names)
-                used_names.update(emitted_param_names)
-                offset_name = self.hlsl_unique_local_identifier(
-                    f"{p.name}_offset", used_names
-                )
-                offset_direction = (
-                    self.hlsl_resource_pointer_offset_parameter_direction(p)
-                )
-                offset_declaration = f"int64_t {offset_name}"
-                if offset_direction is not None:
-                    offset_declaration = f"{offset_direction} {offset_declaration}"
-                params.append(offset_declaration)
-                emitted_param_names.add(offset_name)
-                self.current_identifier_reserved_names.add(offset_name)
-                self.local_variable_types[offset_name] = "int64_t"
-                self.current_hlsl_resource_pointer_aliases[p.name] = (
-                    self.hlsl_narrow_pointer_parameter_alias_binding(
-                        resource_pointer_contract,
-                        function_name=self.hlsl_function_declaration_name(func),
-                        parameter_name=p.name,
-                        root=self.hlsl_declaration_identifier_name(p.name),
-                        offset=offset_name,
-                    )
-                )
-            if self.hlsl_private_pointer_parameter(
-                p
-            ) and p.name not in self.function_private_pointer_scalar_parameters.get(
-                function_name, set()
-            ):
-                base_name = self.current_hlsl_private_pointer_base_names[p.name]
-                params.append(f"int {base_name}")
-                emitted_param_names.add(base_name)
-                self.current_identifier_reserved_names.add(base_name)
-                self.local_variable_types[base_name] = "int"
-            if p.name in implicit_texture_samplers:
-                sampler_info = implicit_texture_samplers[p.name]
-                if sampler_info["synthetic"]:
-                    sampler_type = (
-                        "SamplerComparisonState"
-                        if sampler_info["comparison"]
-                        else "SamplerState"
-                    )
-                    sampler_name = sampler_info["sampler_name"]
-                    params.append(f"{sampler_type} {sampler_name}")
-                    sampler_parameters.add(sampler_name)
-                regular_sampler_name = self.implicit_regular_sampler_name(
-                    p.name, sampler_info
-                )
-                if (
-                    sampler_info.get("regular")
-                    and sampler_info.get("comparison")
-                    and regular_sampler_name != sampler_info["sampler_name"]
-                    and regular_sampler_name not in param_names
-                ):
-                    params.append(f"SamplerState {regular_sampler_name}")
-                    sampler_parameters.add(regular_sampler_name)
-                query_sampler_name = self.implicit_query_lod_sampler_name(
-                    p.name, sampler_info
-                )
-                if (
-                    sampler_info.get("query_lod")
-                    and query_sampler_name != sampler_info["sampler_name"]
-                    and query_sampler_name not in param_names
-                ):
-                    params.append(f"SamplerState {query_sampler_name}")
-                    sampler_parameters.add(query_sampler_name)
-
-        params_str = ", ".join(params)
-        software_subgroup_entry_index = None
-        if effective_shader_type is None:
-            params_str = self.append_required_hlsl_stage_parameter_parameters(
-                params_str, getattr(func, "name", None), param_names
-            )
-            params_str = self.append_required_hlsl_fragment_builtin_parameters(
-                params_str, getattr(func, "name", None), param_names
-            )
-            for parameter in self.required_hlsl_stage_parameters(
-                getattr(func, "name", None)
-            ):
-                name = getattr(parameter, "name", None)
-                if name and name not in self.local_variable_types:
-                    self.local_variable_types[name] = self.type_name_string(
-                        self.hlsl_parameter_raw_type(parameter)
-                    )
-            for builtin_name in self.required_hlsl_fragment_builtin_names(
-                getattr(func, "name", None)
-            ):
-                name = self.hlsl_fragment_builtin_parameter_name(
-                    getattr(func, "name", None),
-                    builtin_name,
-                )
-                param_type = self.hlsl_fragment_builtin_parameter_type(builtin_name)
-                if name and param_type:
-                    self.current_identifier_aliases[builtin_name] = name
-                    self.local_variable_types[name] = param_type
-        elif effective_shader_type == "compute":
-            for (
-                builtin_name,
-                name,
-                param_type,
-                semantic,
-                alias,
-            ) in self.required_hlsl_compute_builtin_parameters(func, execution_config):
-                if alias is not None:
-                    self.current_identifier_aliases[builtin_name] = alias
-                    continue
-                if not name:
-                    continue
-                self.current_identifier_aliases[builtin_name] = name
-                if name in param_names:
-                    continue
-                declaration = f"{param_type} {name}"
-                if semantic:
-                    declaration += f" : {semantic}"
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, declaration
-                )
-                param_names.add(name)
-                self.local_variable_types[name] = param_type
-            if self.hlsl_software_subgroup_invocation_variable is not None:
-                software_subgroup_entry_index = (
-                    self.hlsl_compute_group_index_dependency_name(param_list)
-                )
-            # Logical subgroup derivations require SV_GroupIndex even when the
-            # source exposes only a partial local ID or no local ID at all.
-            group_index_param = self.current_hlsl_compute_group_index_param
-            if group_index_param and group_index_param not in param_names:
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, f"uint {group_index_param} : SV_GroupIndex"
-                )
-                param_names.add(group_index_param)
-                self.local_variable_types[group_index_param] = "uint"
-            subgroup_id_local = self.current_hlsl_compute_subgroup_id_local
-            if subgroup_id_local is not None:
-                helper_name = self.hlsl_physical_subgroup_id_helper_name()
-                group_index_name = self.current_hlsl_compute_subgroup_id_group_index
-                parameter_prologue_statements.insert(
-                    0,
-                    f"uint {subgroup_id_local} = "
-                    f"{helper_name}({group_index_name});",
-                )
-        elif effective_shader_type == "vertex":
-            explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
-                param_list
-            )
-            for (
-                name,
-                param_type,
-                semantic,
-            ) in self.required_hlsl_vertex_builtin_parameters(func):
-                if not name or name in param_names:
-                    continue
-                # An input that already carries the system value delivers it; a second one would overlap it.
-                existing = explicit_stage_builtins.get(semantic.lower())
-                if existing:
-                    self.current_identifier_aliases[name] = existing
-                    continue
-                declaration = f"{param_type} {name}"
-                if semantic:
-                    declaration += f" : {semantic}"
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, declaration
-                )
-                param_names.add(name)
-                self.local_variable_types[name] = param_type
-        elif effective_shader_type == "fragment":
-            explicit_stage_builtins = self.explicit_hlsl_fragment_builtin_parameters(
-                param_list
-            )
-            for builtin_name, parameter_name in explicit_stage_builtins.items():
-                if parameter_name:
-                    self.current_identifier_aliases[builtin_name] = parameter_name
-            reserved_builtin_names = set(param_names)
-            reserved_builtin_names.update(self.function_scope_variable_types(func))
-            for (
-                builtin_name,
-                name,
-                param_type,
-                semantic,
-                prologue,
-            ) in self.required_hlsl_fragment_builtin_parameters(
-                func, reserved_builtin_names, explicit_stage_builtins
-            ):
-                declaration = f"{param_type} {name}"
-                if semantic:
-                    declaration += f" : {semantic}"
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, declaration
-                )
-                param_names.add(name)
-                self.local_variable_types[name] = param_type
-                if prologue is not None:
-                    alias_name, alias_type, statement = prologue
-                    parameter_prologue_statements.append(statement)
-                    self.local_variable_types[alias_name] = alias_type
-                    self.current_identifier_aliases[builtin_name] = alias_name
-                else:
-                    self.current_identifier_aliases[builtin_name] = name
+        )
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
         shader_attr_map = {
             "geometry": "geometry",
@@ -3260,50 +2624,8 @@ class HLSLCodeGen(
             "ray_callable": "callable",
         }
 
-        if isinstance(getattr(func, "return_type", None), PointerType):
-            # HLSL has no pointer types; DXC rejects "T *f()" ("pointers are unsupported in HLSL").
-            self.refuse_lowering(
-                f"pointer return: '{func.name}' returns a pointer, which HLSL has no type for"
-            )
-        if hasattr(func, "return_type"):
-            raw_return_type = self.type_name_string(func.return_type)
-            if "[" in raw_return_type:
-                fixed_array_return_type = self.hlsl_fixed_array_return_type_name(
-                    raw_return_type
-                )
-                if fixed_array_return_type is None:
-                    raise DirectXRefusal(
-                        "DirectX output does not support array return types; "
-                        "wrap the array in a struct or use an output parameter"
-                    )
-                raw_return_type = fixed_array_return_type
-                return_type = fixed_array_return_type
-            else:
-                return_type = self.map_type(raw_return_type)
-        else:
-            raw_return_type = "void"
-            return_type = "void"
-        if (
-            stage_output_lowering is not None
-            and stage_output_lowering.get("struct_name") is not None
-            and self.map_type(return_type) == "void"
-        ):
-            raw_return_type = stage_output_lowering["struct_name"]
-            return_type = stage_output_lowering["struct_name"]
-        self.current_function_return_type = raw_return_type
-        self.current_hlsl_precise_return_type = (
-            return_type
-            if return_type != "void"
-            and (
-                self.hlsl_has_precise_modifier(func)
-                or self.hlsl_is_metal_free_arithmetic_operator(func, return_type)
-            )
-            else None
-        )
-        # ``precise`` marks a value; a function that returns none keeps it on its locals and stores instead.
-        declaration_return_type = (
-            f"{self.hlsl_precise_modifier_prefix(func) if return_type != 'void' else ''}"
-            f"{return_type}"
+        declaration_return_type, raw_return_type, return_type = (
+            self.hlsl_function_return_types(func, stage_output_lowering)
         )
         self.validate_hlsl_local_groupshared_declarations(func)
         self.validate_hlsl_nonuniform_resource_index_calls(func)
@@ -3320,40 +2642,7 @@ class HLSLCodeGen(
             code += self.unsupported_glsl_buffer_block_function_placeholder(
                 "HLSL", getattr(func, "name", None), unsupported_function_reason
             )
-            self.current_function_return_type = previous_function_return_type
-            self.current_hlsl_precise_return_type = previous_precise_return_type
-            self.current_function_name = previous_function_name
-            self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
-            self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
-            self.local_variable_types = previous_local_variable_types
-            self.current_identifier_aliases = previous_identifier_aliases
-            self.current_identifier_reserved_names = previous_identifier_reserved_names
-            self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
-            self.current_hlsl_semantic_stage = previous_semantic_stage
-            self.current_hlsl_resource_pointer_offsets = (
-                previous_resource_pointer_offsets
-            )
-            self.current_hlsl_resource_pointer_aliases = (
-                previous_resource_pointer_aliases
-            )
-            self.current_generic_function_substitutions = (
-                previous_generic_function_substitutions
-            )
-            self.current_glsl_buffer_block_parameters = (
-                previous_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_parameters = (
-                previous_unsupported_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_local_variables = (
-                previous_unsupported_glsl_buffer_block_local_variables
-            )
-            self.current_glsl_buffer_block_parameter_failures = (
-                previous_glsl_buffer_block_parameter_failures
-            )
-            self.current_glsl_buffer_block_parameter_struct_failures = (
-                previous_glsl_buffer_block_parameter_struct_failures
-            )
+            restore_hlsl_function_state(self, saved_function_state)
             return code
 
         return_semantic = self.hlsl_function_return_semantic(func)
@@ -3373,7 +2662,7 @@ class HLSLCodeGen(
                 self.hlsl_tail_recursive_void_call_ids(func)
             )
             if self.current_hlsl_tail_recursive_call_ids:
-                if parameter_epilogue_statements:
+                if signature.parameter_epilogue_statements:
                     target_name = self.hlsl_function_declaration_name(func)
                     raise DirectXRecursiveFunctionError(
                         "DirectX cannot lower tail recursion that requires "
@@ -3397,299 +2686,126 @@ class HLSLCodeGen(
                 f"{declaration_return_type} {function_name}({params_str})"
                 f"{return_semantic_attr};\n\n"
             )
-            self.current_function_return_type = previous_function_return_type
-            self.current_hlsl_precise_return_type = previous_precise_return_type
-            self.current_function_name = previous_function_name
-            self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
-            self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
-            self.local_variable_types = previous_local_variable_types
-            self.current_identifier_aliases = previous_identifier_aliases
-            self.current_identifier_reserved_names = previous_identifier_reserved_names
-            self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
-            self.current_hlsl_semantic_stage = previous_semantic_stage
-            self.current_hlsl_resource_pointer_offsets = (
-                previous_resource_pointer_offsets
-            )
-            self.current_hlsl_resource_pointer_aliases = (
-                previous_resource_pointer_aliases
-            )
-            self.current_generic_function_substitutions = (
-                previous_generic_function_substitutions
-            )
-            self.current_glsl_buffer_block_parameters = (
-                previous_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_parameters = (
-                previous_unsupported_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_local_variables = (
-                previous_unsupported_glsl_buffer_block_local_variables
-            )
-            self.current_glsl_buffer_block_parameter_failures = (
-                previous_glsl_buffer_block_parameter_failures
-            )
-            self.current_glsl_buffer_block_parameter_struct_failures = (
-                previous_glsl_buffer_block_parameter_struct_failures
-            )
+            restore_hlsl_function_state(self, saved_function_state)
             return code
 
-        if effective_shader_type is not None:
-            self.validate_hlsl_function_return_semantic(
-                func, effective_shader_type, raw_return_type, return_semantic
-            )
-            self.validate_hlsl_stage_return_semantics(
-                func, effective_shader_type, return_semantic
-            )
-            self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
-            self.validate_hlsl_interpolation_stage_calls(func, effective_shader_type)
-            self.validate_hlsl_synchronization_stage_calls(func, effective_shader_type)
-            self.validate_hlsl_derivative_stage_calls(func, effective_shader_type)
-        waveops_helper_lanes_attribute = (
-            self.generate_hlsl_waveops_include_helper_lanes_attribute(
-                func, effective_shader_type
-            )
+        code, function_name = self.generate_hlsl_function_header(
+            func,
+            execution_config,
+            entry_name,
+            stage_output_lowering,
+            stage_node,
+            _workgroup_pointer_variant,
+            code,
+            declaration_return_type,
+            effective_shader_type,
+            params_str,
+            raw_return_type,
+            return_semantic,
+            shader_attr_map,
+            shader_map,
         )
-        wave_size_attribute = self.generate_hlsl_wave_size_attribute(
-            func, effective_shader_type
-        )
-        root_signature_attribute = self.generate_hlsl_root_signature_attribute(func)
 
-        if effective_shader_type in shader_map:
-            return_semantic_attr = self.map_semantic(return_semantic)
-            code += f"// {effective_shader_type.capitalize()} Shader\n"
-            code += root_signature_attribute
-            self.validate_hlsl_stage_parameter_requirements(func, effective_shader_type)
-            if effective_shader_type == "compute":
-                code += self.generate_compute_numthreads(execution_config)
-            if (
-                stage_output_lowering is not None
-                and stage_output_lowering.get("input_struct_name") is not None
-            ):
-                input_name = stage_output_lowering["input_local_name"]
-                input_declaration = (
-                    f"{stage_output_lowering['input_struct_name']} {input_name}"
-                )
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, input_declaration
-                )
-                self.local_variable_types[input_name] = stage_output_lowering[
-                    "input_struct_name"
-                ]
-            code += wave_size_attribute
-            code += waveops_helper_lanes_attribute
-            if effective_shader_type == "fragment" and requests_early_fragment_tests(
-                func, stage_node
-            ):
-                code += "[earlydepthstencil]\n"
-            function_name = entry_name or shader_map[effective_shader_type]
-            code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
+        return self.generate_hlsl_function_body(
+            func,
+            indent,
+            shader_type,
+            entry_name,
+            stage_output_lowering,
+            body,
+            code,
+            effective_shader_type,
+            function_name,
+            raw_return_type,
+            return_type,
+            saved_function_body_state,
+            saved_function_state,
+            signature,
+            software_subgroup_entry_index,
+        )
+
+    def emit_hlsl_function_parameter(self, signature, p):
+        """Render one parameter of a function: its declaration and semantic, and the aliases, prologue and epilogue statements and resource facts it adds."""
+        if id(p) in signature.promoted_entry_resource_parameter_ids:
+            return
+        if self.hlsl_resource_pointer_parameter_is_omitted(signature.func, p):
+            return
+        self.current_hlsl_resource_pointer_aliases.pop(p.name, None)
+        if hasattr(p, "param_type"):
+            raw_param_type = (
+                self.type_name_string(p.param_type)
+                if getattr(p.param_type, "generic_args", None)
+                else p.param_type
+            )
+        elif hasattr(p, "vtype"):
+            raw_param_type = p.vtype
         else:
-            shader_attr = shader_attr_map.get(effective_shader_type)
-            self.validate_hlsl_stage_requirements(
-                func,
-                effective_shader_type,
-                stage_node=stage_node,
-            )
-            code += root_signature_attribute
-            code += self.generate_stage_numthreads(
-                func, effective_shader_type, execution_config
-            )
-            code += self.generate_hlsl_stage_attributes(
-                func,
-                effective_shader_type,
-                stage_node=stage_node,
-            )
-            code += wave_size_attribute
-            code += waveops_helper_lanes_attribute
-            if shader_attr:
-                code += f'[shader("{shader_attr}")]\n'
-            function_name = self.hlsl_function_declaration_name(func, entry_name)
-            if _workgroup_pointer_variant is not None:
-                function_name = self.hlsl_workgroup_pointer_specialization_name(
-                    getattr(func, "name", None),
-                    _workgroup_pointer_variant,
-                    function_name,
-                )
-            return_semantic_attr = self.map_semantic(return_semantic)
-            code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
+            raw_param_type = "float"
+        raw_param_type_name = self.type_name_string(raw_param_type)
+        self.local_variable_types[p.name] = raw_param_type_name
+        self.local_variable_source_types[p.name] = raw_param_type_name
 
-        previous_sampler_parameters = self.current_sampler_parameters
-        previous_texture_parameters = self.current_texture_parameters
-        previous_image_access_parameters = self.current_image_access_parameters
-        previous_image_format_parameters = self.current_image_format_parameters
-        previous_implicit_texture_samplers = self.current_implicit_texture_samplers
-        previous_implicit_texture_regular_samplers = (
-            self.current_implicit_texture_regular_samplers
-        )
-        previous_implicit_texture_query_lod_samplers = (
-            self.current_implicit_texture_query_lod_samplers
-        )
-        self.current_sampler_parameters = sampler_parameters
-        self.current_texture_parameters = texture_parameters
-        self.current_image_access_parameters = image_access_parameters
-        self.current_image_format_parameters = image_format_parameters
-        self.current_implicit_texture_samplers = {
-            texture_name: sampler_info["sampler_name"]
-            for texture_name, sampler_info in implicit_texture_samplers.items()
-        }
-        self.current_implicit_texture_regular_samplers = {
-            texture_name: self.implicit_regular_sampler_name(texture_name, sampler_info)
-            for texture_name, sampler_info in implicit_texture_samplers.items()
-            if sampler_info.get("regular") and sampler_info.get("comparison")
-        }
-        self.current_implicit_texture_query_lod_samplers = {
-            texture_name: self.implicit_query_lod_sampler_name(
-                texture_name, sampler_info
-            )
-            for texture_name, sampler_info in implicit_texture_samplers.items()
-            if sampler_info.get("query_lod")
-        }
-        previous_hlsl_visible_int_constants = self.current_hlsl_visible_int_constants
-        self.current_hlsl_visible_int_constants = self.hlsl_initial_int_constants(func)
-        previous_texture_offset_constants = self.current_hlsl_texture_offset_constants
-        self.current_hlsl_texture_offset_constants = (
-            self.hlsl_initial_texture_offset_constants(func)
-        )
-        for parameter_name, value in self.hlsl_texture_offset_parameter_constants.get(
-            id(func), {}
-        ).items():
-            self.current_hlsl_texture_offset_constants[parameter_name] = value
-        body_terminates = self.statement_body_terminates(body)
-        needs_fallthrough_return = return_type != "void" and not body_terminates
-        compound_declaration_offset = len(code)
-        previous_compound_indices = self.hlsl_wide_integer_compound_indices
-        self.hlsl_wide_integer_compound_indices = []
-        previous_parameter_epilogue = self.current_hlsl_parameter_epilogue
-        self.current_hlsl_parameter_epilogue = tuple(parameter_epilogue_statements)
-        previous_constant_guards = getattr(
-            self, "current_hlsl_constant_branch_guards", ({}, set())
-        )
-        # Branches that compile-time constants rule out are not emitted: HLSL
-        # type-checks them where the source's implicit conversions do not apply.
-        self.current_hlsl_constant_branch_guards = constant_branch_guards(
-            self, func, self.hlsl_initial_bool_constants(func)
-        )
-        previous_precise_function_state = self.enter_hlsl_precise_function(func, body)
-        try:
-            if stage_output_lowering is not None:
-                output_name = stage_output_lowering.get("local_name")
-                output_type = stage_output_lowering.get("struct_name")
-                if output_name is not None and output_type is not None:
-                    code += f"{'    ' * (indent + 1)}{output_type} {output_name};\n"
-                    self.local_variable_types[output_name] = output_type
-            for statement in parameter_prologue_statements:
-                code += f"{'    ' * (indent + 1)}{statement}\n"
-            code += self.generate_hlsl_glsl_block_loads(
-                function_name,
-                shader_type is not None or entry_name is not None,
-                indent + 1,
-            )
-            if (
-                effective_shader_type == "compute"
-                and self.hlsl_software_subgroup_invocation_variable is not None
-            ):
-                # HLSL static globals are private to each shader invocation.
-                variable = self.hlsl_software_subgroup_invocation_variable
-                code += (
-                    f"{'    ' * (indent + 1)}{variable} = "
-                    f"uint({software_subgroup_entry_index});\n"
-                )
-            self.hlsl_tall_matrix_rows.mark_writes(body)
-            if self.current_hlsl_tail_recursive_call_ids:
-                code += f"{'    ' * (indent + 1)}while (true) {{\n"
-                code += self.generate_statement_body(body, indent + 2)
-                code += f"{'    ' * (indent + 2)}break;\n"
-                code += f"{'    ' * (indent + 1)}}}\n"
-            else:
-                code += self.generate_statement_body(body, indent + 1)
-            declarations = "".join(
-                f"{'    ' * (indent + 1)}{vtype} {name};\n"
-                for vtype, name in self.hlsl_wide_integer_compound_indices + list(
-                    self.hlsl_precise_captures or ()
-                )
-            )
-            code = (
-                code[:compound_declaration_offset]
-                + declarations
-                + code[compound_declaration_offset:]
-            )
-        finally:
-            self.leave_hlsl_precise_function(previous_precise_function_state)
-            self.current_hlsl_constant_branch_guards = previous_constant_guards
-            self.current_hlsl_parameter_epilogue = previous_parameter_epilogue
-            self.hlsl_wide_integer_compound_indices = previous_compound_indices
-            self.current_hlsl_visible_int_constants = (
-                previous_hlsl_visible_int_constants
-            )
-            self.current_hlsl_texture_offset_constants = (
-                previous_texture_offset_constants
-            )
-        if not body_terminates:
-            for statement in parameter_epilogue_statements:
-                code += f"{'    ' * (indent + 1)}{statement}\n"
-        if needs_fallthrough_return:
-            if (
-                stage_output_lowering is not None
-                and stage_output_lowering.get("local_name") is not None
-            ):
-                fallback = stage_output_lowering["local_name"]
-                code += self.generate_hlsl_return_value_statement(fallback, indent + 1)
-            else:
-                struct_fallback = self.render_hlsl_default_struct_return(
-                    raw_return_type, indent + 1
-                )
-                if struct_fallback is not None:
-                    code += struct_fallback
-                else:
-                    fallback = self.hlsl_default_value_expression(raw_return_type)
-                    code += self.generate_hlsl_return_value_statement(
-                        fallback, indent + 1
-                    )
-        self.current_sampler_parameters = previous_sampler_parameters
-        self.current_texture_parameters = previous_texture_parameters
-        self.current_image_access_parameters = previous_image_access_parameters
-        self.current_image_format_parameters = previous_image_format_parameters
-        self.current_implicit_texture_samplers = previous_implicit_texture_samplers
-        self.current_implicit_texture_regular_samplers = (
-            previous_implicit_texture_regular_samplers
-        )
-        self.current_implicit_texture_query_lod_samplers = (
-            previous_implicit_texture_query_lod_samplers
-        )
-        self.current_function_return_type = previous_function_return_type
-        self.current_hlsl_precise_return_type = previous_precise_return_type
-        self.current_function_name = previous_function_name
-        self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
-        self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
-        self.local_variable_types = previous_local_variable_types
-        self.local_variable_source_types = previous_local_variable_source_types
-        self.current_identifier_aliases = previous_identifier_aliases
-        self.current_identifier_reserved_names = previous_identifier_reserved_names
-        self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
-        self.current_hlsl_semantic_stage = previous_semantic_stage
-        self.current_hlsl_resource_pointer_offsets = previous_resource_pointer_offsets
-        self.current_hlsl_resource_pointer_aliases = previous_resource_pointer_aliases
-        self.current_generic_function_substitutions = (
-            previous_generic_function_substitutions
-        )
-        self.current_glsl_buffer_block_parameters = (
-            previous_glsl_buffer_block_parameters
-        )
-        self.current_unsupported_glsl_buffer_block_parameters = (
-            previous_unsupported_glsl_buffer_block_parameters
-        )
-        self.current_unsupported_glsl_buffer_block_local_variables = (
-            previous_unsupported_glsl_buffer_block_local_variables
-        )
-        self.current_glsl_buffer_block_parameter_failures = (
-            previous_glsl_buffer_block_parameter_failures
-        )
-        self.current_glsl_buffer_block_parameter_struct_failures = (
-            previous_glsl_buffer_block_parameter_struct_failures
-        )
+        handled = self.emit_hlsl_resource_pointer_array_parameter(signature, p)
+        if handled is not UNHANDLED:
+            return handled
 
-        code += "  " * indent + "}\n\n"
-        return code
+        handled = self.emit_hlsl_workgroup_pointer_parameter(signature, p)
+        if handled is not UNHANDLED:
+            return handled
+
+        param_decl_type = self.type_name_string(raw_param_type)
+        resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
+            p, signature.function_name
+        )
+        param_type = self.hlsl_workgroup_pointer_parameter_array_type(
+            p, getattr(signature.func, "name", None)
+        )
+        if param_type is None:
+            param_type = self.hlsl_private_pointer_parameter_array_type(
+                p, getattr(signature.func, "name", None)
+            )
+        if param_type is None and resource_pointer_contract is not None:
+            param_type = resource_pointer_contract["resource_type"]
+        if param_type is None:
+            param_type = self.map_resource_parameter_type_with_hint(
+                param_decl_type, p, getattr(signature.func, "name", None)
+            )
+        param_type = self.directx_resource_declaration_type(param_type)
+        self.current_hlsl_parameter_resource_types[p.name] = param_type
+        if self.is_texture_type(raw_param_type) or self.is_image_type(raw_param_type):
+            signature.texture_parameters[p.name] = self.map_resource_type_with_format(
+                self.resource_base_type(raw_param_type), p
+            )
+            if self.is_image_type(raw_param_type):
+                record_explicit_image_metadata(
+                    p.name,
+                    p,
+                    self.attribute_value_to_string,
+                    image_formats=signature.image_format_parameters,
+                    image_accesses=signature.image_access_parameters,
+                )
+        if self.is_sampler_type(raw_param_type):
+            signature.sampler_parameters.add(p.name)
+            if (
+                p.name in signature.comparison_sampler_parameters
+                or p.name in signature.implicit_existing_comparison_samplers
+            ):
+                param_type = param_type.replace(
+                    "SamplerState", "SamplerComparisonState", 1
+                )
+
+        semantic = self.semantic_from_node(p)
+        if semantic is None:
+            semantic = signature.default_vertex_parameter_semantics.get(id(p))
+        handled = self.emit_hlsl_builtin_input_parameter(
+            signature, p, param_type, semantic
+        )
+        if handled is not UNHANDLED:
+            return handled
+
+        self.emit_hlsl_parameter_declaration(
+            signature, p, param_type, resource_pointer_contract, semantic
+        )
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as HLSL source."""
