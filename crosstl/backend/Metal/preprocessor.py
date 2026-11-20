@@ -11,8 +11,6 @@ from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MA
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.refusals import MetalSourceRefusal
 
-from .mpp_matmul2d import validate_cooperative_tensor_layout
-from .mpp_matmul2d import lower_matmul2d_operations
 from .alias_template_types import (
     expand_concrete_alias_template_references,
     fold_expression_decltypes,
@@ -45,6 +43,7 @@ from .integral_constant_tags import (
 )
 from .member_address_types import addressed_member_pointer_type
 from .member_lowering_layers import lower_members_with_late_specializations
+from .mpp_matmul2d import lower_matmul2d_operations, validate_cooperative_tensor_layout
 from .namespaced_specializations import place_in_namespace, specialization_reference
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
