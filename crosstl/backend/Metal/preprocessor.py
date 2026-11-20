@@ -11,12 +11,12 @@ from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MA
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.refusals import MetalSourceRefusal
 
-from .bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from .alias_template_types import (
     expand_concrete_alias_template_references,
     fold_expression_decltypes,
 )
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from .call_result_types import CallResultScope, infer_call_result_type
 from .class_argument_precedence import class_identity_template_outranks
 from .concrete_qualified_aliases import resolve_concrete_qualified_type_aliases
