@@ -203,6 +203,39 @@ def test_a_slang_probe_both_targets_reject_keeps_the_spirv_reason(
     assert [target for _, target in seen] == ["", "hlsl"]
 
 
+SLANG_UNSPELLED = Feature(
+    "slang",
+    "function",
+    "sin",
+    Signature(Type("float"), (Param(Type("float")),)),
+    note="no CrossGL built-in computes it",
+)
+
+
+def test_an_unspelled_feature_the_target_rejects_is_untested_in_the_output_row(
+    monkeypatch,
+):
+    seen = _slang_compiler(monkeypatch, set())
+    result = runner.run_output(SLANG_UNSPELLED, "slang")
+    assert result.outcome == "untested"
+    assert result.detail == f"the probe itself is rejected: {SPIRV_ONLY_REJECTION}"
+    assert result.validator == ""
+    assert [target for _, target in seen] == ["", "hlsl"]
+
+
+def test_an_unspelled_feature_the_target_accepts_is_refused_in_the_output_row(
+    monkeypatch,
+):
+    seen = _slang_compiler(monkeypatch, {""})
+    result = runner.run_output(SLANG_UNSPELLED, "slang")
+    assert result.outcome == "refused"
+    assert result.detail == (
+        "CrossGL has no spelling for this operation: no CrossGL built-in computes it"
+    )
+    # Only the native probe is checked; there is no translation to validate.
+    assert [target for _, target in seen] == [""]
+
+
 def test_a_probe_its_usual_target_accepts_is_not_retried(monkeypatch):
     seen = _slang_compiler(monkeypatch, {""})
     result = runner.run_input(SLANG_SIN, "slang")
