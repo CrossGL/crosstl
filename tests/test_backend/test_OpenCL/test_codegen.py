@@ -1896,7 +1896,7 @@ def test_opencl_four_component_cross_uses_the_three_component_form():
 
     assert "var r: vec4<f32> = vec4<f32>(cross(a0.xyz, a1.xyz), 0.0);" in crossgl
     assert (
-        "vec4<f32>(cross(((a[2] + a[3])).xyz, "
+        "vec4<f32>(cross((a[2] + a[3]).xyz, "
         "(vec4<f32>(1.0f, 0.0f, 0.0f, 0.0f)).xyz), 0.0)"
     ) in crossgl
     hlsl = HLSLCodeGen().generate(cgl_ast)
@@ -1908,10 +1908,14 @@ def test_opencl_double4_cross_keeps_its_element_type():
         #pragma OPENCL EXTENSION cl_khr_fp64 : enable
         __kernel void probe(__global double4* out) {
             out[0] = cross(out[1], out[2]);
+            out[3] = cross(out[1] - out[2], out[2] * 2.0);
         }
         """)
 
     assert "out[0] = vec4<f64>(cross(out[1].xyz, out[2].xyz), 0.0);" in crossgl
+    assert (
+        "out[3] = vec4<f64>(cross((out[1] - out[2]).xyz, (out[2] * 2.0).xyz), 0.0);"
+    ) in crossgl
 
 
 def test_opencl_three_component_cross_is_unchanged():
@@ -1921,3 +1925,62 @@ def test_opencl_three_component_cross_is_unchanged():
 
     assert "return cross(a, b);" in crossgl
     assert ".xyz" not in crossgl
+
+
+def test_opencl_four_component_cross_infers_arithmetic_arguments():
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        __kernel void probe(__global float4* o, __global const float4* pos) {
+            uint i = get_global_id(0);
+            float4 p0 = pos[3u * i], p1 = pos[3u * i + 1u], p2 = pos[3u * i + 2u];
+            o[i] = normalize(cross(p1 - p0, p2 - p0));
+            o[i + 1u] = cross(2.0f * p0, -p1);
+        }
+        """)
+
+    assert (
+        "o[i] = normalize(vec4<f32>(cross((p1 - p0).xyz, (p2 - p0).xyz), 0.0));"
+    ) in crossgl
+    assert "vec4<f32>(cross((2.0f * p0).xyz, (-p1).xyz), 0.0)" in crossgl
+    hlsl = HLSLCodeGen().generate(cgl_ast)
+    assert "normalize(float4(cross((p1 - p0).xyz, (p2 - p0).xyz), 0.0))" in hlsl
+
+
+def test_opencl_four_component_cross_infers_swizzle_arguments():
+    crossgl = generate_crossgl("""
+        __kernel void probe(__global float4* o, __global float3* t, float4 x, float4 y) {
+            o[0] = cross(x.wzyx, y.s1032);
+            t[0] = cross(x.xyz, y.zyx);
+        }
+        """)
+
+    assert "o[0] = vec4<f32>(cross(x.wzyx.xyz, y.s1032.xyz), 0.0);" in crossgl
+    assert "t[0] = cross(x.xyz, y.zyx);" in crossgl
+
+
+def test_opencl_four_component_cross_infers_builtin_results():
+    crossgl = generate_crossgl("""
+        __kernel void probe(__global float4* o, float4 x, float4 y) {
+            o[0] = cross(normalize(x), normalize(y));
+            o[1] = cross(cross(x, y), y * 2.0f);
+        }
+        """)
+
+    assert (
+        "o[0] = vec4<f32>(cross((normalize(x)).xyz, (normalize(y)).xyz), 0.0);"
+    ) in crossgl
+    assert (
+        "o[1] = vec4<f32>(cross((vec4<f32>(cross(x.xyz, y.xyz), 0.0)).xyz, "
+        "(y * 2.0f).xyz), 0.0);"
+    ) in crossgl
+
+
+def test_opencl_three_component_cross_of_expressions_is_unchanged():
+    crossgl = generate_crossgl("""
+        __kernel void probe(__global float3* o, float4 x, float3 a, float3 b) {
+            o[0] = cross(a - b, normalize(b));
+            o[1] = cross(x.xyz - a, x.zyx);
+        }
+        """)
+
+    assert "o[0] = cross((a - b), normalize(b));" in crossgl
+    assert "o[1] = cross((x.xyz - a), x.zyx);" in crossgl
