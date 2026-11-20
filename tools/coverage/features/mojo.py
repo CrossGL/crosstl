@@ -8,8 +8,10 @@ re-exports, so their public API is every module-level definition whose name does
 ``max.gpu.sync`` exports its barriers from its ``sync`` module. ``max.gpu.primitives.id`` defines ``warp_id`` and
 ``sm_id`` and re-exports ``lane_id`` and the index values (``thread_idx``, ``global_idx`` and the rest) from
 ``std._gpu``; those values are not functions, and the compute construct probes read them. ``std.atomic`` exports
-``fence`` and the type ``Atomic``, whose static methods operate on a pointer. Each name is probed with its first
-definition. Mojo functions are generic over a ``DType`` and a SIMD width; a probe calls them on scalars, ``Float32``
+``fence`` and the type ``Atomic``. A probe calls an Atomic method through the type: a static method on a pointer to
+the output buffer's element, and a method only an Atomic value has on that element viewed as an Atomic. Each name is
+probed with its first definition, a static one where both exist. Mojo functions are generic over a ``DType`` and a
+SIMD width; a probe calls them on scalars, ``Float32``
 unless the definition requires an integral type, as all of ``std.bit`` does. A compile-time parameter no argument
 fixes is written into the call, as in ``nan[dtype=DType.float32]()``.
 
@@ -26,7 +28,7 @@ from collections.abc import Callable
 
 from .. import spellings
 from ..execution import THREADS
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import REDUCE_CLOSURE, VOID, Feature, Param, Signature, Type
 from .common import prototype
 
 _EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
@@ -80,8 +82,10 @@ SYNC = "max.gpu.sync"
 GPU = "max.gpu"
 ATOMIC = "std.atomic"
 # A lane-group reduction is probed over the whole warp, where it is the warp reduction CrossGL has. Over fewer lanes
-# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does.
-_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE"}
+# it leaves the lanes past num_lanes unchanged (warp.mojo, lane_group_sum), which no one CrossGL operation does. A
+# generic reduction exchanges values with shuffle_xor, which leaves the result in every lane, as warp.mojo's own
+# broadcasting reductions do (_lane_group_broadcast_reduce).
+_WARP_LITERALS = {"num_lanes": "warp.WARP_SIZE", "shuffle": "warp.shuffle_xor"}
 # A block reduction is probed over a block of the invocations a subgroup probe runs as one workgroup, a whole number
 # of warps, as block.mojo asserts the block size is.
 _BLOCK_LITERALS = {"block_size": str(THREADS)}
@@ -100,8 +104,8 @@ _RELAXED = {
     parameter: "Ordering.RELAXED"
     for parameter in ("ordering", "success_ordering", "failure_ordering")
 }
-# Only an Atomic value has these methods; a probe calls Atomic's static methods on a buffer element instead.
-_INSTANCE = "a method of an Atomic value only, and the probes call Atomic's static methods on a buffer element"
+# The receiver of a method only an Atomic value has, which a probe passes the output buffer's element as.
+_ATOMIC_VALUE = re.compile(r"Atomic\[(.*)\]")
 # A pointer argument, which a probe passes the output buffer's element as.
 _POINTER = re.compile(r"(?:Mut|Imm|Unsafe)?Pointer\[(.*)\]")
 # The address space of a pointer that a probe passes a workgroup variable as: shared memory, or an address space the
@@ -329,13 +333,17 @@ def signature(
 
     ``literals`` gives the value of a compile-time parameter by name, where the probe passes another value than
     :data:`_LITERALS` gives for the parameter's kind, and ``named`` the parameters the call names even though they
-    have a default. A pointer argument takes the output buffer's element, the operand of an atomic operation, and a
-    ``mut`` argument a local the probe declares.
+    have a default. A pointer argument takes the output buffer's element, the operand of an atomic operation, an
+    Atomic receiver that element viewed as an Atomic, and a ``mut`` argument a local the probe declares.
     """
     parameters, arguments, result, body = definition
     element = _element(body, default)
     declared = _parameters(parameters)
-    generics = {n for n, kind, _, _ in declared if kind not in _LITERALS}
+    # A generic constrained to a reduction function is the type of the function the probe passes.
+    closures = {n for n, kind, _, _ in declared if kind == REDUCE_CLOSURE}
+    generics = {
+        n for n, kind, _, _ in declared if kind not in _LITERALS and n not in closures
+    }
     params: list[Param] = []
     by_name: dict[str, Type] = {}
     passed: list[str] = []
@@ -348,16 +356,22 @@ def signature(
         declaration, default_value = _default(part)
         words, _, kind = declaration.partition(":")
         convention, _, local = words.strip().rpartition(" ")
-        pointer = _POINTER.fullmatch(re.sub(r"\s+", " ", kind.strip()))
+        spelled = re.sub(r"\s+", " ", kind.strip())
+        pointer = _POINTER.fullmatch(spelled)
+        receiver = local == "self" and _ATOMIC_VALUE.fullmatch(spelled)
         shared = False
-        if pointer:
-            # ``Pointer[mut=True, type, _, address_space=.SHARED]`` names its mutability before the pointee.
-            pointee = [p for p in _split(pointer.group(1)) if "=" not in p]
+        if pointer or receiver:
+            # ``Pointer[mut=True, type, _, address_space=.SHARED]`` names its mutability before the pointee, and
+            # ``Atomic[Scalar[dtype], scope=_]`` its scope after the value.
+            held = (pointer or receiver).group(1)
+            pointee = [p for p in _split(held) if "=" not in p]
             mapped = mojo_type(pointee[0], element, generics, by_name)
-            space = re.search(r"address_space=(\w+)\b", pointer.group(1))
-            shared = bool(_SHARED.search(pointer.group(1))) or bool(
+            space = re.search(r"address_space=(\w+)\b", held)
+            shared = bool(_SHARED.search(held)) or bool(
                 space and space.group(1) in generics
             )
+        elif spelled in closures:
+            mapped = Type.other(REDUCE_CLOSURE)
         else:
             mapped = mojo_type(kind, element, generics, by_name)
         by_name[local] = mapped
@@ -366,11 +380,14 @@ def signature(
         elif convention and convention not in _CONVENTIONS:
             return None, "", f"no probe passes a {convention} argument"
         elif not default_value.strip():
-            direction = (
-                "workgroup address"
-                if shared
-                else "inout" if pointer else "address" if convention == "mut" else "in"
-            )
+            if receiver:
+                direction = "atomic"
+            elif shared:
+                direction = "workgroup address"
+            elif pointer:
+                direction = "inout"
+            else:
+                direction = "address" if convention == "mut" else "in"
             params.append(Param(mapped, direction))
             passed.append(kind)
     # A DType parameter no passed argument's type mentions and the definition pins to one type, which the call names.
@@ -402,6 +419,8 @@ def signature(
             fixed.append(
                 f"{parameter}={(literals or {}).get(parameter, _LITERALS[kind])}"
             )
+        elif kind.startswith("def") and parameter in (literals or {}):
+            fixed.append(f"{parameter}={literals[parameter]}")
         elif kind.startswith("def"):
             return None, "", f"no probe passes a function as the parameter {parameter}"
         else:
@@ -431,7 +450,7 @@ def parse(
     ``max/gpu/sync/__init__.mojo`` and ``sync.mojo`` and its ``max/gpu/primitives/id.mojo``, the
     ``std/_gpu/primitives/id.mojo`` that defines ``lane_id``, and ``std/atomic/__init__.mojo`` and ``atomic.mojo``.
     """
-    static, instance = {}, []
+    static, instance = {}, {}
     if "Atomic" in exports(atomic_init, ".atomic", functions=False):
         static, instance = methods(atomic, "Atomic")
     lane = definitions(lanes)
@@ -478,7 +497,7 @@ def parse(
         ),
         (
             "atomic",
-            static,
+            {**instance, **static},
             [*static, *instance],
             "int",
             lambda n: (f"Atomic.{n}", atomic_imports, None, _RELAXED),
@@ -491,20 +510,22 @@ def parse(
             _imported(ATOMIC),
         ),
     ]
-    absent = {f"Atomic.{name}": _INSTANCE for name in instance}
     features = []
     for group, defined, names, default, naming in modules:
         for exported in names:
             name, extension, literals, named = naming(exported)
             found, spelling = None, ""
-            note = absent.get(name, "no definition in the module it is exported from")
+            note = "no definition in the module it is exported from"
             if exported in defined:
                 found, spelling, note = signature(
                     name, defined[exported], default, literals, named
                 )
             crossgl, counterpart = spellings.spelling("mojo", name, glsl_names), None
             if name in spellings.COUNTERPARTS["mojo"]:
-                crossgl, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
+                called, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
+                # An expression spelling takes the counterpart's arguments in place of Mojo's.
+                if not spellings.is_expression(crossgl):
+                    crossgl = called
             if name in UNSPELLED:
                 crossgl, note = "", UNSPELLED[name]
             elif crossgl == name and "." in name:
@@ -555,12 +576,15 @@ def _imported(
 _METHOD = re.compile(r"^((?:@[^\n]*\n)*)def\s+(\w+)", re.M)
 
 
-def methods(text: str, struct: str) -> tuple[dict[str, Definition], list[str]]:
-    """The definitions of the static methods of the struct ``struct`` by name, and the names of the public methods
-    only its values have, in file order."""
+def methods(
+    text: str, struct: str
+) -> tuple[dict[str, Definition], dict[str, Definition]]:
+    """The definitions of the public static methods of the struct ``struct`` by name, and those of the public methods
+    only its values have, in file order; an instance method's arguments start with ``self``.
+    """
     found = re.search(rf"^struct\s+{struct}\b", text, re.M)
     if not found:
-        return {}, []
+        return {}, {}
     position = found.end()
     if text[position] == "[":
         _, position = _group(text, position, "]")
@@ -569,16 +593,14 @@ def methods(text: str, struct: str) -> tuple[dict[str, Definition], list[str]]:
     end = header_end + (following.start() if following else len(text))
     body = re.sub(r"^    ", "", text[header_end:end], flags=re.M)
     static: dict[str, Definition] = {}
-    instance: list[str] = []
+    instance: dict[str, Definition] = {}
     for match in _METHOD.finditer(body):
         decorators, name = match.groups()
         if name.startswith("_"):
             continue
-        if "@staticmethod" in decorators:
-            static.setdefault(name, definitions(body[match.start(2) - 4 :])[name])
-        elif name not in instance:
-            instance.append(name)
-    return static, [name for name in instance if name not in static]
+        kept = static if "@staticmethod" in decorators else instance
+        kept.setdefault(name, definitions(body[match.start(2) - 4 :])[name])
+    return static, {n: d for n, d in instance.items() if n not in static}
 
 
 def public(text: str) -> list[str]:
