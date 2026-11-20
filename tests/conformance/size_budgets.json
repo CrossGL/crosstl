@@ -103,7 +103,7 @@
   "crosstl/backend/SPIRV/VulkanParser.py": 8415,
   "crosstl/translator/codegen/GLSL_codegen.py": 60342,
   "crosstl/translator/codegen/cuda_codegen.py": 13670,
-  "crosstl/translator/codegen/directx_codegen.py": 57799,
+  "crosstl/translator/codegen/directx_codegen.py": 10060,
   "crosstl/translator/codegen/hip_codegen.py": 11111,
   "crosstl/translator/codegen/metal_codegen.py": 7917,
   "crosstl/translator/codegen/mojo_codegen.py": 16295,
