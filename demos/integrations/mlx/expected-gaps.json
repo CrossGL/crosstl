@@ -183,13 +183,13 @@
       "mlx/backend/metal/kernels/softmax.metal"
     ],
     "workgroup_frontier_artifact_count": 94,
-    "workgroup_frontier_translated_artifact_count": 41,
-    "workgroup_blocked_artifact_count": 53,
+    "workgroup_frontier_translated_artifact_count": 55,
+    "workgroup_blocked_artifact_count": 39,
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-required",
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "clean_project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 496,
-    "spirv_validated_artifact_count": 496,
+    "glslang_compiled_artifact_count": 510,
+    "spirv_validated_artifact_count": 510,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
@@ -215,7 +215,7 @@
       }
     },
     "index_range_assertion_evidence": {
-      "assertion_count": 39,
+      "assertion_count": 52,
       "inclusive_bounds": {
         "minimum": 0,
         "maximum": 2147483647
@@ -253,7 +253,9 @@
         ],
         "mlx/backend/metal/kernels/logsumexp.metal": [
           "gid * uint64(axis_size) + lid * 4",
-          "in_ + i"
+          "in_ + i",
+          "gid * uint64(axis_size)",
+          "in_ + offset + i"
         ],
         "mlx/backend/metal/kernels/rms_norm.metal": [
           "gid * uint64(axis_size) + lid * RMS_N_READS",
@@ -261,7 +263,15 @@
           "g + i",
           "out_ + i",
           "gx + i",
-          "gw + i"
+          "gw + i",
+          "i + r",
+          "r + i",
+          "x + i + r",
+          "x + r + i",
+          "out_ + r + i",
+          "g + i + r",
+          "gx + i + r",
+          "gw + i + r"
         ],
         "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": [
           "kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread",
@@ -272,7 +282,10 @@
         "mlx/backend/metal/kernels/softmax.metal": [
           "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
           "in_ + i",
-          "out_ + i"
+          "out_ + i",
+          "gid * uint64(axis_size)",
+          "in_ + offset + i",
+          "out_ + offset + i"
         ]
       },
       "contract_kind": "explicit-host-runtime-portability-preconditions",
