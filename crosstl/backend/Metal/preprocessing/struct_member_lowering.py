@@ -124,10 +124,20 @@ class MetalStructMemberLoweringMixin:
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        struct_names = {struct.name for struct in structs}
+        alias_bindings = self._source_type_alias_bindings
         split_code = split_struct_declarator_lists(
             code,
-            (struct.name for struct in structs),
+            struct_names
+            | {
+                name
+                for name, bindings in alias_bindings.items()
+                if any(binding.target in struct_names for binding in bindings)
+            },
             self._find_comment_and_literal_spans(code),
+            lambda name, position: name in struct_names
+            or self._resolve_struct_type_alias_at(alias_bindings, name, position)
+            in struct_names,
         )
         if split_code != code:
             # Every receiver of a declarator list now has its own declaration.
