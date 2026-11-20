@@ -53,7 +53,6 @@
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.validate_hlsl_software_subgroup_control_flow": 606,
   "crosstl/translator/codegen/loop_guard_bounds.py::guarded_additive_loop_entries": 364,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.__init__": 657,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.expression_result_type": 747,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_statement": 319,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.expression_result_type": 368,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression": 465,
