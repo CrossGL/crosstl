@@ -73,7 +73,6 @@
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_expression": 1292,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_function": 1316,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_statement": 319,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.render_rewritten_program": 1371,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.expression_result_type": 368,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression": 465,
   "crosstl/translator/codegen/resource_arrays.py::collect_resource_array_size_hints": 2268,
@@ -105,7 +104,7 @@
   "crosstl/translator/codegen/cuda_codegen.py": 13670,
   "crosstl/translator/codegen/directx_codegen.py": 57799,
   "crosstl/translator/codegen/hip_codegen.py": 11111,
-  "crosstl/translator/codegen/metal_codegen.py": 7917,
+  "crosstl/translator/codegen/metal_codegen.py": 6710,
   "crosstl/translator/codegen/mojo_codegen.py": 16295,
   "crosstl/translator/codegen/rust_codegen.py": 14799,
   "crosstl/translator/codegen/slang_codegen.py": 16595
