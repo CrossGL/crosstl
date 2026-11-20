@@ -137,9 +137,7 @@ def test_preserves_pointer_and_constant_reference_layouts(
     ],
 )
 @pytest.mark.parametrize("indirection", ["*", "&"])
-def test_coherence_qualifiers_keep_the_device_layout(
-    tmp_path, qualifiers, indirection
-):
+def test_coherence_qualifiers_keep_the_device_layout(tmp_path, qualifiers, indirection):
     resource = _reflect(tmp_path, f"{qualifiers} uint{indirection}")
     plain = _reflect(tmp_path, f"device uint{indirection}")
     assert resource["scalarLayout"] == plain["scalarLayout"]
