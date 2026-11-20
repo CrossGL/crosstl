@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_fragment_interlock import INTERLOCK_LAYOUTS
 from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
 
 __all__ = [
@@ -233,6 +234,12 @@ _BUILTIN_FUNCTION_GROUPS = (
         ),
         (430, 310, ("GL_ARB_shader_storage_buffer_object",) + _COMPUTE, ()),
     ),
+    # No GLSL version declares the interlock functions without GL_ARB_fragment_shader_interlock, and GLSL ES has
+    # no ARB interlock extension.
+    (
+        ("beginInvocationInterlockARB", "endInvocationInterlockARB"),
+        (None, None, ("GL_ARB_fragment_shader_interlock",), ()),
+    ),
 )
 # A non-constant ``textureGatherOffset`` offset (GLSL 4.60 and GLSL ES 3.20, section 8.9.4); the emitter records
 # it while it renders, since the program text does not show whether an offset is a constant expression.
@@ -352,6 +359,8 @@ _LAYOUT_REQUIREMENTS = {
     "uniform_block_layout": GLSLRequirement(
         "a uniform block layout", 330, 300, ("GL_ARB_uniform_buffer_object",)
     ),
+    # glslang accepts the GL_ARB_fragment_shader_interlock modes only from GLSL 4.50, extension or not.
+    "interlock": GLSLRequirement("a fragment shader interlock layout", 450, None),
 }
 _STAGE_REQUIREMENTS = {
     "geometry": GLSLRequirement(
@@ -549,6 +558,8 @@ def _layout_line_requirements(ids, declaration, stage):
         requirements.append(_LAYOUT_REQUIREMENTS["interface"])
     if any(qualifier.startswith("local_size_") for qualifier in ids):
         requirements.append(_LAYOUT_REQUIREMENTS["local_size"])
+    if ids & INTERLOCK_LAYOUTS:
+        requirements.append(_LAYOUT_REQUIREMENTS["interlock"])
     return requirements
 
 

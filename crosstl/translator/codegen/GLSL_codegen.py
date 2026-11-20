@@ -136,6 +136,7 @@ from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_refusals import input_attachment_refusal_reason
 from .glsl_shadow_lod import require_shadow_lod_extension
 from .glsl_specialization_dependents import (
@@ -3036,6 +3037,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
@@ -5076,7 +5080,8 @@ class GLSLCodeGen(
                         mutated.update(target_interval_keys(target))
                 elif isinstance(node, UnaryOpNode) and (
                     self.map_operator(node.op) in {"++", "--"}
-                    or node.op in {
+                    or node.op
+                    in {
                         "PRE_INCREMENT",
                         "PRE_DECREMENT",
                         "POST_INCREMENT",
@@ -5170,9 +5175,8 @@ class GLSLCodeGen(
                         if (
                             isinstance(counter, IdentifierNode)
                             and counter.name == init.name
-                            and init.name not in self.glsl_interval_dependency_names(
-                                offset
-                            )
+                            and init.name
+                            not in self.glsl_interval_dependency_names(offset)
                         ):
                             return counter
                 return None
@@ -5354,7 +5358,8 @@ class GLSLCodeGen(
                                 bounds is None
                                 or info is None
                                 or info.lanes != 1
-                                or info.kind not in {
+                                or info.kind
+                                not in {
                                     ArithmeticScalarKind.SIGNED_INTEGER,
                                     ArithmeticScalarKind.UNSIGNED_INTEGER,
                                 }
@@ -5824,7 +5829,8 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op in {
+                or value.op
+                in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -6025,9 +6031,8 @@ class GLSLCodeGen(
                 exact_values = (
                     self.glsl_storage_pointer_array_loop_iteration_values(
                         value,
-                        counter_mutated=value.init.name in mutation_interval_keys(
-                            value.body, id(value.init)
-                        ),
+                        counter_mutated=value.init.name
+                        in mutation_interval_keys(value.body, id(value.init)),
                     )
                     if count is not None
                     and (pointer_array_loop or aggregate_loop_names)
@@ -6679,7 +6684,8 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op in {
+                or value.op
+                in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -8732,6 +8738,7 @@ class GLSLCodeGen(
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -8744,6 +8751,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -8978,6 +8986,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 
@@ -10471,7 +10482,8 @@ class GLSLCodeGen(
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if (
-                func_name in {
+                func_name
+                in {
                     "texture",
                     "textureLod",
                     "textureGrad",
@@ -10491,7 +10503,8 @@ class GLSLCodeGen(
             ):
                 return self.texture_sampling_result_type(args[0], func_name)
             if (
-                func_name in glsl_call_names_resolving_to(
+                func_name
+                in glsl_call_names_resolving_to(
                     self,
                     "derivative-aliases",
                     self.GLSL_DERIVATIVE_FUNCTIONS,
@@ -11827,7 +11840,8 @@ class GLSLCodeGen(
                     candidates.append(fallback)
                 for argument_index, argument in enumerate(arguments):
                     if not any(
-                        argument_index < len(
+                        argument_index
+                        < len(
                             parameters := list(
                                 getattr(
                                     candidate,
