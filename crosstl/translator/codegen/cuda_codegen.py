@@ -17,6 +17,7 @@ from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
 )
+from .barrier_peephole import merge_adjacent_cuda_barriers
 from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_reference_parameters import is_output_parameter, reference_declarator
 from .c_wide_integer_vectors import wide_integer_vector_type
@@ -318,7 +319,9 @@ class CudaCodeGen(
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
         refuse_cooperative_matrices(ast_node, label="CUDA", target="cuda")
-        return self.refusals.run(self.render_checked_program, ast_node)
+        return merge_adjacent_cuda_barriers(
+            self.refusals.run(self.render_checked_program, ast_node)
+        )
 
     def render_checked_program(self, ast_node):
         """Render the program and refuse each built-in type and function of another language it still names."""

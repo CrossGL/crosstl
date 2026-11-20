@@ -7,6 +7,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.ast import MemberAccessNode
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.codegen.workgroup_size_extents import (
@@ -16,6 +17,7 @@ from crosstl.translator.codegen.workgroup_size_extents import (
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.spirv_friendly_names import translate_spirv
+from tests.stage_entry_helpers import translate_each_entry
 
 TILE = """#version 450
 layout(LAYOUT) in;
@@ -177,12 +179,30 @@ def test_a_specialized_extent_is_refused(tmp_path, backend):
         _translate(tmp_path, _tile(SPECIALIZED), backend)
 
 
-@pytest.mark.parametrize("backend", ["metal", "directx", "vulkan", "opengl"])
+@pytest.mark.parametrize("backend", ["metal", "directx", "vulkan"])
 def test_entries_of_different_sizes_leave_a_shared_extent_without_a_size(
     tmp_path, backend
 ):
     with pytest.raises(REFUSED, match="different"):
         _translate(tmp_path, TWO_SIZES, backend, suffix=".cgl")
+
+
+def test_glsl_gives_each_entry_its_own_size_for_a_shared_extent(tmp_path):
+    # A GLSL unit holds one compute entry, so the file is refused whole and each entry, translated on its own,
+    # declares the extent under its own local size, where gl_WorkGroupSize is a constant (GLSL 4.60 7.1.3).
+    path = _write(tmp_path, TWO_SIZES, ".cgl")
+    with pytest.raises(OpenGLRepeatedStageEntryError):
+        crosstl.translate(str(path), backend="opengl")
+    artifacts = translate_each_entry(path, "opengl", format_output=False)
+    for name, size in (("first", 64), ("second", 8)):
+        code = artifacts[("compute", name)]
+        assert (
+            f"layout(local_size_x = {size}, local_size_y = 1, local_size_z = 1) in;"
+            in code
+        )
+        assert code.index("local_size_x") < code.index(
+            "shared float tile[gl_WorkGroupSize.x];"
+        )
 
 
 def test_the_program_size_reports_why_a_component_has_no_value():

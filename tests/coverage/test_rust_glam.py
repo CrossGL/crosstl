@@ -65,6 +65,10 @@ impl Mat4 {
         &mut self.x_axis
     }
 
+    pub fn write_cols_to_slice(&self, slice: &mut [f32]) {
+        slice[0] = self.x_axis.x;
+    }
+
     pub const fn from_cols_slice(slice: &[f32]) -> Self {
         Self::ZERO
     }
@@ -121,6 +125,10 @@ impl Quat {
 
     pub fn from_affine3a(a: &crate::Affine3A) -> Self {
         Self::IDENTITY
+    }
+
+    pub fn write_to_slice(self, slice: &mut [f32]) {
+        slice[0] = self.x;
     }
 }
 """
@@ -230,6 +238,14 @@ def test_glam_arrays_and_slices_are_read_as_glam_reads_them():
     # A result's column arrays are stored as its first column, as a matrix is.
     source = probes.build(features["Mat4::to_cols_array_2d"], "rust").source
     assert "let r: Vec4 = Vec4::from((a0.to_cols_array_2d())[0]);" in source
+    # A slice the function writes is a local array of one value per component: a matrix's sixteen and a
+    # quaternion's four.
+    source = probes.build(features["Mat4::write_cols_to_slice"], "rust").source
+    assert "let mut a1: [f32; 16] = Default::default();" in source
+    assert "a0.write_cols_to_slice(&mut a1);" in source
+    source = probes.build(features["Quat::write_to_slice"], "rust").source
+    assert "let mut a1: [f32; 4] = Default::default();" in source
+    assert "Quat::from_vec4(a0).write_to_slice(&mut a1);" in source
 
 
 def test_glam_column_references_are_read_through():

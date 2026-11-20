@@ -13,6 +13,13 @@ HLSL ``GroupMemoryBarrier``, ``DeviceMemoryBarrier`` and ``AllMemoryBarrier`` an
 The merge only joins barrier statements on consecutive lines at the same indentation, which the emitters produce
 only for statements of one block, and only barriers of one kind (Metal threadgroup barriers, Metal SIMD-group
 barriers, or HLSL group barriers).
+
+CUDA and HIP spell CrossGL's ``groupMemoryBarrier(); workgroupBarrier(); groupMemoryBarrier();`` (the CUDA and HIP
+importers' ``__syncthreads()``) as ``__threadfence_block(); __syncthreads(); __threadfence_block();``.
+``__syncthreads()`` already makes every global and shared memory access before it visible to the whole block (CUDA
+C++ Programming Guide, "Synchronization Functions"; HIP's ``__syncthreads`` is the same), which is all a
+block-scope fence orders, so a run of those statements that holds a ``__syncthreads()`` is one ``__syncthreads()``.
+A device-scope ``__threadfence()`` orders more than ``__syncthreads()`` does and ends a run.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import re
 
 __all__ = [
     "HLSL_EXECUTION_BARRIER_PLACEHOLDER",
+    "merge_adjacent_cuda_barriers",
     "merge_adjacent_hlsl_barriers",
     "merge_adjacent_metal_barriers",
 ]
@@ -120,3 +128,31 @@ def merge_adjacent_hlsl_barriers(code: str) -> str:
     return merged.replace(
         HLSL_EXECUTION_BARRIER_PLACEHOLDER, "GroupMemoryBarrierWithGroupSync"
     )
+
+
+_CUDA_BARRIER = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<name>__syncthreads|__threadfence_block)\(\);$"
+)
+
+
+def merge_adjacent_cuda_barriers(code: str) -> str:
+    """Merge consecutive CUDA or HIP ``__syncthreads()`` and ``__threadfence_block()`` statements into one."""
+    if "__syncthreads();" not in code:
+        return code
+    merged = []
+    run_indent = None
+    for line in code.split("\n"):
+        match = _CUDA_BARRIER.match(line)
+        if match is None:
+            run_indent = None
+            merged.append(line)
+            continue
+        indent = match.group("indent")
+        if indent == run_indent:
+            # The run synchronizes execution when any of its statements does; each orders all block memory.
+            if match.group("name") == "__syncthreads":
+                merged[-1] = line
+            continue
+        run_indent = indent
+        merged.append(line)
+    return "\n".join(merged)
