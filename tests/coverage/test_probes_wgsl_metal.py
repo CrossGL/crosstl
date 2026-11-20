@@ -261,6 +261,14 @@ def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
     assert "atomicMin(outp[i], a1);" in crossgl
 
 
+def test_metal_atomic_fetch_sub_probe_adds_the_negated_operand_in_crossgl():
+    (sub,) = metal.parse("metal_atomic atomic_fetch_sub int(inout int, int)\n")
+    assert "atomic_fetch_sub(&outp[i], a1);" in probes.build(sub, "metal").source
+    crossgl = probes.build(sub, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicAdd(outp[i], -(a1));" in crossgl
+
+
 def test_metal_memory_flag_probes_call_the_crossgl_operations_the_importer_writes():
     sub, fence, barrier = metal.parse(
         "metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)\n"
