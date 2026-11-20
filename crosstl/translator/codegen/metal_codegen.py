@@ -4854,6 +4854,12 @@ class MetalCodeGen(
             return f"{obj}.{expr.member}"
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
+            if isinstance(
+                expr.pointer_expr, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
+            ) and not self.metal_expression_is_parenthesized(pointer):
+                # `->` binds tighter than every operator, so `(s + 1)->a` must
+                # not become `s + 1->a`.
+                pointer = f"({pointer})"
             return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             true_code, false_code = self.metal_conditional_arms(
