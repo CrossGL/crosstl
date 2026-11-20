@@ -45,6 +45,7 @@ from .wgsl_unsigned_builtin_members import refuse_int_builtin_member_write
 from .wgsl_value_side_effects import is_increment
 
 SWIZZLE_COMPONENT_NAMES = {
+    **dict(zip("xyzw", "xyzw")),
     **dict(zip("rgba", "xyzw")),
     **dict(zip("stpq", "xyzw")),
 }
@@ -491,7 +492,9 @@ class WGSLStatementMixin:
         base, components = target_info
         # WGSL writes one component at a time; GLSL's colour and texture-coordinate names (rgba, stpq) name the
         # same components as xyzw, and WGSL has no stpq names.
-        components = [SWIZZLE_COMPONENT_NAMES.get(c, c) for c in components]
+        if any(component not in SWIZZLE_COMPONENT_NAMES for component in components):
+            return None
+        components = [SWIZZLE_COMPONENT_NAMES[component] for component in components]
         if not self.assignable_swizzle_components(components):
             return None
 
