@@ -16,6 +16,8 @@ from .enum_utils import (
     enum_variant_payload_fields,
     generic_enum_specialized_variant_fields,
 )
+from .mojo_tables import MOJO_VALUE_STRUCT_TRAITS
+from .union_layout import UnionLayoutCollector
 
 
 class MojoTypeDeclarationMixin:
@@ -91,7 +93,7 @@ class MojoTypeDeclarationMixin:
         for field_name, field_type in fields:
             self.struct_types[node.name][field_name] = self.type_name(field_type)
 
-        code = f"@value\nstruct {node.name}:\n"
+        code = f"@fieldwise_init\nstruct {node.name}({MOJO_VALUE_STRUCT_TRAITS}):\n"
         code += "    var variant: Int32\n"
         for field_name, field_type in fields:
             code += (
@@ -166,7 +168,7 @@ class MojoTypeDeclarationMixin:
                 f"payload{index}: {self.map_type(field_type)}"
                 for index, (_field_name, field_type) in enumerate(variant_fields)
             )
-            code += f"fn {constructor_name}({params}) -> {node.name}:\n"
+            code += f"def {constructor_name}({params}) -> {node.name}:\n"
             rendered_fields = {
                 "variant": self.enum_variant_alias_name(node.name, variant.name)
             }
@@ -399,6 +401,13 @@ class MojoTypeDeclarationMixin:
                 )
 
     def generate_struct(self, node):
+        if UnionLayoutCollector.attribute(node, "union_layout") is not None:
+            # A Mojo struct gives every field its own storage, so writing one member of a union and reading
+            # another would read a field that was never written.
+            raise MojoRefusal(
+                f"Mojo struct '{node.name}' has a @union_layout: Mojo has no union type, so its "
+                "overlapping members cannot share storage"
+            )
         generic_params = [
             param.name
             for param in getattr(node, "generic_params", []) or []
@@ -407,9 +416,16 @@ class MojoTypeDeclarationMixin:
         generic_suffix = ""
         if generic_params:
             generic_suffix = (
-                "[" + ", ".join(f"{param}: Copyable" for param in generic_params) + "]"
+                "["
+                + ", ".join(f"{param}: ImplicitlyCopyable" for param in generic_params)
+                + "]"
             )
-        code = f"@value\nstruct {node.name}{generic_suffix}:\n"
+        # CrossGL structs are plain values that are copied on assignment and argument passing, so they conform
+        # to ImplicitlyCopyable; @fieldwise_init writes the member-wise constructor @value used to.
+        code = (
+            f"@fieldwise_init\nstruct {node.name}{generic_suffix}"
+            f"({MOJO_VALUE_STRUCT_TRAITS}):\n"
+        )
         self.register_struct_type_metadata(node)
 
         members = getattr(node, "members", [])
@@ -465,7 +481,9 @@ class MojoTypeDeclarationMixin:
                 )
         return code
 
-    def generate_cbuffer_member_placeholders(self, node, emitted_member_names=None):
+    def generate_cbuffer_member_placeholders(
+        self, node, emitted_member_names=None, stage_scope=False
+    ):
         emitted_member_names = (
             emitted_member_names if emitted_member_names is not None else set()
         )
@@ -481,9 +499,11 @@ class MojoTypeDeclarationMixin:
             member_type = self.struct_types.get(node.name, {}).get(member_name)
             if member_type is None:
                 member_type = self.struct_member_declared_type(member)
-            self.register_variable_type(member_name, member_type)
             emitted_member_names.add(member_name)
-            code += self.generate_zero_initialized_variable(member_name, member_type)
+            # Mojo has no global variables: each constant-buffer member the program reads is a kernel argument.
+            code += self.declare_mojo_kernel_argument(
+                member_name, member_type, stage_scope
+            )
         return code
 
     def generate_zero_initialized_variable(self, name, type_name):

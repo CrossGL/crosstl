@@ -524,8 +524,8 @@ class MojoStatementMixin:
                         base_type = "Float32"  # Default, could be improved
                         return (
                             f"{indent_str}var {self.mojo_identifier(stmt.name)} = "
-                            f"InlineArray[{base_type}, {size}]"
-                            "(unsafe_uninitialized=True)\n"
+                            f"Array[{base_type}, {size}]"
+                            "(uninitialized=True)\n"
                         )
 
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:

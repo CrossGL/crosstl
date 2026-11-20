@@ -336,7 +336,9 @@ class MojoValueMixin:
 
         pointee_type = self.parse_pointer_type_name(vtype_str)
         if pointee_type is not None:
-            return f"UnsafePointer[{self.map_type(pointee_type)}]"
+            # Mojo 1.2 cannot infer a pointer's origin from a declaration; MutAnyOrigin is the origin a kernel's
+            # buffer arguments carry and allows both reads and writes.
+            return f"UnsafePointer[{self.map_type(pointee_type)}, MutAnyOrigin]"
 
         geometry_stream_type = self.geometry_stream_mapped_type(vtype_str)
         if geometry_stream_type is not None:
@@ -350,7 +352,7 @@ class MojoValueMixin:
             base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:
-                return f"InlineArray[{base_mapped}, {size}]"
+                return f"Array[{base_mapped}, {size}]"
             else:
                 return f"List[{base_mapped}]"
 

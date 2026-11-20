@@ -1069,3 +1069,6 @@ MOJO_MATH_HELPERS = {
     "smoothstep",
     "step",
 }
+# The traits a CrossGL value struct conforms to in Mojo 1.2: it is copied implicitly on assignment and argument
+# passing, as a CrossGL struct value is.
+MOJO_VALUE_STRUCT_TRAITS = "ImplicitlyCopyable, Movable"

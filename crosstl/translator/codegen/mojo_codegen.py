@@ -3,7 +3,6 @@
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
-    ArrayNode,
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
@@ -47,6 +46,7 @@ from .mojo_expression_nodes import MojoExpressionNodeMixin
 from .mojo_expressions import MojoExpressionMixin
 from .mojo_functions import MojoFunctionMixin
 from .mojo_generic_types import MojoGenericTypeMixin
+from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
@@ -223,6 +223,7 @@ __all__ = [
 
 
 class MojoCodeGen(
+    MojoKernelArgumentMixin,
     MojoStageContractMixin,
     MojoReturnAliasMixin,
     MojoGenericTypeMixin,
@@ -541,6 +542,7 @@ class MojoCodeGen(
         self.function_return_resource_static_field_aliases = {}
         self.stage_local_function_extra_params = {}
         self.variable_types = {}
+        self.reset_mojo_kernel_arguments()
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
@@ -629,8 +631,8 @@ class MojoCodeGen(
         self.expression_prelude_stack = []
 
         header = "# Generated Mojo Shader Code\n"
-        header += "from math import *\n"
-        header += "from gpu import *\n"
+        header += "from std.math import *\n"
+        header += "from max.gpu import *\n"
         code = ""
 
         structs = getattr(ast, "structs", [])
@@ -667,64 +669,7 @@ class MojoCodeGen(
 
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if isinstance(node, ArrayNode):
-                code += self.generate_array_declaration(node)
-            else:
-                if hasattr(node, "initial_value") and node.initial_value is not None:
-                    vtype = self.variable_declared_type(node)
-                    self.register_variable_type(
-                        node.name,
-                        vtype or self.expression_result_type(node.initial_value),
-                    )
-                    if (
-                        isinstance(node.initial_value, ArrayLiteralNode)
-                        and vtype is not None
-                        and self.is_array_type_name(vtype)
-                    ):
-                        init_expr = self.generate_array_literal_expression(
-                            node.initial_value, vtype
-                        )
-                    else:
-                        self.validate_expression_target_shape(
-                            node.initial_value, vtype, f"global declaration {node.name}"
-                        )
-                        init_expr = self.generate_expression(node.initial_value)
-                        self.validate_scalar_target_conversion(
-                            node.initial_value, vtype, f"global declaration {node.name}"
-                        )
-                    var_name = self.mojo_identifier(node.name)
-                    if vtype is None:
-                        code += f"var {var_name} = {init_expr}\n"
-                        continue
-                    code += f"var {var_name}: {self.map_type(vtype)} = {init_expr}\n"
-                    continue
-
-                # Handle both old and new AST variable structures
-                vtype = self.variable_declared_type(node) or "float"
-                self.register_variable_type(node.name, vtype)
-                resource_comment = self.generate_resource_metadata_comment(node, vtype)
-                var_name = self.mojo_identifier(node.name)
-                if self.is_array_type_name(vtype):
-                    code += resource_comment
-                    code += (
-                        f"var {var_name} = "
-                        f"{self.array_initial_value_for_type(vtype)}\n"
-                    )
-                elif self.is_struct_type_name(vtype):
-                    code += resource_comment
-                    code += f"var {var_name} = {self.zero_value_for_type(vtype)}\n"
-                elif self.is_resource_type_name(vtype):
-                    code += resource_comment
-                    mapped_type = self.map_type(vtype)
-                    init_value = self.resource_binding_initial_value(
-                        node.name, mapped_type, vtype
-                    )
-                    code += f"var {var_name}: {mapped_type} = " f"{init_value}\n"
-                else:
-                    code += (
-                        f"var {var_name}: {self.map_type(vtype)} = "
-                        f"{self.zero_value_for_type(vtype)}\n"
-                    )
+            code += self.generate_module_variable_declaration(node)
 
         cbuffers = self.get_cbuffer_nodes(ast)
         if cbuffers:
@@ -734,6 +679,11 @@ class MojoCodeGen(
         self.collect_function_return_types(ast)
 
         functions = getattr(ast, "functions", [])
+        # A function that reads a module-scope buffer or uniform value takes it as an extra argument.
+        self.stage_local_function_extra_params = self.mojo_kernel_argument_captures(
+            [*functions, *self.mojo_stage_functions(ast)],
+            self.mojo_module_kernel_arguments,
+        )
         for func in functions:
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -771,6 +721,7 @@ class MojoCodeGen(
                 if hasattr(stage, "entry_point"):
                     stage_name = self.stage_type_name(stage_type)
                     self.validate_stage_type(stage_name)
+                    self.mojo_stage_kernel_arguments = {}
                     code += f"# {stage_name.title()} Shader\n"
                     code += self.generate_stage_local_declarations(
                         stage,
@@ -778,10 +729,19 @@ class MojoCodeGen(
                         emitted_stage_local_structs,
                     )
                     previous_extra_params = self.stage_local_function_extra_params
-                    self.stage_local_function_extra_params = {
-                        **previous_extra_params,
-                        **self.stage_local_extra_params(stage),
-                    }
+                    self.stage_local_function_extra_params = (
+                        self.merge_mojo_extra_params(
+                            previous_extra_params,
+                            self.stage_local_extra_params(stage),
+                            self.mojo_kernel_argument_captures(
+                                [
+                                    *functions,
+                                    *self.stage_local_functions_to_emit(stage),
+                                ],
+                                dict(self.mojo_entry_kernel_arguments()),
+                            ),
+                        )
+                    )
                     for func in self.stage_local_functions_to_emit(stage):
                         signature = self.function_signature_key(func)
                         if signature in emitted_local_functions:
@@ -801,7 +761,7 @@ class MojoCodeGen(
                     )
                     self.stage_local_function_extra_params = previous_extra_params
         if self.required_reinterpret_helpers:
-            header += "from memory import bitcast\n"
+            header += "from std.memory import bitcast\n"
         if self.required_bit_imports:
             header += (
                 f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
@@ -1260,10 +1220,10 @@ class MojoCodeGen(
 
     def generate_dispatch_mesh_helper(self):
         return (
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
+            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
             "x: X, y: Y, z: Z):\n"
             "    pass\n\n"
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
+            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
             "Payload: AnyType](x: X, y: Y, z: Z, payload: Payload):\n"
             "    pass\n\n"
         )

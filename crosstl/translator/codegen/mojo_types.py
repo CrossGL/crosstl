@@ -154,7 +154,7 @@ class MojoTypeMixin:
         size = self.format_array_size(size)
         if size is None:
             return f"List[{element_type_name}]"
-        return f"InlineArray[{element_type_name}, {size}]"
+        return f"Array[{element_type_name}, {size}]"
 
     def array_initial_value(self, element_type, size):
         array_type = self.array_storage_type(element_type, size)
@@ -162,7 +162,7 @@ class MojoTypeMixin:
             return f"{array_type}()"
         if self.should_zero_initialize_array_elements(element_type):
             return self.zero_array_value(element_type, size)
-        return f"{array_type}(unsafe_uninitialized=True)"
+        return f"{array_type}(uninitialized=True)"
 
     def array_initial_value_for_type(self, type_name):
         element_type, size = self.parse_array_type_name(type_name)
@@ -203,6 +203,10 @@ class MojoTypeMixin:
             while len(elements) < size:
                 elements.append(self.zero_value_for_type(element_type))
 
+        if array_type.startswith("Array[") and elements:
+            # Mojo 1.2's Array has no positional element initializer; a list literal [a, b] is lowered to this
+            # one, which also works where no declared type gives the literal its element type and length.
+            return f"{array_type}({', '.join(elements)}, __list_literal__=None)"
         return f"{array_type}({', '.join(elements)})"
 
     def infer_array_literal_element_type(self, expr):
@@ -270,10 +274,12 @@ class MojoTypeMixin:
         try:
             element_count = int(size)
         except (TypeError, ValueError):
-            return f"{array_type}(unsafe_uninitialized=True)"
+            return f"{array_type}(uninitialized=True)"
 
-        values = [self.zero_value_for_type(element_type) for _ in range(element_count)]
-        return f"{array_type}({', '.join(values)})"
+        if element_count <= 0:
+            return f"{array_type}(uninitialized=True)"
+        # Mojo 1.2's Array fills every element from one value.
+        return f"{array_type}(fill={self.zero_value_for_type(element_type)})"
 
     def zero_struct_value(self, type_name, fields=None, mapped_type=None):
         fields = fields if fields is not None else self.struct_types.get(type_name, {})
@@ -335,7 +341,7 @@ class MojoTypeMixin:
         if preserve_integer_index_types and index_type in preserve_integer_index_types:
             return index
         if index_type in MOJO_INTEGER_INDEX_TYPES:
-            return f"int({index})"
+            return f"Int({index})"
         return index
 
     def literal_int_value(self, expr):
