@@ -49,6 +49,10 @@ from .glsl_stage_distances import (
     distance_private_output_declaration,
 )
 from .glsl_stage_output_values import builtin_output_value
+from .glsl_spirv_varying_locations import (
+    spirv_location_prefixed,
+    spirv_struct_varying_locations,
+)
 from .glsl_vertex_inputs import (
     vertex_input_builtin,
     vertex_input_layouts,
@@ -107,14 +111,14 @@ class OpenGLStageMemberMixin:
         return code
 
     def generate_vertex_output_declarations(self, node):
-        code = ""
+        entries = []
         for member in getattr(node, "members", []) or []:
             output_name = self.vertex_output_member_name(member)
             if self.is_vertex_stage_builtin_output(output_name):
                 continue
             private_distance = distance_private_output_declaration(self, member)
             if private_distance is not None:
-                code += private_distance
+                entries.append((None, None, private_distance))
                 continue
             refuse_nested_stage_builtins(self, member, "vertex", "output")
 
@@ -141,7 +145,21 @@ class OpenGLStageMemberMixin:
             member_type = self.member_type_name(member)
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, output_name)
-            declaration = f"{prefix} {member_decl};"
+            entries.append((member, output_name, f"{prefix} {member_decl};"))
+        locations = spirv_struct_varying_locations(
+            self,
+            [member for member, _name, _code in entries if member is not None],
+            "vertex",
+            "out",
+        )
+        code = ""
+        for member, output_name, declaration in entries:
+            if member is None:
+                code += declaration
+                continue
+            declaration = spirv_location_prefixed(
+                self, declaration, locations.get(member.name)
+            )
             if self.reserve_stage_io_declaration(
                 "vertex", "output", output_name, declaration
             ):
@@ -149,7 +167,6 @@ class OpenGLStageMemberMixin:
         return code
 
     def generate_fragment_input_declarations(self, node):
-        code = ""
         mesh_layouts = (
             mesh_fragment_input_layouts(
                 self,
@@ -162,6 +179,7 @@ class OpenGLStageMemberMixin:
             if self.glsl_program_has_mesh_stage
             else {}
         )
+        entries = []
         for member in getattr(node, "members", []) or []:
             input_name = self.fragment_input_member_name(member, node.name)
             if input_name is None:
@@ -197,7 +215,15 @@ class OpenGLStageMemberMixin:
             )
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, input_name)
-            declaration = f"{prefix} {member_decl};"
+            entries.append((member, input_name, f"{prefix} {member_decl};"))
+        locations = spirv_struct_varying_locations(
+            self, [member for member, _name, _code in entries], "fragment", "in"
+        )
+        code = ""
+        for member, input_name, declaration in entries:
+            declaration = spirv_location_prefixed(
+                self, declaration, locations.get(member.name)
+            )
             if self.reserve_stage_io_declaration(
                 "fragment", "input", input_name, declaration
             ):

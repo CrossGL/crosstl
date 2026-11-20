@@ -19,6 +19,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_spirv_varying_locations import (
+    spirv_location_macro_definition,
+    strip_spirv_location_macro,
+)
 from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
 
 __all__ = [
@@ -591,7 +595,8 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
     body = _COMMENTS.sub("", str(code or ""))
     struct_names = frozenset(_STRUCT_NAME.findall(body))
     for line in body.splitlines():
-        stripped = line.strip()
+        # A varying's SPIR-V location expands to nothing in an OpenGL compilation.
+        stripped = strip_spirv_location_macro(line.strip())
         stage = stage_of(stripped)
         if stage is None:
             continue
@@ -616,8 +621,13 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
 
 
 def program_extensions(code):
-    """The extensions a rendered program enables with ``enable``, ``require`` or ``warn``."""
-    return set(_EXTENSION_LINE.findall(str(code or "")))
+    """The extensions an OpenGL compilation of a rendered program enables with ``enable``, ``require`` or ``warn``.
+
+    The extension in the SPIR-V branch of the varying location macro is not one of them: an OpenGL compilation
+    skips that branch, so its varyings still need a ``#version`` that has their other layouts.
+    """
+    body = str(code or "").replace(spirv_location_macro_definition(), "")
+    return set(_EXTENSION_LINE.findall(body))
 
 
 def resolve_version_line(version_line, requirements, extensions, can_raise=True):
