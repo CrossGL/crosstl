@@ -106,7 +106,7 @@
   "crosstl/translator/codegen/cuda_codegen.py": 13670,
   "crosstl/translator/codegen/directx_codegen.py": 57799,
   "crosstl/translator/codegen/hip_codegen.py": 11111,
-  "crosstl/translator/codegen/metal_codegen.py": 29942,
+  "crosstl/translator/codegen/metal_codegen.py": 7917,
   "crosstl/translator/codegen/mojo_codegen.py": 16295,
   "crosstl/translator/codegen/rust_codegen.py": 14799,
   "crosstl/translator/codegen/slang_codegen.py": 16595
