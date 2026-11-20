@@ -153,7 +153,7 @@ from .glsl_stage_output_values import (
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
-from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
+from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -455,6 +455,8 @@ class GLSLCodeGen(
         self.glsl_float_remainder_types = set()
         self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
+        self.glsl_vulkan_resources = VulkanResourceForms()
+        self.glsl_vulkan_resource_exclusions = frozenset()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
         self.reset_glsl_hlsl_cbuffers()
@@ -2781,12 +2783,14 @@ class GLSLCodeGen(
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        separate_ast = ast
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
         )
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_vulkan_resources = VulkanResourceForms.plan(self, separate_ast, ast)
         self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -3383,6 +3387,7 @@ class GLSLCodeGen(
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
+        self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
         code += f"{version_line}\n"
@@ -4120,7 +4125,14 @@ class GLSLCodeGen(
                 qualifier_parts.append("uniform")
                 if precision_qualifiers:
                     qualifier_parts.append(precision_qualifiers)
-                code += f"{' '.join(qualifier_parts)} {declaration};\n"
+                code += self.glsl_vulkan_resources.declaration(
+                    source_var_name,
+                    var_name,
+                    " ".join(qualifier_parts),
+                    declaration,
+                    mapped_type,
+                    array_suffix,
+                )
                 self.record_glsl_resource_binding(
                     node,
                     source_var_name,
@@ -4238,6 +4250,7 @@ class GLSLCodeGen(
             self.prepare_glsl_resource_function_specializations(ast, target_stage)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
+        code += self.glsl_vulkan_resources.sampler_declarations(self)
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         helper_stage_macros = glsl_helper_stage_macros(self, ast)
@@ -4549,12 +4562,11 @@ class GLSLCodeGen(
                 + cooperative_matrix_support
                 + code[cooperative_matrix_support_insertion_index:]
             )
-        if self.glsl_descriptor_binding_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + descriptor_binding_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
+        code = self.glsl_vulkan_resources.with_prelude(
+            code,
+            cooperative_matrix_support_insertion_index,
+            self.glsl_descriptor_binding_macro_used,
+        )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
@@ -11060,6 +11072,9 @@ class GLSLCodeGen(
             texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         else:
             self.record_glsl_combined_sampler_use(args[0], args[1])
+            texture_name = self.glsl_vulkan_resources.sampled(
+                args, texture_name, sampler_name
+            )
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]

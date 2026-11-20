@@ -1267,14 +1267,33 @@ class OpenGLProgramStructureMixin:
         )
         pristine = deepcopy(ast) if retry else None
         try:
-            return self._generate_program_attempt(ast, target_stage, False)
+            return self._generate_program_with_vulkan_forms(ast, target_stage, False)
         except OpenGLSoftwareSubgroupError as error:
             if not retry or error.reason not in self.GLSL_EARLY_EXIT_RETRY_REASONS:
                 raise
             try:
-                return self._generate_program_attempt(pristine, target_stage, True)
+                return self._generate_program_with_vulkan_forms(
+                    pristine, target_stage, True
+                )
             except OpenGLSoftwareSubgroupError:
                 raise error from None
+
+    def _generate_program_with_vulkan_forms(self, ast, target_stage, early_exits):
+        """Render the program, again without each Vulkan resource form that a use outside it would break.
+
+        :mod:`.glsl_vulkan_resources` plans its forms from the uses it can see in the AST; a texture that the
+        rendering still names outside them, or a runtime array it names without an index, keeps the combined
+        OpenGL form in both compilations.
+        """
+        self.glsl_vulkan_resource_exclusions = frozenset()
+        while True:
+            code = self._generate_program_attempt(ast, target_stage, early_exits)
+            unwrapped = self.glsl_vulkan_resources.unwrapped(code)
+            if not unwrapped:
+                return code
+            self.glsl_vulkan_resource_exclusions = (
+                self.glsl_vulkan_resource_exclusions | unwrapped
+            )
 
     def collect_called_function_names(self, root):
         return {
