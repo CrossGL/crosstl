@@ -15,7 +15,6 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -45,7 +44,6 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
-from ..matrix_shape import length_method_object
 from ..refusals import MetalRefusal
 from ..resource_identity import resource_identity_marker
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
@@ -58,41 +56,26 @@ from ..unhandled import UNHANDLED
 from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
-    split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
-from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
-from .boolean_mix import boolean_mix_selector, metal_boolean_mix
 from .builtin_result_types import (
     C_FAMILY,
     boolean_builtin_result_type,
     component_access_type,
 )
-from .c_family_operands import postfix_operand
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
     is_comma_expression,
 )
 from .enum_utils import (
-    enum_value_expression,
-    generate_enum_constructor_call,
-    generate_enum_constructor_expression,
     infer_enum_constructor_type,
 )
-from .exponent_builtins import metal_exponent_call
-from .extended_arithmetic_builtins import (
-    metal_extended_arithmetic_call,
-)
 from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
     generic_function_call_name,
     numeric_trait_method_result_type,
-    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import (
-    generate_struct_constructor_expression,
     infer_struct_constructor_type,
 )
 from .glsl_buffer_array_values import glsl_buffer_array_value_type
@@ -112,10 +95,8 @@ from .match_utils import (
 from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import generate_metal_array_initializer
 from .metal_atomic_addresses import metal_vector_component_address
-from .metal_bit_scans import metal_bit_scan_call
 from .metal_buffer_scalars import metal_buffer_scalar_type
 from .metal_call_lowering import MetalCallLoweringMixin
-from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_constant_initializers import (
     metal_constant_initializer,
     restore_static_initializer_helpers,
@@ -175,26 +156,15 @@ from .metal_threadgroup_forwarding import (
 )
 from .metal_type_mapping import MetalTypeMappingMixin
 from .metal_wave_operations import MetalWaveOperationMixin
-from .pack_builtins import PACK_FUNCTIONS, metal_pack_call
-from .relational_builtins import metal_logical_not_operand
-from .sizeof_calls import sizeof_call_bytes
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     collect_stage_entry_records,
     function_stage_name,
     normalize_stage_name,
 )
-from .storage_image_texels import is_whole_texel_load
-from .texture_lod_clamp import (
-    is_texture_lod_clamp_operation,
-    metal_texture_lod_clamp_call,
-)
-from .texture_residency import (
-    TEXTURE_RESIDENCY_OPERATION,
-    TEXTURE_RESIDENT_OPERATION,
-    metal_texture_residency_call,
-    metal_texture_resident_call,
-)
+from .metal_feature_errors import UnsupportedMetalFeatureError
+from .metal_expression_forms import MetalExpressionFormMixin
+from .metal_call_expressions import MetalCallExpressionMixin
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
@@ -205,29 +175,6 @@ FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
 METAL_COLOR_ATTACHMENT_TYPE = re.compile(
     r"(?:float|half|int|uint|short|ushort|char|uchar)[234]?"
 )
-
-
-class UnsupportedMetalFeatureError(ValueError):
-    """Raised when Metal has no equivalent target representation."""
-
-    project_diagnostic_code = "project.translate.unsupported-feature"
-
-    def __init__(
-        self,
-        feature,
-        message,
-        *,
-        missing_capabilities=(),
-        operation=None,
-        reason=None,
-        source_location=None,
-    ):
-        super().__init__(message)
-        self.feature = feature
-        self.missing_capabilities = tuple(missing_capabilities)
-        self.operation = operation
-        self.reason = reason
-        self.source_location = source_location
 
 
 class MetalStructConversionError(ValueError):
@@ -304,6 +251,8 @@ class MetalCodeGen(
     MetalProgramStateMixin,
     MetalProgramSectionMixin,
     MetalFunctionPartsMixin,
+    MetalExpressionFormMixin,
+    MetalCallExpressionMixin,
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
@@ -3697,128 +3646,18 @@ class MetalCodeGen(
         if substitutions and id(expr) in substitutions:
             return substitutions[id(expr)]
         elif isinstance(expr, str):
-            builtin_name = self.metal_builtin_expression_name(expr)
-            if builtin_name != expr:
-                return builtin_name
-            if expr.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            if expr in self.local_variable_types:
-                return self.metal_local_identifier_name(expr)
-            return expr
+            return self.generate_metal_raw_string_expression(expr)
         elif isinstance(expr, IdentifierNode):
-            name = expr.name
-            builtin_name = self.metal_builtin_expression_name(name)
-            if builtin_name != name:
-                return builtin_name
-            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            buffer_block_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if buffer_block_value is not None:
-                return buffer_block_value
-            if name in self.METAL_RAY_FLAG_VALUES:
-                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
-            if name in getattr(self, "enum_variant_constants", {}):
-                return enum_value_expression(self, name)
-            if (
-                name not in self.local_variable_types
-                and name in self.ambiguous_cbuffer_members
-            ):
-                raise MetalRefusal(
-                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
-                )
-            if (
-                name not in self.local_variable_types
-                and name in self.cbuffer_member_references
-            ):
-                return self.cbuffer_member_references[name]
-            if (
-                name not in self.local_variable_types
-                and name in self.metal_runtime_initialized_constants
-            ):
-                return f"{name}()"
-            return self.metal_local_identifier_name(name)
+            return self.generate_metal_identifier_node_expression(expr)
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
         elif isinstance(expr, (VariableNode, BackendVariableNode)):
             # Fix infinite recursion - directly return the name
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_acceleration_structure_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            if hasattr(expr, "name"):
-                builtin_name = self.metal_builtin_expression_name(expr.name)
-                if builtin_name != expr.name:
-                    return builtin_name
-                if (
-                    isinstance(expr.name, str)
-                    and expr.name.rsplit("::", 1)[-1] == "None"
-                ):
-                    option_default = self.option_none_default_expression()
-                    if option_default is not None:
-                        return option_default
-                if expr.name in self.METAL_RAY_FLAG_VALUES:
-                    return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
-                if expr.name in self.local_variable_types:
-                    return self.metal_local_identifier_name(expr.name)
-                enum_value = enum_value_expression(self, expr.name)
-                if enum_value is not None:
-                    return enum_value
-                # Not an enum value: a variable this program declares keeps its declared spelling.
-                return expr.name
-            else:
-                return str(expr)
+            return self.generate_metal_variable_expression(expr)
         elif isinstance(expr, BinaryOpNode):
-            operator = self.map_operator(expr.op)
-            left = self.metal_narrow_vector_operand(
-                expr.left, self.generate_binary_operand(expr.left, operator)
-            )
-            right = self.metal_narrow_vector_operand(
-                expr.right, self.generate_binary_operand(expr.right, operator, True)
-            )
-            if operator in {"<", ">", "<=", ">="}:
-                if self.map_type(self.expression_result_type(expr.left)) == "bool":
-                    left = f"int({left})"
-                if self.map_type(self.expression_result_type(expr.right)) == "bool":
-                    right = f"int({right})"
-            if operator in {"<", ">", "<=", ">=", "==", "!="}:
-                left, right = metal_sign_matched_comparison_operands(
-                    self.map_type(self.expression_result_type(expr.left)),
-                    self.map_type(self.expression_result_type(expr.right)),
-                    left,
-                    right,
-                )
-            left, right, common = self.metal_mixed_vector_binary_operands(
-                expr, operator, left, right
-            )
-            if operator == "%" and common in {"float", "half"}:
-                return f"fmod({left}, {right})"
-            matrix_arithmetic = self.metal_matrix_builtins.componentwise(
-                operator, expr.left, expr.right, left, right
-            )
-            if matrix_arithmetic is not None:
-                return matrix_arithmetic
-            # The operands keep their own (common) type and the declaration
-            # converts the result: converting each operand to the declared
-            # type would turn an integer division into a floating one, or a
-            # signed one into an unsigned one (#3166).
-            return self.metal_narrow_vector_wrap(
-                expr, operator, f"{left} {operator} {right}"
-            )
+            return self.generate_metal_binary_expression(expr)
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return assignment_value_expression(self.generate_assignment(expr))
         elif is_comma_expression(expr):
@@ -3826,46 +3665,7 @@ class MetalCodeGen(
                 expr, self.generate_expression, self.generate_discarded_expression
             )
         elif isinstance(expr, ArrayLiteralNode):
-            element_type, array_suffix = split_array_type_suffix(
-                self.current_expression_expected_type or ""
-            )
-            matrix_element_type = (
-                element_type
-                if array_suffix.count("[") == 1
-                and self.is_matrix_value_type(element_type)
-                else None
-            )
-            # A structure's brace list gives each nested list its member's type,
-            # and an array of structures' list gives each its element type, so a
-            # matrix array member is written as the array above is.
-            nested_types = []
-            if element_type in self.struct_member_types and array_suffix:
-                nested_types = [
-                    self.metal_for_in_array_element_type(
-                        self.current_expression_expected_type
-                    )
-                ] * len(expr.elements)
-            elif element_type in self.struct_member_types:
-                nested_types = list(self.struct_member_types[element_type].values())
-            rendered_elements = []
-            for index, element in enumerate(expr.elements):
-                nested_type = (
-                    nested_types[index]
-                    if isinstance(element, ArrayLiteralNode)
-                    and index < len(nested_types)
-                    else None
-                )
-                rendered = self.generate_expression_with_expected(element, nested_type)
-                # A scalar cannot initialize a matrix element of a brace list, so
-                # write the matrix constructor, as GLSL output's mat3(0.0) does.
-                if (
-                    matrix_element_type is not None
-                    and self.expression_component_count(element) == 1
-                ):
-                    rendered = f"{self.map_type(matrix_element_type)}({rendered})"
-                rendered_elements.append(rendered)
-            elements = ", ".join(rendered_elements)
-            return f"{{{elements}}}"
+            return self.generate_metal_array_literal_expression(expr)
         elif isinstance(expr, PointerReinterpretNode):
             return self.generate_metal_storage_pointer_reinterpret(expr)
         elif isinstance(expr, UnaryOpNode):
@@ -3874,65 +3674,7 @@ class MetalCodeGen(
             # to that token first creates an unsigned value and triggers a
             # warning-fatal conversion back to ``long``.  Keep the exact value
             # in signed arithmetic using two representable long literals.
-            operand_value = getattr(getattr(expr, "operand", None), "value", None)
-            if (
-                getattr(expr, "op", getattr(expr, "operator", None)) == "-"
-                and not getattr(expr, "is_postfix", False)
-                and isinstance(operand_value, int)
-                and not isinstance(operand_value, bool)
-                and operand_value == 1 << 63
-                and self.map_type(
-                    getattr(getattr(expr.operand, "literal_type", None), "name", None)
-                )
-                not in {"ulong", "uint64_t"}
-            ):
-                return "(-9223372036854775807L - 1L)"
-            negated_literal = self.metal_negated_wide_integer_literal(expr)
-            if negated_literal is not None:
-                return negated_literal
-            local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
-            if local_reinterpret is not None:
-                return local_reinterpret
-            operator = self.map_operator(expr.op)
-            if operator in {"++", "--"} and self.is_metal_signed_builtin_member(
-                expr.operand
-            ):
-                # The uint storage steps with the int's bits; the value read is converted back.
-                storage = self.generate_metal_signed_builtin_member_storage(
-                    expr.operand
-                )
-                if getattr(expr, "is_postfix", False):
-                    return f"int({storage}{operator})"
-                return f"int({operator}{storage})"
-            operand = self.generate_unary_operand(expr.operand)
-            if operator in {"++", "--"}:
-                byte_update = self.metal_narrow_integer_update_expression(
-                    expr, expr.operand, operator
-                )
-                if byte_update is not None:
-                    return byte_update
-                # Buffer storage whose reads convert (a packed vector's
-                # components) is updated in place through the storage itself.
-                layout_store = self.metal_hlsl_layout_store_target(expr.operand)
-                if layout_store is not None and not layout_store[1]:
-                    operand = layout_store[0]
-            if getattr(expr, "is_postfix", False):
-                return f"{postfix_operand(operand)}{operator}"
-            if operator == "!":
-                operand = metal_logical_not_operand(
-                    operand, self.expression_result_type(expr.operand)
-                )
-            operand = self.metal_narrow_vector_operand(expr.operand, operand)
-            if operator == "-":
-                matrix_negation = self.metal_matrix_builtins.negation(
-                    expr.operand, operand
-                )
-                if matrix_negation is not None:
-                    return matrix_negation
-            if operator in {"+", "-"} and operand.startswith(("+", "-")):
-                # Keep adjacent signs from becoming an increment or decrement.
-                operand = f"({operand})"
-            return self.metal_narrow_vector_wrap(expr, operator, f"{operator}{operand}")
+            return self.generate_metal_unary_expression(expr)
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
@@ -3952,987 +3694,22 @@ class MetalCodeGen(
                 expr.arguments,
             )
         elif isinstance(expr, ArrayAccessNode):
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            stage_io_access = self.generate_metal_stage_io_lowered_array_access(expr)
-            if stage_io_access is not None:
-                return stage_io_access
-            unsupported_value = (
-                self.unsupported_metal_acceleration_structure_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_array_load(expr)
-            if block_load is not None:
-                return block_load
-            layout_element = self.metal_hlsl_layout_element_access(expr)
-            if layout_element is not None:
-                access, conversion = layout_element
-                return f"{conversion}({access})" if conversion else access
-            if is_whole_texel_load(expr.array, self.function_call_name):
-                # The subscript selects a component of the whole texel.
-                array = self.generate_expression_with_expected(expr.array, None)
-            else:
-                array = self.generate_expression(expr.array)
-            if isinstance(
-                expr.array,
-                (
-                    AssignmentNode,
-                    BinaryOpNode,
-                    TernaryOpNode,
-                    CastNode,
-                    PointerReinterpretNode,
-                    UnaryOpNode,
-                ),
-            ):
-                array = f"({array})"
-            index = self.generate_expression(expr.index)
-            return f"{array}[{index}]"
+            return self.generate_metal_array_access_expression(expr)
         elif isinstance(expr, ConstructorNode):
-            registered_conversion = self.metal_registered_structure_scalar_conversion(
-                expr,
-                getattr(expr, "constructor_type", None),
-                getattr(expr, "arguments", []),
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-            enum_constructor = generate_enum_constructor_expression(self, expr)
-            if enum_constructor is not None:
-                return enum_constructor
-            constructor = generate_struct_constructor_expression(self, expr)
-            if constructor is not None:
-                return constructor
-            constructor_type = getattr(expr, "constructor_type", None)
-            matrix_constructor = self.generate_metal_matrix_constructor_override(
-                constructor_type, getattr(expr, "arguments", [])
-            )
-            if matrix_constructor is not None:
-                return matrix_constructor
-            if self.is_builtin_value_constructor_type(constructor_type):
-                metal_type = self.map_type(constructor_type)
-                matrix_resize = self.generate_metal_matrix_resize_constructor(
-                    metal_type, getattr(expr, "arguments", [])
-                ) or self.metal_matrix_builtins.component_constructor(
-                    metal_type, getattr(expr, "arguments", [])
-                )
-                if matrix_resize is not None:
-                    return matrix_resize
-                args = ", ".join(
-                    self.generate_metal_value_constructor_arguments(
-                        metal_type, getattr(expr, "arguments", [])
-                    )
-                )
-                if getattr(
-                    expr, "is_braced_constructor", False
-                ) and self.is_vector_value_type(constructor_type):
-                    width = self.value_component_count(constructor_type)
-                    counts = [
-                        self.expression_component_count(arg) for arg in expr.arguments
-                    ]
-                    if (
-                        width
-                        and all(count is not None for count in counts)
-                        and sum(counts) > width
-                    ):
-                        raise UnsupportedMetalFeatureError(
-                            "vector-list-initialization",
-                            f"Vector initializer for {metal_type} exceeds its {width} components",
-                            reason="element-count-mismatch",
-                            source_location=getattr(expr, "source_location", None),
-                        )
-                    rendered = f"{metal_type}{{{args}}}"
-                else:
-                    rendered = f"{metal_type}({args})"
-                return (
-                    self.metal_narrow_integer_conversion_expression(
-                        rendered, constructor_type
-                    )
-                    or rendered
-                )
-            return str(expr)
+            return self.generate_metal_constructor_expression(expr)
         elif isinstance(expr, FunctionCallNode):
-            option_payload = self.option_constructor_payload_expression(expr)
-            if option_payload is not None:
-                return option_payload
-
-            func_expr = getattr(expr, "function", None)
-            if func_expr is None:
-                func_expr = expr.name
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                expr.args,
-            )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-
-            func_name = None
-            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
-                func_name = func_expr.name
-                callee = func_name
-            elif isinstance(func_expr, str):
-                func_name = func_expr
-                callee = func_expr
-            else:
-                callee = self.generate_expression(func_expr)
-
-            if (
-                func_name in PACK_FUNCTIONS
-                and func_name not in self.user_function_names
-            ):
-                return metal_pack_call(
-                    self, func_name, [self.generate_expression(a) for a in expr.args]
-                )
-            packed_dot = self.generate_packed_dot4add_call(func_name, expr.args)
-            if packed_dot is not None:
-                return packed_dot
-            if (
-                func_name in BITFIELD_ARITIES
-                and func_name not in self.user_function_names
-            ):
-                return metal_bitfield_call(
-                    self, func_name, [self.generate_expression(a) for a in expr.args]
-                )
-            boolean_mix = boolean_mix_selector(
-                self, func_name, expr.args, self.user_function_names
-            )
-            if boolean_mix is not None:
-                return metal_boolean_mix(self, expr.args, boolean_mix)
-            exponent_call = metal_exponent_call(self, func_name, expr.args)
-            if exponent_call is not None:
-                return exponent_call
-            bit_scan_call = metal_bit_scan_call(self, func_name, expr.args)
-            if bit_scan_call is not None:
-                return bit_scan_call
-            extended_arithmetic = metal_extended_arithmetic_call(
-                self, func_name, expr.args
-            )
-            if extended_arithmetic is not None:
-                return extended_arithmetic
-            packed_bytes = self.generate_packed_byte_call(func_name, expr.args)
-            if packed_bytes is not None:
-                return packed_bytes
-
-            vector_set = re.fullmatch(
-                r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
-                str(func_name),
-            )
-            if vector_set and len(expr.args) == 3:
-                member = expr.args[0]
-                while isinstance(member, ArrayAccessNode):
-                    member = member.array
-                if (
-                    isinstance(member, MemberAccessNode)
-                    and self.member_lookup_type_name(
-                        self.expression_result_type(member.object)
-                    )
-                    in self.structs_by_name
-                ):
-                    native = self.metal_native_narrow_bitcast_storage_type(
-                        vector_set[1]
-                    )
-                    target = self.generate_expression(expr.args[0])
-                    lane = self.generate_expression_with_expected(expr.args[1], "uint")
-                    selected = self.generate_expression(expr.args[2])
-                    return f"({target}[{lane}] = {native[:-1]}({selected}))"
-
-            block_length = self.glsl_buffer_block_length_call(func_expr, expr.args)
-            if block_length is not None:
-                return block_length
-            length_object = length_method_object(func_expr, expr.args)
-            matrix_dimensions = (
-                self.metal_matrix_dimensions(
-                    self.expression_result_type(length_object) or ""
-                )
-                if length_object is not None
-                else None
-            )
-            if matrix_dimensions is not None:
-                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
-                return f"int({matrix_dimensions[1]})"
-
-            unsupported_table_call = (
-                self.unsupported_metal_ray_function_table_array_member_call(func_expr)
-            )
-            if unsupported_table_call is not None:
-                return unsupported_table_call
-
-            ray_query_operation = self.ray_query_operation_from_function_call(expr)
-            if ray_query_operation is not None and isinstance(
-                func_expr, MemberAccessNode
-            ):
-                return self.generate_metal_ray_query_call(
-                    ray_query_operation,
-                    getattr(
-                        func_expr,
-                        "object",
-                        getattr(func_expr, "object_expr", None),
-                    ),
-                    expr.args,
-                )
-
-            sizeof_bytes = sizeof_call_bytes(self, func_name, expr.args, "metal")
-            if sizeof_bytes is not None:
-                return str(sizeof_bytes)
-
-            static_generic_call = generate_static_generic_numeric_call(self, func_name)
-            if static_generic_call is not None:
-                return static_generic_call
-
-            if isinstance(func_name, str) and not self.metal_function_name_is_shadowed(
-                func_name
-            ):
-                matrix_constructor = self.generate_metal_matrix_constructor_override(
-                    func_name, expr.args
-                )
-                if matrix_constructor is not None:
-                    return matrix_constructor
-                logical_intrinsic = self.generate_metal_hlsl_logical_intrinsic(
-                    func_name, expr.args
-                )
-                if logical_intrinsic is not None:
-                    return logical_intrinsic
-
-            if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
-                func_name
-            ):
-                self.required_metal_ray_desc_runtime = True
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"CglRayDesc({args})"
-
-            unsupported_call = self.unsupported_glsl_buffer_block_function_call(
-                func_name
-            )
-            if unsupported_call is not None:
-                return unsupported_call
-
-            input_attachment_call = self.unsupported_input_attachment_call(func_name)
-            if input_attachment_call is not None:
-                return input_attachment_call
-
-            enum_constructor = generate_enum_constructor_call(
-                self, func_name, expr.args
-            )
-            if enum_constructor is not None:
-                return enum_constructor
-
-            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
-                func_name, expr.args
-            )
-            if glsl_block_atomic_call is not None:
-                return glsl_block_atomic_call
-
-            buffer_atomic_call = self.generate_metal_buffer_resource_atomic_call(
-                func_name, expr.args
-            )
-            if buffer_atomic_call is not None:
-                return buffer_atomic_call
-
-            synchronization_call = self.synchronization_function_call(
-                func_name,
-                expr.args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if synchronization_call is not None:
-                return synchronization_call
-
-            wave_call = self.generate_metal_wave_operation(func_name, expr.args)
-            if wave_call is not None:
-                return wave_call
-
-            atomic_call = self.generate_atomic_function_call(func_name, expr.args)
-            if atomic_call is not None:
-                return atomic_call
-
-            mesh_output_call = self.generate_metal_mesh_output_call(
-                func_name, expr.args
-            )
-            if mesh_output_call is not None:
-                return mesh_output_call
-
-            if func_name == TEXTURE_RESIDENCY_OPERATION:
-                return metal_texture_residency_call(self, expr.args, expr)
-            if func_name == TEXTURE_RESIDENT_OPERATION:
-                return metal_texture_resident_call(self, expr.args, expr)
-
-            if is_texture_lod_clamp_operation(func_name):
-                return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)
-
-            texture_call = self.generate_texture_call(func_name, expr.args)
-            if texture_call is not None:
-                return texture_call
-
-            buffer_call = self.generate_buffer_call(func_name, expr.args)
-            if buffer_call is not None:
-                return buffer_call
-            specialized_func_name = generic_function_call_name(
-                self,
-                func_name,
-                expr.args,
-            )
-            argument_func_name = func_name
-            if specialized_func_name is not None:
-                callee = specialized_func_name
-                func_name = specialized_func_name
-            else:
-                reject_unresolved_generic_function_call(self, func_name, "Metal")
-            scalar_geometric_call = self.metal_scalar_geometric_call(
-                func_name, expr.args
-            )
-            if scalar_geometric_call is not None:
-                return scalar_geometric_call
-            if func_name == "normalize" and func_name not in self.user_function_names:
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                call_name = (
-                    "metal::normalize"
-                    if self.metal_function_name_is_shadowed("normalize")
-                    else "normalize"
-                )
-                return f"{call_name}({args})"
-            matrix_builtin = self.metal_matrix_builtins.call(func_name, expr.args)
-            if matrix_builtin is not None:
-                return matrix_builtin
-            if (
-                func_name == "inverse"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg_type = self.map_type(self.expression_result_type(expr.args[0]))
-                if arg_type in {"float2x2", "float3x3", "float4x4"}:
-                    self.required_metal_inverse_helpers.add(arg_type)
-                    arg = self.generate_expression(expr.args[0])
-                    return f"__crossgl_inverse_{arg_type}({arg})"
-            if (
-                func_name == "mod"
-                and len(expr.args) == 2
-                and func_name not in self.user_function_names
-            ):
-                left = self.generate_expression(expr.args[0])
-                right = self.generate_expression(expr.args[1])
-                return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
-            if (
-                func_name == "frac"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                fract_name = (
-                    "metal::fract"
-                    if self.metal_function_name_is_shadowed("fract")
-                    else "fract"
-                )
-                return f"{fract_name}({arg})"
-            if (
-                func_name == "lerp"
-                and len(expr.args) == 3
-                and func_name not in self.user_function_names
-            ):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                mix_name = (
-                    "metal::mix"
-                    if self.metal_function_name_is_shadowed("mix")
-                    else "mix"
-                )
-                return f"{mix_name}({args})"
-            if (
-                func_name == "atan"
-                and len(expr.args) == 2
-                and func_name not in self.user_function_names
-            ):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                atan2_name = (
-                    "metal::atan2"
-                    if self.metal_function_name_is_shadowed("atan2")
-                    else "atan2"
-                )
-                return f"{atan2_name}({args})"
-            if (
-                func_name in {"inverseSqrt", "inversesqrt"}
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                rsqrt_name = (
-                    "metal::rsqrt"
-                    if self.metal_function_name_is_shadowed("rsqrt")
-                    else "rsqrt"
-                )
-                return f"{rsqrt_name}({arg})"
-            if (
-                func_name == "roundEven"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                # MSL rint() rounds halfway cases to the nearest even integer (MSL 4.1 section 6.5).
-                # It has only float and half overloads, so integer operands are converted to float.
-                unified_args = self.generate_metal_unified_builtin_arguments(
-                    func_name, expr.args
-                )
-                arg = (
-                    unified_args[0]
-                    if unified_args is not None
-                    else self.generate_expression(expr.args[0])
-                )
-                rint_name = (
-                    "metal::rint"
-                    if self.metal_function_name_is_shadowed("rint")
-                    else "rint"
-                )
-                return f"{rint_name}({arg})"
-            derivative_name = self.METAL_DERIVATIVE_FUNCTION_ALIASES.get(func_name)
-            if (
-                derivative_name is not None
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                derivative_call_name = (
-                    f"metal::{derivative_name}"
-                    if self.metal_function_name_is_shadowed(derivative_name)
-                    else derivative_name
-                )
-                return f"{derivative_call_name}({arg})"
-            explicit_as_type = self.generate_metal_explicit_as_type_call(
-                func_name, expr.args
-            )
-            if explicit_as_type is not None:
-                return explicit_as_type
-            bitcast_call = self.generate_metal_bitcast_call(func_name, expr.args)
-            if bitcast_call is not None:
-                return bitcast_call
-            integer_bit_call = self.generate_metal_integer_bit_call(
-                func_name, expr.args
-            )
-            if integer_bit_call is not None:
-                return integer_bit_call
-            angle_conversion = self.generate_metal_angle_conversion_call(
-                func_name, expr.args
-            )
-            if angle_conversion is not None:
-                return angle_conversion
-            if (
-                func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
-                and func_name not in self.user_function_names
-            ):
-                integer_dot = self.generate_metal_integer_dot_call(func_name, expr.args)
-                if integer_dot is not None:
-                    return integer_dot
-                unified_args = self.generate_metal_unified_builtin_arguments(
-                    func_name, expr.args
-                )
-                if unified_args is not None:
-                    args = ", ".join(unified_args)
-                elif func_name in self.METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS:
-                    args = ", ".join(
-                        self.generate_metal_bfloat_promoted_argument(arg)
-                        for arg in expr.args
-                    )
-                else:
-                    args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                if self.metal_fast_math_call(expr, func_name):
-                    return f"metal::fast::{func_name}({args})"
-                if self.metal_precise_math_call(
-                    expr, func_name
-                ) or self.metal_safe_math_call(expr, func_name):
-                    return f"metal::precise::{func_name}({args})"
-                call_name = (
-                    f"metal::{func_name}"
-                    if self.metal_function_name_is_shadowed(func_name)
-                    else func_name
-                )
-                return f"{call_name}({args})"
-            registered_conversion = self.metal_registered_structure_scalar_conversion(
-                expr,
-                func_name,
-                expr.args,
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-            aggregate_constructor = self.generate_metal_aggregate_constructor_call(
-                expr,
-                func_name,
-            )
-            if aggregate_constructor is not None:
-                return aggregate_constructor
-            if (
-                func_name in self.metal_type_aliases
-                or (
-                    func_name not in self.user_function_names
-                    and self.is_vector_value_type(func_name)
-                )
-                or re.fullmatch(
-                    r"(?:u?int(?:8|16|32|64)(?:_t)?|"
-                    r"(?:float(?:16|32|64)|bfloat16)(?:_t)?)[234]",
-                    str(func_name),
-                )
-                is not None
-                or func_name in [
-                    "float",
-                    "half",
-                    "float16",
-                    "float16_t",
-                    "min16float",
-                    "min10float",
-                    "double",
-                    "f16",
-                    "f32",
-                    "f64",
-                    "bfloat",
-                    "bfloat16",
-                    "bfloat16_t",
-                    "int",
-                    "i8",
-                    "i16",
-                    "i32",
-                    "char",
-                    "signed char",
-                    "int8",
-                    "int16",
-                    "int8_t",
-                    "int16_t",
-                    "int32_t",
-                    "int64",
-                    "int64_t",
-                    "long",
-                    "signed long",
-                    "ptrdiff_t",
-                    "min16int",
-                    "min12int",
-                    "uint",
-                    "u8",
-                    "u16",
-                    "u32",
-                    "i64",
-                    "u64",
-                    "uchar",
-                    "unsigned char",
-                    "uint8",
-                    "uint16",
-                    "uint8_t",
-                    "uint16_t",
-                    "uint32_t",
-                    "uint64",
-                    "uint64_t",
-                    "ulong",
-                    "unsigned long",
-                    "size_t",
-                    "min16uint",
-                    "short",
-                    "signed short",
-                    "ushort",
-                    "unsigned short",
-                    "bool",
-                    "vec2",
-                    "vec3",
-                    "vec4",
-                    "vec2<f16>",
-                    "vec3<f16>",
-                    "vec4<f16>",
-                    "vec2<f32>",
-                    "vec3<f32>",
-                    "vec4<f32>",
-                    "vec2<f64>",
-                    "vec3<f64>",
-                    "vec4<f64>",
-                    "vec2<i8>",
-                    "vec3<i8>",
-                    "vec4<i8>",
-                    "vec2<u8>",
-                    "vec3<u8>",
-                    "vec4<u8>",
-                    "vec2<i16>",
-                    "vec3<i16>",
-                    "vec4<i16>",
-                    "vec2<u16>",
-                    "vec3<u16>",
-                    "vec4<u16>",
-                    "vec2<i32>",
-                    "vec3<i32>",
-                    "vec4<i32>",
-                    "vec2<u32>",
-                    "vec3<u32>",
-                    "vec4<u32>",
-                    "vec2<i64>",
-                    "vec3<i64>",
-                    "vec4<i64>",
-                    "vec2<u64>",
-                    "vec3<u64>",
-                    "vec4<u64>",
-                    "vec2<bool>",
-                    "vec3<bool>",
-                    "vec4<bool>",
-                    "ivec2",
-                    "ivec3",
-                    "ivec4",
-                    "i64vec2",
-                    "i64vec3",
-                    "i64vec4",
-                    "uvec2",
-                    "uvec3",
-                    "uvec4",
-                    "u64vec2",
-                    "u64vec3",
-                    "u64vec4",
-                    "bvec2",
-                    "bvec3",
-                    "bvec4",
-                    "packed_float2",
-                    "packed_float3",
-                    "packed_float4",
-                    "simd_float2",
-                    "simd_float3",
-                    "simd_float4",
-                    "half2",
-                    "half3",
-                    "half4",
-                    "packed_half2",
-                    "packed_half3",
-                    "packed_half4",
-                    "simd_half2",
-                    "simd_half3",
-                    "simd_half4",
-                    "f16vec2",
-                    "f16vec3",
-                    "f16vec4",
-                    "mat2",
-                    "mat3",
-                    "mat4",
-                    "mat2x2",
-                    "mat2x3",
-                    "mat2x4",
-                    "mat3x2",
-                    "mat3x3",
-                    "mat3x4",
-                    "mat4x2",
-                    "mat4x3",
-                    "mat4x4",
-                    "f16mat2",
-                    "f16mat3",
-                    "f16mat4",
-                    "f16mat2x2",
-                    "f16mat2x3",
-                    "f16mat2x4",
-                    "f16mat3x2",
-                    "f16mat3x3",
-                    "f16mat3x4",
-                    "f16mat4x2",
-                    "f16mat4x3",
-                    "f16mat4x4",
-                    "char2",
-                    "char3",
-                    "char4",
-                    "uchar2",
-                    "uchar3",
-                    "uchar4",
-                    "packed_int2",
-                    "packed_int3",
-                    "packed_int4",
-                    "packed_uint2",
-                    "packed_uint3",
-                    "packed_uint4",
-                    "simd_int2",
-                    "simd_int3",
-                    "simd_int4",
-                    "simd_uint2",
-                    "simd_uint3",
-                    "simd_uint4",
-                    "simd_float2x2",
-                    "simd_float2x3",
-                    "simd_float2x4",
-                    "simd_float3x2",
-                    "simd_float3x3",
-                    "simd_float3x4",
-                    "simd_float4x2",
-                    "simd_float4x3",
-                    "simd_float4x4",
-                    "simd_half2x2",
-                    "simd_half2x3",
-                    "simd_half2x4",
-                    "simd_half3x2",
-                    "simd_half3x3",
-                    "simd_half3x4",
-                    "simd_half4x2",
-                    "simd_half4x3",
-                    "simd_half4x4",
-                    "i8vec2",
-                    "i8vec3",
-                    "i8vec4",
-                    "u8vec2",
-                    "u8vec3",
-                    "u8vec4",
-                    "short2",
-                    "short3",
-                    "short4",
-                    "ushort2",
-                    "ushort3",
-                    "ushort4",
-                    "i16vec2",
-                    "i16vec3",
-                    "i16vec4",
-                    "u16vec2",
-                    "u16vec3",
-                    "u16vec4",
-                    "min16float2",
-                    "min16float3",
-                    "min16float4",
-                    "min10float2",
-                    "min10float3",
-                    "min10float4",
-                    "min16int2",
-                    "min16int3",
-                    "min16int4",
-                    "min12int2",
-                    "min12int3",
-                    "min12int4",
-                    "min16uint2",
-                    "min16uint3",
-                    "min16uint4",
-                    "min16float2x2",
-                    "min16float2x3",
-                    "min16float2x4",
-                    "min16float3x2",
-                    "min16float3x3",
-                    "min16float3x4",
-                    "min16float4x2",
-                    "min16float4x3",
-                    "min16float4x4",
-                    "min10float2x2",
-                    "min10float2x3",
-                    "min10float2x4",
-                    "min10float3x2",
-                    "min10float3x3",
-                    "min10float3x4",
-                    "min10float4x2",
-                    "min10float4x3",
-                    "min10float4x4",
-                ]
-            ):
-                metal_type = self.map_type(func_name)
-                matrix_resize = self.generate_metal_matrix_resize_constructor(
-                    metal_type, expr.args
-                ) or self.metal_matrix_builtins.component_constructor(
-                    metal_type, expr.args
-                )
-                if matrix_resize is not None:
-                    return matrix_resize
-                args = ", ".join(
-                    self.generate_metal_value_constructor_arguments(
-                        metal_type, expr.args
-                    )
-                )
-                direct = self.metal_direct_narrow_float_conversion(
-                    func_name, expr.args, args
-                )
-                if direct is not None:
-                    return direct
-                rendered = f"{metal_type}({args})"
-                return (
-                    self.metal_narrow_integer_conversion_expression(rendered, func_name)
-                    or rendered
-                )
-            readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if readonly_raw_buffer_call is not None:
-                return readonly_raw_buffer_call
-            readonly_parameter_call = self.readonly_metal_parameter_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if readonly_parameter_call is not None:
-                return readonly_parameter_call
-            mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
-                func_name
-            )
-            if mesh_context_call is not None:
-                return mesh_context_call
-            self.validate_address_space_call(argument_func_name, expr.args)
-            wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
-            if wave_lane_call is not None:
-                return wave_lane_call
-            readonly_mesh_payload_call = (
-                self.readonly_metal_mesh_payload_call_diagnostic(
-                    argument_func_name, expr.args
-                )
-            )
-            if readonly_mesh_payload_call is not None:
-                return readonly_mesh_payload_call
-            self.validate_function_resource_argument_types(func_name, expr.args)
-            self.validate_function_image_access_arguments(func_name, expr.args)
-            args = self.generate_function_call_arguments(argument_func_name, expr.args)
-            if self.function_call_matches_known_signature(func_name, expr.args):
-                args.extend(
-                    self.required_function_stage_output_argument_names(func_name)
-                )
-                args.extend(
-                    self.required_function_stage_parameter_argument_names(func_name)
-                )
-                args.extend(
-                    self.cbuffer_parameter_name(cbuffer)
-                    for cbuffer in self.required_function_cbuffers(func_name)
-                )
-                args.extend(
-                    self.required_function_thread_private_global_argument_names(
-                        func_name
-                    )
-                )
-                args.extend(self.required_function_resource_argument_names(func_name))
-                args.extend(
-                    self.required_metal_mesh_dispatch_context_arguments(func_name)
-                )
-                wave_lane_args = self.required_metal_wave_lane_context_arguments(
-                    func_name
-                )
-                if wave_lane_args is not None:
-                    args.extend(wave_lane_args)
-            args = ", ".join(args)
-            if callee == func_name and (
-                self.metal_precise_math_call(expr, func_name)
-                or self.metal_safe_math_call(expr, func_name)
-            ):
-                return f"metal::precise::{func_name}({args})"
-            return f"{callee}({args})"
+            return self.generate_metal_function_call_expression(expr)
         elif isinstance(expr, MemberAccessNode):
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            stage_io_access = self.generate_metal_stage_io_lowered_member_access(expr)
-            if stage_io_access is not None:
-                return stage_io_access
-            if id(
-                expr
-            ) not in self.metal_signed_member_raw_reads and self.is_metal_signed_builtin_member(
-                expr
-            ):
-                return f"int({self.generate_metal_signed_builtin_member_storage(expr)})"
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_member_load(expr)
-            if block_load is not None:
-                return block_load
-            suppress_suffix = self.member_access_is_image_load_component(expr)
-            object_name = self.expression_name(expr.object)
-            if (
-                object_name in self.metal_static_struct_members
-                and str(expr.member)
-                in self.metal_static_struct_members.get(object_name, set())
-                and object_name not in self.local_variable_types
-                and object_name not in self.metal_program_scope_value_global_types
-            ):
-                return f"{object_name}::{expr.member}"
-            previous_suppression = self.suppress_image_load_component_suffix
-            self.suppress_image_load_component_suffix = (
-                previous_suppression or suppress_suffix
-            )
-            try:
-                obj = self.generate_expression_with_expected(expr.object, None)
-            finally:
-                self.suppress_image_load_component_suffix = previous_suppression
-            if isinstance(
-                expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
-            ) and not self.metal_expression_is_parenthesized(obj):
-                # Member access binds tighter than every operator; keep the
-                # operand grouping that CrossGL expresses through the tree.
-                obj = f"({obj})"
-            if self.member_access_uses_pointer_operator(expr):
-                return f"{obj}->{expr.member}"
-            layout_member = self.metal_hlsl_layout_member(expr)
-            if (
-                layout_member is not None
-                and layout_member.read_conversion
-                and layout_member.array_count is None
-            ):
-                return f"{layout_member.read_conversion}({obj}.{expr.member})"
-            return f"{obj}.{expr.member}"
+            return self.generate_metal_member_access_expression(expr)
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
             return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
-            true_code, false_code = self.metal_conditional_arms(
-                expr,
-                self.generate_expression(expr.true_expr),
-                self.generate_expression(expr.false_expr),
-            )
-            condition = self.generate_expression(expr.condition)
-            # `?:` is right-associative: an unparenthesized conditional
-            # condition would regroup as part of the false arm.
-            if isinstance(expr.condition, TernaryOpNode):
-                condition = f"({condition})"
-            return f"{condition} ? {true_code} : {false_code}"
+            return self.generate_metal_ternary_expression(expr)
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            if hasattr(expr, "value"):
-                value = expr.value
-                literal_type = getattr(
-                    getattr(expr, "literal_type", None), "name", None
-                )
-                if isinstance(value, int) and not isinstance(value, bool):
-                    mapped_type = self.map_type(literal_type) if literal_type else None
-                    if mapped_type in {"long", "ulong", "int64_t", "uint64_t"}:
-                        suffix = "ul" if mapped_type in {"ulong", "uint64_t"} else "l"
-                        return f"{value}{suffix}"
-                if (
-                    literal_type == "uint"
-                    and isinstance(value, int)
-                    and not isinstance(value, bool)
-                ):
-                    return f"{value}u"
-                if isinstance(value, bool):
-                    return "true" if value else "false"
-                if isinstance(value, int):
-                    # Unsuffixed decimal literals beyond int are long in
-                    # Metal; the source type of such a literal is uint up to
-                    # 2^32 - 1 (as in GLSL and HLSL) and 64-bit above it.
-                    if value > 0x7FFFFFFFFFFFFFFF:
-                        return f"{value}ul"
-                    if 0x7FFFFFFF < value <= 0xFFFFFFFF:
-                        return f"{value}u"
-                    if value < -0x80000000:
-                        return f"{value}l"
-                if isinstance(value, str) and not (
-                    value.startswith('"') and value.endswith('"')
-                ):
-                    return f'"{value}"'  # Add quotes for string literals
-                return str(value)
-            return str(expr)
+            return self.generate_metal_literal_class_expression(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            name = getattr(expr, "name", str(expr))
-            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            if name in self.METAL_RAY_FLAG_VALUES:
-                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
-            if name in getattr(self, "enum_variant_constants", {}):
-                return enum_value_expression(self, name)
-            if (
-                name not in self.local_variable_types
-                and name in self.ambiguous_cbuffer_members
-            ):
-                raise MetalRefusal(
-                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
-                )
-            if (
-                name not in self.local_variable_types
-                and name in self.cbuffer_member_references
-            ):
-                return self.cbuffer_member_references[name]
-            if (
-                name not in self.local_variable_types
-                and name in self.metal_runtime_initialized_constants
-            ):
-                return f"{name}()"
-            return name
+            return self.generate_metal_identifier_class_expression(expr)
         else:
             return str(expr)
 
