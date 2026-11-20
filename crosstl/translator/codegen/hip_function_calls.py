@@ -9,6 +9,7 @@ from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
 from .c_wide_integer_vectors import wide_integer_vector_constructor
+from .cuda_pointer_operands import hip_pointer_operand_call
 from .enum_utils import generate_enum_constructor_call
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -102,6 +103,11 @@ class HipFunctionCallMixin:
             )
             if warp_sync_builtin_call is not None:
                 return warp_sync_builtin_call
+            pointer_operand_call = hip_pointer_operand_call(
+                self, func_name, raw_args, args, HipRefusal
+            )
+            if pointer_operand_call is not None:
+                return pointer_operand_call
         if not is_user_function:
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, raw_args
