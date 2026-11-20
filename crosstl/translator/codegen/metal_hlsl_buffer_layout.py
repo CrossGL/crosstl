@@ -445,11 +445,13 @@ class MetalHlslBufferLayouts:
             return self.nested_array_member_storage(placement, layout, following)
         if layout in REGISTER_LAYOUTS and element.kind in ("scalar", "vector"):
             storage, size = METAL_SCALAR_STORAGE[element.scalar]
-            if size != 4:
-                raise HlslLayoutError(
-                    f"64-bit scalar arrays in {label} buffers are not supported"
-                )
             width = element.components if element.kind == "vector" else 1
+            if size != 4:
+                if layout != STD140_LAYOUT or element.scalar == "double":
+                    raise HlslLayoutError(
+                        f"64-bit scalar arrays in {label} buffers are not supported"
+                    )
+                return self.std140_wide_array_storage(placement, storage, width)
             if (
                 layout == HLSL_CBUFFER_LAYOUT
                 and following is not None
@@ -496,6 +498,28 @@ class MetalHlslBufferLayouts:
             read_conversion=read,
             write_conversion=write,
             nested_struct=nested,
+        )
+
+    @staticmethod
+    def std140_wide_array_storage(placement, storage, width):
+        """Storage of a std140 array of 64-bit integer scalars or vectors.
+
+        std140 rounds the stride of every array up to a ``vec4``'s 16 bytes, so a 64-bit scalar or two-component
+        element takes 16 bytes and a three- or four-component one 32, aligned alike (GLSL 4.60 section 7.6.2.2,
+        rules 1 to 4). ``long2`` and ``long4`` have exactly those sizes and alignments in Metal (MSL 3.2 table 2.4),
+        and a read selects the element's components.
+        """
+        lanes = 2 if width <= 2 else 4
+        stride = 8 * lanes
+        count = placement.layout_type.count
+        return MetalLayoutMember(
+            name=placement.name,
+            offset=placement.offset,
+            storage_type=f"{storage}{lanes}",
+            array_count=count,
+            size=stride * count,
+            alignment=stride,
+            element_suffix={1: ".x", 3: ".xyz"}.get(width, ""),
         )
 
     def nested_array_member_storage(self, placement, layout, following):
