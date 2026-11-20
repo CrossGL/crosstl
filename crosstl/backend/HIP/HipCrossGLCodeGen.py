@@ -109,6 +109,9 @@ class HipToCrossGLConverter(
     # Whether a file-scope FP_CONTRACT OFF pragma is in effect (crosstl/backend/no_contraction.py).
     fp_contract_file_scope_off = False
     ERASE_CONCRETE_TYPE_ALIASES = True
+    # Whether a function without a body is written as a CrossGL prototype rather than an empty function. The
+    # OpenCL importer keeps empty functions, which its target lowering reports as unresolved helpers.
+    WRITE_FUNCTION_PROTOTYPES = True
     RECORD_SEMANTIC_ERROR = HipRecordSemanticError
 
     CPP_NUMERIC_LITERAL_WITH_SEPARATOR = re.compile(
@@ -1681,10 +1684,8 @@ class HipToCrossGLConverter(
                 else:
                     if has_kernel and stmt.name == "main":
                         continue
-                    if getattr(
-                        stmt, "body", None
-                    ) is None and self.is_redundant_function_prototype(stmt, node):
-                        continue
+                    if getattr(stmt, "body", None) is None:
+                        self.refuse_called_undefined_prototype(stmt, node)
                     self.emit_function_local_record_definitions(stmt)
                     self.emit(f"// Function: {stmt.name}")
                     self.visit(stmt)
@@ -1710,13 +1711,12 @@ class HipToCrossGLConverter(
             else:
                 self.visit(stmt)
 
-    def is_redundant_function_prototype(self, prototype, program):
-        """Whether a function prototype is left out of the CrossGL program.
+    def refuse_called_undefined_prototype(self, prototype, program):
+        """Refuse a call to a function the file declares but never defines.
 
-        A prototype such as ``__device__ float twice(float x);`` adds nothing when the file also defines the
-        function: the definition is written where the file gives it, and writing the prototype too would
-        give CrossGL two functions of that name. A call to a function the file declares but never defines
-        is refused, since there is no body to translate and an empty function is not a faithful stand-in.
+        A prototype such as ``__device__ float twice(float x);`` becomes a CrossGL prototype, so a call
+        above the definition still has a declaration. A prototype that is called but has no definition
+        anywhere in the file has no body to translate, so the import is refused.
         """
         argument_count = len(getattr(prototype, "params", None) or [])
         if any(
@@ -1725,17 +1725,15 @@ class HipToCrossGLConverter(
                 prototype.name, argument_count
             )
         ):
-            return True
+            return
         if (prototype.name, argument_count) in self.collect_function_calls(program):
             self.refuse_import(
                 f"{self.SOURCE_LANGUAGE_NAME} function '{prototype.name}' is called but "
                 "never defined: CrossGL has no function without a body"
             )
-            return True
-        return False
 
     def collect_function_calls(self, node):
-        """The ``(name, argument count)`` of every function call in ``node``."""
+        """The ``(name, argument count)`` of every function call in ``node``, with a leading ``::`` dropped."""
         calls = set()
         pending = [node]
         visited = set()
@@ -1755,7 +1753,10 @@ class HipToCrossGLConverter(
             if not hasattr(current, "__dict__"):
                 continue
             if isinstance(current, FunctionCallNode) and isinstance(current.name, str):
-                calls.add((current.name, len(getattr(current, "args", None) or [])))
+                name = (
+                    current.name[2:] if current.name.startswith("::") else current.name
+                )
+                calls.add((name, len(getattr(current, "args", None) or [])))
             pending.extend(vars(current).values())
         return calls
 
@@ -1839,6 +1840,9 @@ class HipToCrossGLConverter(
                 node, file_scope_off=self.fp_contract_file_scope_off
             ):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
+            if self.WRITE_FUNCTION_PROTOTYPES and getattr(node, "body", None) is None:
+                self.emit(f"{return_type} {function_name}({param_str});")
+                return
             self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
