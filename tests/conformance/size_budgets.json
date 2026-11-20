@@ -76,8 +76,6 @@
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.render_rewritten_program": 1371,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.expression_result_type": 368,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression": 465,
-  "crosstl/translator/codegen/resource_array_constant_walk.py::ResourceArrayConstantWalkMixin.walk_nodes_with_constants": 494,
-  "crosstl/translator/codegen/resource_array_constant_walk.py::ResourceArrayConstantWalkMixin.walk_nodes_with_constants.<locals>.walk": 459,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.__init__": 592,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.builtin_function_result_type": 324,
   "crosstl/translator/codegen/slang_codegen.py::SlangCodeGen.generate_expression": 383,
