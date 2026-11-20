@@ -198,13 +198,22 @@ class CudaAliasMixin:
         return attributes
 
     def skip_gnu_attributes(self):
+        """Skip ``__attribute__((...))`` specifiers and return their source text, one string per specifier."""
+        skipped = []
         while (
             self.current_token == ("IDENTIFIER", "__attribute__")
             and self.current_index + 1 < len(self.tokens)
             and self.tokens[self.current_index + 1][0] == "LPAREN"
         ):
+            start = self.current_index
             self.eat("IDENTIFIER")
             self.skip_balanced_parentheses()
+            skipped.append(
+                "".join(
+                    str(token[1]) for token in self.tokens[start : self.current_index]
+                )
+            )
+        return skipped
 
     def parse_cuda_declaration_attributes(self):
         while self.is_cuda_declaration_attribute_identifier():

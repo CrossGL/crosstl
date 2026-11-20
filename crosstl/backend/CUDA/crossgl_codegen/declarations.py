@@ -14,6 +14,7 @@ from ..CudaAst import (
 )
 from ..local_memory_spaces import crossgl_zero_value
 from ..reference_parameters import ReferenceParameters
+from ..union_layout_import import anonymous_union_members
 
 
 class CudaImportDeclarationMixin:
@@ -93,6 +94,7 @@ class CudaImportDeclarationMixin:
                 getattr(node, "attributes", None),
                 getattr(node, "is_union", False),
             )
+        union = self.cuda_union_layout_record(node, struct_name)
         self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
@@ -104,10 +106,34 @@ class CudaImportDeclarationMixin:
             if layouts is not None:
                 # CUDA stores a three-component vector member at its scalar alignment; see buffer_layout_import.
                 layouts.member(struct_name, member_type, member_name, len(self.output))
+            if union is not None:
+                union.member(member_type, member_name, len(self.output), member)
             self.emit(f"{member_type} {member_name};")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def cuda_union_layout_record(self, node, struct_name):
+        """The record that marks union ``node`` with its layout contract once the program is rendered.
+
+        Returns ``None`` for a struct, and refuses a struct whose anonymous union members it would write one after
+        another; see :mod:`crosstl.backend.CUDA.union_layout_import`.
+        """
+        contracts = getattr(self, "union_layout_contracts", None)
+        if not getattr(node, "is_union", False):
+            overlapping = anonymous_union_members(node)
+            if overlapping:
+                self.refuse_import(
+                    f"CUDA struct '{struct_name}' has anonymous union members "
+                    f"{', '.join(repr(name) for name in overlapping)}, which share storage that CrossGL does not "
+                    "keep in a struct"
+                )
+            return None
+        if contracts is None:
+            return None
+        return contracts.union(
+            struct_name, getattr(node, "attributes", None), len(self.output)
+        )
 
     def visit_EnumNode(self, node):
         # An enum named ``let`` is declared as ``let_``, the name its uses get.

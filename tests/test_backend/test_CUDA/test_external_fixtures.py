@@ -2010,8 +2010,17 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
 
     ast = parse_cuda(source)
     kernel_body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
+    # cub's TempStorage has no CUDA layout CrossGL can describe, so the union's overlapping storage is refused
+    # instead of being written as a struct.
+    assert (
+        "CUDA union 'ShmemLayout': member 'reduce': its type TempStorageT has no modelled CUDA layout"
+        in message
+    )
+    assert "@union_layout" not in crossgl
     assert isinstance(kernel_body[2], StructNode)
     assert kernel_body[2].name == "ShmemLayout"
     assert isinstance(kernel_body[3], SharedMemoryNode)
@@ -2050,8 +2059,17 @@ def test_cccl_cub_shared_union_temp_storage_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = cuda_to_crossgl(source)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
+    # The cub TempStorage members have no CUDA layout CrossGL can describe, so the union is refused instead of
+    # being written as a struct whose members do not overlap.
+    assert (
+        "CUDA union 'TempStorage': member 'load': its type BlockLoad::TempStorage has no modelled CUDA layout"
+        in message
+    )
+    assert "@union_layout" not in crossgl
     assert isinstance(body[0], StructNode)
     assert body[0].name == "TempStorage"
     assert [member.name for member in body[0].members] == ["load", "scan", "aggregate"]
@@ -3416,7 +3434,18 @@ def test_cuda_samples_dxtc_bitfield_struct_members_parse_and_codegen():
 
     ast = parse_cuda(source)
     color16, block = ast.structs
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
+
+    # The parser drops the bit-field widths and flattens both anonymous aggregates, so neither record keeps the
+    # storage the source gives it: Color16's b, g and r share one 16-bit word, and BlockDXT1's row and indices
+    # overlap. Both are refused instead of being written with members that do not share storage.
+    assert "CUDA union 'Color16': member 'b' belongs to an anonymous struct" in message
+    assert (
+        "CUDA struct 'BlockDXT1' has anonymous union members 'row', 'indices'"
+        in message
+    )
 
     assert [(member.vtype, member.name) for member in color16.members] == [
         ("unsigned short", "b"),
