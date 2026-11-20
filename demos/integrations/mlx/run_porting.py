@@ -962,14 +962,31 @@ MLX_FENCE_TARGET_CONTRACTS = {
         "targetDescription": "Vulkan SPIR-V",
     },
 }
+# A GLSL compilation unit holds one entry point per stage (GLSL 4.60 section 6.1), so project translation gives each
+# kernel of the multi-kernel fence unit its own OpenGL artifact (crosstl.project.glsl_entry_split). Every one of these
+# kernels issues the system-scope fence, so each artifact must be refused.
+MLX_FENCE_ENTRY_POINTS = ("input_coherent", "fence_update", "fence_wait")
+MLX_FENCE_PER_ENTRY_TARGETS = frozenset({"opengl"})
 MLX_REFERENCE_TARGETS = tuple(MLX_FENCE_TARGET_CONTRACTS)
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_EXPECTED_UNIT_COUNT = 42
 FULL_CORPUS_TARGETS = ("directx", "opengl")
-FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = FULL_CORPUS_EXPECTED_UNIT_COUNT * len(
-    FULL_CORPUS_TARGETS
+# HLSL keeps every kernel of a unit in one artifact. OpenGL gets one artifact per discovered kernel, because every
+# corpus unit holds two or more compute kernels; entry discovery finds 17319 of them at MLX_CORPUS_COMMIT 846d176.
+FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET = {
+    "directx": FULL_CORPUS_EXPECTED_UNIT_COUNT,
+    "opengl": 17319,
+}
+FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = sum(
+    FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target] for target in FULL_CORPUS_TARGETS
 )
-FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(FULL_CORPUS_TARGETS)
+FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET = {
+    target: len(MLX_FENCE_ENTRY_POINTS) if target in MLX_FENCE_PER_ENTRY_TARGETS else 1
+    for target in FULL_CORPUS_TARGETS
+}
+FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = sum(
+    FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET.values()
+)
 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
     FULL_CORPUS_EXPECTED_ARTIFACT_COUNT - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
 )
@@ -3658,6 +3675,13 @@ def _atomic_fence_expected_message(target_contract: Mapping[str, str]) -> str:
     )
 
 
+def _fence_artifact_entries(target: str) -> tuple[str | None, ...]:
+    """Entry points of the fence artifacts for ``target``; ``None`` is one artifact for the whole unit."""
+    if target in MLX_FENCE_PER_ENTRY_TARGETS:
+        return MLX_FENCE_ENTRY_POINTS
+    return (None,)
+
+
 def _validate_atomic_fence_contract_report(
     mlx_root: Path,
     output_dir: Path,
@@ -3673,13 +3697,17 @@ def _validate_atomic_fence_contract_report(
     )
     summary = payload.get("summary", {})
     _require(isinstance(summary, Mapping), "fence contract summary must be an object")
+    expected_artifact_counts = {
+        target: len(_fence_artifact_entries(target)) for target in selected_targets
+    }
+    expected_artifact_total = sum(expected_artifact_counts.values())
     expected_diagnostic_codes = {
-        contract["diagnosticCode"]: 1
+        contract["diagnosticCode"]: expected_artifact_counts[target]
         for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
         if target in selected_targets
     }
     expected_missing_capabilities = {
-        contract["missingCapability"]: 1
+        contract["missingCapability"]: expected_artifact_counts[target]
         for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
         if target in selected_targets
     }
@@ -3696,14 +3724,15 @@ def _validate_atomic_fence_contract_report(
     if exact_report:
         _require(
             summary.get("unitCount") == 1
-            and summary.get("artifactCount") == len(selected_targets)
+            and summary.get("artifactCount") == expected_artifact_total
             and summary.get("translatedCount") == 0
-            and summary.get("failedCount") == len(selected_targets),
-            "fence contract translation must report one failed artifact per target",
+            and summary.get("failedCount") == expected_artifact_total,
+            "fence contract translation must report one failed artifact per target "
+            "and, for one-entry-per-stage targets, per entry",
         )
         _require(
             summary.get("diagnosticCounts") == {
-                "error": len(selected_targets),
+                "error": expected_artifact_total,
                 "note": 0,
                 "warning": 0,
             },
@@ -3739,9 +3768,10 @@ def _validate_atomic_fence_contract_report(
     _require(isinstance(artifacts, list), "fence contract artifacts must be a list")
     if exact_report:
         _require(
-            len(diagnostics) == len(selected_targets)
-            and len(artifacts) == len(selected_targets),
-            "fence contract report must contain one diagnostic and artifact per target",
+            len(diagnostics) == expected_artifact_total
+            and len(artifacts) == expected_artifact_total,
+            "fence contract report must contain one diagnostic and artifact per "
+            "expected artifact",
         )
 
     target_results: dict[str, dict[str, Any]] = {}
@@ -3757,42 +3787,45 @@ def _validate_atomic_fence_contract_report(
                 "Cannot lower CrossGL atomicThreadFence"
             )
         ]
+        expected_entries = _fence_artifact_entries(target)
+        expected_count = len(expected_entries)
         _require(
-            len(target_diagnostics) == 1,
-            f"fence contract report must contain one {target} diagnostic",
+            len(target_diagnostics) == expected_count,
+            f"fence contract report must contain {expected_count} {target} diagnostic(s)",
         )
-        diagnostic = target_diagnostics[0]
         expected_message = _atomic_fence_expected_message(contract)
-        _require(
-            {
-                "severity": diagnostic.get("severity"),
-                "code": diagnostic.get("code"),
-                "message": diagnostic.get("message"),
-                "target": diagnostic.get("target"),
-                "sourceBackend": diagnostic.get("sourceBackend"),
-                "missingCapabilities": diagnostic.get("missingCapabilities"),
-            }
-            == {
-                "severity": "error",
-                "code": contract["diagnosticCode"],
-                "message": expected_message,
-                "target": target,
-                "sourceBackend": "metal",
-                "missingCapabilities": [contract["missingCapability"]],
-            },
-            f"fence contract {target} structured diagnostic changed",
-        )
-        location = diagnostic.get("location", {})
-        _require(
-            isinstance(location, Mapping) and location.get("file") == MLX_FENCE_SOURCE,
-            f"fence contract {target} diagnostic source changed",
-        )
+        for diagnostic in target_diagnostics:
+            _require(
+                {
+                    "severity": diagnostic.get("severity"),
+                    "code": diagnostic.get("code"),
+                    "message": diagnostic.get("message"),
+                    "target": diagnostic.get("target"),
+                    "sourceBackend": diagnostic.get("sourceBackend"),
+                    "missingCapabilities": diagnostic.get("missingCapabilities"),
+                }
+                == {
+                    "severity": "error",
+                    "code": contract["diagnosticCode"],
+                    "message": expected_message,
+                    "target": target,
+                    "sourceBackend": "metal",
+                    "missingCapabilities": [contract["missingCapability"]],
+                },
+                f"fence contract {target} structured diagnostic changed",
+            )
+            location = diagnostic.get("location", {})
+            _require(
+                isinstance(location, Mapping)
+                and location.get("file") == MLX_FENCE_SOURCE,
+                f"fence contract {target} diagnostic source changed",
+            )
         if exact_report:
             target_summary = summary.get("artifactsByTarget", {}).get(target, {})
             _require(
-                target_summary.get("artifactCount") == 1
+                target_summary.get("artifactCount") == expected_count
                 and target_summary.get("translatedCount") == 0
-                and target_summary.get("failedCount") == 1,
+                and target_summary.get("failedCount") == expected_count,
                 f"fence contract {target} artifact summary changed",
             )
 
@@ -3804,34 +3837,48 @@ def _validate_atomic_fence_contract_report(
             and artifact.get("target") == target
         ]
         _require(
-            len(target_artifacts) == 1,
-            f"fence contract report must contain one {target} artifact record",
+            len(target_artifacts) == expected_count,
+            f"fence contract report must contain {expected_count} {target} artifact record(s)",
         )
-        artifact = target_artifacts[0]
+        artifact_entries = []
+        for artifact in target_artifacts:
+            entry_point = artifact.get("entryPoint")
+            artifact_entries.append(
+                entry_point.get("source")
+                if isinstance(entry_point, Mapping)
+                and entry_point.get("target") == "main"
+                else entry_point
+            )
         _require(
-            artifact.get("sourceBackend") == "metal"
-            and artifact.get("status") == "failed"
-            and artifact.get("error") == expected_message,
-            f"fence contract {target} failed artifact record changed",
+            sorted(artifact_entries, key=str) == sorted(expected_entries, key=str),
+            f"fence contract {target} artifact entry points changed",
         )
-        artifact_path = artifact.get("path")
-        _require(
-            isinstance(artifact_path, str) and bool(artifact_path),
-            f"fence contract {target} artifact path is missing",
-        )
-        generated_path = (mlx_root / artifact_path).resolve()
-        _require(
-            _is_relative_to(generated_path, output_root),
-            f"fence contract {target} artifact path escaped its output directory",
-        )
-        _require(
-            not generated_path.exists(),
-            f"fence contract {target} unexpectedly emitted {artifact_path}",
-        )
-        _require(
-            "generatedHash" not in artifact and "generatedSizeBytes" not in artifact,
-            f"fence contract {target} recorded generated artifact metadata",
-        )
+        for artifact in target_artifacts:
+            _require(
+                artifact.get("sourceBackend") == "metal"
+                and artifact.get("status") == "failed"
+                and artifact.get("error") == expected_message,
+                f"fence contract {target} failed artifact record changed",
+            )
+            artifact_path = artifact.get("path")
+            _require(
+                isinstance(artifact_path, str) and bool(artifact_path),
+                f"fence contract {target} artifact path is missing",
+            )
+            generated_path = (mlx_root / artifact_path).resolve()
+            _require(
+                _is_relative_to(generated_path, output_root),
+                f"fence contract {target} artifact path escaped its output directory",
+            )
+            _require(
+                not generated_path.exists(),
+                f"fence contract {target} unexpectedly emitted {artifact_path}",
+            )
+            _require(
+                "generatedHash" not in artifact
+                and "generatedSizeBytes" not in artifact,
+                f"fence contract {target} recorded generated artifact metadata",
+            )
         target_results[target] = {
             "diagnosticCode": contract["diagnosticCode"],
             "missingCapability": contract["missingCapability"],
@@ -3897,8 +3944,12 @@ def _check_atomic_fence_contract(
         "report": _relpath(report_path, mlx_root),
         "source": MLX_FENCE_SOURCE,
         "targets": list(targets),
-        "artifactRecordCount": len(targets),
-        "failedArtifactCount": len(targets),
+        "artifactRecordCount": sum(
+            len(_fence_artifact_entries(target)) for target in targets
+        ),
+        "failedArtifactCount": sum(
+            len(_fence_artifact_entries(target)) for target in targets
+        ),
         "emittedArtifactCount": 0,
         "requestedContract": dict(MLX_FENCE_REQUESTED_CONTRACT),
         "targetContracts": target_results,
@@ -10871,7 +10922,9 @@ def _translate_full_corpus(
     expected_error_diagnostics_by_code = Counter(
         {
             **{
-                contract["diagnosticCode"]: 1
+                contract[
+                    "diagnosticCode"
+                ]: FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target]
                 for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
                 if target in FULL_CORPUS_TARGETS
             },
@@ -10882,8 +10935,11 @@ def _translate_full_corpus(
     )
     expected_target_counts = {
         target: {
-            "translatedCount": FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
-            "failedCount": 1,
+            "translatedCount": (
+                FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target]
+                - FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target]
+            ),
+            "failedCount": FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET[target],
         }
         for target in FULL_CORPUS_TARGETS
     }

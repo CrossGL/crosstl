@@ -593,15 +593,20 @@ template <int TAG>
 
 
 def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=False):
+    """A full-corpus report with only the fence refusals: one OpenGL artifact per kernel."""
+    fence_failures = module.FULL_CORPUS_EXPECTED_FENCE_FAILURES_BY_TARGET
     per_target = {
         target: {
-            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
-            "failedCount": 1,
+            "translatedCount": (
+                module.FULL_CORPUS_EXPECTED_ARTIFACTS_BY_TARGET[target]
+                - fence_failures[target]
+            ),
+            "failedCount": fence_failures[target],
         }
         for target in module.FULL_CORPUS_TARGETS
     }
     diagnostics_by_code = {
-        contract["diagnosticCode"]: 1
+        contract["diagnosticCode"]: fence_failures[target]
         for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
         if target in module.FULL_CORPUS_TARGETS
     }
@@ -609,7 +614,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
         module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
     )
     missing_capability_counts = {
-        contract["missingCapability"]: 1
+        contract["missingCapability"]: fence_failures[target]
         for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
         if target in module.FULL_CORPUS_TARGETS
     }
@@ -619,15 +624,23 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
     diagnostics = []
     artifacts = []
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
-    for target in module.FULL_CORPUS_TARGETS:
+    fence_artifacts = [
+        (target, entry)
+        for target in module.FULL_CORPUS_TARGETS
+        for entry in module._fence_artifact_entries(target)
+    ]
+    for target, entry in fence_artifacts:
         contract = module.MLX_FENCE_TARGET_CONTRACTS[target]
         message = module._atomic_fence_expected_message(contract)
-        artifact_path = (
-            work_dir
-            / "out-full-corpus"
-            / target
-            / Path(module.MLX_FENCE_SOURCE).with_suffix(extensions[target])
-        ).relative_to(mlx_root)
+        unit_path = Path(module.MLX_FENCE_SOURCE)
+        relative = (
+            unit_path.with_suffix(extensions[target])
+            if entry is None
+            else unit_path.with_suffix("") / f"{entry}{extensions[target]}"
+        )
+        artifact_path = (work_dir / "out-full-corpus" / target / relative).relative_to(
+            mlx_root
+        )
         diagnostics.append(
             {
                 "severity": "error",
@@ -650,16 +663,17 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
                 "missingCapabilities": ["batch.translation"],
             }
         )
-        artifacts.append(
-            {
-                "source": module.MLX_FENCE_SOURCE,
-                "sourceBackend": "metal",
-                "target": target,
-                "path": artifact_path.as_posix(),
-                "status": "failed",
-                "error": message,
-            }
-        )
+        artifact = {
+            "source": module.MLX_FENCE_SOURCE,
+            "sourceBackend": "metal",
+            "target": target,
+            "path": artifact_path.as_posix(),
+            "status": "failed",
+            "error": message,
+        }
+        if entry is not None:
+            artifact["entryPoint"] = {"source": entry, "target": "main"}
+        artifacts.append(artifact)
 
     translated_count = module.FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
     failed_count = module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
@@ -4470,30 +4484,37 @@ def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_pat
 
 
 def _fence_contract_report(module, mlx_root, work_dir):
+    """The report main's translator writes: one OpenGL artifact per fence kernel."""
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
     diagnostics = []
     artifacts = []
+    counts = {}
     for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items():
         message = module._atomic_fence_expected_message(contract)
-        artifact_path = (
-            work_dir
-            / "out-fence-contract"
-            / target
-            / Path(module.MLX_FENCE_SOURCE).with_suffix(extensions[target])
-        ).relative_to(mlx_root)
-        diagnostics.append(
-            {
-                "severity": "error",
-                "code": contract["diagnosticCode"],
-                "message": message,
-                "location": {"file": module.MLX_FENCE_SOURCE},
-                "target": target,
-                "sourceBackend": "metal",
-                "missingCapabilities": [contract["missingCapability"]],
-            }
-        )
-        artifacts.append(
-            {
+        entries = module._fence_artifact_entries(target)
+        counts[target] = len(entries)
+        for entry in entries:
+            unit_path = Path(module.MLX_FENCE_SOURCE)
+            relative = (
+                unit_path.with_suffix(extensions[target])
+                if entry is None
+                else unit_path.with_suffix("") / f"{entry}{extensions[target]}"
+            )
+            artifact_path = (
+                work_dir / "out-fence-contract" / target / relative
+            ).relative_to(mlx_root)
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": contract["diagnosticCode"],
+                    "message": message,
+                    "location": {"file": module.MLX_FENCE_SOURCE},
+                    "target": target,
+                    "sourceBackend": "metal",
+                    "missingCapabilities": [contract["missingCapability"]],
+                }
+            )
+            artifact = {
                 "source": module.MLX_FENCE_SOURCE,
                 "sourceBackend": "metal",
                 "target": target,
@@ -4501,28 +4522,30 @@ def _fence_contract_report(module, mlx_root, work_dir):
                 "status": "failed",
                 "error": message,
             }
-        )
-    target_count = len(module.MLX_FENCE_TARGET_CONTRACTS)
+            if entry is not None:
+                artifact["entryPoint"] = {"source": entry, "target": "main"}
+            artifacts.append(artifact)
+    total = sum(counts.values())
     return {
         "summary": {
             "unitCount": 1,
-            "artifactCount": target_count,
+            "artifactCount": total,
             "translatedCount": 0,
-            "failedCount": target_count,
-            "diagnosticCounts": {"error": target_count, "note": 0, "warning": 0},
+            "failedCount": total,
+            "diagnosticCounts": {"error": total, "note": 0, "warning": 0},
             "diagnosticsByCode": {
-                contract["diagnosticCode"]: 1
-                for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+                contract["diagnosticCode"]: counts[target]
+                for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
             },
             "missingCapabilityCounts": {
-                contract["missingCapability"]: 1
-                for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+                contract["missingCapability"]: counts[target]
+                for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
             },
             "artifactsByTarget": {
                 target: {
-                    "artifactCount": 1,
+                    "artifactCount": counts[target],
                     "translatedCount": 0,
-                    "failedCount": 1,
+                    "failedCount": counts[target],
                 }
                 for target in module.MLX_FENCE_TARGET_CONTRACTS
             },
@@ -4583,8 +4606,14 @@ def test_atomic_fence_contract_records_exact_target_failures(tmp_path, monkeypat
     assert result["status"] == "blocked-as-expected"
     assert result["source"] == module.MLX_FENCE_SOURCE
     assert result["targets"] == ["directx", "opengl", "vulkan"]
-    assert result["artifactRecordCount"] == 3
-    assert result["failedArtifactCount"] == 3
+    # One DirectX and one Vulkan artifact, and one OpenGL artifact per fence kernel.
+    assert module.MLX_FENCE_ENTRY_POINTS == (
+        "input_coherent",
+        "fence_update",
+        "fence_wait",
+    )
+    assert result["artifactRecordCount"] == 5
+    assert result["failedArtifactCount"] == 5
     assert result["emittedArtifactCount"] == 0
     assert result["requestedContract"] == {
         "memoryFlags": ["mem_device"],
@@ -4652,6 +4681,48 @@ def test_atomic_fence_contract_records_exact_target_failures(tmp_path, monkeypat
     ],
 )
 def test_atomic_fence_contract_rejects_diagnostic_drift(
+    tmp_path, monkeypatch, mutation, error
+):
+    module = _load_harness()
+    check = _prepare_fence_contract_check(module, tmp_path, monkeypatch, mutation)
+
+    with pytest.raises(module.PortingCheckError, match=error):
+        module._check_atomic_fence_contract(*check[:5], "python")
+
+
+def _merge_opengl_fence_artifacts(payload, _root):
+    """The pre-split shape: one OpenGL artifact for the whole multi-kernel unit."""
+    opengl = [item for item in payload["artifacts"] if item["target"] == "opengl"]
+    merged = dict(opengl[0])
+    merged.pop("entryPoint")
+    payload["artifacts"] = [
+        item for item in payload["artifacts"] if item["target"] != "opengl"
+    ] + [merged]
+
+
+def _drop_opengl_fence_entry(payload, _root):
+    payload["artifacts"] = [
+        item
+        for item in payload["artifacts"]
+        if item.get("entryPoint", {}).get("source") != "fence_wait"
+    ]
+
+
+def _rename_opengl_fence_entry(payload, _root):
+    for item in payload["artifacts"]:
+        if item.get("entryPoint", {}).get("source") == "fence_wait":
+            item["entryPoint"] = {"source": "fence_wait_2", "target": "main"}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (_merge_opengl_fence_artifacts, "fence contract report must contain one"),
+        (_drop_opengl_fence_entry, "fence contract report must contain one"),
+        (_rename_opengl_fence_entry, "opengl artifact entry points changed"),
+    ],
+)
+def test_atomic_fence_contract_requires_one_opengl_artifact_per_kernel(
     tmp_path, monkeypatch, mutation, error
 ):
     module = _load_harness()
@@ -8965,15 +9036,16 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
         ]
     ]
     assert "--run-toolchains" not in commands[0]
+    # One HLSL artifact per unit; one GLSL artifact per kernel, three of them fence kernels.
     assert result["unitCount"] == 42
-    assert result["artifactCount"] == 84
-    assert result["translatedCount"] == 82
-    assert result["failedCount"] == 2
+    assert result["artifactCount"] == 42 + 17319
+    assert result["translatedCount"] == 41 + 17316
+    assert result["failedCount"] == 1 + 3
     assert result["status"] == "passed-with-expected-fence-blockers"
     assert result["jobTimeoutSeconds"] == 120
     assert result["targetCounts"] == {
         "directx": {"translatedCount": 41, "failedCount": 1},
-        "opengl": {"translatedCount": 41, "failedCount": 1},
+        "opengl": {"translatedCount": 17316, "failedCount": 3},
     }
     assert result["fenceContract"]["status"] == "blocked-as-expected"
     assert set(result["fenceContract"]["targetContracts"]) == {
@@ -9132,9 +9204,9 @@ def test_full_corpus_mode_reports_tracked_translation_errors(tmp_path, monkeypat
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
-    assert result["translatedCount"] == 81
-    assert result["failedCount"] == 3
-    assert result["expectedFenceFailureCount"] == 2
+    assert result["translatedCount"] == 40 + 17316
+    assert result["failedCount"] == 2 + 3
+    assert result["expectedFenceFailureCount"] == 1 + 3
     assert result["unexpectedFailedCount"] == 1
     assert result["unexpectedErrorDiagnosticsByCode"] == {
         "project.translate.failed": 1,
@@ -15114,9 +15186,9 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert result["scope"]["metalRoundTripIncluded"] is True
     assert result["repository"]["commit"] == CURRENT_MLX_COMMIT
     assert result["scope"]["fullCorpusExpectedUnitCount"] == 42
-    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 84
-    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 82
-    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 2
+    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 42 + 17319
+    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == (41 + 17316)
+    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 1 + 3
     assert result["scope"]["referenceAccessorProofIncluded"] is False
     assert result["scope"]["referenceAccessorTargets"] == []
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
