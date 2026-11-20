@@ -115,6 +115,11 @@ class HipExpressionMixin:
         target_type, is_array = self.unwrap_array_template_type(template_args[0])
         target_type = self.convert_hip_type_to_crossgl(target_type)
         args_str = ", ".join(args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"HIP {function_name}({args_str}): CrossGL has no device heap",
+                "0",
+            )
         if is_array:
             return f"new_array<{target_type}>({args_str})"
         return f"new<{target_type}>({args_str})"
