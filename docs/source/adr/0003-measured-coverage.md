@@ -113,7 +113,7 @@ generator, such as Rust output's missing `#![no_std]`, then stays a gap of that 
 as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
 translation that computes the operation with other instructions does not count. CrossGL probes come from a small
 template layer, `tools/coverage/crossgl/`, and the
-spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
+spelling tables in `tools/coverage/spellings.py` and `tools/coverage/rust_spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.
 
