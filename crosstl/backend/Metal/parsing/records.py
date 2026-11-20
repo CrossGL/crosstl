@@ -3,6 +3,10 @@
 from crosstl.translator.refusals import MetalSyntaxError
 
 from ..local_aggregate_declarators import unnamed_aggregate_name
+from ..member_aggregates import (
+    parse_unnamed_member_aggregate,
+    unnamed_member_aggregate_kind,
+)
 from ..member_enums import (
     is_anonymous_member_enum_start,
     parse_anonymous_member_enum,
@@ -822,6 +826,8 @@ class MetalRecordParsingMixin:
             name_index = self.skip_leading_attribute_tokens_at(declaration_start + 1)
             name_index = self.skip_alignas_specifier_tokens_at(name_index)
             if name_index >= len(self.tokens) or not self.is_name_token_at(name_index):
+                if unnamed_member_aggregate_kind(self) is not None:
+                    return parse_unnamed_member_aggregate(self, pre_alignas)
                 self.skip_nested_aggregate_declaration()
                 return None
 

@@ -21,7 +21,6 @@ from ..ast import (
     FunctionCallNode,
     IdentifierNode,
     IfNode,
-    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -58,11 +57,8 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .bitfield_builtins import (
-    BITFIELD_ARITIES,
     emit_hlsl_bitfield_helpers,
-    hlsl_bitfield_call,
 )
-from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_length import HlslBufferLength
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, component_access_type
@@ -80,13 +76,14 @@ from .constant_guards import (
 )
 from .constant_ordering import partition_constants_by_struct_dependency
 from .counter_loops import any_start_counter_loops
-from .crossgl_vector_names import crossgl_named_vector_spelling
 from .directx_aggregate_initializers import DirectXAggregateInitializerMixin
 from .directx_atomic_resources import DirectXAtomicResourceMixin
+from .directx_call_expressions import DirectXCallExpressionMixin
 from .directx_compile_time_globals import DirectXCompileTimeGlobalMixin
 from .directx_compute_builtins import DirectXComputeBuiltinMixin
 from .directx_cooperative_matrix import DirectXCooperativeMatrixMixin
 from .directx_entry_functions import DirectXEntryFunctionMixin
+from .directx_expression_forms import DirectXExpressionFormMixin
 from .directx_glsl_blocks import DirectXGlslBlockMixin
 from .directx_image_arguments import DirectXImageArgumentMixin
 from .directx_integer_arithmetic import DirectXIntegerArithmeticMixin
@@ -178,38 +175,28 @@ from .enum_utils import (
     collect_generic_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
-    enum_value_expression,
     generate_enum_constants,
-    generate_enum_constructor_call,
-    generate_enum_constructor_expression,
     generate_enum_constructor_functions,
     generate_generic_enum_constants,
     generate_generic_enum_constructor_functions,
     infer_enum_constructor_type,
 )
-from .exponent_builtins import hlsl_exponent_call
 from .extended_arithmetic_builtins import (
     emit_hlsl_extended_arithmetic_helpers,
-    hlsl_extended_arithmetic_call,
 )
 from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
-    reject_unresolved_generic_function_call,
-    reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_struct_constructor_expression,
     infer_struct_constructor_type,
 )
 from .glsl_buffer_array_values import glsl_buffer_array_value_type
@@ -228,7 +215,6 @@ from .hlsl_buffer_block_atomic_values import (
 )
 from .hlsl_byte_address_atomics import (
     emit_hlsl_byte_address_atomic_helpers,
-    hlsl_byte_address_atomic_expression,
     hlsl_byte_address_atomic_statement,
 )
 from .hlsl_byteaddress_typed_access import hlsl_byteaddress_component_refusal
@@ -265,7 +251,6 @@ from .hlsl_texture_residency import (
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
-    hlsl_subgroup_lane_mask_expression,
     hlsl_wave_extension_call,
 )
 from .image_access_contracts import (
@@ -307,7 +292,7 @@ from .metadata_call_bounds import (
     inherited_metadata_bindings,
     join_parameter_bounds,
 )
-from .pack_builtins import PACK_FUNCTIONS, emit_hlsl_pack_helpers, hlsl_pack_call
+from .pack_builtins import emit_hlsl_pack_helpers
 from .pointer_reinterpret import PointerReinterpretationError, scalar_storage_layout
 from .private_array_rows import aliased_row_view
 from .private_member_views import hlsl_aliased_scalar_view
@@ -319,7 +304,6 @@ from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
 from .resource_aggregates import lower_resource_aggregates
 from .sampler_pairs import canonicalize_separate_textures
-from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS
 from .stage_utils import (
     collect_stage_local_structs,
@@ -337,7 +321,6 @@ from .stage_utils import (
 from .standard_constant_types import standard_constant_type
 from .storage_image_texels import (
     TEXEL_COMPONENTS,
-    image_load_swizzle_extent,
     reshaped_texel_expression,
 )
 from .storage_parameter_texels import StorageParameterTexels
@@ -411,6 +394,8 @@ class HLSLCodeGen(
     HLSLResourceAccessVariantsMixin,
     LoweringRefusalMixin,
     HLSLBfloat16Vectors,
+    DirectXExpressionFormMixin,
+    DirectXCallExpressionMixin,
 ):
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -6887,27 +6872,7 @@ class HLSLCodeGen(
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
-            if self.cooperative_matrix_software_lowering:
-                return self.directx_cooperative_matrix_operation_lowering(expr)
-            operation = expr.operation
-            matrix_type = getattr(expr, "result_type", None)
-            fragment_contract = _directx_cooperative_matrix_fragment_contract(
-                matrix_type
-            )
-            fragment_contract_message = (
-                _directx_cooperative_matrix_fragment_contract_message(fragment_contract)
-            )
-            raise DirectXCooperativeMatrixUnsupportedError(
-                "DirectX cooperative matrix lowering is unavailable for "
-                f"operation '{operation}'; emitting a regular HLSL expression "
-                "would not preserve distributed matrix semantics; "
-                f"{fragment_contract_message}",
-                operation=operation,
-                matrix_type=matrix_type,
-                **fragment_contract,
-                reason="unsupported-operation",
-                source_location=getattr(expr, "source_location", None),
-            )
+            return self.generate_hlsl_cooperative_matrix_operation_expression(expr)
         elif isinstance(expr, str):
             if self.is_hlsl_builtin_option_none_expression(expr):
                 none_value = self.generate_hlsl_builtin_option_none_value()
@@ -6927,88 +6892,11 @@ class HLSLCodeGen(
                 expr, self.generate_expression, self.generate_discarded_expression
             )
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            if hasattr(expr, "value"):
-                value = expr.value
-                literal_type = getattr(
-                    getattr(expr, "literal_type", None), "name", None
-                )
-                mapped_literal_type = (
-                    self.map_type(literal_type) if literal_type else None
-                )
-                if (
-                    mapped_literal_type == "uint64_t"
-                    and isinstance(value, int)
-                    and not isinstance(value, bool)
-                ):
-                    return f"{value}ull"
-                if (
-                    mapped_literal_type == "int64_t"
-                    and isinstance(value, int)
-                    and not isinstance(value, bool)
-                ):
-                    return f"{value}ll"
-                if (
-                    literal_type == "uint"
-                    and isinstance(value, int)
-                    and not isinstance(value, bool)
-                ):
-                    return f"{value}u"
-                if isinstance(value, bool):
-                    return "true" if value else "false"
-                if isinstance(value, int):
-                    if value > 0xFFFFFFFF:
-                        return f"{value}ull"
-                    if value > 0x7FFFFFFF:
-                        return f"{value}u"
-                    if value < -0x80000000:
-                        return f"{value}ll"
-                if isinstance(value, str) and not (
-                    value.startswith('"') and value.endswith('"')
-                ):
-                    return f'"{value}"'
-                return str(value)
-            return str(expr)
+            return self.generate_hlsl_literal_expression(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            if self.is_hlsl_builtin_option_none_expression(expr):
-                none_value = self.generate_hlsl_builtin_option_none_value()
-                if none_value is not None:
-                    return none_value
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            name = getattr(expr, "name", str(expr))
-            enum_value = enum_value_expression(self, name)
-            if enum_value is not None:
-                return enum_value
-            standard_constant = self.hlsl_standard_math_constant_expression(name)
-            if standard_constant is not None:
-                return standard_constant
-            lane_mask = hlsl_subgroup_lane_mask_expression(self, name)
-            if lane_mask is not None:
-                return lane_mask
-            self.hlsl_resource_pointer_array_bare_expression_error(expr)
-            self.hlsl_workgroup_pointer_bare_expression_error(expr)
-            return self.hlsl_identifier_name(name)
+            return self.generate_hlsl_identifier_node_expression(expr)
         elif isinstance(expr, VariableNode):
-            if self.is_hlsl_builtin_option_none_expression(expr):
-                none_value = self.generate_hlsl_builtin_option_none_value()
-                if none_value is not None:
-                    return none_value
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            enum_value = enum_value_expression(self, expr.name)
-            if enum_value is not None:
-                return enum_value
-            standard_constant = self.hlsl_standard_math_constant_expression(expr.name)
-            if standard_constant is not None:
-                return standard_constant
-            lane_mask = hlsl_subgroup_lane_mask_expression(self, expr.name)
-            if lane_mask is not None:
-                return lane_mask
-            self.hlsl_resource_pointer_array_bare_expression_error(expr)
-            self.hlsl_workgroup_pointer_bare_expression_error(expr)
-            return self.hlsl_identifier_name(expr.name)
+            return self.generate_hlsl_variable_expression(expr)
         elif isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             target_layout = scalar_storage_layout(self.type_name_string(target_type))
@@ -7026,224 +6914,11 @@ class HLSLCodeGen(
                 source_location=getattr(expr, "source_location", None),
             )
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
-            op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            mapped_op = self.map_operator(op)
-            if mapped_op == ",":
-                left = self.generate_expression_with_expected(expr.left, None)
-                right = self.generate_expression_with_expected(expr.right, None)
-                sequence = f"({left}, {right})"
-                result_type = self.expression_result_type(expr.right)
-                if self.hlsl_struct_constructor_fields(result_type) is not None:
-                    # Explicit same-type construction distinguishes an aggregate
-                    # value sequence from a misplaced HLSL initializer list.
-                    return f"{self.map_type(result_type)}({sequence})"
-                return sequence
-            if mapped_op in {"+", "-"}:
-                private_pointer_binding = self.hlsl_private_pointer_view_binding(expr)
-                if private_pointer_binding is not None and private_pointer_binding.get(
-                    "root_kind"
-                ) in {"parameter", "scalar_parameter", "word_view_parameter"}:
-                    parameter_name = next(
-                        (
-                            name
-                            for name in self.current_hlsl_private_pointer_base_names
-                            if self.hlsl_identifier_name(name)
-                            == private_pointer_binding.get("backing")
-                        ),
-                        None,
-                    )
-                    raise DirectXPrivatePointerParameterError(
-                        "DirectX cannot emit fixed private array parameter "
-                        "arithmetic as a first-class pointer expression",
-                        function_name=self.current_function_name,
-                        parameter_name=parameter_name,
-                        reason="bare-pointer-expression",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-            if mapped_op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||", "<<", ">>"}:
-                previous_expected_type = self.current_expression_expected_type
-                self.current_expression_expected_type = None
-                try:
-                    left = self.generate_expression(getattr(expr, "left", ""))
-                    right = self.generate_expression(getattr(expr, "right", ""))
-                finally:
-                    self.current_expression_expected_type = previous_expected_type
-            else:
-                left = self.generate_expression(getattr(expr, "left", ""))
-                right = self.generate_expression(getattr(expr, "right", ""))
-            if mapped_op in {"<<", ">>"} and self.hlsl_untyped_int_expression(
-                expr.left
-            ):
-                # Fix the source operand type before shifting; the count and
-                # enclosing expression must not choose its width or signedness.
-                left = f"int({left})"
-            option_none_comparison = self.generate_hlsl_builtin_option_none_comparison(
-                getattr(expr, "left", ""),
-                mapped_op,
-                getattr(expr, "right", ""),
-            )
-            if option_none_comparison is not None:
-                return option_none_comparison
-            self_comparison = self.hlsl_floating_self_comparison(expr, left, mapped_op)
-            if self_comparison is not None:
-                return self_comparison
-            if mapped_op == "-":
-                precise_difference = self.hlsl_precise_difference_call(
-                    expr, left, right
-                )
-                if precise_difference is not None:
-                    return precise_difference
-            if self.hlsl_binary_multiply_uses_mul(expr):
-                return f"mul({left}, {right})"
-            complex_binary = self.hlsl_complex64_binary_expression(
-                expr,
-                left,
-                right,
-                mapped_op,
-            )
-            if complex_binary is not None:
-                return complex_binary
-            bfloat_binary = self.hlsl_bfloat16_binary_expression(
-                expr,
-                left,
-                right,
-                mapped_op,
-            )
-            if bfloat_binary is not None:
-                return bfloat_binary
-            native_16_bit_binary = self.hlsl_native_16_bit_binary_expression(
-                expr,
-                left,
-                right,
-                mapped_op,
-            )
-            if native_16_bit_binary is not None:
-                return native_16_bit_binary
-            integer_floating = self.hlsl_integer_floating_binary_expression(
-                expr,
-                left,
-                right,
-                mapped_op,
-            )
-            if integer_floating is not None:
-                return integer_floating
-            wide_integer = self.hlsl_wide_integer_binary_expression(
-                expr, left, right, mapped_op
-            )
-            if wide_integer is not None:
-                return wide_integer
-            bool_arithmetic = self.hlsl_bool_arithmetic_expression(
-                expr,
-                left,
-                right,
-                mapped_op,
-            )
-            if bool_arithmetic is not None:
-                return bool_arithmetic
-            minimum_precision_integer = (
-                self.hlsl_minimum_precision_integer_binary_expression(
-                    expr,
-                    left,
-                    right,
-                    mapped_op,
-                )
-            )
-            if minimum_precision_integer is not None:
-                return minimum_precision_integer
-            return f"({left} {mapped_op} {right})"
+            return self.generate_hlsl_binary_expression(expr)
         elif isinstance(expr, AssignmentNode):
             return assignment_value_expression(self.generate_assignment(expr))
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
-            pointer_array_base_unary = (
-                self.generate_hlsl_resource_pointer_array_base_unary(
-                    expr,
-                    statement_context=False,
-                )
-            )
-            if pointer_array_base_unary is not None:
-                return pointer_array_base_unary
-            self.generate_hlsl_resource_pointer_step(expr, statement_context=False)
-            op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            mapped_op = self.map_operator(op)
-            if mapped_op in {"++", "--"}:
-                self.hlsl_tall_matrix_rows.mark_chain(getattr(expr, "operand", None))
-                self.hlsl_private_pointer_word_view_write_error(
-                    getattr(expr, "operand", None)
-                )
-                ancestor = self.hlsl_union_access_ancestor(
-                    getattr(expr, "operand", None)
-                )
-                if ancestor is not None and ancestor["member"]["kind"] not in {
-                    "uint32",
-                    "uint32_array",
-                }:
-                    raise self.hlsl_union_usage_error(
-                        ancestor,
-                        expr,
-                        "interpreted-increment-unsupported",
-                        "increment and decrement require a canonical union lvalue",
-                    )
-            if mapped_op == "*" and not getattr(expr, "is_postfix", False):
-                postincrement_load = self.hlsl_resource_pointer_postincrement_load(expr)
-                if postincrement_load is not None:
-                    return postincrement_load
-                aggregate = self.generate_hlsl_private_scalar_struct_reinterpret_read(
-                    expr
-                )
-                if aggregate is not None:
-                    return aggregate
-                private_pointee = self.generate_hlsl_private_pointer_view_access(
-                    expr.operand, access_expression=expr
-                )
-                if private_pointee is not None:
-                    return private_pointee
-                pointee = self.generate_hlsl_resource_pointer_access(expr.operand)
-                if pointee is not None:
-                    return pointee
-            operand = self.generate_expression(getattr(expr, "operand", ""))
-            if mapped_op in {"++", "--"}:
-                byte_update = self.hlsl_byte_update_expression(
-                    expr, expr.operand, mapped_op
-                )
-                if byte_update is not None:
-                    return byte_update
-            complex_unary = self.hlsl_complex64_unary_expression(
-                expr,
-                operand,
-                mapped_op,
-            )
-            if complex_unary is not None:
-                return complex_unary
-            bfloat_unary = self.hlsl_bfloat16_unary_expression(
-                expr,
-                operand,
-                mapped_op,
-            )
-            if bfloat_unary is not None:
-                return bfloat_unary
-            narrow_scalar_unary = self.hlsl_narrow_scalar_unary_expression(
-                expr, operand, mapped_op
-            )
-            if narrow_scalar_unary is not None:
-                return narrow_scalar_unary
-            if mapped_op == "-" and not isinstance(expr.operand, LiteralNode):
-                floating = self.hlsl_floating_arithmetic_type_info(
-                    self.hlsl_source_expression_type(expr.operand)
-                )
-                if floating is not None and floating["base_type"] == "float":
-                    # Arithmetic negation can flush subnormals under DirectX FTZ.
-                    # Toggle the sign without arithmetic or repeated evaluation.
-                    width = floating["width"]
-                    mask = "0x80000000u"
-                    if width != 1:
-                        mask = f"uint{width}({', '.join([mask] * width)})"
-                    return f"asfloat(asuint({operand}) ^ {mask})"
-            if mapped_op in {"++", "--"} and getattr(expr, "is_postfix", False):
-                return f"{operand}{mapped_op}"
-            if mapped_op in {"+", "-"} and operand.startswith(("+", "-")):
-                # Keep adjacent signs from becoming an increment or decrement.
-                operand = f"({operand})"
-            return f"{mapped_op}{operand}"
+            return self.generate_hlsl_unary_expression(expr)
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
@@ -7263,720 +6938,15 @@ class HLSLCodeGen(
             )
             return f"{query}.{expr.operation}({args_str})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
-            array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
-            index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
-            union_array_read = self.generate_hlsl_union_array_read(expr)
-            if union_array_read is not None:
-                return union_array_read
-            pointer_array_binding = self.hlsl_resource_pointer_array_for_access(expr)
-            if pointer_array_binding is not None:
-                self.hlsl_resource_pointer_array_index(
-                    pointer_array_binding, index_expr
-                )
-                raise self.hlsl_resource_pointer_array_error(
-                    "DirectX cannot emit a selected storage pointer array element "
-                    f"from '{pointer_array_binding['array_name']}' as a first-class "
-                    "pointer",
-                    binding=pointer_array_binding,
-                    node=expr,
-                    reason="pointer-element-escape",
-                )
-            private_pointer_access = self.generate_hlsl_private_pointer_view_access(
-                array_expr, index_expr, access_expression=expr
-            )
-            if private_pointer_access is not None:
-                return private_pointer_access
-            pointer_access = None
-            if (
-                self.hlsl_resource_pointer_alias_expression(array_expr)
-                or isinstance(array_expr, PointerReinterpretNode)
-                or isinstance(array_expr, BinaryOpNode)
-                and array_expr.op in {"+", "-"}
-            ):
-                pointer_access = self.generate_hlsl_resource_pointer_access(
-                    array_expr, index_expr
-                )
-            if pointer_access is not None:
-                return pointer_access
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_array_load(expr)
-            if block_load is not None:
-                return block_load
-            fixed_array_access = self.generate_hlsl_fixed_array_return_access(
-                array_expr,
-                index_expr,
-            )
-            if fixed_array_access is not None:
-                return fixed_array_access
-            matrix_access = self.hlsl_matrix_orientation.subscript(
-                array_expr, index_expr
-            )
-            if matrix_access is not None:
-                return matrix_access
-            if isinstance(array_expr, FunctionCallNode) and self.expression_name(
-                array_expr.name
-            ) in {"imageLoad", "texelFetch"}:
-                # The subscript selects a component of the whole texel, so the
-                # element's context does not narrow the load.
-                array = self.generate_expression_with_expected(array_expr, None)
-            else:
-                array = self.generate_expression(array_expr)
-            index = self.generate_expression(index_expr)
-            index = self.hlsl_resource_pointer_offset_index(array, index, array_expr)
-            index = self.hlsl_resource_index_expression(
-                array_expr,
-                index_expr,
-                index,
-                rendered_resource=array,
-            )
-            array = (
-                self.hlsl_tall_matrix_rows.row_read(array_expr, index_expr, array)
-                or array
-            )
-            return f"{array}[{index}]"
+            return self.generate_hlsl_array_access_expression(expr)
         elif isinstance(expr, ConstructorNode):
-            if getattr(expr, "is_braced_constructor", False):
-                vector_initializer = self.hlsl_vector_aggregate_initializer(
-                    ArrayLiteralNode(list(expr.arguments)),
-                    self.map_type(expr.constructor_type),
-                )
-                if vector_initializer is not None:
-                    return vector_initializer
-            registered_conversion = (
-                self.hlsl_registered_structure_scalar_constructor_call(
-                    self.type_name_string(getattr(expr, "constructor_type", None)),
-                    list(getattr(expr, "arguments", []) or []),
-                    source_location=getattr(expr, "source_location", None),
-                )
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-            enum_constructor = generate_enum_constructor_expression(self, expr)
-            if enum_constructor is not None:
-                return enum_constructor
-            self.validate_hlsl_struct_constructor_expression_context(expr)
-            constructor = generate_struct_constructor_expression(self, expr)
-            if constructor is not None:
-                return constructor
-            return str(expr)
+            return self.generate_hlsl_constructor_expression(expr)
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
-            reject_unresolved_generic_member_call(expr, "DirectX")
-            func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
-            args = getattr(expr, "arguments", getattr(expr, "args", []))
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                args,
-            )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-
-            func_name = None
-            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
-                func_name = func_expr.name
-                callee = self.hlsl_function_call_name(func_name)
-            elif isinstance(func_expr, str):
-                func_name = func_expr
-                callee = self.hlsl_function_call_name(func_expr)
-            else:
-                callee = self.generate_expression(func_expr)
-
-            original_func_name = self.hlsl_builtin_option_constructor_name(func_name)
-            original_func_name = crossgl_named_vector_spelling(original_func_name)
-            if original_func_name != func_name:
-                func_name = original_func_name
-                callee = original_func_name
-
-            union_small_vector_set = self.generate_hlsl_union_small_vector_set_call(
-                func_name, args
-            )
-            if union_small_vector_set is not None:
-                return union_small_vector_set
-
-            byteaddress_interlocked_call = (
-                self.generate_hlsl_byteaddress_interlocked_member_call(
-                    func_expr,
-                    args,
-                )
-            )
-            if byteaddress_interlocked_call is not None:
-                return byteaddress_interlocked_call
-
-            block_length_call = self.generate_glsl_buffer_block_length_call(
-                func_expr, args
-            )
-            if block_length_call is not None:
-                return block_length_call
-            matrix_length = self.hlsl_matrix_orientation.length_call(func_expr, args)
-            if matrix_length is not None:
-                return matrix_length
-
-            byteaddress_member_call = self.generate_hlsl_byteaddress_member_call(
-                func_expr,
-                args,
-            )
-            if byteaddress_member_call is not None:
-                return byteaddress_member_call
-
-            sizeof_bytes = sizeof_call_bytes(self, func_name, args, "directx")
-            if sizeof_bytes is not None:
-                return str(sizeof_bytes)
-
-            static_generic_call = generate_static_generic_numeric_call(self, func_name)
-            if static_generic_call is not None:
-                return static_generic_call
-
-            enum_constructor = generate_enum_constructor_call(self, func_name, args)
-            if enum_constructor is not None:
-                return enum_constructor
-
-            registered_conversion = (
-                self.hlsl_registered_structure_scalar_constructor_call(
-                    func_name,
-                    args,
-                    source_location=getattr(expr, "source_location", None),
-                )
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-
-            bfloat_constructor = self.hlsl_bfloat16_constructor_call(
-                func_name,
-                args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if bfloat_constructor is not None:
-                return bfloat_constructor
-
-            complex64_constructor = self.hlsl_complex64_constructor_call(
-                func_name, args
-            )
-            if complex64_constructor is not None:
-                return complex64_constructor
-
-            self.validate_hlsl_struct_constructor_expression_context(expr)
-            struct_constructor = self.generate_hlsl_struct_constructor_call(
-                func_name,
-                args,
-                getattr(expr, "named_arguments", None),
-            )
-            if struct_constructor is not None:
-                return struct_constructor
-
-            unsupported_call = self.unsupported_glsl_buffer_block_function_call(
-                func_name
-            )
-            if unsupported_call is not None:
-                return unsupported_call
-
-            input_attachment_call = self.unsupported_input_attachment_call(func_name)
-            if input_attachment_call is not None:
-                return input_attachment_call
-
-            synchronization_call = self.synchronization_function_call(
-                func_name,
-                args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if synchronization_call is not None:
-                return synchronization_call
-
-            interpolation_call = self.interpolation_function_call(func_name, args)
-            if interpolation_call is not None:
-                return interpolation_call
-
-            if func_name in PACK_FUNCTIONS and func_name not in getattr(
-                self, "function_return_types", {}
-            ):
-                return hlsl_pack_call(
-                    self, func_name, [self.generate_expression(arg) for arg in args]
-                )
-            if func_name in BITFIELD_ARITIES and func_name not in getattr(
-                self, "function_return_types", {}
-            ):
-                return hlsl_bitfield_call(
-                    self,
-                    func_name,
-                    args,
-                    [self.generate_expression(arg) for arg in args],
-                )
-            exponent_refusal = hlsl_exponent_call(self, func_name, args)
-            if exponent_refusal is not None:
-                return exponent_refusal
-            extended_arithmetic = hlsl_extended_arithmetic_call(self, func_name, args)
-            if extended_arithmetic is not None:
-                return extended_arithmetic
-            boolean_mix = boolean_mix_selector(
-                self, func_name, args, getattr(self, "function_return_types", {})
-            )
-            if boolean_mix is not None:
-                return hlsl_boolean_mix(self, args, boolean_mix)
-
-            if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
-                return self.generate_hlsl_wave_intrinsic_call(func_name, args)
-
-            metal_simd_call = self.generate_hlsl_metal_simd_shuffle_call(
-                func_name, args
-            )
-            if metal_simd_call is not None:
-                return metal_simd_call
-
-            metal_as_type_call = self.generate_hlsl_metal_as_type_call(func_name, args)
-            if metal_as_type_call is not None:
-                return metal_as_type_call
-
-            signbit_call = self.generate_hlsl_signbit_call(
-                func_name,
-                args,
-                call_node=expr,
-            )
-            if signbit_call is not None:
-                return signbit_call
-
-            copysign_call = self.generate_hlsl_copysign_call(
-                func_name,
-                args,
-                call_node=expr,
-            )
-            if copysign_call is not None:
-                return copysign_call
-
-            inverse_hyperbolic_call = self.generate_hlsl_inverse_hyperbolic_call(
-                func_name,
-                args,
-                call_node=expr,
-            )
-            if inverse_hyperbolic_call is not None:
-                return inverse_hyperbolic_call
-
-            precise_hyperbolic_call = self.generate_hlsl_precise_hyperbolic_call(
-                func_name,
-                args,
-                call_node=expr,
-            )
-            if precise_hyperbolic_call is not None:
-                return precise_hyperbolic_call
-
-            atan2_call = self.generate_hlsl_atan2_call(func_name, args, call_node=expr)
-            if atan2_call is not None:
-                return atan2_call
-
-            bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
-            if bitcast_call is not None:
-                return bitcast_call
-
-            texture_call = self.generate_texture_call(func_name, args, call_node=expr)
-            if texture_call is not None:
-                return texture_call
-
-            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
-                func_name, args
-            )
-            if glsl_block_atomic_call is not None:
-                return glsl_block_atomic_call
-
-            byte_address_atomic_call = hlsl_byte_address_atomic_expression(
-                self, func_name, args
-            )
-            if byte_address_atomic_call is not None:
-                return byte_address_atomic_call
-
-            typed_buffer_atomic_call = (
-                self.generate_hlsl_typed_buffer_atomic_expression(func_name, args)
-            )
-            if typed_buffer_atomic_call is not None:
-                return typed_buffer_atomic_call
-
-            buffer_call = self.generate_buffer_call(func_name, args)
-            if buffer_call is not None:
-                return buffer_call
-
-            inverse_call = self.hlsl_inverse_function_call(func_name, args)
-            if inverse_call is not None:
-                return inverse_call
-            matrix_builtin = self.hlsl_matrix_orientation.builtin_call(func_name, args)
-            if matrix_builtin is not None:
-                return matrix_builtin
-
-            call_argument_func_name = self.hlsl_materialized_function_name(func_name)
-            specialized_func_name = generic_function_call_name(
-                self, call_argument_func_name, args
-            )
-            if specialized_func_name is not None:
-                callee = specialized_func_name
-                func_name = specialized_func_name
-            else:
-                reject_unresolved_generic_function_call(
-                    self, call_argument_func_name, "HLSL"
-                )
-
-            resolved_overload = None
-            if func_name in self.hlsl_mapped_overload_names:
-                resolved_overload = self.resolve_hlsl_function_overload(
-                    func_name,
-                    args,
-                    call_node=expr,
-                )
-                if resolved_overload is not None:
-                    target_name = self.hlsl_function_declaration_name(resolved_overload)
-                    callee = target_name
-                    func_name = target_name
-                    call_argument_func_name = target_name
-
-            constructor_type = self.hlsl_type_constructor_name(func_name)
-            if constructor_type is not None:
-                return self.hlsl_constructor_expression(constructor_type, args)
-
-            if func_name in [
-                "float",
-                "half",
-                "float16",
-                "min16float",
-                "min10float",
-                "double",
-                "f16",
-                "f32",
-                "f64",
-                "int",
-                "i8",
-                "i16",
-                "i32",
-                "char",
-                "signed char",
-                "int8",
-                "int8_t",
-                "int16",
-                "int16_t",
-                "int32_t",
-                "int64",
-                "int64_t",
-                "long",
-                "signed long",
-                "ptrdiff_t",
-                "min16int",
-                "min12int",
-                "uint",
-                "uchar",
-                "unsigned char",
-                "uint8",
-                "uint8_t",
-                "uint16",
-                "uint16_t",
-                "uint32_t",
-                "uint64",
-                "uint64_t",
-                "ulong",
-                "unsigned long",
-                "size_t",
-                "min16uint",
-                "short",
-                "signed short",
-                "ushort",
-                "unsigned short",
-                "u8",
-                "u16",
-                "u32",
-                "i64",
-                "u64",
-                "bool",
-                "vec2",
-                "vec3",
-                "vec4",
-                "vec2<f16>",
-                "vec3<f16>",
-                "vec4<f16>",
-                "vec2<f32>",
-                "vec3<f32>",
-                "vec4<f32>",
-                "vec2<f64>",
-                "vec3<f64>",
-                "vec4<f64>",
-                "vec2<i8>",
-                "vec3<i8>",
-                "vec4<i8>",
-                "vec2<u8>",
-                "vec3<u8>",
-                "vec4<u8>",
-                "vec2<i16>",
-                "vec3<i16>",
-                "vec4<i16>",
-                "vec2<u16>",
-                "vec3<u16>",
-                "vec4<u16>",
-                "vec2<i32>",
-                "vec3<i32>",
-                "vec4<i32>",
-                "vec2<u32>",
-                "vec3<u32>",
-                "vec4<u32>",
-                "vec2<bool>",
-                "vec3<bool>",
-                "vec4<bool>",
-                "ivec2",
-                "ivec3",
-                "ivec4",
-                "uvec2",
-                "uvec3",
-                "uvec4",
-                "bvec2",
-                "bvec3",
-                "bvec4",
-                "mat2",
-                "mat3",
-                "mat4",
-                "mat2x2",
-                "mat2x3",
-                "mat2x4",
-                "mat3x2",
-                "mat3x3",
-                "mat3x4",
-                "mat4x2",
-                "mat4x3",
-                "mat4x4",
-                "float2",
-                "float3",
-                "float4",
-                "float2x2",
-                "float2x3",
-                "float2x4",
-                "float3x2",
-                "float3x3",
-                "float3x4",
-                "float4x2",
-                "float4x3",
-                "float4x4",
-                "double2",
-                "double3",
-                "double4",
-                "int2",
-                "int3",
-                "int4",
-                "uint2",
-                "uint3",
-                "uint4",
-                "bool2",
-                "bool3",
-                "bool4",
-                "packed_float2",
-                "packed_float3",
-                "packed_float4",
-                "simd_float2",
-                "simd_float3",
-                "simd_float4",
-                "half2",
-                "half3",
-                "half4",
-                "packed_half2",
-                "packed_half3",
-                "packed_half4",
-                "f16vec2",
-                "f16vec3",
-                "f16vec4",
-                "f16mat2",
-                "f16mat3",
-                "f16mat4",
-                "f16mat2x2",
-                "f16mat2x3",
-                "f16mat2x4",
-                "f16mat3x2",
-                "f16mat3x3",
-                "f16mat3x4",
-                "f16mat4x2",
-                "f16mat4x3",
-                "f16mat4x4",
-                "dvec2",
-                "dvec3",
-                "dvec4",
-                "dmat2",
-                "dmat3",
-                "dmat4",
-                "dmat2x2",
-                "dmat2x3",
-                "dmat2x4",
-                "dmat3x2",
-                "dmat3x3",
-                "dmat3x4",
-                "dmat4x2",
-                "dmat4x3",
-                "dmat4x4",
-                "char2",
-                "char3",
-                "char4",
-                "uchar2",
-                "uchar3",
-                "uchar4",
-                "packed_int2",
-                "packed_int3",
-                "packed_int4",
-                "simd_int2",
-                "simd_int3",
-                "simd_int4",
-                "packed_uint2",
-                "packed_uint3",
-                "packed_uint4",
-                "simd_uint2",
-                "simd_uint3",
-                "simd_uint4",
-                "simd_float2x2",
-                "simd_float2x3",
-                "simd_float2x4",
-                "simd_float3x2",
-                "simd_float3x3",
-                "simd_float3x4",
-                "simd_float4x2",
-                "simd_float4x3",
-                "simd_float4x4",
-                "i8vec2",
-                "i8vec3",
-                "i8vec4",
-                "u8vec2",
-                "u8vec3",
-                "u8vec4",
-                "short2",
-                "short3",
-                "short4",
-                "ushort2",
-                "ushort3",
-                "ushort4",
-                "i16vec2",
-                "i16vec3",
-                "i16vec4",
-                "u16vec2",
-                "u16vec3",
-                "u16vec4",
-                "min16float2",
-                "min16float3",
-                "min16float4",
-                "min10float2",
-                "min10float3",
-                "min10float4",
-                "min16int2",
-                "min16int3",
-                "min16int4",
-                "min12int2",
-                "min12int3",
-                "min12int4",
-                "min16uint2",
-                "min16uint3",
-                "min16uint4",
-            ]:
-                return self.hlsl_constructor_expression(func_name, args)
-            builtin_call = self.hlsl_builtin_function_call(
-                func_name,
-                args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if builtin_call is not None:
-                return builtin_call
-            builtin_callee = self.hlsl_builtin_function_name(func_name, args)
-            if builtin_callee is not None:
-                callee = builtin_callee
-            self.validate_function_image_access_arguments(func_name, args)
-            workgroup_callee = self.hlsl_workgroup_pointer_call_name(
-                call_argument_func_name, args
-            )
-            if workgroup_callee is not None:
-                callee = workgroup_callee
-            argument_type_func_name = self.hlsl_materialized_function_name(func_name)
-            rendered_args, argument_assignments = self.generate_call_arguments(
-                call_argument_func_name,
-                args,
-                argument_type_func_name,
-                call_node=expr,
-                resolved_overload=resolved_overload,
-            )
-            call = f"{callee}({', '.join(rendered_args)})"
-            return (
-                f"({', '.join([*argument_assignments, call])})"
-                if argument_assignments
-                else call
-            )
+            return self.generate_hlsl_function_call_expression(expr)
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
-            union_member_read = self.generate_hlsl_union_member_read(expr)
-            if union_member_read is not None:
-                return union_member_read
-            struct_buffer_access = self.hlsl_struct_buffer_member_access_expression(
-                expr
-            )
-            if struct_buffer_access is not None:
-                return struct_buffer_access
-            lowered_resource_member = (
-                self.hlsl_lowered_struct_resource_member_global_name(expr)
-            )
-            if lowered_resource_member is not None:
-                return lowered_resource_member
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_member_load(expr)
-            if block_load is not None:
-                return block_load
-            obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
-            member = getattr(expr, "member", "")
-            previous_extent = self.hlsl_image_load_swizzle_extent
-            self.hlsl_image_load_swizzle_extent = image_load_swizzle_extent(
-                obj_expr, member, self.expression_name
-            )
-            try:
-                obj = self.generate_expression_with_expected(obj_expr, None)
-            finally:
-                self.hlsl_image_load_swizzle_extent = previous_extent
-            return f"{obj}.{member}"
+            return self.generate_hlsl_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
-            expected_type = self.current_expression_expected_type
-            aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
-            if aggregate_type is not None:
-                self.hlsl_aggregate_conditional_error(
-                    expr,
-                    aggregate_type=aggregate_type,
-                    context="expression",
-                    reason="statement-context-required",
-                    detail=(
-                        "HLSL aggregate selection requires a temporary or direct "
-                        "statement control flow"
-                    ),
-                )
-            half_selection = self.generate_hlsl_half_selection(expr)
-            if half_selection is not None:
-                return half_selection
-            source_type = self.expression_result_type(expr)
-            source_info = self.hlsl_floating_arithmetic_type_info(source_type)
-            if (
-                source_info is not None and source_info["base_type"] == "float16_t"
-            ) or any(
-                self.is_hlsl_bfloat16_type(self.expression_result_type(arm))
-                for arm in (expr.true_expr, expr.false_expr)
-            ):
-                # Convert arms to the logical common type before selection;
-                # the enclosing context converts the selected value once.
-                expected_type = source_type
-            condition = self.hlsl_precise_condition(
-                getattr(expr, "condition", None),
-                self.generate_expression_with_expected(
-                    getattr(expr, "condition", ""), "bool"
-                ),
-            )
-            wide_integer_contract = self.hlsl_wide_integer_arithmetic_contract(
-                expr,
-                "?:",
-                self.expression_result_type(getattr(expr, "true_expr", None)),
-                self.expression_result_type(getattr(expr, "false_expr", None)),
-            )
-            if wide_integer_contract is not None:
-                expected_type = None
-            true_expr = self.generate_expression_with_expected(
-                getattr(expr, "true_expr", ""), expected_type
-            )
-            false_expr = self.generate_expression_with_expected(
-                getattr(expr, "false_expr", ""), expected_type
-            )
-            if wide_integer_contract is not None:
-                true_expr, false_expr = self.hlsl_wide_integer_operands(
-                    wide_integer_contract, true_expr, false_expr
-                )
-            return f"({condition} ? {true_expr} : {false_expr})"
+            return self.generate_hlsl_ternary_expression(expr)
         else:
             return str(expr)
 

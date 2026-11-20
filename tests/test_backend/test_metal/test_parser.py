@@ -2241,20 +2241,21 @@ def test_parse_named_nested_struct_retains_trailing_member_declaration():
     assert [nested.name for nested in owner.nested_structs] == ["Inner"]
 
 
-def test_parse_anonymous_nested_struct_keeps_prior_conservative_skip():
+def test_parse_unnamed_nested_struct_keeps_its_declared_member():
     code = """
     struct Outer {
         struct {
-            int omitted;
-        } anonymous_value;
+            int kept;
+        } unnamed_value;
         int retained;
     };
     """
     ast = parse_ok(code)
     owner = ast.structs[0]
 
-    assert [member.name for member in owner.members] == ["retained"]
-    assert owner.nested_structs == []
+    assert [member.name for member in owner.members] == ["unnamed_value", "retained"]
+    assert [nested.members[0].name for nested in owner.nested_structs] == ["kept"]
+    assert owner.members[0].vtype == owner.nested_structs[0].name
 
 
 def test_parse_using_alias():
