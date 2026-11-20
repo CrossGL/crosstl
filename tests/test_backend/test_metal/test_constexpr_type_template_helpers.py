@@ -15,8 +15,8 @@ import subprocess
 
 import pytest
 
-import crosstl
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from tests.stage_entry_helpers import joined_entries
 
 PRELUDE = """
 #include <metal_stdlib>
@@ -101,9 +101,7 @@ kernel void k(device uint* o [[buffer(0)]], uint tid [[thread_position_in_grid]]
 def _translate(tmp_path, source, backend="metal"):
     path = tmp_path / "unit.metal"
     path.write_text(source)
-    return crosstl.translate(
-        str(path), backend=backend, format_output=False, source_backend="metal"
-    )
+    return joined_entries(path, backend, format_output=False, source_backend="metal")
 
 
 def _compile_metal_if_available(code, tmp_path):

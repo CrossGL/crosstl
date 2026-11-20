@@ -2,17 +2,19 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
-# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc,
-# and OpenCL C input with the runner image's clang-18 and DXC, and runs the GLSL and SPIR-V compute probes on Mesa's
-# llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe as the SPIR-V DXC, slangc and naga write for
-# them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust with
-# rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V rust-gpu writes, and the macOS job measures Metal
-# with xcrun metal and runs the Metal compute probes on the GPU. Every run goes through Core's conformance harness
-# (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and
-# nightly, the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
-# COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from it; main itself never receives generated
-# files. The issues job then reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print
-# its plan, and coverage-comment.yml posts their change against main on the pull request.
+# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc
+# (and nvcc for the Slang functions only CUDA has), and OpenCL C input with the runner image's clang-18 and DXC, and
+# runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
+# as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
+# and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
+# rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. Every
+# run goes through Core's conformance harness (tools/coverage/execution.py). The report job merges the reports and adds
+# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
+# coverage.json (each row's score, with its features in features/<language>-<direction>.json so that no file reaches
+# 1 MB), coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from
+# it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
+# (tools/coverage/issues.py); pull requests only print its plan, and coverage-comment.yml posts their change against
+# main on the pull request.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -77,21 +79,8 @@ jobs:
             exit 0
           fi
           # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
-          # base, so this lists exactly the files the change touches.
-          changed="$(git diff --name-only HEAD^1 HEAD)"
-          engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
-          declare -A paths=(
-            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
-            [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
-            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/|tests/conformance/(runner\.py|runtimes\.py|interface\.py|vkrun\.c)$'
-          )
-          for leg in "${legs[@]}"; do
-            if grep -Eq "^($engine|${paths[$leg]})" <<<"$changed"; then
-              echo "$leg=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$leg=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
+          # base, so this lists exactly the files the change touches. tools/coverage/legs.py says which legs they reach.
+          git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang, OpenCL C)
@@ -156,6 +145,10 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/slang"
           echo "$RUNNER_TEMP/slang/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/slang/bin/slangc" -version
+
+      # slangc writes CUDA source for the Slang functions only CUDA has, and nvcc compiles it.
+      - name: Install nvcc 13.0
+        uses: ./.github/actions/install-nvcc
 
       # tools/coverage/upstream.py stores each source under its pinned commit and checks its SHA-256 on every read,
       # so an older cache can seed a new key, and a changed pin downloads only the sources it changes.
@@ -234,23 +227,9 @@ jobs:
           pip install -e .
 
       # nvcc compiles without a GPU, so the CUDA compiler and runtime headers are all the probes need.
-      - name: Add the CUDA apt repository
-        if: matrix.backend == 'cuda'
-        run: |
-          set -euo pipefail
-          keyring="$RUNNER_TEMP/cuda-keyring.deb"
-          curl -fsSLo "$keyring" --retry 8 --retry-all-errors --retry-delay 10 --connect-timeout 30 \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          echo "d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba  $keyring" | sha256sum --check --strict
-          sudo dpkg -i "$keyring"
-          echo /usr/local/cuda-13.0/bin >> "$GITHUB_PATH"
-
       - name: Install nvcc 13.0
         if: matrix.backend == 'cuda'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: cuda-nvcc-13-0=13.0.88-1 cuda-crt-13-0=13.0.88-1 cuda-cudart-dev-13-0=13.0.96-1
-          recommends: "false"
+        uses: ./.github/actions/install-nvcc
 
       # hipcc 5.7.1 and its clang 17 come from Ubuntu's archive, the versions tools/coverage/upstream.py pins the HIP
       # headers to. It compiles for a named AMD target, so no GPU is needed either.
@@ -504,8 +483,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json coverage.json \
+          published="$RUNNER_TEMP/published"
+          if git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; then
+            python -m tools.coverage compare "$published/coverage.json" coverage.json \
               --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
             { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
           else
@@ -598,7 +579,7 @@ jobs:
           git init --quiet --initial-branch=coverage
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage.json coverage.svg COVERAGE.md history.csv trend.svg
+          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg
           git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
           # The branch is one commit by design, so each publication replaces it.
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:coverage

@@ -1,7 +1,7 @@
 """The Mojo feature list, read from the standard library packages: the math, numerics and bit functions."""
 
 from tools.coverage import probes
-from tools.coverage.features import mojo
+from tools.coverage.features import mojo, mojo_source
 from tools.coverage.model import Param, Signature, Type
 
 from .mojo_cases import (
@@ -106,8 +106,10 @@ def test_mojo_writes_bit_and_math_functions_crossgl_lacks_as_expressions():
 
 
 def test_mojo_splits_a_default_at_the_top_level_equals_sign():
-    assert mojo._default("ptr: MutPointer[Scalar[dtype], _, address_space=_]") == (
+    assert mojo_source.argument_default(
+        "ptr: MutPointer[Scalar[dtype], _, address_space=_]"
+    ) == (
         "ptr: MutPointer[Scalar[dtype], _, address_space=_]",
         "",
     )
-    assert mojo._default("mask: Int = -1") == ("mask: Int ", " -1")
+    assert mojo_source.argument_default("mask: Int = -1") == ("mask: Int ", " -1")
