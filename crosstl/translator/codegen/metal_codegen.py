@@ -96,6 +96,7 @@ from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import generate_metal_array_initializer
 from .metal_atomic_addresses import metal_vector_component_address
 from .metal_buffer_scalars import metal_buffer_scalar_type
+from .metal_call_expressions import MetalCallExpressionMixin
 from .metal_call_lowering import MetalCallLoweringMixin
 from .metal_constant_initializers import (
     metal_constant_initializer,
@@ -104,6 +105,8 @@ from .metal_constant_initializers import (
 from .metal_entry_return import (
     metal_entry_return_semantic_key,
 )
+from .metal_expression_forms import MetalExpressionFormMixin
+from .metal_feature_errors import UnsupportedMetalFeatureError
 from .metal_function_dependencies import MetalFunctionDependencyMixin
 from .metal_function_parts import MetalFunctionPartsMixin
 from .metal_function_state import (
@@ -162,9 +165,6 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
 )
-from .metal_feature_errors import UnsupportedMetalFeatureError
-from .metal_expression_forms import MetalExpressionFormMixin
-from .metal_call_expressions import MetalCallExpressionMixin
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",

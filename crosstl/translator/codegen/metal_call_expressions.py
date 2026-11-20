@@ -1,11 +1,11 @@
 """Metal rendering of CrossGL function-call expressions for ``MetalCodeGen.generate_expression``."""
 
+from ..unhandled import UNHANDLED
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generic_function_call_name,
     reject_unresolved_generic_function_call,
 )
-from ..unhandled import UNHANDLED
 from .metal_builtin_call_forms import MetalBuiltinCallFormMixin
 
 
