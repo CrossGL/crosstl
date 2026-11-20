@@ -1,5 +1,6 @@
 """CrossGL-to-Mojo code generator."""
 
+from ..float_limit_constants import float_limit_constant
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -50,6 +51,9 @@ from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
+from .mojo_shared_memory import MojoSharedMemoryMixin
+from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
+from .mojo_split_builtins import MojoSplitBuiltinMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -246,6 +250,9 @@ class MojoCodeGen(
     MojoCallExpressionMixin,
     MojoExpressionNodeMixin,
     MojoPointerExpressionMixin,
+    MojoSplitBuiltinMixin,
+    MojoSharedMemoryMixin,
+    MojoArithmeticConversionMixin,
     MojoResultTypeMixin,
 ):
     """Emit Mojo-like shader source from the shared CrossGL AST."""
@@ -313,8 +320,10 @@ class MojoCodeGen(
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.requires_bitcast_import = False
+        self.requires_threadfence_import = False
+        self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
-        self.required_sync_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -363,6 +372,9 @@ class MojoCodeGen(
             "min16int": "Int16",
             "short": "Int16",
             "long": "Int64",
+            "i64": "Int64",
+            "int64": "Int64",
+            "int64_t": "Int64",
             "uint": "UInt32",
             "u8": "UInt8",
             "u16": "UInt16",
@@ -374,6 +386,9 @@ class MojoCodeGen(
             "min16uint": "UInt16",
             "ushort": "UInt16",
             "ulong": "UInt64",
+            "u64": "UInt64",
+            "uint64": "UInt64",
+            "uint64_t": "UInt64",
             "f16": "Float16",
             "float": "Float32",
             "double": "Float64",
@@ -409,10 +424,12 @@ class MojoCodeGen(
                 "Float16",
                 "Float32",
                 "Float64",
+                "Int8",
                 "Int16",
                 "Int32",
                 "Int64",
                 "String",
+                "UInt8",
                 "UInt16",
                 "UInt32",
                 "UInt64",
@@ -595,8 +612,10 @@ class MojoCodeGen(
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.requires_bitcast_import = False
+        self.requires_threadfence_import = False
+        self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
-        self.required_sync_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -738,7 +757,10 @@ class MojoCodeGen(
                                     *functions,
                                     *self.stage_local_functions_to_emit(stage),
                                 ],
-                                dict(self.mojo_entry_kernel_arguments()),
+                                {
+                                    **dict(self.mojo_entry_kernel_arguments()),
+                                    **self.mojo_stage_shared_arguments(stage),
+                                },
                             ),
                         )
                     )
@@ -760,8 +782,15 @@ class MojoCodeGen(
                         stage.entry_point, shader_type=stage_name, stage_node=stage
                     )
                     self.stage_local_function_extra_params = previous_extra_params
-        if self.required_reinterpret_helpers:
+        if self.required_reinterpret_helpers or self.requires_bitcast_import:
             header += "from std.memory import bitcast\n"
+        if self.requires_shared_memory_imports:
+            header += "from std.memory import stack_allocation\n"
+            header += "from max.gpu.memory import AddressSpace\n"
+        if self.requires_threadfence_import:
+            header += "from max.gpu.intrinsics import threadfence\n"
+        if "StaticTuple[" in code:
+            header += "from std.utils import StaticTuple\n"
         if self.required_bit_imports:
             header += (
                 f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
@@ -812,7 +841,14 @@ class MojoCodeGen(
         visit(ast)
 
     def generate_expression(self, expr, target_type=None, target_context=None):
-        """Render a CrossGL expression as Mojo expression syntax."""
+        """Render a CrossGL expression as Mojo expression syntax, converted to a numeric ``target_type``."""
+        code = self.generate_expression_value(expr, target_type, target_context)
+        if target_type is None or isinstance(expr, (str, int, float, bool)):
+            return code
+        return self.mojo_converted_to_target(expr, code, target_type)
+
+    def generate_expression_value(self, expr, target_type=None, target_context=None):
+        """Render a CrossGL expression as Mojo expression syntax in its own type."""
         if is_comma_expression(expr):
             return refuse_comma_expression("Mojo", expr)
         if isinstance(expr, str):
@@ -857,6 +893,8 @@ class MojoCodeGen(
                 return self.generate_increment_expression(expr)
             if op == "*":
                 return self.generate_mojo_dereference_expression(expr)
+            if op == "&":
+                return self.generate_mojo_address_of_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
                 operand_type = self.expression_result_type(expr.operand)
@@ -970,7 +1008,6 @@ class MojoCodeGen(
             and not self.required_tessellation_patch_helpers
             and not self.required_mesh_helpers
             and not self.required_reinterpret_helpers
-            and not self.required_sync_helpers
             and not self.required_ray_helpers
             and not self.required_builtin_placeholders
             and not self.required_gpu_builtin_placeholders
@@ -1143,12 +1180,6 @@ class MojoCodeGen(
                 code += self.generate_reinterpret_helper(*key)
             code += "\n"
 
-        if self.required_sync_helpers:
-            code += "# CrossGL synchronization placeholders\n"
-            for helper_name in sorted(self.required_sync_helpers):
-                code += self.generate_sync_helper(helper_name)
-            code += "\n"
-
         if self.required_ray_helpers:
             code += self.generate_ray_helpers()
 
@@ -1300,6 +1331,8 @@ class MojoCodeGen(
             name = getattr(expr, "name", "")
             if name in MOJO_BUILTIN_PLACEHOLDERS and name not in self.variable_types:
                 return MOJO_BUILTIN_PLACEHOLDERS[name][1]
+            if name not in self.variable_types and float_limit_constant(name):
+                return "float"
             return (
                 self.identifier_replacement_result_type(name)
                 or self.enum_variant_result_types.get(name)

@@ -2,6 +2,7 @@
 
 import re
 
+from .mojo_shared_memory import split_pointee_address_space
 from ..ast import (
     ArrayLiteralNode,
     BinaryOpNode,
@@ -115,7 +116,7 @@ class MojoTypeMixin:
         type_text = str(type_name or "").strip()
         if not self.is_pointer_type_name(type_text):
             return None
-        return type_text[:-1].strip()
+        return split_pointee_address_space(type_text[:-1].strip())[1]
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
@@ -154,7 +155,7 @@ class MojoTypeMixin:
         size = self.format_array_size(size)
         if size is None:
             return f"List[{element_type_name}]"
-        return f"Array[{element_type_name}, {size}]"
+        return f"StaticTuple[{element_type_name}, {size}]"
 
     def array_initial_value(self, element_type, size):
         array_type = self.array_storage_type(element_type, size)
@@ -162,7 +163,7 @@ class MojoTypeMixin:
             return f"{array_type}()"
         if self.should_zero_initialize_array_elements(element_type):
             return self.zero_array_value(element_type, size)
-        return f"{array_type}(uninitialized=True)"
+        return f"{array_type}()"
 
     def array_initial_value_for_type(self, type_name):
         element_type, size = self.parse_array_type_name(type_name)
@@ -203,10 +204,6 @@ class MojoTypeMixin:
             while len(elements) < size:
                 elements.append(self.zero_value_for_type(element_type))
 
-        if array_type.startswith("Array[") and elements:
-            # Mojo 1.2's Array has no positional element initializer; a list literal [a, b] is lowered to this
-            # one, which also works where no declared type gives the literal its element type and length.
-            return f"{array_type}({', '.join(elements)}, __list_literal__=None)"
         return f"{array_type}({', '.join(elements)})"
 
     def infer_array_literal_element_type(self, expr):
@@ -274,11 +271,11 @@ class MojoTypeMixin:
         try:
             element_count = int(size)
         except (TypeError, ValueError):
-            return f"{array_type}(uninitialized=True)"
+            return f"{array_type}()"
 
         if element_count <= 0:
-            return f"{array_type}(uninitialized=True)"
-        # Mojo 1.2's Array fills every element from one value.
+            return f"{array_type}()"
+        # A StaticTuple fills every element from one value.
         return f"{array_type}(fill={self.zero_value_for_type(element_type)})"
 
     def zero_struct_value(self, type_name, fields=None, mapped_type=None):
@@ -389,6 +386,10 @@ class MojoTypeMixin:
             # A comparison or logical operation on scalars yields a ``Bool``,
             # not a value of its operand type.
             return "bool"
+        if self.type_name(left_type) != self.type_name(right_type):
+            common_type = self.mojo_binary_common_type(mapped_op, left_type, right_type)
+            if common_type is not None:
+                return common_type
         left_type = promoted_type(self, mapped_op, left_type)
         right_type = promoted_type(self, mapped_op, right_type)
         return left_type if left_type == right_type else left_type or right_type

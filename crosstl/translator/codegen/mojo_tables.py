@@ -234,9 +234,11 @@ MOJO_DTYPE_INFO = {
     "DType.int8": ("char", "i8vec", "0"),
     "DType.int16": ("short", "i16vec", "0"),
     "DType.int32": ("int", "ivec", "0"),
+    "DType.int64": ("int64_t", "i64vec", "0"),
     "DType.uint8": ("uchar", "u8vec", "0"),
     "DType.uint16": ("ushort", "u16vec", "0"),
     "DType.uint32": ("uint", "uvec", "0"),
+    "DType.uint64": ("uint64_t", "u64vec", "0"),
     "DType.bool": ("bool", "bvec", "False"),
 }
 MOJO_DTYPE_SUFFIX = {
@@ -246,9 +248,11 @@ MOJO_DTYPE_SUFFIX = {
     "DType.int8": "i8",
     "DType.int16": "i16",
     "DType.int32": "i32",
+    "DType.int64": "i64",
     "DType.uint8": "u8",
     "DType.uint16": "u16",
     "DType.uint32": "u32",
+    "DType.uint64": "u64",
     "DType.bool": "bool",
 }
 MOJO_SCALAR_DTYPES = {
@@ -266,6 +270,10 @@ MOJO_SCALAR_DTYPES = {
     "int16": "DType.int16",
     "int16_t": "DType.int16",
     "int": "DType.int32",
+    "i64": "DType.int64",
+    "int64": "DType.int64",
+    "int64_t": "DType.int64",
+    "long": "DType.int64",
     "min12int": "DType.int16",
     "min16int": "DType.int16",
     "short": "DType.int16",
@@ -279,6 +287,10 @@ MOJO_SCALAR_DTYPES = {
     "uint16_t": "DType.uint16",
     "min16uint": "DType.uint16",
     "ushort": "DType.uint16",
+    "u64": "DType.uint64",
+    "uint64": "DType.uint64",
+    "uint64_t": "DType.uint64",
+    "ulong": "DType.uint64",
     "bool": "DType.bool",
 }
 MOJO_RESOURCE_TYPE_MAPPING = {
@@ -822,11 +834,14 @@ MOJO_INTEGER_INDEX_TYPES = {
     "i8",
     "i16",
     "i32",
+    "i64",
     "int8",
     "int8_t",
     "int",
     "int16",
     "int16_t",
+    "int64",
+    "int64_t",
     "long",
     "min12int",
     "min16int",
@@ -840,6 +855,9 @@ MOJO_INTEGER_INDEX_TYPES = {
     "uint8_t",
     "uint16",
     "uint16_t",
+    "u64",
+    "uint64",
+    "uint64_t",
     "ulong",
     "ushort",
 }
@@ -876,16 +894,19 @@ MOJO_SUPPORTED_STAGE_TYPES = (
     | MOJO_RAY_STAGE_TYPES
     | MOJO_MESH_STAGE_TYPES
 )
+# The Mojo GPU call of each CrossGL synchronization built-in. barrier() synchronizes the threads of a block and
+# orders their memory accesses; threadfence() is a device-scope fence, at least as strong as any of the memory
+# barriers it stands for.
 MOJO_SYNC_BUILTINS = {
-    "barrier": "_crossgl_workgroup_barrier",
-    "workgroupBarrier": "_crossgl_workgroup_barrier",
-    "memoryBarrier": "_crossgl_memory_barrier",
-    "memoryBarrierShared": "_crossgl_memory_barrier_shared",
-    "memoryBarrierBuffer": "_crossgl_memory_barrier_buffer",
-    "memoryBarrierImage": "_crossgl_memory_barrier_image",
-    "groupMemoryBarrier": "_crossgl_group_memory_barrier",
-    "allMemoryBarrier": "_crossgl_all_memory_barrier",
-    "deviceMemoryBarrier": "_crossgl_device_memory_barrier",
+    "barrier": "barrier",
+    "workgroupBarrier": "barrier",
+    "memoryBarrier": "threadfence",
+    "memoryBarrierShared": "threadfence",
+    "memoryBarrierBuffer": "threadfence",
+    "memoryBarrierImage": "threadfence",
+    "groupMemoryBarrier": "threadfence",
+    "allMemoryBarrier": "threadfence",
+    "deviceMemoryBarrier": "threadfence",
 }
 MOJO_WAVE_OP_ARITIES = {
     "WaveGetLaneCount": 0,
@@ -1008,6 +1029,10 @@ MOJO_BUILTIN_PLACEHOLDERS = {
     "gl_NumWorkGroups": ("num_workgroups", "uvec3"),
     "gl_WorkGroupSize": ("workgroup_size", "uvec3"),
     "gl_LocalInvocationIndex": ("local_invocation_index", "uint"),
+    "gl_SubgroupSize": ("subgroup_size", "uint"),
+    "gl_SubgroupInvocationID": ("subgroup_invocation_id", "uint"),
+    "gl_SubgroupID": ("subgroup_id", "uint"),
+    "gl_NumSubgroups": ("num_subgroups", "uint"),
     "SV_DispatchThreadID": ("global_invocation_id", "uvec3"),
     "SV_GroupID": ("workgroup_id", "uvec3"),
     "SV_GroupThreadID": ("local_invocation_id", "uvec3"),
@@ -1071,4 +1096,4 @@ MOJO_MATH_HELPERS = {
 }
 # The traits a CrossGL value struct conforms to in Mojo 1.2: it is copied implicitly on assignment and argument
 # passing, as a CrossGL struct value is.
-MOJO_VALUE_STRUCT_TRAITS = "ImplicitlyCopyable, Movable"
+MOJO_VALUE_STRUCT_TRAITS = "TrivialRegisterPassable"

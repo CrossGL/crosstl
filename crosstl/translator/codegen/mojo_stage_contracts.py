@@ -879,11 +879,9 @@ class MojoStageContractMixin:
         self, node, emitted_stage_local_variables
     ):
         if self.is_mojo_shared_variable(node):
-            if isinstance(node, ArrayNode):
-                variable_type = self.array_declared_type(node)
-            else:
-                variable_type = self.variable_declared_type(node) or "float"
-            self.register_variable_type(getattr(node, "name", None), variable_type)
+            self.register_variable_type(
+                getattr(node, "name", None), self.mojo_shared_pointer_type_name(node)[0]
+            )
             return ""
 
         if isinstance(node, ArrayNode):
@@ -922,7 +920,7 @@ class MojoStageContractMixin:
         for node in getattr(stage_node, "local_variables", []) or []:
             if not self.is_mojo_shared_variable(node):
                 continue
-            code += self.generate_statement(node, indent)
+            code += self.generate_mojo_shared_declaration(node, indent)
         return code
 
     def stage_local_functions_to_emit(self, stage):

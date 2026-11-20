@@ -39,9 +39,17 @@ MOJO_GPU_INDEX_SOURCES = {
     "block_dim_uint": "block_dim",
 }
 # The built-in placeholders of mojo_tables.MOJO_BUILTIN_PLACEHOLDERS that a Mojo device function can compute.
+_LINEAR_THREAD_INDEX = (
+    "thread_idx.z * block_dim.y * block_dim.x + thread_idx.y * block_dim.x + thread_idx.x"
+)
+# A Mojo warp is the subgroup: WARP_SIZE lanes of consecutive linear thread indices, lane_id() among them.
 MOJO_COMPUTED_BUILTIN_PLACEHOLDERS = {
-    "local_invocation_index": (
-        "UInt32(thread_idx.z * block_dim.y * block_dim.x + thread_idx.y * block_dim.x + thread_idx.x)"
+    "local_invocation_index": f"UInt32({_LINEAR_THREAD_INDEX})",
+    "subgroup_size": "UInt32(WARP_SIZE)",
+    "subgroup_invocation_id": "UInt32(lane_id())",
+    "subgroup_id": f"UInt32(({_LINEAR_THREAD_INDEX}) // WARP_SIZE)",
+    "num_subgroups": (
+        "UInt32((block_dim.x * block_dim.y * block_dim.z + WARP_SIZE - 1) // WARP_SIZE)"
     ),
 }
 _SKIPPED_ATTRIBUTES = frozenset({"parent", "annotations", "source_location"})

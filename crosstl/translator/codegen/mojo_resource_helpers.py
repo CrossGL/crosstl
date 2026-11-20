@@ -121,9 +121,6 @@ class MojoResourceHelperMixin:
             )
         return code + "\n"
 
-    def generate_sync_helper(self, helper_name):
-        return f"def {helper_name}():\n    pass\n\n"
-
     def resource_requirements_use_concrete_bindings(self, resource_types):
         if not set(resource_types).issubset(MOJO_CONCRETE_RESOURCE_TYPES):
             return False

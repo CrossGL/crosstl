@@ -230,9 +230,14 @@ class MojoBuiltinCallMixin:
         helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
         if helper_name is None:
             raise MojoRefusal(f"Invalid Mojo synchronization operation {sync_type}")
-        self.required_sync_helpers.add(helper_name)
         indent_str = "    " * indent
-        return f"{indent_str}{helper_name}()\n"
+        return f"{indent_str}{self.mojo_sync_call(helper_name)}\n"
+
+    def mojo_sync_call(self, mojo_name):
+        """The Mojo GPU synchronization call ``mojo_name()``, noting the import threadfence needs."""
+        if mojo_name == "threadfence":
+            self.requires_threadfence_import = True
+        return f"{mojo_name}()"
 
     def generate_atomic_op_node(self, expr):
         operation = getattr(expr, "operation", "")
@@ -348,7 +353,13 @@ class MojoBuiltinCallMixin:
             return "uvec3"
         if name in {"SV_GroupIndex", "SV_InstanceID", "SV_VertexID"}:
             return "uint"
-        if name == "gl_LocalInvocationIndex":
+        if name in {
+            "gl_LocalInvocationIndex",
+            "gl_NumSubgroups",
+            "gl_SubgroupID",
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
+        }:
             return "uint"
         if name in {"gl_InstanceID", "gl_VertexID"}:
             return "int"

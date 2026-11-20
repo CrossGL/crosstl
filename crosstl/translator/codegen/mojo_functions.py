@@ -179,7 +179,11 @@ class MojoFunctionMixin:
                         shader_type, p.name, semantic
                     )
                 )
-            ownership = "var " if p.name in mutated_params else ""
+            if {"out", "inout"} & set(getattr(p, "qualifiers", None) or []):
+                # A CrossGL out or inout parameter writes the caller's variable, as a Mojo mut argument does.
+                ownership = "mut "
+            else:
+                ownership = "var " if p.name in mutated_params else ""
             params.append(
                 f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
             )

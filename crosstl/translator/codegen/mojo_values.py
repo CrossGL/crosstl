@@ -143,13 +143,14 @@ class MojoValueMixin:
 
     def vector_components_for_expression(self, expr, target_dtype=None):
         if isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
             swizzle_indices = self.get_swizzle_indices(expr.member)
-            if swizzle_indices is not None:
-                source_info = self.vector_type_info(
-                    self.expression_result_type(expr.object)
-                )
-                source_dtype = source_info[0] if source_info is not None else None
+            # A struct member named like a swizzle (``p.a``) is a member, not a component of a vector.
+            source_info = self.vector_type_info(
+                self.expression_result_type(expr.object)
+            )
+            if swizzle_indices is not None and source_info is not None:
+                obj = self.generate_expression(expr.object)
+                source_dtype = source_info[0]
                 return [
                     self.cast_vector_component(
                         f"{obj}[{index}]", source_dtype, target_dtype
@@ -334,11 +335,8 @@ class MojoValueMixin:
         else:
             vtype_str = str(vtype)
 
-        pointee_type = self.parse_pointer_type_name(vtype_str)
-        if pointee_type is not None:
-            # Mojo 1.2 cannot infer a pointer's origin from a declaration; MutAnyOrigin is the origin a kernel's
-            # buffer arguments carry and allows both reads and writes.
-            return f"UnsafePointer[{self.map_type(pointee_type)}, MutAnyOrigin]"
+        if self.is_pointer_type_name(vtype_str):
+            return self.mojo_pointer_type(vtype_str.strip()[:-1].strip())
 
         geometry_stream_type = self.geometry_stream_mapped_type(vtype_str)
         if geometry_stream_type is not None:
@@ -352,7 +350,7 @@ class MojoValueMixin:
             base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:
-                return f"Array[{base_mapped}, {size}]"
+                return f"StaticTuple[{base_mapped}, {size}]"
             else:
                 return f"List[{base_mapped}]"
 
