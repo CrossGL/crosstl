@@ -33,6 +33,7 @@ from .cuda_expression_types import CudaExpressionTypeMixin
 from .cuda_expressions import CudaExpressionMixin
 from .cuda_function_calls import CudaFunctionCallMixin
 from .cuda_function_parts import CudaFunctionPartsMixin
+from .cuda_function_prototypes import late_called_functions, prototype_of
 from .cuda_gather import CudaGatherMixin
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
@@ -557,6 +558,7 @@ class CudaCodeGen(
                 emitted_stage_local_variables[var_name] = var_type
 
         functions = getattr(node, "functions", [])
+        self.emit_late_function_prototypes(functions)
         for func in functions:
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -599,6 +601,11 @@ class CudaCodeGen(
                     )
                     try:
                         self.current_stage_name = saved_stage_name
+                        self.emit_late_function_prototypes(
+                            func
+                            for func in getattr(stage, "local_functions", [])
+                            if id(func) not in emitted_local_functions
+                        )
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
                                 continue
@@ -632,6 +639,16 @@ class CudaCodeGen(
                         for captured_name in local_captures:
                             self.cuda_function_capture_params.pop(captured_name, None)
                     self.emit("")
+
+    def emit_late_function_prototypes(self, functions):
+        """Declare each function of ``functions`` that an earlier one calls (:mod:`.cuda_function_prototypes`)."""
+        late = late_called_functions(
+            func for func in functions if not generic_function_parameters(func)
+        )
+        for func in late:
+            self.visit(prototype_of(func))
+        if late:
+            self.emit("")
 
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
