@@ -303,9 +303,12 @@ class _Builder:
                     self.lines.append(f"{local} = {self.value(param.type)};")
                 arguments.append(dialect.workgroup_argument(local))
             elif param.direction == "workgroup address":
-                self.shared.append(dialect.workgroup(param.type, local))
-                self.lines.append(f"{local} = {self.value(param.type)};")
-                arguments.append(dialect.address(local))
+                shared = dialect.shared_pointer(
+                    param.type, local, self.value(param.type)
+                )
+                self.shared += shared.declarations
+                self.lines += shared.lines
+                arguments.append(shared.argument)
             elif param.direction == "constant address":
                 self.constants.append(dialect.constant_memory(param.type, local))
                 arguments.append(dialect.address(local))

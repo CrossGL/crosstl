@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 10396
+; Bound: 10395
 OpCapability Shader
 OpCapability Int64
 %1 = OpExtInstImport "GLSL.std.450"
@@ -1117,6 +1117,7 @@ OpDecorate %4170 BuiltIn NumWorkgroups
 %4200 = OpTypePointer Uniform %4
 %4204 = OpTypePointer Workgroup %4
 %4206 = OpConstant %29 264
+%4214 = OpConstant %29 0
 %12 = OpVariable %11 Uniform
 %16 = OpVariable %15 Uniform
 %19 = OpVariable %18 Uniform
@@ -5316,7 +5317,6 @@ OpStore %4207 %4208
 OpBranch %4209
 %4209 = OpLabel
 %4213 = OpLoad %29 %4207
-%4214 = OpBitcast %29 %39
 %4215 = OpINotEqual %3 %4213 %4214
 OpLoopMerge %4212 %4211 None
 OpBranchConditional %4215 %4210 %4212
@@ -13549,19 +13549,18 @@ OpStore %4207 %10385
 OpBranch %4209
 %4212 = OpLabel
 %10386 = OpLoad %29 %4158
-%10387 = OpBitcast %29 %39
-%10388 = OpIEqual %3 %10386 %10387
-OpSelectionMerge %10389 None
-OpBranchConditional %10388 %10390 %10391
-%10390 = OpLabel
-%10392 = OpAccessChain %4204 %4150 %39
-%10393 = OpLoad %4 %10392
-%10394 = OpLoad %29 %4167
-%10395 = OpAccessChain %4200 %19 %39 %10394
-OpStore %10395 %10393
-OpBranch %10389
-%10391 = OpLabel
-OpBranch %10389
+%10387 = OpIEqual %3 %10386 %4214
+OpSelectionMerge %10388 None
+OpBranchConditional %10387 %10389 %10390
 %10389 = OpLabel
+%10391 = OpAccessChain %4204 %4150 %39
+%10392 = OpLoad %4 %10391
+%10393 = OpLoad %29 %4167
+%10394 = OpAccessChain %4200 %19 %39 %10393
+OpStore %10394 %10392
+OpBranch %10388
+%10390 = OpLabel
+OpBranch %10388
+%10388 = OpLabel
 OpReturn
 OpFunctionEnd
