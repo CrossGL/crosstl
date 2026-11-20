@@ -45,6 +45,8 @@ _ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\d+)\s*\]\s*")
 _DECLARATION_ONLY_TARGETS = frozenset(
     {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "vulkan", "spirv"}
 )
+# C++ targets: no array constructor expression, and a C array cannot be assigned.
+_CPP_TARGETS = frozenset({"cuda", "hip"})
 _TEMPORARY_PREFIX = "cgl_array_value"
 
 
@@ -65,7 +67,9 @@ class ArrayConstructorUnsupportedError(TranslationDiagnostic):
 def hoist_array_constructors(program, target) -> int:
     """Rewrite array constructors outside declarations in place; returns how many were rewritten."""
     target = str(target or "").lower()
-    if not isinstance(program, A.ShaderNode) or target not in _DECLARATION_ONLY_TARGETS:
+    if not isinstance(program, A.ShaderNode) or target not in (
+        _DECLARATION_ONLY_TARGETS | _CPP_TARGETS
+    ):
         return 0
     hoister = _Hoister(program, target)
     for constant in getattr(program, "constants", None) or []:
@@ -212,6 +216,17 @@ class _Hoister:
                 set_child(owner, field, None, A.IdentifierNode(name))
 
     def _walk(self, node, hoisted, slot, effects):
+        if (
+            self.target in _CPP_TARGETS
+            and isinstance(node, A.AssignmentNode)
+            and array_constructor_shape(node.value) is not None
+        ):
+            element, size = array_constructor_shape(node.value)
+            self._refuse(
+                f"array constructor '{element}[{size}]' is assigned to an array",
+                "array-constructor-assigned",
+                getattr(node, "source_location", None),
+            )
         aggregate = self._is_aggregate(node)
         for field, key in list(child_slots(node)):
             child = get_child(node, field, key)
