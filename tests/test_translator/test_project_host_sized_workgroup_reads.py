@@ -56,6 +56,32 @@ def _write_kernel(repo, value_type):
     )
 
 
+def _write_kernels(repo):
+    """Two kernels in one source, each sized by its own dispatch."""
+    repo.mkdir()
+    (repo / "group_sizes.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void read_width(
+                device uint* output [[buffer(0)]],
+                uint3 lid [[thread_position_in_threadgroup]],
+                uint group_size [[threads_per_threadgroup]]) {
+                output[lid.x] = group_size;
+            }
+
+            kernel void read_area(
+                device uint* output [[buffer(0)]],
+                uint3 lid [[thread_position_in_threadgroup]],
+                uint3 group_size [[threads_per_threadgroup]]) {
+                output[lid.x] = group_size.x * group_size.y;
+            }
+            """).lstrip(),
+        encoding="utf-8",
+    )
+
+
 def _translate(repo, target, **config):
     return translate_project(
         project_api.ProjectConfig(
@@ -108,6 +134,40 @@ def test_configured_size_still_fixes_a_metal_size_read(tmp_path, target):
     assert "OpSpecConstant " not in code
 
 
+@pytest.mark.parametrize("target", ["directx", "vulkan"])
+def test_artifact_of_host_sized_kernels_leaves_each_its_host_size(tmp_path, target):
+    # One HLSL file or SPIR-V module holds both kernels. Each pipeline the host builds from it sets
+    # its own kernel's size, so the artifact needs no shared size.
+    repo = tmp_path / "repo"
+    _write_kernels(repo)
+
+    artifact, code = _translated_artifact(_translate(repo, target), repo)
+
+    assert artifact.get("execution") is None
+    if target == "directx":
+        sized_entries = re.findall(
+            r"\[numthreads\(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, "
+            r"CROSSGL_WORKGROUP_SIZE_Z\)\]",
+            code,
+        )
+        assert len(sized_entries) == 2
+    else:
+        assert len(re.findall(r"OpEntryPoint GLCompute ", code)) == 2
+        assert len(re.findall(r"= OpSpecConstant ", code)) == 3
+        assert "BuiltIn WorkgroupSize" in code
+
+
+def test_configured_size_still_refuses_an_artifact_of_several_kernels(tmp_path):
+    repo = tmp_path / "repo"
+    _write_kernels(repo)
+
+    payload = _translate(repo, "directx", workgroup_size=[64, 1, 1])
+
+    assert payload["summary"]["translatedCount"] == 0
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["code"] == "project.translate.workgroup-size-entry-ambiguous"
+
+
 @pytest.mark.skipif(GLSLANG is None, reason="glslangValidator is not installed")
 def test_glslang_compiles_both_host_chosen_paths_of_a_size_read(tmp_path):
     repo = tmp_path / "repo"
@@ -135,9 +195,14 @@ def test_glslang_compiles_both_host_chosen_paths_of_a_size_read(tmp_path):
 @pytest.mark.skipif(
     SPIRV_AS is None or SPIRV_VAL is None, reason="SPIRV-Tools are not installed"
 )
-def test_spirv_val_accepts_the_host_chosen_size_read(tmp_path):
+@pytest.mark.parametrize(
+    "write",
+    [lambda repo: _write_kernel(repo, "uint3"), _write_kernels],
+    ids=["one-kernel", "two-kernels"],
+)
+def test_spirv_val_accepts_the_host_chosen_size_read(tmp_path, write):
     repo = tmp_path / "repo"
-    _write_kernel(repo, "uint3")
+    write(repo)
     artifact, _ = _translated_artifact(_translate(repo, "vulkan"), repo)
     binary = tmp_path / "kernel.spv"
 
