@@ -368,10 +368,12 @@ class WGSLGlobalDeclarationMixin:
         attributes = (
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
+        # An atomic built-in on the buffer's elements makes them atomic<T> (wgsl_buffer_atomics).
+        storage_type = self.atomic_declaration_type(None, node.name, node.var_type)
         return (
             f"{attributes}\nvar<storage, read_write> "
             f"{self.module_identifier_name(node.name)}: "
-            f"{self.buffer_pointer_storage_type(node.var_type)};"
+            f"{self.buffer_pointer_storage_type(storage_type)};"
         )
 
     def generate_glsl_buffer_block_global_variable(self, node):

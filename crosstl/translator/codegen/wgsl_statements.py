@@ -37,12 +37,17 @@ from .wgsl_integer_operands import (
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode
 from .wgsl_must_use import wgsl_call_statement
-from .wgsl_primitive_index import refuse_primitive_index_write
 from .wgsl_switch_clauses import (
     is_discard_statement,
     wgsl_switch_clauses,
 )
+from .wgsl_unsigned_builtin_members import refuse_int_builtin_member_write
 from .wgsl_value_side_effects import is_increment
+
+SWIZZLE_COMPONENT_NAMES = {
+    **dict(zip("rgba", "xyzw")),
+    **dict(zip("stpq", "xyzw")),
+}
 
 
 class WGSLStatementMixin:
@@ -222,7 +227,7 @@ class WGSLStatementMixin:
         if isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         if is_increment(expr):
-            refuse_primitive_index_write(self, expr.operand)
+            refuse_int_builtin_member_write(self, expr.operand)
             operator = "+=" if expr.operator == "++" else "-="
             return f"{self.generate_expression(expr.operand)} {operator} 1"
         return self.generate_expression(expr)
@@ -250,7 +255,7 @@ class WGSLStatementMixin:
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
-        refuse_primitive_index_write(self, node.target)
+        refuse_int_builtin_member_write(self, node.target)
         boolean_xor = wgsl_boolean_xor_assignment(self, node)
         if boolean_xor is not None:
             return boolean_xor
@@ -484,6 +489,9 @@ class WGSLStatementMixin:
         if target_info is None:
             return None
         base, components = target_info
+        # WGSL writes one component at a time; GLSL's colour and texture-coordinate names (rgba, stpq) name the
+        # same components as xyzw, and WGSL has no stpq names.
+        components = [SWIZZLE_COMPONENT_NAMES.get(c, c) for c in components]
         if not self.assignable_swizzle_components(components):
             return None
 

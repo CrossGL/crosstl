@@ -32,6 +32,9 @@ from .wgsl_generic_functions import (
 from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_helpers,
 )
+from .wgsl_matrix_resize import (
+    wgsl_matrix_resize_helpers,
+)
 from .wgsl_primitive_index import (
     PRIMITIVE_INDEX_ENABLE_DIRECTIVE,
 )
@@ -97,6 +100,7 @@ class WGSLProgramSectionMixin:
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
+        self._matrix_resize_helpers = {}
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -120,7 +124,7 @@ class WGSLProgramSectionMixin:
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
-        self._primitive_index_int_members = set()
+        self._int_builtin_members = {}
 
     def collect_wgsl_program_tables(
         self,
@@ -432,6 +436,9 @@ class WGSLProgramSectionMixin:
         matrix_inverse_helpers = wgsl_matrix_inverse_helpers(self)
         if matrix_inverse_helpers:
             emitted_sections.append(matrix_inverse_helpers)
+        matrix_resize_helpers = wgsl_matrix_resize_helpers(self)
+        if matrix_resize_helpers:
+            emitted_sections.append(matrix_resize_helpers)
         half_conversion_helpers = self.generate_half_conversion_helpers()
         if half_conversion_helpers:
             emitted_sections.append(half_conversion_helpers)
