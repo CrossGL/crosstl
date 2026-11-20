@@ -167,3 +167,6 @@ side-effecting operands and the unchanged MLX Sign kernel.
 
 .. automodule:: crosstl.backend.Metal.MetalCrossGLCodeGen
    :members:
+
+.. automodule:: crosstl.backend.Metal.crossgl_codegen.support
+   :members:
