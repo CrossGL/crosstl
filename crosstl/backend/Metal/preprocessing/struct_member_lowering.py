@@ -11,6 +11,7 @@ from typing import (
     Tuple,
 )
 
+from ..alias_template_owners import expose_alias_template_owners
 from ..declarator_lists import split_struct_declarator_lists
 from ..integral_constant_locals import (
     fold_concrete_function_integral_constant_arithmetic,
@@ -205,7 +206,9 @@ class MetalStructMemberLoweringMixin:
             and self._containing_span(struct.span[0], local_owner_spans) is None
         ]
         if not structs_with_methods:
-            return self._canonicalize_qualified_struct_alias_templates(code, structs)
+            return self._canonicalize_qualified_struct_alias_templates(
+                expose_alias_template_owners(self, code, structs), structs
+            )
 
         # Structs with device/threadgroup pointer members cannot be lowered by
         # passing `self` by value (a pointer cannot live in a Function-storage
@@ -371,7 +374,7 @@ class MetalStructMemberLoweringMixin:
             if not rewritten.endswith("\n"):
                 rewritten += "\n"
         rewritten = self._canonicalize_qualified_struct_alias_templates(
-            rewritten, structs
+            expose_alias_template_owners(self, rewritten, structs), structs
         )
         return self._elide_used_resolved_static_data_members(
             resolve_retained_static_member_owners(self, rewritten),
