@@ -2,7 +2,7 @@
 
 import pytest
 
-import crosstl
+from tests.stage_entry_helpers import translate_each_entry
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 # scan.h's shape: CumProd<bool> replaces the primary's methods, and a kernel
@@ -54,10 +54,15 @@ combine_values<int, Combine<int>>(device const int*, device int*, uint);
 """
 
 
-def _translate(tmp_path, backend):
+def _translate_each_entry(tmp_path, backend):
     path = tmp_path / "kernel.metal"
     path.write_text(SOURCE, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    return list(translate_each_entry(path, backend).values())
+
+
+def _translate(tmp_path, backend):
+    (code,) = _translate_each_entry(tmp_path, backend)
+    return code
 
 
 def test_method_bearing_explicit_specialization_becomes_a_concrete_receiver(
@@ -76,6 +81,9 @@ def test_method_bearing_explicit_specialization_becomes_a_concrete_receiver(
 
 @pytest.mark.parametrize("backend", ("metal", "opengl", "directx"))
 def test_explicit_specialization_receivers_compile_natively(tmp_path, backend):
-    generated = _translate(tmp_path, backend)
-    assert "Combine<bool>" not in generated
-    _compile(generated, backend, tmp_path)
+    artifacts = _translate_each_entry(tmp_path, backend)
+    # GLSL holds one compute entry per unit, so each instantiation is its own artifact.
+    assert len(artifacts) == (2 if backend == "opengl" else 1)
+    for generated in artifacts:
+        assert "Combine<bool>" not in generated
+        _compile(generated, backend, tmp_path)

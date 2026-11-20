@@ -6,10 +6,8 @@ from crosstl.backend.Metal.integral_binding_visibility import (
     IntegralBindingTable,
     indexed_visible_bindings,
 )
-from crosstl.backend.Metal.preprocessor import (
-    MetalPreprocessor,
-    _MetalIntegralConstantBinding,
-)
+from crosstl.backend.Metal.preprocessing.support import _MetalIntegralConstantBinding
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
 scan = MetalPreprocessor._local_integral_constant_bindings_at
 

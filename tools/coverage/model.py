@@ -137,6 +137,10 @@ VOID = Type.other("void")
 # The opaque spelling of a C pointer to any memory, which CUDA's address space conversions return. A probe holds the
 # result in a local of the language's generic pointer type.
 GENERIC_POINTER = "void *"
+# The instruction kinds an AMD scheduling group of MAX's ``schedule_group_barrier`` takes, and the mask a probe passes:
+# every ALU instruction (max/gpu/sync/sync.mojo).
+SCHEDULE_MASK = "AMDScheduleBarrierMask"
+SCHEDULE_MASK_VALUE = f"{SCHEDULE_MASK}.ALL_ALU"
 # The OpenCL C enumerated types of the synchronization, atomic, event-profiling and enqueue functions, whose arguments
 # are named constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as
 # ``opaque``.

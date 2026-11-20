@@ -1,0 +1,24 @@
+name: Install pinned nvcc
+description: >-
+  Install nvcc 13.0 with the CUDA runtime headers from NVIDIA's apt repository for Ubuntu 24.04 on x86_64, and put
+  it on PATH. nvcc compiles without a GPU, so this is all the coverage probes need.
+
+runs:
+  using: composite
+  steps:
+    - name: Add the CUDA apt repository
+      shell: bash
+      run: |
+        set -euo pipefail
+        keyring="$RUNNER_TEMP/cuda-keyring.deb"
+        curl -fsSLo "$keyring" --retry 8 --retry-all-errors --retry-delay 10 --connect-timeout 30 \
+          https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+        echo "d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba  $keyring" | sha256sum --check --strict
+        sudo dpkg -i "$keyring"
+        echo /usr/local/cuda-13.0/bin >> "$GITHUB_PATH"
+
+    - name: Install nvcc 13.0
+      uses: ./.github/actions/apt-install
+      with:
+        packages: cuda-nvcc-13-0=13.0.88-1 cuda-crt-13-0=13.0.88-1 cuda-cudart-dev-13-0=13.0.96-1
+        recommends: "false"
