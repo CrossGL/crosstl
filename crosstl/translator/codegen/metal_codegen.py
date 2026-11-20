@@ -11,7 +11,6 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
-    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -39,7 +38,6 @@ from ..ast import (
     ReferenceType,
     ReturnNode,
     StageMap,
-    StructNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -51,15 +49,13 @@ from ..matrix_shape import length_method_object
 from ..refusals import MetalRefusal
 from ..resource_identity import resource_identity_marker
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
-from ..source_licenses import source_license_comments
 from ..structure_conversions import (
     StructureConversionKind,
     StructureFieldValue,
     registered_structure_conversion_for_identity,
 )
+from ..unhandled import UNHANDLED
 from .array_utils import (
-    collect_literal_int_constants,
-    collect_struct_member_types,
     format_c_style_array_declaration,
     get_array_size_from_node,
     split_array_type_suffix,
@@ -78,47 +74,24 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
-from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
-    collect_enum_struct_variant_fields,
-    collect_enum_type_names,
-    collect_enum_variant_constants,
-    collect_enum_variant_constructor_fields,
-    collect_enum_variant_constructors,
-    collect_generic_enum_specialization_member_types,
-    collect_generic_enum_specializations,
-    collect_generic_enum_struct_definitions,
-    collect_generic_enum_variant_constants,
-    collect_plain_enums,
-    collect_struct_payload_enums,
     enum_value_expression,
-    generate_enum_constants,
     generate_enum_constructor_call,
     generate_enum_constructor_expression,
-    generate_generic_enum_constants,
     infer_enum_constructor_type,
 )
-from .exponent_builtins import emit_metal_exponent_helpers, metal_exponent_call
+from .exponent_builtins import metal_exponent_call
 from .extended_arithmetic_builtins import (
-    emit_metal_extended_arithmetic_helpers,
     metal_extended_arithmetic_call,
 )
-from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
-    generic_function_emission_list,
-    generic_function_parameters,
     numeric_trait_method_result_type,
-    prepare_generic_function_specializations,
     reject_unresolved_generic_function_call,
 )
-from .generic_global_types import metal_generic_global_types
 from .generic_struct_utils import (
-    collect_generic_struct_definitions,
-    collect_generic_struct_specialization_member_types,
-    collect_generic_struct_specializations,
     generate_struct_constructor_expression,
     infer_struct_constructor_type,
 )
@@ -127,10 +100,7 @@ from .glsl_buffer_block_arrays import (
     glsl_buffer_indexed_value_type,
     glsl_buffer_whole_array_reason,
 )
-from .glsl_buffer_layout import collect_lowered_glsl_buffer_blocks
 from .image_access_contracts import (
-    collect_function_image_access_requirements,
-    collect_function_parameter_names,
     is_resource_size_query_operation,
     is_texel_fetch_operation,
     is_texture_sampling_operation,
@@ -143,18 +113,14 @@ from .match_utils import (
 from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import generate_metal_array_initializer
 from .metal_atomic_addresses import metal_vector_component_address
-from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
-from .metal_buffer_coherence import collect_inherited_buffer_contracts
-from .metal_buffer_component_stores import metal_glsl_buffer_component_refusal
+from .metal_bit_scans import metal_bit_scan_call
 from .metal_buffer_scalars import metal_buffer_scalar_type
 from .metal_call_lowering import MetalCallLoweringMixin
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_constant_initializers import (
-    folded_helper_is_unused,
     metal_constant_initializer,
     restore_static_initializer_helpers,
 )
-from .metal_debug_printf import uses_debug_printf
 from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
@@ -162,7 +128,7 @@ from .metal_entry_return import (
 from .metal_function_dependencies import MetalFunctionDependencyMixin
 from .metal_glsl_buffer_blocks import MetalGLSLBufferBlockMixin
 from .metal_hlsl_functions import MetalHlslFunctionMixin
-from .metal_hlsl_matrix import hlsl_emulated_matrix_shape, metal_hlsl_matrix_prelude
+from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
@@ -172,6 +138,9 @@ from .metal_mesh_outputs import MetalMeshOutputMixin
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_parameter_address_spaces import MetalParameterAddressSpaceMixin
 from .metal_program_entries import MetalProgramEntryMixin
+from .metal_program_scope_variables import MetalProgramScopeVariableMixin
+from .metal_program_sections import MetalProgramSectionMixin
+from .metal_program_state import MetalProgramStateMixin
 from .metal_ray_tracing import MetalRayTracingMixin
 from .metal_reference_argument_conditions import generate_header_writeback_statement
 from .metal_reference_argument_order import generate_ordered_writeback_statement
@@ -181,15 +150,8 @@ from .metal_reference_sequenced_calls import generate_conditional_call_statement
 from .metal_refusals import metal_refusals
 from .metal_render_walks import MetalRenderWalks
 from .metal_resource_arguments import MetalResourceArgumentMixin
-from .metal_safe_math import METAL_SAFE_MATH_PRAGMA
 from .metal_signed_builtins import (
-    collect_metal_signed_builtin_members,
     metal_signed_member_assignment,
-)
-from .metal_specialization_constants import (
-    block_member_array_types,
-    flattened_stage_io_array_types,
-    specialization_constants_sizing_arrays,
 )
 from .metal_stage_entries import MetalStageEntryMixin
 from .metal_stage_interfaces import MetalStageInterfaceMixin
@@ -200,13 +162,13 @@ from .metal_texel_buffers import (
     TEXEL_BUFFER_TYPES,
     MetalTexelBuffers,
 )
-from .metal_texture_coherence import collect_device_coherent_textures
 from .metal_texture_operations import MetalTextureOperationMixin
 from .metal_texture_validation import MetalTextureValidationMixin
-from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
+from .metal_threadgroup_forwarding import (
+    METAL_GROUPSHARED_ENTRY_STAGES,
+)
 from .metal_type_mapping import MetalTypeMappingMixin
 from .metal_varyings import metal_varying_attribute
-from .metal_wave_extended import emit_metal_wave_extension_helpers
 from .metal_wave_operations import MetalWaveOperationMixin
 from .pack_builtins import PACK_FUNCTIONS, metal_pack_call
 from .relational_builtins import metal_logical_not_operand
@@ -214,15 +176,9 @@ from .sizeof_calls import sizeof_call_bytes
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     collect_stage_entry_records,
-    collect_stage_local_structs,
-    collect_stage_local_variables,
-    deduplicate_named_declarations,
     function_stage_name,
     normalize_stage_name,
-    order_functions_by_dependencies,
     requests_early_fragment_tests,
-    should_emit_qualified_function,
-    stage_matches,
 )
 from .storage_image_texels import is_whole_texel_load
 from .texture_lod_clamp import (
@@ -232,7 +188,6 @@ from .texture_lod_clamp import (
 from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
-    emit_metal_texture_residency_helpers,
     metal_texture_residency_call,
     metal_texture_resident_call,
 )
@@ -319,13 +274,6 @@ class MetalEntryPointSelectionError(ValueError):
         self.source_location = source_location
 
 
-# Entry stages whose threadgroup memory Metal declares inside the entry function, so a
-# program-scope groupshared value used only by such entries becomes an entry local.
-METAL_GROUPSHARED_ENTRY_STAGES = frozenset(
-    {"compute", "task", "amplification", "object", "mesh"}
-)
-
-
 class MetalCodeGen(
     MetalProgramEntryMixin,
     MetalStageIOStructMixin,
@@ -348,6 +296,9 @@ class MetalCodeGen(
     MetalHlslValueMixin,
     MetalHlslFunctionMixin,
     MetalNarrowVectorMixin,
+    MetalProgramScopeVariableMixin,
+    MetalProgramStateMixin,
+    MetalProgramSectionMixin,
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
@@ -1545,1360 +1496,149 @@ class MetalCodeGen(
 
     def render_rewritten_program(self, ast, target_stage):
         """Render ``ast`` once its rewrites are done; generation only reads the AST from here on."""
-        self.metal_type_aliases = self.collect_metal_type_aliases(ast)
-        self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
-        self.metal_program_identifier_names = (
-            self.collect_metal_program_identifier_names(ast)
+        self.reset_metal_program_resource_state(ast)
+        all_functions = self.collect_metal_program_function_tables(ast)
+        self.reset_metal_program_parameter_state(ast)
+        structs = self.collect_metal_program_type_tables(ast, target_stage)
+        global_vars = self.collect_metal_program_global_tables(
+            ast, target_stage, all_functions
+        )
+        self.reset_metal_program_generation_state()
+        self.collect_metal_buffer_block_layouts(
+            ast, all_functions, global_vars, structs
+        )
+        generic_function_specializations = (
+            self.prepare_metal_generic_function_specializations(
+                ast, all_functions, global_vars, structs
+            )
+        )
+        code = self.render_metal_program_prelude(
+            ast, all_functions, global_vars, structs
         )
 
-        self.texture_variables = []
-        self.metal_device_coherent_textures = frozenset()
-        self.metal_inherited_buffer_contracts = {}
-        self.acceleration_structure_variables = []
-        self.visible_function_table_variables = []
-        self.intersection_function_table_variables = []
-        self.unsupported_metal_acceleration_structure_array_variables = {}
-        self.unsupported_metal_ray_function_table_array_variables = {}
-        self.sampler_variables = []
-        self.structured_buffer_variables = []
-        self.structured_buffer_length_variables = []
-        self.structured_buffer_counter_variables = []
-        self.metal_buffer_resource_variables = []
-        self.metal_resource_binding_indices_by_id = {}
-        self.metal_deferred_register_bindings = []
-        self.metal_hlsl_register_bindings_by_id = {}
-        self.metal_program_scope_value_globals = set()
-        self.metal_program_scope_groupshared_globals = set()
-        self.metal_lowered_program_scope_groupshared_globals_by_function = {}
-        self.metal_lowered_program_scope_groupshared_global_ids = set()
-        self.metal_forwarded_thread_private_globals = {}
-        self.metal_program_scope_value_global_types = {}
-        self.program_scope_sampler_constants = set()
-        self.metal_specialization_macro_constants = set()
-        self.glsl_buffer_block_variables = []
-        self.lowered_glsl_buffer_blocks = {}
-        self.lowered_glsl_buffer_block_struct_names = set()
-        self.glsl_buffer_block_lowering_failures = {}
-        self.glsl_buffer_block_struct_lowering_failures = {}
-        self.metal_temp_variable_index = 0
-        self.generated_return_wrapper_struct_names = set()
-        self.metal_vertex_entry_input_struct_names = set()
-        self.metal_vertex_entry_output_struct_names = set()
-        self.metal_mesh_primitive_struct_names = set()
-        self.metal_fragment_entry_input_struct_names = set()
-        self.metal_fragment_entry_output_struct_names = set()
-        self.metal_stage_io_struct_names = set()
-        self.metal_stage_io_member_lowerings = {}
-        self.metal_signed_builtin_members = {}
-        self.metal_signed_member_raw_reads = set()
-        self.hlsl_program_constant_global_ids = set()
-        self.cbuffer_variables = list(getattr(ast, "cbuffers", []) or [])
-        hlsl_program_constants = self.synthetic_hlsl_program_constants_cbuffer(ast)
-        if hlsl_program_constants is not None:
-            self.cbuffer_variables.append(hlsl_program_constants)
-        self.cbuffer_binding_indices = {}
-        self.cbuffers_by_name = {
-            cbuffer.name: cbuffer
-            for cbuffer in self.cbuffer_variables
-            if getattr(cbuffer, "name", None)
-        }
-        all_functions = self.all_functions(ast)
-        self.metal_constant_conversion_operators = (
-            self.collect_metal_constant_conversion_operators(all_functions)
-        )
-        for struct_name, receivers in (
-            getattr(ast, "metal_constant_conversion_operators", None) or {}
-        ).items():
-            known = self.metal_constant_conversion_operators.setdefault(struct_name, [])
-            known += [item for item in receivers if item not in known]
-        self.validate_metal_mesh_payload_parameter_placement(ast, all_functions)
-        self.user_function_names = {
-            func.name for func in all_functions if getattr(func, "name", None)
-        }
-        self.metal_atomic_fence_calls = self.collect_metal_atomic_fence_calls(ast)
-        self.requires_metal_atomic_fence = bool(self.metal_atomic_fence_calls)
-        self.requires_metal_system_thread_scope = any(
-            self.atomic_fence_operand_identifier(call.args[2]) == "thread_scope_system"
-            for call in self.metal_atomic_fence_calls
-            if len(call.args) == 3
-        )
-        self.metal_resource_memory_contracts = (
-            self.collect_metal_resource_memory_contracts(ast)
-        )
-        self.requires_metal_resource_coherence = any(
-            kind == "coherent" for kind, _scope in self.metal_resource_memory_contracts
-        )
-        self.functions_by_name = {
-            func.name: func for func in all_functions if getattr(func, "name", None)
-        }
-        self.function_overloads_by_name = {}
-        for func in all_functions:
-            func_name = getattr(func, "name", None)
-            if func_name:
-                self.function_overloads_by_name.setdefault(func_name, []).append(func)
-        self.function_parameter_infos = self.collect_function_parameter_infos(
-            all_functions
-        )
-        self.function_parameter_nodes = self.collect_function_parameter_nodes(
-            all_functions
-        )
-        self.metal_skipped_function_parameter_indices = (
-            self.collect_unused_array_parameter_indices(all_functions)
-        )
-        self.function_return_types = {
-            func.name: self.metal_effective_function_return_type(func)
-            for func in all_functions
-            if getattr(func, "name", None)
-        }
-        self.function_parameter_names = collect_function_parameter_names(all_functions)
-        self.function_image_access_requirements = (
-            collect_function_image_access_requirements(
-                all_functions,
-                self.function_parameter_names,
-                self.iter_ast_nodes,
-                self.function_call_name,
-                self.expression_name,
-            )
-        )
-        self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
-            self.cbuffer_variables
-        )
-        self.cbuffer_member_references = self.collect_cbuffer_member_references(
-            self.cbuffer_variables
-        )
-        if not self.cbuffer_variables:
-            self.ambiguous_cbuffer_members = set()
-        self.current_sampler_parameters = set()
-        self.current_sampler_parameter_array_sizes = {}
-        self.texture_variable_types = {}
-        self.metal_texel_buffers = MetalTexelBuffers(self)
-        self.texture_variable_raw_types = {}
-        self.current_texture_parameters = {}
-        self.current_texture_parameter_raw_types = {}
-        self.current_texture_parameter_array_sizes = {}
-        self.current_texture_alias_sources = {}
-        self.image_variable_formats = {}
-        self.current_image_format_parameters = {}
-        self.current_structured_buffer_length_parameters = {}
-        self.current_structured_buffer_counter_parameters = {}
-        self.function_structured_buffer_length_dependencies = {}
-        self.global_structured_buffer_length_dependencies = set()
-        self.function_global_resource_dependencies = {}
-        self.function_stage_parameter_dependencies = {}
-        self.function_metal_wave_lane_dependencies = {}
-        self.function_metal_wave_lane_parameter_names = {}
-        self.unsupported_glsl_buffer_block_functions = {}
-        self.unsupported_glsl_buffer_block_struct_names = set()
-        self.required_image_atomic_compare_helpers = set()
-        self.required_pointer_atomic_compare_helpers = set()
-        self.required_metal_inverse_helpers = set()
-        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
-        self.metal_array_arguments = MetalArrayArguments(self)
-        self.required_metal_integer_dot_helper = False
-        self.metal_argument_substitutions = {}
-        self.metal_writeback_statement_ids = set()
-        self.metal_sequenced_call_ids = set()
-        self.metal_writeback_temporary_count = 0
-        self.required_metal_ray_query_runtime = False
-        self.required_metal_ray_desc_runtime = False
-        self.required_metal_ray_query_helpers = set()
-        self.required_glsl_buffer_aggregate_load_helpers = {}
-        self.current_glsl_buffer_block_parameters = {}
-        self.unsupported_glsl_buffer_block_variables = set()
-        self.unsupported_glsl_buffer_block_variable_types = {}
-        self.current_unsupported_glsl_buffer_block_parameters = set()
-        self.current_unsupported_glsl_buffer_block_local_variables = set()
-        self.metal_emulated_matrix_shapes = set()
-        self.current_glsl_buffer_block_parameter_failures = {}
-        self.current_glsl_buffer_block_parameter_struct_failures = {}
-        self.current_metal_mesh_output_config = None
-        self.current_metal_mesh_output_parameter = None
-        self.current_metal_mesh_grid_properties_parameter = None
-        self.current_metal_mesh_payload_parameter = None
-        self.current_metal_mesh_payload_type = None
-        self.current_metal_mesh_output_accumulators = {}
-        self.current_metal_non_thread_payload_parameters = set()
-        self.metal_ray_payload_parameter_types = set()
-        self.function_metal_mesh_dispatch_contexts = {}
-        self.function_metal_mesh_dispatch_contexts_by_id = {}
-        self.metal_program_mesh_payload_type = self.metal_mesh_payload_type_for_program(
-            ast
-        )
-        self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
-        )
-        # Declared types of program-scope constants, so expressions that read
-        # them (such as an array constant copied into an array member) are typed.
-        self.metal_program_scope_constant_types = {
-            node.name: self.type_name_string(
-                getattr(node, "const_type", getattr(node, "vtype", None))
-            )
-            for node in getattr(ast, "constants", []) or []
-            if getattr(node, "name", None)
-        }
-        structs = deduplicate_named_declarations(
-            list(getattr(ast, "structs", []) or [])
-            + collect_stage_local_structs(ast, target_stage),
-            "struct",
-        )
-        self.structs_by_name = {
-            node.name: node for node in structs if isinstance(node, StructNode)
-        }
-        self.metal_static_struct_members = {
-            node.name: {
-                getattr(member, "name", None)
-                for member in getattr(node, "members", []) or []
-                if any(
-                    self.normalized_metal_abi_attribute_name(attribute) == "static"
-                    for attribute in getattr(member, "attributes", []) or []
-                )
-            }
-            for node in structs
-            if isinstance(node, StructNode)
-        }
-        self.metal_union_layouts = {}
-        for node in structs:
-            layout = self.metal_union_layout_contract(node)
-            if layout is not None:
-                self.metal_union_layouts[node.name] = layout
-        self.collect_metal_hlsl_buffer_layouts(ast)
-        if self.metal_hlsl_cbuffer_plans:
-            self.cbuffer_member_references = self.collect_cbuffer_member_references(
-                self.cbuffer_variables
-            )
-        self.metal_generated_struct_names = set()
-        self.metal_vertex_entry_input_struct_names = (
-            self.collect_metal_stage_entry_parameter_struct_names(
-                ast, target_stage, "vertex"
-            )
-        )
-        # A mesh function's vertex and primitive structures feed the fragment ``[[stage_in]]`` as a vertex
-        # function's output does, and link by the same ``[[user(...)]]`` keys (:mod:`.metal_varyings`).
-        self.metal_vertex_entry_output_struct_names = (
-            self.collect_metal_stage_entry_return_struct_names(
-                ast, target_stage, "vertex"
-            )
-            | self.collect_metal_mesh_output_struct_names(ast, target_stage, "vertices")
-        )
-        self.metal_mesh_primitive_struct_names = (
-            self.collect_metal_mesh_output_struct_names(ast, target_stage, "primitives")
-        )
-        self.metal_fragment_entry_input_struct_names = (
-            self.collect_metal_stage_entry_parameter_struct_names(
-                ast, target_stage, "fragment"
-            )
-        )
-        self.metal_fragment_entry_output_struct_names = (
-            self.collect_metal_stage_entry_return_struct_names(
-                ast, target_stage, "fragment"
-            )
-        )
-        self.metal_stage_io_struct_names = (
-            set(self.metal_vertex_entry_input_struct_names)
-            | set(self.metal_vertex_entry_output_struct_names)
-            | set(self.metal_fragment_entry_input_struct_names)
-            | set(self.metal_fragment_entry_output_struct_names)
-        )
-        self.metal_ray_payload_parameter_types = (
-            self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))
-        )
-        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
-            structs
-        )
-        self.generic_struct_definitions = collect_generic_struct_definitions(
-            structs,
-            excluded_names=set(self.generic_enum_struct_definitions),
-        )
-        self.generic_enum_specializations = collect_generic_enum_specializations(
+        code = self.render_metal_program_scope_variables(code, global_vars)
+
+        code, stage_entry_names = self.collect_metal_program_function_dependencies(
             ast,
-            self.generic_enum_struct_definitions,
-            self.type_name_string,
-        )
-        self.generic_struct_specializations = collect_generic_struct_specializations(
-            ast,
-            self.generic_struct_definitions,
-            self.type_name_string,
-        )
-        self.plain_enums = collect_plain_enums(structs)
-        self.struct_payload_enums = collect_struct_payload_enums(structs)
-        self.enum_type_names = collect_enum_type_names(self.plain_enums)
-        self.enum_struct_type_names = (
-            collect_enum_type_names(self.struct_payload_enums)
-            | set(self.generic_enum_struct_definitions)
-            | {
-                specialization["struct_name"]
-                for specialization in self.generic_enum_specializations.values()
-            }
-        )
-        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constructors = collect_enum_variant_constructors(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
-            self.struct_payload_enums
-        )
-        self.enum_variant_constants = {
-            **collect_enum_variant_constants(
-                self.plain_enums + self.struct_payload_enums
-            ),
-            **collect_generic_enum_variant_constants(
-                self.generic_enum_struct_definitions
-            ),
-        }
-        stage_local_resource_variables = collect_stage_local_variables(
-            ast, target_stage, self.is_stage_local_resource_variable
-        )
-        self.metal_source_binding_stage_by_id = (
-            self.collect_stage_local_resource_stage_scopes(
-                ast, target_stage, stage_local_resource_variables
-            )
-        )
-        global_vars = deduplicate_named_declarations(
-            [
-                node
-                for node in list(getattr(ast, "global_variables", []) or [])
-                if not self.is_metal_type_alias_declaration(node)
-            ]
-            + stage_local_resource_variables,
-            "Metal resource",
-        )
-        self.metal_lowered_program_scope_groupshared_globals_by_function = (
-            self.collect_metal_lowered_program_scope_groupshared_globals(
-                ast, target_stage, global_vars, all_functions
-            )
-        )
-        self.metal_lowered_program_scope_groupshared_global_ids = {
-            id(node)
-            for nodes in (
-                self.metal_lowered_program_scope_groupshared_globals_by_function.values()
-            )
-            for node in nodes
-        }
-        thread_private_globals, thread_private_ids = (
-            self.collect_metal_lowered_thread_private_globals(
-                ast, target_stage, global_vars, all_functions
-            )
-        )
-        for function_id, nodes in thread_private_globals.items():
-            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
-                function_id, []
-            ).extend(nodes)
-        self.metal_lowered_program_scope_groupshared_global_ids.update(
-            thread_private_ids
-        )
-        threadgroup_storage, threadgroup_ids = (
-            collect_metal_forwarded_threadgroup_storage(
-                self,
-                ast,
-                target_stage,
-                global_vars,
-                all_functions,
-                METAL_GROUPSHARED_ENTRY_STAGES,
-            )
-        )
-        for function_id, nodes in threadgroup_storage.items():
-            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
-                function_id, []
-            ).extend(nodes)
-        self.metal_lowered_program_scope_groupshared_global_ids.update(threadgroup_ids)
-        self.metal_runtime_initialized_constants = (
-            self.collect_metal_runtime_initialized_constants(global_vars)
-        )
-        self.metal_spirv_interface_variables = [
-            node for node in global_vars if self.is_spirv_stage_interface_layout(node)
-        ]
-        self.glsl_buffer_block_struct_names = (
-            self.collect_glsl_buffer_block_struct_names(
-                list(global_vars) + self.collect_function_parameters(all_functions)
-            )
-        )
-        (
-            self.resource_array_size_hints,
-            self.function_resource_array_size_hints,
-        ) = self.collect_resource_array_size_hints(ast)
-        self.function_structured_buffer_length_dependencies = (
-            self.collect_function_structured_buffer_length_dependencies(all_functions)
-        )
-        self.global_structured_buffer_length_dependencies = (
-            self.collect_global_structured_buffer_length_dependencies(
-                all_functions, global_vars
-            )
-        )
-        self.validate_global_resource_shadows(ast)
-        self.current_function_name = None
-        self.current_function_return_type = None
-        self.current_function_return_wrapper = None
-        self.current_expression_expected_type = None
-        self.suppress_image_load_component_suffix = False
-        self.required_buffer_atomic_compare_helpers = set()
-        self.required_metal_wave_ballot_helper = False
-        self.metal_wave_extension_helpers = {}
-        self.metal_exponent_helpers = {}
-        self.metal_texture_residency_helpers = {}
-        self.required_metal_wave_match_helper = False
-        self.required_metal_wave_mask_contains_helper = False
-        self.required_metal_wave_multi_prefix_helpers = set()
-        self.required_metal_inverse_helpers = set()
-        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
-        self.metal_array_arguments = MetalArrayArguments(self)
-        self.required_metal_integer_dot_helper = False
-        self.metal_argument_substitutions = {}
-        self.metal_writeback_statement_ids = set()
-        self.metal_sequenced_call_ids = set()
-        self.metal_writeback_temporary_count = 0
-        self.required_metal_ray_query_runtime = False
-        self.required_metal_ray_desc_runtime = False
-        self.required_metal_ray_query_helpers = set()
-        self.local_variable_types = {}
-        self.current_metal_native_width_local_array_declaration_ids = set()
-        self.current_metal_graphics_builtin_parameter_names = {}
-        (
-            self.lowered_glsl_buffer_blocks,
-            self.glsl_buffer_block_lowering_failures,
-            self.glsl_buffer_block_struct_lowering_failures,
-        ) = collect_lowered_glsl_buffer_blocks(
-            global_vars,
-            structs_by_name=self.structs_by_name,
-            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
-            resource_base_type=self.resource_base_type,
-            glsl_buffer_block_layout=self.glsl_buffer_block_layout,
-            convert_type_node_to_string=self.convert_type_node_to_string,
-            literal_int_value=lambda expr: self.literal_int_value(
-                expr, self.literal_int_constants
-            ),
-            map_type=self.map_type,
-            target_type_key="metal_type",
-            unsupported_type_message=(
-                "type is not supported by Metal pointer/offset lowering"
-            ),
-            component_refusal=metal_glsl_buffer_component_refusal,
-        )
-        self.record_metal_glsl_buffer_block_layout_failures(
-            global_vars,
-            self.lowered_glsl_buffer_blocks,
-            self.glsl_buffer_block_lowering_failures,
-            self.glsl_buffer_block_struct_lowering_failures,
-        )
-        self.lowered_glsl_buffer_block_struct_names = {
-            block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
-        }
-        for node in global_vars:
-            block = self.lowered_glsl_buffer_blocks.get(getattr(node, "name", None))
-            if block is not None:
-                block["memory"] = self.resource_memory_qualifier_prefix(
-                    node, getattr(node, "var_type", None)
-                )
-        self.metal_specialization_macro_constants = (
-            specialization_constants_sizing_arrays(
-                ast,
-                lambda node: self.metal_specialization_constant_id(node) is not None,
-                flattened_stage_io_array_types(
-                    structs,
-                    self.metal_stage_io_struct_names,
-                    self.metal_stage_io_member_array_info,
-                )
-                + block_member_array_types(
-                    self.cbuffer_variables,
-                    structs,
-                    self.lowered_glsl_buffer_block_struct_names,
-                ),
-            )
-        )
-        self.unsupported_glsl_buffer_block_struct_names = set(
-            self.glsl_buffer_block_struct_lowering_failures
-        )
-        _, _, parameter_struct_failures = (
-            self.collect_lowered_glsl_buffer_block_parameters(
-                self.collect_function_parameters(all_functions)
-            )
-        )
-        self.unsupported_glsl_buffer_block_struct_names.update(
-            parameter_struct_failures
-        )
-        self.unsupported_glsl_buffer_block_functions = (
-            self.collect_unsupported_glsl_buffer_block_functions(all_functions)
-        )
-        self.struct_member_types = collect_struct_member_types(
-            structs, self.type_name_string
-        )
-        for owner, names in self.metal_static_struct_members.items():
-            for name in names:
-                self.struct_member_types.get(owner, {}).pop(name, None)
-        self.struct_member_address_spaces = self.collect_struct_member_address_spaces(
-            structs
-        )
-        self.struct_member_types.update(
-            collect_generic_enum_specialization_member_types(
-                self,
-                self.generic_enum_specializations,
-            )
-        )
-        self.struct_member_types.update(
-            collect_generic_struct_specialization_member_types(
-                self,
-                self.generic_struct_specializations,
-            )
-        )
-        generic_function_specializations = prepare_generic_function_specializations(
-            self,
+            target_stage,
             all_functions,
-            {
-                **getattr(self, "metal_program_scope_constant_types", {}),
-                **getattr(self, "metal_cbuffer_member_types", {}),
-                **metal_generic_global_types(self, global_vars),
-            },
-            ast=ast,
-        )
-        self.function_return_types.update(
-            {
-                func.name: self.metal_effective_function_return_type(func)
-                for func in generic_function_specializations.values()
-            }
-        )
-        self.user_function_names.update(
-            func.name for func in generic_function_specializations.values()
-        )
-        if generic_function_specializations:
-            self.function_parameter_names.update(
-                collect_function_parameter_names(
-                    generic_function_specializations.values()
-                )
-            )
-            self.function_parameter_nodes.update(
-                self.collect_function_parameter_nodes(
-                    generic_function_specializations.values()
-                )
-            )
-            generic_specialization_roots = [
-                ast,
-                *generic_function_specializations.values(),
-            ]
-            self.generic_enum_specializations = collect_generic_enum_specializations(
-                generic_specialization_roots,
-                self.generic_enum_struct_definitions,
-                self.type_name_string,
-            )
-            self.generic_struct_specializations = (
-                collect_generic_struct_specializations(
-                    generic_specialization_roots,
-                    self.generic_struct_definitions,
-                    self.type_name_string,
-                )
-            )
-            for func in generic_function_specializations.values():
-                self.add_metal_generic_specializations_from_type_text(
-                    self.type_name_string(getattr(func, "return_type", None))
-                )
-                for parameter in getattr(
-                    func, "parameters", getattr(func, "params", [])
-                ):
-                    self.add_metal_generic_specializations_from_type_text(
-                        self.type_name_string(getattr(parameter, "param_type", None))
-                    )
-            self.enum_struct_type_names = (
-                collect_enum_type_names(self.struct_payload_enums)
-                | set(self.generic_enum_struct_definitions)
-                | {
-                    specialization["struct_name"]
-                    for specialization in self.generic_enum_specializations.values()
-                }
-            )
-            self.enum_variant_constants = {
-                **collect_enum_variant_constants(
-                    self.plain_enums + self.struct_payload_enums
-                ),
-                **collect_generic_enum_variant_constants(
-                    self.generic_enum_struct_definitions
-                ),
-            }
-            self.struct_member_types.update(
-                collect_generic_enum_specialization_member_types(
-                    self,
-                    self.generic_enum_specializations,
-                )
-            )
-            self.struct_member_types.update(
-                collect_generic_struct_specialization_member_types(
-                    self,
-                    self.generic_struct_specializations,
-                )
-            )
-        # Collect cbuffer dependencies after generic specializations exist, so a
-        # specialization that reads a cbuffer member (e.g. `scaled_float` reading
-        # `gain`) gets the cbuffer threaded as a parameter like any other helper.
-        # The unspecialized generic templates are excluded, mirroring the
-        # global-resource collection below: emission and call sites query the
-        # specialization name, not the template name.
-        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
-            [f for f in all_functions if not generic_function_parameters(f)]
-            + list(generic_function_specializations.values())
-        )
-        wave_dependency_functions = list(all_functions) + list(
-            generic_function_specializations.values()
-        )
-        self.function_metal_wave_lane_dependencies = (
-            self.collect_function_metal_wave_lane_dependencies(
-                wave_dependency_functions
-            )
-        )
-        self.function_metal_wave_lane_parameter_names = (
-            self.collect_function_metal_wave_lane_parameter_names(
-                wave_dependency_functions
-            )
-        )
-        self.function_metal_mesh_dispatch_contexts = (
-            self.collect_function_metal_mesh_dispatch_contexts(
-                list(all_functions) + list(generic_function_specializations.values())
-            )
-        )
-        self.metal_stage_io_member_lowerings = (
-            self.collect_metal_stage_io_member_lowerings(structs)
-        )
-        self.metal_signed_builtin_members = collect_metal_signed_builtin_members(
-            self, structs
-        )
-        code = "\n"
-        code += source_license_comments(ast, "metal")
-        if getattr(self, "metal_safe_math", False):
-            code += METAL_SAFE_MATH_PRAGMA + "\n"
-        preprocessors = getattr(ast, "preprocessors", []) or []
-        pre_lines = []
-        for directive in preprocessors:
-            line = self.generate_preprocessor_directive(directive)
-            if line:
-                pre_lines.append(line)
-        if (
-            self.requires_metal_system_thread_scope
-            or self.requires_metal_resource_coherence
-        ) and not any("#pragma metal internals" in line.lower() for line in pre_lines):
-            code += "#pragma METAL internals : enable\n"
-        if pre_lines:
-            code += "\n".join(pre_lines) + "\n"
-        if not any("metal_stdlib" in line for line in pre_lines):
-            code += "#include <metal_stdlib>\n"
-        if self.requires_metal_atomic_fence and not any(
-            "metal_atomic" in line for line in pre_lines
-        ):
-            code += "#include <metal_atomic>\n"
-        if uses_debug_printf(self, ast) and not any(
-            "metal_logging" in line for line in pre_lines
-        ):
-            code += "#include <metal_logging>\n"
-        if self.uses_cooperative_matrix(ast) and not any(
-            "metal_simdgroup_matrix" in line for line in pre_lines
-        ):
-            code += "#include <metal_simdgroup_matrix>\n"
-        code += "using namespace metal;\n"
-        if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
-            code += "using namespace metal::raytracing;\n"
-        code += "\n"
-        self.metal_prelude_insertion_index = len(code)
-        if self.requires_metal_system_thread_scope:
-            code += self.generate_metal_system_thread_scope_support()
-        code += generate_enum_constants(
-            self,
-            self.plain_enums + self.struct_payload_enums,
-            qualifier=self.metal_unused_declaration_qualifier("constant"),
-        )
-        code += generate_generic_enum_constants(
-            self,
-            self.generic_enum_struct_definitions,
-            qualifier=self.metal_unused_declaration_qualifier("constant"),
-        )
-        leading_constants, struct_dependent_constants = (
-            partition_constants_by_struct_dependency(
-                getattr(ast, "constants", []) or [], structs
-            )
-        )
-        code += self.generate_constants(ast, leading_constants)
-        code += self.generate_metal_builtin_limit_fallbacks(ast, all_functions)
-        code += self.generate_metal_struct_declarations(structs)
-        code += self.generate_constants(
-            ast, struct_dependent_constants, include_function_constants=False
-        )
-        code += self.generate_metal_stage_io_array_helpers()
-        code += self.generate_metal_enum_constructor_functions(
-            self.struct_payload_enums
-        )
-        code += self.generate_metal_generic_enum_constructor_functions(
-            self.generic_enum_specializations
-        )
-
-        texture_register = 0
-        sampler_register = 0
-        buffer_register = 0
-        used_resource_bindings = {}
-        source_resource_bindings = {}
-        self.pre_reserve_cbuffer_bindings(
-            used_resource_bindings, source_resource_bindings
-        )
-        self.reserve_explicit_global_resource_bindings(
-            global_vars, used_resource_bindings, source_resource_bindings
-        )
-        buffer_register = self.reserve_cbuffer_bindings(
-            used_resource_bindings,
-            source_resource_bindings,
-        )
-        for i, node in enumerate(global_vars):
-            if self.is_spirv_stage_interface_layout(node):
-                continue
-
-            resource_count = 1
-            array_size = None
-            if getattr(node, "var_type", None) is not None:
-                if (
-                    hasattr(node.var_type, "name")
-                    or hasattr(node.var_type, "element_type")
-                    or isinstance(node.var_type, (PointerType, ReferenceType))
-                ):
-                    if (
-                        hasattr(node.var_type, "element_type")
-                        and str(type(node.var_type)).find("ArrayType") != -1
-                    ):  # ArrayType
-                        base_type = self.convert_type_node_to_string(
-                            node.var_type.element_type
-                        )
-                        # An array of arrays: the outer dimension is the first suffix.
-                        base_type, element_suffix = split_array_type_suffix(base_type)
-                        array_size = (
-                            self.expression_to_string(node.var_type.size)
-                            if node.var_type.size
-                            else self.resource_array_size_hints.get(node.name, "")
-                        )
-                        vtype = base_type
-                        array_suffix = (
-                            f"[{array_size}]" if array_size else "[]"
-                        ) + element_suffix
-                        resource_count = self.resource_array_count(
-                            node.var_type.size if node.var_type.size else array_size
-                        )
-                        element_type = node.var_type.element_type
-                        while isinstance(element_type, ArrayType):
-                            resource_count *= self.resource_array_count(
-                                element_type.size
-                            )
-                            element_type = element_type.element_type
-                    else:
-                        vtype = self.convert_type_node_to_string(node.var_type)
-                        array_suffix = ""
-                else:
-                    vtype = str(node.var_type)
-                    array_suffix = ""
-            elif getattr(node, "vtype", None) is not None:
-                vtype = node.vtype
-                array_suffix = ""
-            else:
-                # No written type: take it from the initializer so a shader-scope
-                # `let scale = 2.0` is `constant float scale = 2.0`, not
-                # `constant None scale` (#2444).
-                vtype = self.infer_metal_global_value_type(node)
-                array_suffix = ""
-
-            var_name = getattr(node, "name", getattr(node, "variable_name", None))
-            if id(node) in self.hlsl_program_constant_global_ids:
-                continue
-            if id(node) in self.metal_lowered_program_scope_groupshared_global_ids:
-                continue
-            if self.is_metal_function_constant_variable(node):
-                continue
-
-            if self.is_metal_argument_buffer_global(node):
-                binding = self.metal_argument_buffer_binding(node)
-                declaration = self.format_metal_argument_buffer_global(
-                    node, vtype, var_name
-                )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                code += declaration
-                buffer_register = max(buffer_register, binding + resource_count)
-                continue
-
-            lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
-            if lowered_block is not None:
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                self.glsl_buffer_block_variables.append(
-                    (node, binding, lowered_block, array_size)
-                )
-                buffer_register = max(buffer_register, binding + resource_count)
-                continue
-
-            if self.is_glsl_buffer_block_variable(node, vtype):
-                code += self.glsl_buffer_block_diagnostic(
-                    "Metal", vtype, var_name, node
-                )
-                self.unsupported_glsl_buffer_block_variables.add(var_name)
-                self.unsupported_glsl_buffer_block_variable_types[var_name] = (
-                    self.type_name_string(vtype)
-                )
-                code += self.unsupported_glsl_buffer_block_variable_placeholder(
-                    "Metal", vtype, var_name
-                )
-                continue
-
-            metal_buffer_address_space = self.metal_buffer_resource_address_space(
-                node, vtype
-            )
-            if metal_buffer_address_space is not None:
-                binding_count = self.metal_buffer_resource_binding_count(
-                    node, array_size
-                )
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        binding_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    binding_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                self.metal_buffer_resource_variables.append(
-                    (node, binding, vtype, array_size, metal_buffer_address_space)
-                )
-                buffer_register = max(buffer_register, binding + binding_count)
-                continue
-
-            if self.is_acceleration_structure_type(vtype):
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                mapped_type = self.map_resource_type_with_format(vtype, node)
-                if array_size is not None:
-                    self.unsupported_metal_acceleration_structure_array_variables[
-                        var_name
-                    ] = mapped_type
-                    code += (
-                        self.unsupported_metal_acceleration_structure_array_diagnostic(
-                            var_name
-                        )
-                    )
-                    buffer_register = max(buffer_register, binding + resource_count)
-                    continue
-                self.acceleration_structure_variables.append(
-                    (node, binding, mapped_type, array_size)
-                )
-                buffer_register = max(buffer_register, binding + resource_count)
-                continue
-
-            if self.is_visible_function_table_type(vtype):
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                if array_size is not None:
-                    self.unsupported_metal_ray_function_table_array_variables[
-                        var_name
-                    ] = "visible_function_table"
-                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
-                        "visible_function_table", var_name
-                    )
-                    buffer_register = max(buffer_register, binding + resource_count)
-                    continue
-                mapped_type = self.map_visible_function_table_type(vtype)
-                self.visible_function_table_variables.append(
-                    (node, binding, mapped_type, array_size)
-                )
-                buffer_register = max(buffer_register, binding + resource_count)
-                continue
-
-            if self.is_intersection_function_table_type(vtype):
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                if array_size is not None:
-                    self.unsupported_metal_ray_function_table_array_variables[
-                        var_name
-                    ] = "intersection_function_table"
-                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
-                        "intersection_function_table", var_name
-                    )
-                    buffer_register = max(buffer_register, binding + resource_count)
-                    continue
-                mapped_type = self.map_intersection_function_table_type(vtype)
-                self.intersection_function_table_variables.append(
-                    (node, binding, mapped_type, array_size)
-                )
-                buffer_register = max(buffer_register, binding + resource_count)
-                continue
-
-            if self.is_structured_buffer_type(vtype):
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "buffer"}, ("b", "u", "t")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "buffer",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    buffer_register,
-                )
-                self.structured_buffer_variables.append(
-                    (node, binding, vtype, array_size)
-                )
-                buffer_register = max(buffer_register, binding + resource_count)
-                if self.structured_buffer_requires_length(var_name):
-                    length_binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                    length_name = self.structured_buffer_length_resource_name(var_name)
-                    self.reserve_resource_binding_range(
-                        used_resource_bindings,
-                        "Metal",
-                        "buffer",
-                        length_binding,
-                        resource_count,
-                        length_name,
-                    )
-                    self.structured_buffer_length_variables.append(
-                        (node, length_binding, vtype, array_size)
-                    )
-                    buffer_register = max(
-                        buffer_register, length_binding + resource_count
-                    )
-                if self.structured_buffer_requires_counter(vtype):
-                    counter_binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "buffer",
-                        buffer_register,
-                        resource_count,
-                    )
-                    counter_name = self.structured_buffer_counter_resource_name(
-                        var_name
-                    )
-                    self.reserve_resource_binding_range(
-                        used_resource_bindings,
-                        "Metal",
-                        "buffer",
-                        counter_binding,
-                        resource_count,
-                        counter_name,
-                    )
-                    self.structured_buffer_counter_variables.append(
-                        (node, counter_binding, vtype, array_size)
-                    )
-                    buffer_register = max(
-                        buffer_register, counter_binding + resource_count
-                    )
-            elif vtype in [
-                "sampler1D",
-                "sampler1DArray",
-                "sampler2D",
-                "sampler3D",
-                "samplerCube",
-                "sampler2DArray",
-                "samplerCubeArray",
-                "sampler2DMS",
-                "sampler2DMSArray",
-                "sampler2DShadow",
-                "sampler2DArrayShadow",
-                "samplerCubeShadow",
-                "samplerCubeArrayShadow",
-                "isampler1D",
-                "isampler1DArray",
-                "isampler2D",
-                "isampler3D",
-                "isamplerCube",
-                "isampler2DArray",
-                "isamplerCubeArray",
-                "isampler2DMS",
-                "isampler2DMSArray",
-                "usampler1D",
-                "usampler1DArray",
-                "usampler2D",
-                "usampler3D",
-                "usamplerCube",
-                "usampler2DArray",
-                "usamplerCubeArray",
-                "usampler2DMS",
-                "usampler2DMSArray",
-                "iimage1D",
-                "iimage1DArray",
-                "iimage2D",
-                "iimage3D",
-                "iimage2DArray",
-                "iimage2DMS",
-                "iimage2DMSArray",
-                "uimage1D",
-                "uimage1DArray",
-                "uimage2D",
-                "uimage3D",
-                "uimage2DArray",
-                "uimage2DMS",
-                "uimage2DMSArray",
-                "image1D",
-                "image1DArray",
-                "image2D",
-                "image3D",
-                "imageCube",
-                "image2DArray",
-                "image2DMS",
-                "image2DMSArray",
-                *TEXEL_BUFFER_TYPES,
-            ]:
-                mapped_type = self.map_resource_type_with_format(vtype, node)
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "texture"}, ("t", "u")
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "texture",
-                        texture_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "texture",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    texture_register,
-                )
-                self.texture_variables.append((node, binding, mapped_type, array_size))
-                self.texture_variable_types[node.name] = mapped_type
-                self.texture_variable_raw_types[node.name] = self.resource_base_type(
-                    vtype
-                )
-                record_explicit_image_metadata(
-                    node.name,
-                    node,
-                    self.attribute_value_to_string,
-                    image_formats=self.image_variable_formats,
-                )
-                texture_register = max(texture_register, binding + resource_count)
-            elif self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}:
-                binding = self.explicit_resource_binding_index(
-                    node, {"binding", "sampler"}, ("s",)
-                )
-                if binding is None:
-                    binding = self.next_available_resource_binding(
-                        used_resource_bindings,
-                        "sampler",
-                        sampler_register,
-                        resource_count,
-                    )
-                binding = self.reserve_or_remap_resource_binding(
-                    used_resource_bindings,
-                    source_resource_bindings,
-                    "sampler",
-                    binding,
-                    resource_count,
-                    var_name,
-                    node,
-                    sampler_register,
-                )
-                self.sampler_variables.append((node, binding, array_size))
-                sampler_register = max(sampler_register, binding + resource_count)
-            elif self.is_input_attachment_type_name(vtype):
-                self.refuse_lowering(
-                    f"input attachment declaration: '{var_name}' uses "
-                    f"{self.type_name_string(vtype)}; subpassInput resources require "
-                    "Vulkan subpass lowering"
-                )
-            else:
-                mapped_type = self.map_type(vtype)
-                if (
-                    var_name in self.metal_runtime_initialized_constants
-                    and not array_suffix
-                ):
-                    qualifier = self.global_variable_qualifier(node)
-                    self.record_metal_program_scope_value_global(
-                        var_name, vtype, qualifier, node
-                    )
-                    init_expr = self.generate_expression_with_expected(
-                        getattr(node, "initial_value", None),
-                        getattr(node, "var_type", vtype),
-                    )
-                    # Metal program-scope constants need constant expressions;
-                    # a source constant computed by a function call becomes an
-                    # accessor that each use calls.
-                    code += (
-                        f"inline {mapped_type} {var_name}() {{\n"
-                        f"    return {init_expr};\n"
-                        "}\n"
-                    )
-                    continue
-                declaration = format_c_style_array_declaration(mapped_type, var_name)
-                if array_suffix:
-                    declaration = f"{declaration}{array_suffix}"
-                qualifier = self.global_variable_qualifier(node)
-                declaration = f"{qualifier}{declaration}"
-                resolved_var_type = getattr(node, "var_type", None) or vtype
-                self.record_metal_program_scope_value_global(
-                    var_name, resolved_var_type, qualifier, node
-                )
-                initial_value = getattr(node, "initial_value", None)
-                if initial_value is not None:
-                    expected_type = getattr(node, "var_type", None) or vtype
-                    init_expr = self.generate_expression_with_expected(
-                        initial_value, expected_type
-                    )
-                    code += f"{declaration} = {init_expr};\n"
-                elif self.global_value_variable_requires_initializer(qualifier):
-                    self.refuse_program_scope_groupshared_global(var_name, node)
-                    init_expr = self.metal_program_scope_global_default_initializer(
-                        mapped_type, array_suffix
-                    )
-                    code += f"{declaration} = {init_expr};\n"
-                else:
-                    code += f"{declaration};\n"
-
-        self.function_global_resource_dependencies = (
-            self.collect_function_global_resource_dependencies(
-                [f for f in all_functions if not generic_function_parameters(f)]
-                + list(generic_function_specializations.values())
-            )
-        )
-        self.function_stage_parameter_dependencies = (
-            self.collect_function_stage_parameter_dependencies(ast, target_stage)
-        )
-        self.function_stage_output_dependencies = (
-            self.collect_function_stage_output_dependencies(ast, target_stage)
-        )
-        self.metal_device_coherent_textures = collect_device_coherent_textures(
-            [entry[0] for entry in self.texture_variables],
-            all_functions,
-            is_storage_texture=self.is_metal_storage_texture_node,
-            contracts_of=lambda node: self.resource_memory_qualifier_contracts(
-                node, getattr(node, "param_type", getattr(node, "var_type", None))
-            ),
-            call_name=self.function_call_name,
-            iter_nodes=self.iter_ast_nodes,
-            refuse=self.refuse_lowering,
-        )
-        self.metal_inherited_buffer_contracts = collect_inherited_buffer_contracts(
+            code,
+            generic_function_specializations,
             global_vars,
-            all_functions,
-            contracts_of=lambda node: self.resource_memory_qualifier_contracts(
-                node, getattr(node, "param_type", getattr(node, "var_type", None))
-            ),
-            call_name=self.function_call_name,
-            iter_nodes=self.iter_ast_nodes,
         )
 
-        cbuffers = self.cbuffer_variables
-        if cbuffers:
-            code += "// Constant Buffers\n"
-            code += self.generate_cbuffers(ast)
-        code += self.metal_hlsl_structured_element_definitions()
-
-        stage_entry_names = self.stage_entry_names(ast, target_stage)
-        self.metal_compute_only_program = self.metal_program_is_compute_only(
-            ast, target_stage
+        functions_code = self.render_metal_program_functions(
+            ast, target_stage, stage_entry_names
         )
 
-        functions = order_functions_by_dependencies(
-            getattr(ast, "functions", []),
-            self.iter_ast_nodes,
-            self.function_call_name,
-            FunctionCallNode,
-            include_overloads=True,
+        return self.append_metal_program_helpers(code, functions_code)
+
+    def declare_metal_program_scope_variable(self, emission, node):
+        """Declare one program-scope variable: a resource gets its binding, and a value gets its address space and initializer."""
+        if self.is_spirv_stage_interface_layout(node):
+            return
+
+        resource_count, array_size, vtype, array_suffix = (
+            self.metal_program_scope_variable_shape(node)
         )
-        functions_code = ""
-        for func in functions:
-            qualifier_name = function_stage_name(func)
 
-            if not should_emit_qualified_function(target_stage, qualifier_name):
-                continue
+        var_name = getattr(node, "name", getattr(node, "variable_name", None))
+        if id(node) in self.hlsl_program_constant_global_ids:
+            return
+        if id(node) in self.metal_lowered_program_scope_groupshared_global_ids:
+            return
+        if self.is_metal_function_constant_variable(node):
+            return
 
-            if generic_function_parameters(func):
-                mark_generic_function_emitted(self, func)
-                for specialized_func in generic_function_emission_list(self, func):
-                    functions_code += self.generate_function(specialized_func)
-                continue
+        handled = self.declare_metal_buffer_variable(
+            emission, node, array_size, resource_count, var_name, vtype
+        )
+        if handled is not UNHANDLED:
+            return handled
 
-            if qualifier_name == "vertex":
-                functions_code += "// Vertex Shader\n"
-                functions_code += self.generate_function(
-                    func,
-                    shader_type="vertex",
-                    entry_name=stage_entry_names.get(id(func)),
-                )
-            elif qualifier_name == "fragment":
-                functions_code += "// Fragment Shader\n"
-                functions_code += self.generate_function(
-                    func,
-                    shader_type="fragment",
-                    entry_name=stage_entry_names.get(id(func)),
-                )
-            elif qualifier_name == "compute":
-                functions_code += "// Compute Shader\n"
-                functions_code += self.generate_function(
-                    func,
-                    shader_type="compute",
-                    entry_name=stage_entry_names.get(id(func)),
-                    stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(
-                        func
-                    ),
-                )
-            elif not folded_helper_is_unused(self, func):
-                functions_code += self.generate_function(func)
+        handled = self.declare_metal_ray_tracing_variable(
+            emission, node, array_size, resource_count, var_name, vtype
+        )
+        if handled is not UNHANDLED:
+            return handled
 
-        if hasattr(ast, "stages") and ast.stages:
-            for stage_type, stage in ast.stages.items():
-                stage_name = normalize_stage_name(stage_type)
-                if not stage_matches(target_stage, stage_name):
-                    continue
-
-                for func in order_functions_by_dependencies(
-                    getattr(stage, "local_functions", []) or [],
-                    self.iter_ast_nodes,
-                    self.function_call_name,
-                    FunctionCallNode,
-                ):
-                    if generic_function_parameters(func):
-                        mark_generic_function_emitted(self, func)
-                        for specialized_func in generic_function_emission_list(
-                            self,
-                            func,
-                        ):
-                            functions_code += self.generate_function(specialized_func)
-                    else:
-                        functions_code += self.generate_function(func)
-
-                if hasattr(stage, "entry_point"):
-                    functions_code += f"// {stage_name.title()} Shader\n"
-                    functions_code += self.generate_function(
-                        stage.entry_point,
-                        shader_type=stage_name,
-                        execution_config=getattr(stage, "execution_config", None),
-                        entry_name=stage_entry_names.get(id(stage.entry_point)),
-                        stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(
-                            stage.entry_point,
-                            getattr(stage, "local_variables", []),
-                        ),
-                        stage_node=stage,
-                    )
-
-        code += self.generate_image_atomic_compare_helpers()
-        code += self.metal_texel_buffers.code()
-        code += self.generate_buffer_atomic_compare_helpers()
-        code += self.generate_pointer_atomic_compare_helpers()
-        code += self.generate_metal_wave_helpers()
-        code += emit_metal_wave_extension_helpers(self)
-        code += emit_metal_exponent_helpers(self)
-        code += emit_metal_bit_scan_helpers(self)
-        code += emit_metal_texture_residency_helpers(self)
-        code += emit_metal_extended_arithmetic_helpers(self)
-        code += self.generate_metal_ray_query_helpers()
-        code += self.generate_glsl_buffer_aggregate_load_helpers()
-        code += self.generate_metal_inverse_helpers()
-        code += self.metal_matrix_builtins.code()
-        code += self.generate_metal_integer_dot_helper()
-        code += self.metal_array_arguments.code()
-        code += functions_code
-        if self.metal_emulated_matrix_shapes:
-            index = self.metal_prelude_insertion_index
-            code = (
-                code[:index]
-                + metal_hlsl_matrix_prelude(self.metal_emulated_matrix_shapes)
-                + code[index:]
+        if self.is_structured_buffer_type(vtype):
+            self.declare_metal_structured_buffer_variable(
+                emission, node, array_size, resource_count, var_name, vtype
             )
-        return code
+        elif vtype in [
+            "sampler1D",
+            "sampler1DArray",
+            "sampler2D",
+            "sampler3D",
+            "samplerCube",
+            "sampler2DArray",
+            "samplerCubeArray",
+            "sampler2DMS",
+            "sampler2DMSArray",
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+            "samplerCubeShadow",
+            "samplerCubeArrayShadow",
+            "isampler1D",
+            "isampler1DArray",
+            "isampler2D",
+            "isampler3D",
+            "isamplerCube",
+            "isampler2DArray",
+            "isamplerCubeArray",
+            "isampler2DMS",
+            "isampler2DMSArray",
+            "usampler1D",
+            "usampler1DArray",
+            "usampler2D",
+            "usampler3D",
+            "usamplerCube",
+            "usampler2DArray",
+            "usamplerCubeArray",
+            "usampler2DMS",
+            "usampler2DMSArray",
+            "iimage1D",
+            "iimage1DArray",
+            "iimage2D",
+            "iimage3D",
+            "iimage2DArray",
+            "iimage2DMS",
+            "iimage2DMSArray",
+            "uimage1D",
+            "uimage1DArray",
+            "uimage2D",
+            "uimage3D",
+            "uimage2DArray",
+            "uimage2DMS",
+            "uimage2DMSArray",
+            "image1D",
+            "image1DArray",
+            "image2D",
+            "image3D",
+            "imageCube",
+            "image2DArray",
+            "image2DMS",
+            "image2DMSArray",
+            *TEXEL_BUFFER_TYPES,
+        ]:
+            self.declare_metal_texture_variable(
+                emission, node, array_size, resource_count, var_name, vtype
+            )
+        elif self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}:
+            self.declare_metal_sampler_variable(
+                emission, node, array_size, resource_count, var_name
+            )
+        elif self.is_input_attachment_type_name(vtype):
+            self.refuse_lowering(
+                f"input attachment declaration: '{var_name}' uses "
+                f"{self.type_name_string(vtype)}; subpassInput resources require "
+                "Vulkan subpass lowering"
+            )
+        else:
+            return self.declare_metal_value_variable(
+                emission, node, array_suffix, var_name, vtype
+            )
 
     def metal_struct_alignment_error(self, node, reason, detail):
         struct_name = getattr(node, "name", "<anonymous>")
