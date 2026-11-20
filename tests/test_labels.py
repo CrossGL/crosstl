@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = {
     "bug",
     "enhancement",
-    "documentation",
     "question",
     "good first issue",
     "help wanted",
@@ -57,7 +56,7 @@ def _many(count=labels.MINIMUM):
 def test_the_label_file_defines_the_taxonomy_and_little_else():
     names = {label.name for label in load()}
     assert TAXONOMY <= names
-    assert len(names) <= 31
+    assert len(names) <= 30
 
 
 def test_labels_that_workflows_and_dependabot_apply_are_defined():

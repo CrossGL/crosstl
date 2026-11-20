@@ -594,6 +594,16 @@ class CudaRecordMixin:
             return [VariableNode(vtype, name, attributes=attributes)]
 
         self.eat("SEMICOLON")
+        for member in members:
+            # The members join the enclosing record; whether they overlapped or followed each other is kept here,
+            # and so is the alignment the anonymous aggregate declared.
+            if getattr(member, "anonymous_aggregate", None) is None:
+                member.anonymous_aggregate = str(aggregate_type)
+            if attributes:
+                member.layout_specifiers = (
+                    *getattr(member, "layout_specifiers", ()),
+                    *attributes,
+                )
         return members
 
     def skip_struct_method(self):

@@ -119,6 +119,7 @@ from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -3036,6 +3037,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
@@ -8732,6 +8736,7 @@ class GLSLCodeGen(
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -8744,6 +8749,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -8978,6 +8984,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 

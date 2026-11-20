@@ -36,6 +36,7 @@ from ..refusals import (
 from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import evaluate_literal_int_expression
 from .entry_selection import entry_type_references
+from .glsl_fragment_interlock import fragment_interlock_extension_lines
 from .glsl_scalar_block_layout import scalar_block_layout_extension_line
 from .glsl_tessellation_modes import remember_scoped_control_sources
 from .glsl_version_requirements import (
@@ -767,6 +768,7 @@ class OpenGLProgramOptionMixin:
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
         lines.extend(self.glsl_shader_clock_extension_lines(ast))
+        lines.extend(fragment_interlock_extension_lines(self, ast))
         scalar_layout = scalar_block_layout_extension_line(self, ast)
         if scalar_layout is not None:
             lines.append(scalar_layout)
