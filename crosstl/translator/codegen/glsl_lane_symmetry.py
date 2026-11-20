@@ -6,7 +6,16 @@ OpenGL generator's view of collectives, calls, parameters and storage.
 
 from contextlib import contextmanager
 
-from ..ast import FunctionCallNode, PointerType, ReferenceType, WaveOpNode
+from ..ast import (
+    ASTNode,
+    BinaryOpNode,
+    FunctionCallNode,
+    IfNode,
+    PointerType,
+    ReferenceType,
+    TernaryOpNode,
+    WaveOpNode,
+)
 from .array_utils import evaluate_literal_int_expression
 from .lane_symmetry import SYMMETRIC, UNIFORM, LaneSymmetryAnalysis, SymmetryRules
 
@@ -193,3 +202,66 @@ def validating_function(codegen, function):
         yield
     finally:
         codegen.glsl_software_subgroup_symmetry = None
+
+
+class OpenGLLaneSymmetryExitMixin:
+    """Generator queries that read the lane-symmetry facts of one function."""
+
+    def glsl_software_subgroup_collective_uniform(self, node):
+        """Whether ``node`` is a collective result every holder agrees on.
+
+        That covers a collective of lane-symmetric values, and a name or
+        helper result built from one. Values without a collective keep the
+        generator's other proofs.
+        """
+        symmetry = getattr(self, "glsl_software_subgroup_symmetry", None)
+        return (
+            symmetry is not None
+            and symmetry.collective_derived(node)
+            and symmetry.level(node) == UNIFORM
+        )
+
+    def glsl_software_subgroup_condition_calls(self, statement, uniform=None):
+        """Calls an ``if`` statement's first condition makes uniformly.
+
+        Only the first condition runs whenever the statement does. A call
+        under a conditional operator, or in the right operand of
+        ``&&``/``||``, runs only where the operator's condition selects it,
+        so it counts only when ``uniform(condition)`` proves that every
+        invocation selects it alike. Without ``uniform`` such calls are
+        left out.
+        """
+        if not isinstance(statement, IfNode):
+            return []
+        calls = []
+        pending = [getattr(statement, "condition", None)]
+        while pending:
+            node = pending.pop()
+            if not isinstance(node, ASTNode):
+                continue
+            if isinstance(node, TernaryOpNode):
+                pending.append(node.condition)
+                if uniform is not None and uniform(node.condition):
+                    pending.extend((node.false_expr, node.true_expr))
+                continue
+            if isinstance(node, BinaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"&&", "||"}:
+                pending.append(node.left)
+                if uniform is not None and uniform(node.left):
+                    pending.append(node.right)
+                continue
+            if isinstance(node, FunctionCallNode):
+                calls.append(node)
+            pending.extend(reversed(list(node.child_nodes())))
+        return calls
+
+    def glsl_software_subgroup_uniform_exit(self, node):
+        """Whether every invocation takes the exit ``node`` together.
+
+        The lane-symmetry facts of the function under validation prove it
+        when every condition guarding the exit, and every exit before it, is
+        workgroup-uniform.
+        """
+        symmetry = getattr(self, "glsl_software_subgroup_symmetry", None)
+        return symmetry is not None and symmetry.reach(node) == UNIFORM

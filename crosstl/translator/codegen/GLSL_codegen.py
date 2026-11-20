@@ -14,7 +14,6 @@ from ..ast import (
     ArrayLiteralNode,
     ArrayNode,
     AssignmentNode,
-    ASTNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
@@ -140,7 +139,11 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
-from .glsl_lane_symmetry import GLSLHelperSymmetry, validating_function
+from .glsl_lane_symmetry import (
+    GLSLHelperSymmetry,
+    OpenGLLaneSymmetryExitMixin,
+    validating_function,
+)
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
@@ -189,7 +192,6 @@ from .image_access_contracts import (
     texture_sample_offset_capability_error,
 )
 from .index_range_contracts import IntegerRange
-from .lane_symmetry import UNIFORM
 from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
     fixed_stride_loop_terminates,
@@ -345,6 +347,7 @@ from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
 class GLSLCodeGen(
     OpenGLTableMixin,
+    OpenGLLaneSymmetryExitMixin,
     OpenGLProgramOptionMixin,
     OpenGLSubgroupControlFlowMixin,
     OpenGLProgramStructureMixin,
@@ -1226,41 +1229,6 @@ class GLSLCodeGen(
             for node in self.walk_ast(root)
         )
 
-    def glsl_software_subgroup_condition_calls(self, statement, uniform=None):
-        """Calls an ``if`` statement's first condition makes uniformly.
-
-        Only the first condition runs whenever the statement does. A call
-        under a conditional operator, or in the right operand of
-        ``&&``/``||``, runs only where the operator's condition selects it,
-        so it counts only when ``uniform(condition)`` proves that every
-        invocation selects it alike. Without ``uniform`` such calls are
-        left out.
-        """
-        if not isinstance(statement, IfNode):
-            return []
-        calls = []
-        pending = [getattr(statement, "condition", None)]
-        while pending:
-            node = pending.pop()
-            if not isinstance(node, ASTNode):
-                continue
-            if isinstance(node, TernaryOpNode):
-                pending.append(node.condition)
-                if uniform is not None and uniform(node.condition):
-                    pending.extend((node.false_expr, node.true_expr))
-                continue
-            if isinstance(node, BinaryOpNode) and self.map_operator(
-                getattr(node, "op", getattr(node, "operator", None))
-            ) in {"&&", "||"}:
-                pending.append(node.left)
-                if uniform is not None and uniform(node.left):
-                    pending.append(node.right)
-                continue
-            if isinstance(node, FunctionCallNode):
-                calls.append(node)
-            pending.extend(reversed(list(node.child_nodes())))
-        return calls
-
     def glsl_software_subgroup_uniform_top_level_call_ids(self, body):
         call_ids = set()
         for statement in self.glsl_software_subgroup_statement_list(body):
@@ -2110,15 +2078,7 @@ class GLSLCodeGen(
     def glsl_software_subgroup_exit_uniform_expression(self, node, names, components):
         if isinstance(node, LiteralNode):
             return True
-        symmetry = getattr(self, "glsl_software_subgroup_symmetry", None)
-        if (
-            symmetry is not None
-            and symmetry.collective_derived(node)
-            and symmetry.level(node) == UNIFORM
-        ):
-            # A collective of lane-symmetric values, or a name or helper result
-            # built from one, that every invocation holding it agrees on.
-            # Values without a collective keep the proofs below.
+        if self.glsl_software_subgroup_collective_uniform(node):
             return True
         if isinstance(node, IdentifierNode):
             return node.name in names
@@ -2812,16 +2772,6 @@ class GLSLCodeGen(
         return self.glsl_software_subgroup_loop_controls_preserved(
             node, controls, uniform_exits=True
         )
-
-    def glsl_software_subgroup_uniform_exit(self, node):
-        """Whether every invocation takes the exit ``node`` together.
-
-        The lane-symmetry facts of the function under validation prove it
-        when every condition guarding the exit, and every exit before it, is
-        workgroup-uniform.
-        """
-        symmetry = getattr(self, "glsl_software_subgroup_symmetry", None)
-        return symmetry is not None and symmetry.reach(node) == UNIFORM
 
     def glsl_software_subgroup_loop_controls_preserved(
         self, node, control_names, *, uniform_exits=False
@@ -5224,7 +5174,8 @@ class GLSLCodeGen(
                         mutated.update(target_interval_keys(target))
                 elif isinstance(node, UnaryOpNode) and (
                     self.map_operator(node.op) in {"++", "--"}
-                    or node.op in {
+                    or node.op
+                    in {
                         "PRE_INCREMENT",
                         "PRE_DECREMENT",
                         "POST_INCREMENT",
@@ -5318,9 +5269,8 @@ class GLSLCodeGen(
                         if (
                             isinstance(counter, IdentifierNode)
                             and counter.name == init.name
-                            and init.name not in self.glsl_interval_dependency_names(
-                                offset
-                            )
+                            and init.name
+                            not in self.glsl_interval_dependency_names(offset)
                         ):
                             return counter
                 return None
@@ -5502,7 +5452,8 @@ class GLSLCodeGen(
                                 bounds is None
                                 or info is None
                                 or info.lanes != 1
-                                or info.kind not in {
+                                or info.kind
+                                not in {
                                     ArithmeticScalarKind.SIGNED_INTEGER,
                                     ArithmeticScalarKind.UNSIGNED_INTEGER,
                                 }
@@ -5972,7 +5923,8 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op in {
+                or value.op
+                in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -6173,9 +6125,8 @@ class GLSLCodeGen(
                 exact_values = (
                     self.glsl_storage_pointer_array_loop_iteration_values(
                         value,
-                        counter_mutated=value.init.name in mutation_interval_keys(
-                            value.body, id(value.init)
-                        ),
+                        counter_mutated=value.init.name
+                        in mutation_interval_keys(value.body, id(value.init)),
                     )
                     if count is not None
                     and (pointer_array_loop or aggregate_loop_names)
@@ -6827,7 +6778,8 @@ class GLSLCodeGen(
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op in {
+                or value.op
+                in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -10619,7 +10571,8 @@ class GLSLCodeGen(
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if (
-                func_name in {
+                func_name
+                in {
                     "texture",
                     "textureLod",
                     "textureGrad",
@@ -10639,7 +10592,8 @@ class GLSLCodeGen(
             ):
                 return self.texture_sampling_result_type(args[0], func_name)
             if (
-                func_name in glsl_call_names_resolving_to(
+                func_name
+                in glsl_call_names_resolving_to(
                     self,
                     "derivative-aliases",
                     self.GLSL_DERIVATIVE_FUNCTIONS,
@@ -11445,12 +11399,10 @@ class GLSLCodeGen(
                 )
             if (
                 specialized_func_name is None
-                and original_func_name in getattr(
-                    self, "generic_function_definitions", {}
-                )
-                and original_func_name not in (
-                    getattr(self, "concrete_function_names", None) or ()
-                )
+                and original_func_name
+                in getattr(self, "generic_function_definitions", {})
+                and original_func_name
+                not in (getattr(self, "concrete_function_names", None) or ())
                 and getattr(self, "enforce_concrete_glsl_types", False)
             ):
                 raise OpenGLTemplateTypeError(
@@ -13003,7 +12955,8 @@ class GLSLCodeGen(
                     candidates.append(fallback)
                 for argument_index, argument in enumerate(arguments):
                     if not any(
-                        argument_index < len(
+                        argument_index
+                        < len(
                             parameters := list(
                                 getattr(
                                     candidate,
