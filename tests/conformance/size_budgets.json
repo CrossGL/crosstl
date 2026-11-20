@@ -1,6 +1,5 @@
 {
  "functions": {
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.format_cuda_runtime_call": 2825,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.__init__": 553,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.generate_expression": 395,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.texture_method_descriptor": 403,
@@ -92,7 +91,6 @@
   "moduleLines": 5000
  },
  "modules": {
-  "crosstl/backend/CUDA/CudaCrossGLCodeGen.py": 7614,
   "crosstl/backend/CUDA/CudaParser.py": 5557,
   "crosstl/backend/HIP/HipCrossGLCodeGen.py": 11430,
   "crosstl/backend/HIP/HipParser.py": 5993,
