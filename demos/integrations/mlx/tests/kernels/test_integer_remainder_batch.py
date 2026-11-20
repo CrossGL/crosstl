@@ -6,6 +6,7 @@ import json
 import pytest
 
 from crosstl.project import load_project_config, translate_project
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 from demos.integrations.mlx.tests.kernels import test_current_integer_remainder as rem
 
 
@@ -59,6 +60,8 @@ def small_binary_root(tmp_path):
             if (i < size) c[i] = a[i];
         }
         """
+        + INSTANTIATE_KERNEL_DEFINE
+        + "\n"
         + "\n".join(
             f'instantiate_kernel("{rem._entry(dtype)}", binary, {typename})'
             for dtype, (_, typename, _, _) in rem.TYPES.items()
