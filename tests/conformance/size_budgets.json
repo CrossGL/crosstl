@@ -60,8 +60,6 @@
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.expression_result_type": 368,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression": 465,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.__init__": 592,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.builtin_function_result_type": 324,
-  "crosstl/translator/codegen/slang_codegen.py::SlangCodeGen.generate_expression": 383,
   "crosstl/translator/codegen/slang_codegen.py::SlangCodeGen.generate_function": 378,
   "crosstl/translator/codegen/subgroup_control_flow.py::converge_subgroup_conditional_calls": 1095,
   "crosstl/translator/codegen/wgsl_codegen.py::WGSLCodeGen.generate_program": 370,
