@@ -468,6 +468,10 @@ OTHER_NAMES = {
         "WaveGetNumWaves": "gl_NumSubgroups",
         "WaveGetWaveIndex": "gl_SubgroupID",
         "WorkgroupCount": "gl_NumWorkGroups",
+        # CUDA's threadIdx, blockIdx and blockDim, which Slang reads for CUDA only.
+        "cudaThreadIdx": "gl_LocalInvocationID",
+        "cudaBlockIdx": "gl_WorkGroupID",
+        "cudaBlockDim": "gl_WorkGroupSize",
         "HitTriangleVertexPosition": "gl_HitTriangleVertexPositionsEXT[{}]",
         # GL_EXT_shader_realtime_clock's device-scope clock, as two 32-bit halves.
         "getRealtimeClock": "clockRealtime2x32EXT",

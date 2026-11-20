@@ -13,6 +13,7 @@ from ..dialect import (
 from ..model import (
     COOP_COLUMNS,
     GENERIC_POINTER,
+    SCHEDULE_MASK,
     SLANG_ENUMERATORS,
     WIDE_INTEGERS,
     Type,
@@ -287,6 +288,8 @@ class CrossGL(Dialect):
         # A Metal ballot returns a simd_vote or quad_vote mask (features.metal.VOTES), which no CrossGL type holds.
         if kind.opaque in ("simd_vote", "quad_vote"):
             raise NoSpelling(f"CrossGL has no type for Metal's {kind.opaque} mask")
+        if kind.opaque == SCHEDULE_MASK:
+            raise NoSpelling("CrossGL has no AMD instruction scheduling groups")
         # CrossGL spells Slang's cooperative vectors, their enumerations and tuples as Slang does.
         if kind == COOP_COLUMNS:
             return super().type(kind.with_scalar("int"))

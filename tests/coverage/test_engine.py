@@ -565,6 +565,56 @@ def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys)
 
 
 @pytest.mark.parametrize(
+    ("status", "accepted"), [(0, True), (2, False)], ids=["accepts", "rejects"]
+)
+def test_a_slang_probe_for_cuda_is_written_by_slangc_and_compiled_by_nvcc(
+    tmp_path, monkeypatch, status, accepted
+):
+    calls = tmp_path / "calls"
+    slangc = tmp_path / "slangc"
+    slangc.write_text(
+        "#!/bin/sh\n"
+        f'echo "slangc $*" >> "{calls}"\n'
+        'while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\n'
+        'echo "__global__ void main_0() {}" > "$out"\n'
+    )
+    nvcc = tmp_path / "nvcc"
+    nvcc.write_text(
+        "#!/bin/sh\n"
+        f'echo "nvcc $*" >> "{calls}"\n'
+        f'cat probe.cu >> "{calls}"\n'
+        f'[ {status} = 0 ] || echo "probe.cu(1): error: rejected" >&2\n'
+        f"exit {status}\n"
+    )
+    for tool in (slangc, nvcc):
+        tool.chmod(0o755)
+    tools = {"slangc": slangc, "nvcc": nvcc}
+    monkeypatch.setattr(validators, "command", lambda name: (str(tools[name]),))
+    verdict = validators.validate("slang", "probe", "compute", "main", "cuda")
+    assert verdict.accepted is accepted
+    assert verdict.log == ("" if accepted else "probe.cu(1): error: rejected")
+    assert calls.read_text().splitlines() == [
+        "slangc probe.slang -entry main -stage compute -target cuda -o probe.cu",
+        f"nvcc -arch={validators.CUDA_ARCH} -std=c++17 -c probe.cu -o probe.o",
+        "__global__ void main_0() {}",
+    ]
+
+
+def test_strict_run_names_the_compiler_a_slang_target_needs(monkeypatch, capsys):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        validators, "command", lambda tool: () if tool == "nvcc" else (tool,)
+    )
+    assert cli.main(["run", "--strict", "--backend", "slang"]) == 2
+    assert capsys.readouterr().err.strip() == (
+        "error: missing tools for slang for cuda (nvcc)"
+    )
+
+
+@pytest.mark.parametrize(
     ("banner", "found"),
     [("Mojo 1.1.0 (8189361e)", True), ("mojo 24.4.0 (59977802)", False)],
 )

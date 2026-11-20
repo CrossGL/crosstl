@@ -319,6 +319,7 @@ def test_a_slang_probe_for_hlsl_needs_dxc(monkeypatch):
     )
     assert validators.missing("slang") == ""
     assert validators.missing("slang", "hlsl") == "dxc"
+    assert validators.missing("slang", "cuda") == "nvcc"
     assert not validators.available("slang", "hlsl")
 
 
