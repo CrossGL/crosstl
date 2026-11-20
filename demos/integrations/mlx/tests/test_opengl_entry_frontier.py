@@ -106,7 +106,13 @@ def _diagnostic(module, code, entry, source, artifact_path):
 
 
 def _report(
-    module, mlx_root, output_dir, sources, outcomes_by_source, assertions, entry_rules=None
+    module,
+    mlx_root,
+    output_dir,
+    sources,
+    outcomes_by_source,
+    assertions,
+    entry_rules=None,
 ):
     """A per-entry project report and the files it emits."""
     units, artifacts, diagnostics, files = [], [], [], {}

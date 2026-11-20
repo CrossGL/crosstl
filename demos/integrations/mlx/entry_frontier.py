@@ -225,13 +225,15 @@ def _require_summary(
         and summary.get("artifactCount") == artifact_count
         and summary.get("translatedCount") == translated_count
         and summary.get("failedCount") == failed_count
-        and summary.get("diagnosticCounts") == {
+        and summary.get("diagnosticCounts")
+        == {
             "error": sum(diagnostics_by_code.values()),
             "note": 0,
             "warning": 0,
         }
         and dict(observed_by_code or {}) == dict(diagnostics_by_code)
-        and summary.get("artifactsByTarget") == {
+        and summary.get("artifactsByTarget")
+        == {
             target: {
                 "artifactCount": artifact_count,
                 "translatedCount": translated_count,
@@ -288,7 +290,8 @@ def _require_workgroup_diagnostic(diagnostic: Mapping[str, Any], entry: str) -> 
         and diagnostic.get("message") == WORKGROUP_SIZE_REQUIRED_MESSAGE
         and diagnostic.get("missingCapabilities")
         == ["execution.workgroup-size-specialization"]
-        and execution == {
+        and execution
+        == {
             "reason": "consumed-source-value-unconfigured",
             "sourceEntryPoints": [entry],
         }
@@ -451,9 +454,13 @@ def require_entry_rule_sizes(
         for entry, artifact in artifacts.items():
             if artifact.get("status") != ENTRY_OUTCOME_TRANSLATED:
                 continue
-            patterns = [pattern for pattern in rules if fnmatch.fnmatchcase(entry, pattern)]
+            patterns = [
+                pattern for pattern in rules if fnmatch.fnmatchcase(entry, pattern)
+            ]
             execution = artifact.get("execution")
-            entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
+            entries = (
+                execution.get("entryPoints") if isinstance(execution, Mapping) else None
+            )
             if not patterns:
                 require(
                     not entries,
@@ -461,15 +468,22 @@ def require_entry_rule_sizes(
                 )
                 host_sized.append(entry)
                 continue
-            require(len(patterns) == 1, f"{label} entry rules overlap for {source}:{entry}")
+            require(
+                len(patterns) == 1, f"{label} entry rules overlap for {source}:{entry}"
+            )
             expected = [int(component) for component in rules[patterns[0]]]
-            rule = entries[0].get("rule") if isinstance(entries, list) and len(entries) == 1 else None
+            rule = (
+                entries[0].get("rule")
+                if isinstance(entries, list) and len(entries) == 1
+                else None
+            )
             require(
                 isinstance(rule, Mapping)
                 and entries[0].get("sourceEntryPoint") == entry
                 and entries[0].get("workgroupSize") == expected
                 and rule.get("entryPattern") == patterns[0]
-                and rule.get("components") == [str(component) for component in rules[patterns[0]]],
+                and rule.get("components")
+                == [str(component) for component in rules[patterns[0]]],
                 f"{label} entry rule size changed for {source}:{entry}",
             )
             sized[entry] = expected
@@ -479,7 +493,10 @@ def require_entry_rule_sizes(
                 f"{label} entry rule {pattern!r} sized no translated entry of {source}",
             )
         evidence[source] = {
-            "entryRules": {pattern: list(components) for pattern, components in sorted(rules.items())},
+            "entryRules": {
+                pattern: list(components)
+                for pattern, components in sorted(rules.items())
+            },
             "ruleSizedEntryPoints": sized,
             "hostSizedEntryPoints": host_sized,
         }
