@@ -470,6 +470,39 @@ class VulkanParser(
         "ExclusiveScan": "subgroupExclusive",
         "ClusteredReduce": "subgroupClustered",
     }
+    # Vote, ballot and shuffle instructions that take one value operand after the scope:
+    # ``OpGroupNonUniform<Op> <type> <scope> <value>``.
+    SPIRV_GROUP_NON_UNIFORM_SINGLE_OPERAND_FUNCTIONS = {
+        "OpGroupNonUniformAll": "subgroupAll",
+        "OpGroupNonUniformAny": "subgroupAny",
+        "OpGroupNonUniformAllEqual": "subgroupAllEqual",
+        "OpGroupNonUniformBallot": "subgroupBallot",
+        "OpGroupNonUniformInverseBallot": "subgroupInverseBallot",
+        "OpGroupNonUniformBallotFindLSB": "subgroupBallotFindLSB",
+        "OpGroupNonUniformBallotFindMSB": "subgroupBallotFindMSB",
+    }
+    # Vote, ballot and shuffle instructions that take two value operands after the scope:
+    # ``OpGroupNonUniform<Op> <type> <scope> <value> <index>``.
+    SPIRV_GROUP_NON_UNIFORM_TWO_OPERAND_FUNCTIONS = {
+        "OpGroupNonUniformBallotBitExtract": "subgroupBallotBitExtract",
+        "OpGroupNonUniformShuffle": "subgroupShuffle",
+        "OpGroupNonUniformShuffleXor": "subgroupShuffleXor",
+        "OpGroupNonUniformShuffleUp": "subgroupShuffleUp",
+        "OpGroupNonUniformShuffleDown": "subgroupShuffleDown",
+        "OpGroupNonUniformQuadBroadcast": "subgroupQuadBroadcast",
+    }
+    # BallotBitCount carries a group operation between the scope and the ballot mask.
+    SPIRV_GROUP_NON_UNIFORM_BALLOT_BIT_COUNT_FUNCTIONS = {
+        "Reduce": "subgroupBallotBitCount",
+        "InclusiveScan": "subgroupBallotInclusiveBitCount",
+        "ExclusiveScan": "subgroupBallotExclusiveBitCount",
+    }
+    # QuadSwap carries a constant direction: 0 reads across x, 1 across y, 2 across the diagonal.
+    SPIRV_GROUP_NON_UNIFORM_QUAD_SWAP_DIRECTIONS = {
+        0: "subgroupQuadSwapHorizontal",
+        1: "subgroupQuadSwapVertical",
+        2: "subgroupQuadSwapDiagonal",
+    }
     LEGACY_GLSLANG_SPIRV_ID_OPERANDS = {
         "AccessChain": "all",
         "CompositeConstruct": "all",
@@ -2498,6 +2531,109 @@ class VulkanParser(
                             decorations,
                             constants,
                         )
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if result_id and opcode == "OpGroupNonUniformElect":
+                if len(operands) >= 2:
+                    expressions[result_id] = FunctionCallNode("subgroupElect", [])
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if (
+                result_id
+                and opcode in self.SPIRV_GROUP_NON_UNIFORM_SINGLE_OPERAND_FUNCTIONS
+            ):
+                if len(operands) >= 3:
+                    expressions[result_id] = FunctionCallNode(
+                        self.SPIRV_GROUP_NON_UNIFORM_SINGLE_OPERAND_FUNCTIONS[opcode],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if result_id and opcode == "OpGroupNonUniformBallotBitCount":
+                if len(operands) >= 4:
+                    function_name = (
+                        self.SPIRV_GROUP_NON_UNIFORM_BALLOT_BIT_COUNT_FUNCTIONS.get(
+                            operands[2]
+                        )
+                    )
+                    if function_name is None:
+                        raise SpirvInstructionUnsupportedError(
+                            opcode,
+                            f"has unknown group operation {operands[2]}",
+                        )
+                    expressions[result_id] = FunctionCallNode(
+                        function_name,
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[3],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if (
+                result_id
+                and opcode in self.SPIRV_GROUP_NON_UNIFORM_TWO_OPERAND_FUNCTIONS
+            ):
+                if len(operands) >= 4:
+                    expressions[result_id] = FunctionCallNode(
+                        self.SPIRV_GROUP_NON_UNIFORM_TWO_OPERAND_FUNCTIONS[opcode],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[2:4]
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if result_id and opcode == "OpGroupNonUniformQuadSwap":
+                if len(operands) >= 4:
+                    direction = self.spirv_integer_constant_operand(
+                        operands[3], constants
+                    )
+                    function_name = (
+                        self.SPIRV_GROUP_NON_UNIFORM_QUAD_SWAP_DIRECTIONS.get(direction)
+                    )
+                    if function_name is None:
+                        raise SpirvInstructionUnsupportedError(
+                            opcode,
+                            "needs a constant direction 0, 1 or 2, "
+                            f"got {operands[3]}",
+                        )
+                    expressions[result_id] = FunctionCallNode(
+                        function_name,
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
                     )
                     expression_type_ids[result_id] = operands[0]
                     continue
