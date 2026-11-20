@@ -19746,7 +19746,11 @@ class MetalCodeGen(
 
     def stage_entry_base_name(self, stage_name, func):
         func_name = getattr(func, "name", None) or "main"
-        if self.function_has_explicit_stage_entry_attribute(func):
+        # Metal rejects stage functions named main, so an explicit entry
+        # keeps its name only when it is something else.
+        if func_name != "main" and self.function_has_explicit_stage_entry_attribute(
+            func
+        ):
             return func_name
         if stage_name == "vertex":
             return f"vertex_{func_name}"
