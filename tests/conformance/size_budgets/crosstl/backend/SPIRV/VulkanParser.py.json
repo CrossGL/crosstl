@@ -1,0 +1,6 @@
+{
+ "functions": {
+  "VulkanParser.parse_spirv_assembly_module": 395
+ },
+ "module": 8415
+}
