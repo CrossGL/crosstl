@@ -12,6 +12,10 @@ from typing import (
 )
 
 from ..concrete_free_operators import materialize_concrete_free_operators
+from ..integral_constant_locals import (
+    fold_concrete_function_integral_constant_arithmetic,
+    is_folded_integral_constant_operator,
+)
 from ..static_assertion_sources import concrete_static_assertion_conditions
 from ..value_traits import (
     complete_template_arguments,
@@ -1129,6 +1133,8 @@ class MetalStaticAggregateMixin:
         return self._apply_text_replacements(body, replacements)
 
     def _materialize_free_operator_overloads(self, code: str) -> str:
+        # An operator between two integral constants has a known constant result; fold it rather than instantiate it.
+        code = fold_concrete_function_integral_constant_arithmetic(self, code)
         code = materialize_concrete_free_operators(self, code)
         if not self._materialized_struct_specializations or "operator" not in code:
             return code
@@ -1185,6 +1191,8 @@ class MetalStaticAggregateMixin:
             and is_reachable_materialized_type(name)
         }
         for definition in operators:
+            if is_folded_integral_constant_operator(self, definition):
+                continue
             generated = []
             for materialized_name, (source_name, source_arguments) in sorted(
                 retained_structs.items()
