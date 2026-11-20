@@ -123,8 +123,8 @@ from .wgsl_struct_initializers import (
 )
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_type_names import WGSLTypeNameMixin
-from .wgsl_unsigned_builtin_members import is_int_builtin_member
 from .wgsl_uniform_registers import wgsl_uniform_register_load
+from .wgsl_unsigned_builtin_members import is_int_builtin_member
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 from .wgsl_value_types import WGSLValueTypeMixin

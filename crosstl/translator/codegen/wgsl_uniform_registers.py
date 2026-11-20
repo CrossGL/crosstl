@@ -237,10 +237,11 @@ def _wgsl_align_size(layout_type, nested=False):
 def _wgsl_scalar_offsets(layout_type, base, offsets, nested=False, root=False):
     """Append WGSL's byte offset of every scalar of a typed uniform value; ``False`` when WGSL rejects the value.
 
-    The generator declares a block member of type ``bool`` as ``u32`` and a block member that is a scalar array as
-    an array of ``@size(16)`` wrappers. A struct the block holds keeps its own member types, so inside it
-    (``nested``) a scalar array has 4-byte strides and a ``bool`` is not host-shareable (WGSL section 14.4.4).
-    ``bool`` vectors and arrays are refused everywhere, so a block holding one is read from registers.
+    The generator declares a block member of type ``bool`` or ``vecN<bool>`` as ``u32`` or ``vecN<u32>`` and a
+    block member that is a scalar array as an array of ``@size(16)`` wrappers. A struct the block holds keeps its
+    own member types, so inside it (``nested``) a scalar array has 4-byte strides and a ``bool`` vector is not
+    host-shareable (WGSL section 14.4.4). ``bool`` arrays are refused everywhere, so a block holding one is read
+    from registers.
     """
     kind = layout_type.kind
     if kind == "scalar":
@@ -248,7 +249,7 @@ def _wgsl_scalar_offsets(layout_type, base, offsets, nested=False, root=False):
         return not (nested and layout_type.scalar == "bool")
     if kind == "vector":
         offsets.extend(base + 4 * index for index in range(layout_type.components))
-        return layout_type.scalar != "bool"
+        return not (nested and layout_type.scalar == "bool")
     if kind == "matrix":
         if layout_type.row_major:
             return False
