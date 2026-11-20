@@ -162,7 +162,6 @@ class OpenGLWorkgroupPointerLoopMixin(OpenGLWorkgroupPointerLoopReplayMixin):
         original_intervals = dict(active_intervals)
         loop_aliases = dict(active_aliases)
         loop_intervals = dict(active_intervals)
-        iterable = getattr(value, "iterable", None)
         pattern_interval = self.generator.glsl_for_in_pattern_interval(
             value,
             loop_intervals,
