@@ -42,6 +42,7 @@ from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
 from ..refusals import DirectXRefusal
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
+from ..unhandled import UNHANDLED
 from . import hlsl_private_pointer_call_intervals
 from .array_utils import (
     _UnsignedLiteralInt,
@@ -73,6 +74,8 @@ from .directx_compute_builtins import DirectXComputeBuiltinMixin
 from .directx_cooperative_matrix import DirectXCooperativeMatrixMixin
 from .directx_entry_functions import DirectXEntryFunctionMixin
 from .directx_expression_forms import DirectXExpressionFormMixin
+from .directx_function_emission import HLSLFunctionEmissionMixin
+from .directx_function_parameters import HLSLFunctionParameterMixin
 from .directx_function_state import (
     HLSL_FUNCTION_BODY_STATE_ATTRIBUTES,
     HLSL_FUNCTION_STATE_ATTRIBUTES,
@@ -286,9 +289,6 @@ from .texture_residency import (
     TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
-from ..unhandled import UNHANDLED
-from .directx_function_parameters import HLSLFunctionParameterMixin
-from .directx_function_emission import HLSLFunctionEmissionMixin
 
 
 class HLSLCodeGen(
