@@ -120,8 +120,11 @@ which Core owns.
 ### 5. Generated data stays out of `main`
 
 A `coverage` workflow runs on every push to `main` and nightly. It publishes `coverage.json`, `coverage.svg`,
-`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history,
-to an orphan `coverage` branch as a single replaced commit. Only that job has `contents: write`. The README embeds
+`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history, to
+an orphan `coverage` branch as a single replaced commit. No published file may exceed 1 MB, so `coverage.json` keeps
+each row's score and counts, and the row's features go to `features/<language>-<direction>.json`; the publish step
+fails rather than write a larger file. `history.csv` keeps the newest 400 runs that fit in that limit, so more rows
+shorten the history instead of stopping publication. Only that job has `contents: write`. The README embeds
 `coverage.svg` from the `coverage` branch and `COVERAGE.md` embeds the trend. Both charts are plain SVG written by
 small scripts with no plotting dependency. Contributors never run a regeneration step.
 
