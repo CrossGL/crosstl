@@ -696,10 +696,10 @@ because a GLSL program has a single ``main``. Entry rules keep that split: each
 artifact applies the rule of its own entry, and pattern coverage is checked
 against every discovered entry of the unit. An entry that no entry rule names,
 in a source without a source-wide fallback, keeps the size its source or host
-gives it. If it reads ``threads_per_threadgroup`` without such a size, it fails
-with ``project.translate.workgroup-size-required``. Targets that emit every
-entry into one artifact, such as DirectX and Metal, still need a rule for each
-entry.
+gives it: a Metal entry that reads ``threads_per_threadgroup`` without a source
+size reads the host-chosen size described below, never another entry's rule.
+Targets that emit every entry into one artifact, such as DirectX and Metal,
+still need a rule for each entry once a source has entry rules.
 
 Metal also consumes source-wide and entry-specific workgroup-size rules, but as
 host-dispatch contracts rather than source specialization. MSL does not encode
