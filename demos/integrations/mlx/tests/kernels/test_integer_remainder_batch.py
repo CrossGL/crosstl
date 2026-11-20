@@ -6,8 +6,8 @@ import json
 import pytest
 
 from crosstl.project import load_project_config, translate_project
-from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 from demos.integrations.mlx.tests.kernels import test_current_integer_remainder as rem
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 
 
 def test_batch_preserves_single_entry_configuration_and_input_inventory(tmp_path):

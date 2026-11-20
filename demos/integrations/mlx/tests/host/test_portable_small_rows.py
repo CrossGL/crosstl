@@ -15,13 +15,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 from demos.integrations.mlx.portable_host import (
     row_reduction_layout,
     runtime,
     small_row_packages,
     verify_small_rows,
 )
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 from tests.ci_helpers import assert_paths_covered
 
 ENTRY = "row_reduce_small_1_reduce_sumfloat32"
