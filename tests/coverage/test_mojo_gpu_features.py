@@ -4,7 +4,7 @@ import pytest
 
 from tools.coverage import probes, validators
 from tools.coverage.execution import THREADS
-from tools.coverage.features import mojo
+from tools.coverage.features import mojo, mojo_source
 from tools.coverage.model import REDUCE_CLOSURE, VOID, Param, Signature, Type
 
 from .mojo_cases import (
@@ -206,7 +206,7 @@ def test_mojo_probes_warp_reductions_over_the_whole_warp():
     assert "\ndef combine[dtype: DType, width: SIMDLength](\n" in source
     assert "warp.reduce[shuffle=warp.shuffle_xor](a0, combine)" in source
     # A function parameter the probes have no value for leaves the definition without a probe.
-    defined = mojo.definitions(
+    defined = mojo_source.definitions(
         "def apply[f: def(Float32) -> Float32](x: Float32) -> Float32:\n    return x\n"
     )
     assert mojo.signature("apply", defined["apply"], "float") == (
