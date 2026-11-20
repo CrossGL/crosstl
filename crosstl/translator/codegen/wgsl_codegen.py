@@ -1434,6 +1434,9 @@ class WGSLCodeGen(
         try:
             if isinstance(expr, FunctionCallNode):
                 expr = self.specialize_generic_function_call(expr)
+                matrix_conditional = self.matrix_select_as_ternary(expr)
+                if isinstance(matrix_conditional, TernaryOpNode):
+                    self.require_select_operands(matrix_conditional)
                 rendered = self.generate_function_call(expr, expected_type=target_type)
             else:
                 rendered = self.generate_expression(expr)
@@ -1603,6 +1606,9 @@ class WGSLCodeGen(
             self.require_unconditional_branches(expr)
             return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
+            matrix_conditional = self.matrix_select_as_ternary(expr)
+            if isinstance(matrix_conditional, TernaryOpNode):
+                self.require_select_operands(matrix_conditional)
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
             return self.generate_constructor(expr)

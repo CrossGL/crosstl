@@ -1633,6 +1633,15 @@ class SlangCodeGen(
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            if func_name == "select" and len(raw_args) == 3:
+                false_type = self.expression_result_type(raw_args[0])
+                true_type = self.expression_result_type(raw_args[1])
+                if (
+                    false_type is not None
+                    and self.convert_type(false_type) == self.convert_type(true_type)
+                    and self.is_matrix_value_type(false_type)
+                ):
+                    return false_type
             ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
             if ray_transform_type is not None:
                 return ray_transform_type
@@ -1916,6 +1925,42 @@ class SlangCodeGen(
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            if (
+                callee == "select"
+                and callee not in self.user_function_names
+                and len(node.args) == 3
+                and all(
+                    self.is_matrix_value_type(self.expression_result_type(argument))
+                    for argument in node.args[:2]
+                )
+            ):
+                false_value, true_value, condition = node.args
+                if self.convert_type(self.expression_result_type(condition)) != "bool":
+                    return self.refuse_lowering(
+                        "matrix select condition must be a scalar bool",
+                        self.generate_expression(false_value),
+                    )
+                if any(
+                    any(
+                        isinstance(item, (FunctionCallNode, AssignmentNode))
+                        or (
+                            isinstance(item, UnaryOpNode)
+                            and str(getattr(item, "op", "")) in {"++", "--"}
+                        )
+                        for item in self.walk_ast(value)
+                    )
+                    for value in (false_value, true_value)
+                ):
+                    return self.refuse_lowering(
+                        "matrix select evaluates both value arguments, but a "
+                        "conditional expression would skip one side-effecting argument",
+                        self.generate_expression(false_value),
+                    )
+                return (
+                    f"({self.generate_expression(condition)} ? "
+                    f"{self.generate_expression(true_value)} : "
+                    f"{self.generate_expression(false_value)})"
+                )
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,
                 func_expr,
