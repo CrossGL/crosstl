@@ -346,7 +346,7 @@ class MetalDeclarationTypeMixin:
         return arguments[0].strip(), "0"
 
     def is_metal_array_type_name(self, base_name):
-        return base_name in {"array", "metal::array", "c10::metal::array"}
+        return base_name in {"array", "metal::array"}
 
     def metal_vector_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)

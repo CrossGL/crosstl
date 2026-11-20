@@ -94,7 +94,6 @@
  "modules": {
   "crosstl/backend/CUDA/CudaCrossGLCodeGen.py": 7614,
   "crosstl/backend/CUDA/CudaParser.py": 5557,
-  "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py": 6560,
   "crosstl/backend/HIP/HipCrossGLCodeGen.py": 11430,
   "crosstl/backend/HIP/HipParser.py": 5993,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py": 24579,
@@ -103,15 +102,13 @@
   "crosstl/backend/Rust/RustCrossGLCodeGen.py": 12394,
   "crosstl/backend/SPIRV/VulkanParser.py": 8415,
   "crosstl/translator/codegen/GLSL_codegen.py": 14396,
-  "crosstl/translator/codegen/SPIRV_codegen.py": 33326,
   "crosstl/translator/codegen/cuda_codegen.py": 13670,
   "crosstl/translator/codegen/directx_codegen.py": 57799,
   "crosstl/translator/codegen/hip_codegen.py": 11111,
-  "crosstl/translator/codegen/metal_codegen.py": 29942,
+  "crosstl/translator/codegen/metal_codegen.py": 7917,
   "crosstl/translator/codegen/mojo_codegen.py": 16295,
   "crosstl/translator/codegen/rust_codegen.py": 14799,
-  "crosstl/translator/codegen/slang_codegen.py": 16595,
-  "crosstl/translator/parser.py": 7209
+  "crosstl/translator/codegen/slang_codegen.py": 16595
  },
  "schemaVersion": 1
 }

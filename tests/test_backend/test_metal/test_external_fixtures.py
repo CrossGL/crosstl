@@ -6,6 +6,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -992,10 +993,12 @@ EXTERNAL_FIXTURES = [
             "constant int elems_per_thread_ @function_constant(2);",
         ],
         "not_contains": ["STEEL_CONST"],
+        "preprocess": True,
         "source": (
             """
             #include <metal_common>
-            #include "mlx/backend/metal/kernels/steel/defines.h"
+            // From mlx/backend/metal/kernels/steel/defines.h at the same commit.
+            #define STEEL_CONST static constant constexpr const
             using namespace metal;
 
             STEEL_CONST bool inv_ [[function_constant(0)]];
@@ -1413,6 +1416,15 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["c10::metal::array"],
         "source": (
             """
+            // c10::metal::array, from c10/metal/common.h at the same commit
+            // (the __METAL__ branch).
+            namespace c10 {
+            namespace metal {
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
+
             template <unsigned N = 5, typename idx_t = int32_t>
             struct GridSamplerParams {
                 int32_t sampler_dims;
@@ -1439,7 +1451,14 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["c10::metal::array"],
         "source": (
             """
-            #include <c10/metal/common.h>
+            // c10::metal::array, from c10/metal/common.h at the same commit
+            // (the __METAL__ branch).
+            namespace c10 {
+            namespace metal {
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
 
             template <unsigned N = 5>
             struct UpsampleParams {
@@ -1465,9 +1484,18 @@ EXTERNAL_FIXTURES = [
             "int64 padding_idx;",
         ],
         "not_contains": ["c10::metal::array", "::c10::metal::max_ndim"],
+        "preprocess": True,
         "source": (
             """
-            #include <c10/metal/common.h>
+            // From c10/metal/common.h at the same commit (the __METAL__ branch).
+            #define C10_METAL_CONSTEXPR constant constexpr
+            namespace c10 {
+            namespace metal {
+            C10_METAL_CONSTEXPR unsigned max_ndim = 16;
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
 
             template <typename idx_type_t = uint32_t>
             struct EmbeddingDenseBackwardParams {
@@ -1626,9 +1654,12 @@ EXTERNAL_FIXTURES = [
         "source_path": "aten/src/ATen/native/mps/kernels/ReduceOps.h",
         "roundtrip": True,
         "contains": ["constant uint SUM_NCHAINS = 8;"],
+        "not_contains": ["C10_METAL_CONSTEXPR"],
+        "preprocess": True,
         "source": (
             """
-            #include <c10/metal/common.h>
+            // From c10/metal/common.h at the same commit (the __METAL__ branch).
+            #define C10_METAL_CONSTEXPR constant constexpr
 
             C10_METAL_CONSTEXPR uint32_t SUM_NCHAINS = 8;
         """
@@ -2483,14 +2514,18 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "struct_names": ["sv", "alignment_dummy"],
         "contains": [
-            "struct sv",
-            "struct alignment_dummy",
+            "@metal_alignas(16)\n    generic<_T, _length> struct sv",
+            "@metal_alignas(16)\n    struct alignment_dummy",
             "dtype[_length] data;",
         ],
+        "preprocess": True,
         "source": (
             """
             #include <metal_stdlib>
             using namespace metal;
+            // From extra/thunder/metal/include/common/utils.metal at the same commit.
+            #define mittens_ALIGN_AS(n) alignas(n)
+            #define mittens_DEFAULT_ALIGN mittens_ALIGN_AS(16)
 
             template<typename _T, size_t _length>
             struct mittens_DEFAULT_ALIGN sv {
@@ -2511,7 +2546,10 @@ EXTERNAL_FIXTURES = [
 ]
 
 
-def parse_metal(source):
+def parse_metal(source, preprocess=False):
+    # Fixtures that define macros run through the preprocessor, as translation does.
+    if preprocess:
+        source = MetalPreprocessor().preprocess(source)
     tokens = MetalLexer(source).tokenize()
     return MetalParser(tokens).parse()
 
@@ -2525,7 +2563,10 @@ def parse_crossgl(source):
     "fixture", EXTERNAL_FIXTURES, ids=[fixture["name"] for fixture in EXTERNAL_FIXTURES]
 )
 def test_external_metal_fixture_parse_and_roundtrip(fixture):
-    ast = parse_metal(fixture["source"] + fixture.get("instantiation", ""))
+    ast = parse_metal(
+        fixture["source"] + fixture.get("instantiation", ""),
+        preprocess=fixture.get("preprocess", False),
+    )
     assert ast.functions or ast.structs or ast.global_variables or ast.typedefs
     assert fixture["repo_url"]
     assert fixture["commit"]

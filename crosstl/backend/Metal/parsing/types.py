@@ -10,7 +10,6 @@ from ..signed_type_spellings import fold_signed_type_spellings
 from .parser_tables import (
     IDENTIFIER_PREFIX_TYPE_QUALIFIERS,
     IDENTIFIER_TYPE_QUALIFIERS,
-    MACRO_QUALIFIER_ALIASES,
     QUALIFIER_TOKENS,
     RAYTRACING_TYPE_QUALIFIERS,
     SCOPED_IDENTIFIER_PART_TOKENS,
@@ -328,7 +327,7 @@ class MetalTypeParsingMixin:
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
-            return MACRO_QUALIFIER_ALIASES.get(qualifier, (qualifier,))
+            return (qualifier,)
 
         qualifier_name = self.current_token[1]
         self.eat("IDENTIFIER")
