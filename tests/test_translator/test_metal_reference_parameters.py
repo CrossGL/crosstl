@@ -41,7 +41,7 @@ kernel void k(device uchar *out [[buffer(0)]], constant uchar &s [[buffer(1)]],
 def _translate(tmp_path, source, backend="metal"):
     path = tmp_path / "unit.metal"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _compile(tmp_path, output):
@@ -63,7 +63,7 @@ def _compile(tmp_path, output):
 def test_bfloat_reference_argument_is_passed_unconverted(tmp_path):
     output = _translate(tmp_path, BFLOAT)
 
-    assert "constant bfloat &value, uint tid)" in output
+    assert "constant bfloat& value, uint tid)" in output
     assert "fill_with(out_, value, tid);" in output
     assert "bfloat(value), tid" not in output
 
@@ -71,8 +71,8 @@ def test_bfloat_reference_argument_is_passed_unconverted(tmp_path):
 def test_narrow_integer_buffer_references_keep_the_storage_type(tmp_path):
     output = _translate(tmp_path, NARROW)
 
-    assert "void bump(device uchar &x, constant uchar &step)" in output
-    assert "widen(constant ushort &v)" in output
+    assert "void bump(device uchar& x, constant uchar& step)" in output
+    assert "widen(constant ushort& v)" in output
     assert "bump(out_[i], s);" in output
     assert "widen(w)" in output
 
