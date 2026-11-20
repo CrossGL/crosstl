@@ -190,8 +190,7 @@ def test_image_probes_compile_with_rust_gpu(features):
         assert verdict.accepted, (feature.name, verdict.log)
 
 
-# An excerpt of spirv-std 0.11's byte_addressable_buffer.rs: constructors, and a load that the mutable buffer defines
-# a second time.
+# An excerpt of spirv-std 0.11's byte_addressable_buffer.rs: constructors, and a load the mutable buffer redefines.
 BYTE_BUFFER = (FIXTURES / "spirv_std_byte_buffer.rs").read_text(encoding="utf-8")
 
 
