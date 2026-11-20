@@ -165,5 +165,41 @@ side-effecting operands and the unchanged MLX Sign kernel.
 .. automodule:: crosstl.backend.Metal.MetalParser
    :members:
 
+.. automodule:: crosstl.backend.Metal.parsing.top_level
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.templates
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.declaration_lookahead
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.aliases
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.types
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.declarators
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.records
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.functions
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.statements
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.expressions
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.postfix
+   :members:
+
+.. automodule:: crosstl.backend.Metal.parsing.primary
+   :members:
+
 .. automodule:: crosstl.backend.Metal.MetalCrossGLCodeGen
    :members:
