@@ -406,6 +406,39 @@ class VectorArithmeticMixin:
             }
         return None
 
+    def geometric_vector_type_info(self, type_name):
+        """Return vector type info for ``length``, ``normalize``, ``distance`` and ``dot``, including native half2.
+
+        The native ``half2`` (``__half2``) gets ``lane_floats``: the functions that read its lanes as ``float``.
+        Its members cannot be read directly on every toolkit: ``cuda_fp16.h`` declares ``x`` and ``y`` as
+        ``__half``, but HIP's ``amd_hip_fp16.h`` (ROCm 5.7) declares them as ``unsigned short`` bit patterns, which
+        ``__half``'s integral constructor converts as numbers. ``__low2float`` and ``__high2float`` read the lanes
+        correctly in both, and ``__floats2half2_rn`` builds the result.
+        """
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info
+        if self.native_vector_component_type(type_name) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+                "lane_floats": ("__low2float", "__high2float"),
+            }
+        return None
+
+    def geometric_lane_read(self, vector_info, operand, component):
+        """Read ``component`` of ``operand`` in the type geometric helpers compute in."""
+        lane_floats = vector_info.get("lane_floats")
+        if lane_floats is not None:
+            return (
+                f"{lane_floats[vector_info['components'].index(component)]}({operand})"
+            )
+        return self.geometric_component_read(
+            vector_info["component_type"], f"{operand}.{component}"
+        )
+
     def is_repeat_safe_expression(self, expr):
         """Return whether an expression can be safely emitted more than once."""
         if isinstance(expr, (IdentifierNode, VariableNode, LiteralNode)):
@@ -1821,7 +1854,7 @@ class VectorArithmeticMixin:
             arg_type = self.expression_result_type(
                 raw_args[0]
             ) or self.scalar_cast_result_type(raw_args[0])
-            vector_info = self.vector_type_info(arg_type)
+            vector_info = self.geometric_vector_type_info(arg_type)
             if vector_info is not None:
                 if func_name == "length":
                     helper_name = self.require_vector_length_helper(vector_info)
@@ -1880,13 +1913,18 @@ class VectorArithmeticMixin:
         if func_name in {"dot", "cross", "distance"}:
             if len(raw_args) != 2:
                 return None
-            left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-            right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+            left_info = self.geometric_vector_type_info(
+                self.expression_result_type(raw_args[0])
+            )
+            right_info = self.geometric_vector_type_info(
+                self.expression_result_type(raw_args[1])
+            )
             if (
                 left_info is None
                 or right_info is None
                 or len(left_info["components"]) != len(right_info["components"])
                 or left_info["component_type"] != right_info["component_type"]
+                or left_info.get("lane_floats") != right_info.get("lane_floats")
             ):
                 return None
             if func_name == "dot":
@@ -2534,15 +2572,27 @@ class VectorArithmeticMixin:
             return helper_name
 
         scalar_type = self.vector_scalar_parameter_type(vector_info)
-        terms = [
-            f"(lhs.{component} * rhs.{component})"
-            for component in vector_info["components"]
-        ]
+        if vector_info.get("lane_floats") is not None:
+            # A native half2's lanes are read as float, so the sum is rounded to half once.
+            terms = [
+                f"({self.geometric_lane_read(vector_info, 'lhs', component)} * "
+                f"{self.geometric_lane_read(vector_info, 'rhs', component)})"
+                for component in vector_info["components"]
+            ]
+            result = self.geometric_scalar_result(
+                vector_info["component_type"], " + ".join(terms)
+            )
+        else:
+            terms = [
+                f"(lhs.{component} * rhs.{component})"
+                for component in vector_info["components"]
+            ]
+            result = " + ".join(terms)
         helper = (
             f"__device__ inline {scalar_type} {helper_name}"
             f"({vector_type} lhs, {vector_type} rhs)\n"
             "{\n"
-            f"    return {' + '.join(terms)};\n"
+            f"    return {result};\n"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -2620,7 +2670,7 @@ class VectorArithmeticMixin:
 
         squares = []
         for component in vector_info["components"]:
-            value = self.geometric_component_read(component_type, f"value.{component}")
+            value = self.geometric_lane_read(vector_info, "value", component)
             squares.append(f"({value} * {value})")
         result = self.geometric_scalar_result(
             component_type,
@@ -2649,8 +2699,8 @@ class VectorArithmeticMixin:
         declarations = []
         squares = []
         for component in vector_info["components"]:
-            lhs = self.geometric_component_read(component_type, f"lhs.{component}")
-            rhs = self.geometric_component_read(component_type, f"rhs.{component}")
+            lhs = self.geometric_lane_read(vector_info, "lhs", component)
+            rhs = self.geometric_lane_read(vector_info, "rhs", component)
             declarations.append(f"    {compute_type} d{component} = {lhs} - {rhs};\n")
             squares.append(f"(d{component} * d{component})")
         result = self.geometric_scalar_result(
@@ -2684,9 +2734,7 @@ class VectorArithmeticMixin:
             # Keep the length in float so a half vector is not rounded twice
             squares = []
             for component in vector_info["components"]:
-                value = self.geometric_component_read(
-                    component_type, f"value.{component}"
-                )
+                value = self.geometric_lane_read(vector_info, "value", component)
                 squares.append(f"({value} * {value})")
             length_expression = f"sqrtf({' + '.join(squares)})"
         else:
@@ -2696,8 +2744,7 @@ class VectorArithmeticMixin:
             length_expression = f"{length_helper}(value)"
 
         components = [
-            f"({self.geometric_component_read(component_type, f'value.{component}')}"
-            " * inv_length)"
+            f"({self.geometric_lane_read(vector_info, 'value', component)} * inv_length)"
             for component in vector_info["components"]
         ]
         helper = (

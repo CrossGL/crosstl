@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 
@@ -2198,6 +2199,51 @@ class TestHipCodeGen:
         for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
             assert f" = {bare};" not in hip_code
         assert "return distance(a, b);" not in hip_code
+
+    @pytest.mark.parametrize("spelling", ["f16vec2", "half2", "vec2<f16>"])
+    def test_native_half2_geometric_builtins_read_lanes_as_float(
+        self, spelling, tmp_path
+    ):
+        source_code = f"""
+        shader G {{
+            half f({spelling} s, {spelling} r) {{
+                half a = length(s);
+                {spelling} n = normalize(s);
+                half d = distance(s, r);
+                half t = dot(s, r);
+                return a + d + t + length(n);
+            }}
+        }}
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "half a = cgl_half2_length(s);" in hip_code
+        assert "half2 n = cgl_half2_normalize(s);" in hip_code
+        assert "half d = cgl_half2_distance(s, r);" in hip_code
+        assert "half t = cgl_half2_dot(s, r);" in hip_code
+        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "dot(s, r)"):
+            assert f" = {bare};" not in hip_code
+        # HIP's __half2 declares x and y as unsigned short bit patterns, so the
+        # helpers read the lanes with __low2float and __high2float.
+        assert (
+            "__float2half(sqrtf((__low2float(value) * __low2float(value)) +" in hip_code
+        )
+        assert "float dx = __low2float(lhs) - __low2float(rhs);" in hip_code
+        assert "float dy = __high2float(lhs) - __high2float(rhs);" in hip_code
+        assert "return __floats2half2_rn((__low2float(value) * inv_length)," in hip_code
+        assert "return __float2half((__low2float(lhs) * __low2float(rhs)) +" in hip_code
+        helpers = re.findall(
+            r"__device__ inline half2? cgl_half2_(?:length|normalize|distance|dot)"
+            r"\(.*?\n}",
+            hip_code,
+            re.S,
+        )
+        assert len(helpers) == 4
+        for helper in helpers:
+            assert not re.search(r"\b(?:value|lhs|rhs)\.[xy]\b", helper), helper
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_half_vector_remainder_takes_the_float_fmodf(self):
         source_code = """
