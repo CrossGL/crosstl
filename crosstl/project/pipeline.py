@@ -72,6 +72,7 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project import preprocessed_locations
 from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -99,6 +100,7 @@ from crosstl.project.dispatch_planning import (
     DispatchArtifactPlanError,
     plan_dispatch_artifacts,
 )
+from crosstl.project.glsl_entry_split import host_sizes_unit, per_entry_split
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -10403,10 +10405,17 @@ class _ProjectTranslationCheckpointRun:
 def _regular_project_translation_jobs(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
+    target: str | None = None,
 ) -> Iterator[_ProjectArtifactTranslationJob]:
-    entry_points: tuple[str | None, ...] = _resolved_entry_points_for_unit(
-        config, unit
-    ) or (None,)
+    entry_points: tuple[str | None, ...] = (
+        _resolved_entry_points_for_unit(config, unit)
+        or (
+            per_entry_split(unit, target)
+            if target is not None and not host_sizes_unit(config, unit)
+            else ()
+        )
+        or (None,)
+    )
     for variant, defines in _variant_jobs(config):
         for entry_point in entry_points:
             yield _ProjectArtifactTranslationJob(
@@ -10545,7 +10554,7 @@ def _project_translation_jobs_for_target(
 ) -> Iterator[_ProjectArtifactTranslationJob]:
     artifacts = dispatch_artifacts.get(unit.relative_path, ())
     if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
-        return _regular_project_translation_jobs(config, unit)
+        return _regular_project_translation_jobs(config, unit, target)
     return _dispatch_project_translation_jobs(config, unit.relative_path, artifacts)
 
 
@@ -14190,12 +14199,39 @@ def _is_template_hostile_target(target: str) -> bool:
 def _metal_preprocess_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
-    return memoized_preprocessor_run(
+    text = memoized_preprocessor_run(
         preprocessor,
         code,
         file_path=file_path,
         source_backend="metal",
         run=_expand_metal_without_template_materialization,
+    )
+    _record_metal_line_origins(preprocessor, code, text, file_path=file_path)
+    return text
+
+
+def _record_metal_line_origins(
+    preprocessor: Any, code: str, text: str, *, file_path: str
+) -> None:
+    """Record where each line of ``text`` comes from, so that diagnostics found
+    in it name the line the user wrote. The run reads ``code`` without its
+    leading compiler diagnostics, which moves every line of the unit itself."""
+    origins = list(getattr(preprocessor, "line_origins", None) or ())
+    if not origins:
+        return
+    source = preprocessor._strip_leading_compiler_diagnostics(code)
+    shift = code[: len(code) - len(source)].count("\n") if code.endswith(source) else 0
+
+    def shifted(origin: Any) -> Any:
+        if origin is None or not shift:
+            return origin
+        path, line, site = origin
+        if site is None:
+            return (path, line + shift, None) if path == file_path else origin
+        return (path, line, shifted(site))
+
+    preprocessed_locations.record_preprocessed_text(
+        file_path, code, text, [shifted(origin) for origin in origins]
     )
 
 
@@ -25719,6 +25755,20 @@ def _metal_template_parameter_name(parameter: str) -> str | None:
 def _source_location_at_offset(
     unit: ProjectTranslationUnit, text: str, offset: int, length: int
 ) -> SourceLocation:
+    span = preprocessed_locations.source_span(
+        str(unit.path), unit.relative_path, text, offset, length
+    )
+    if span is not None:
+        return SourceLocation(
+            file=span.file,
+            line=span.line,
+            column=span.column,
+            offset=span.offset,
+            length=span.end_offset - span.offset,
+            end_line=span.end_line,
+            end_column=span.end_column,
+            end_offset=span.end_offset,
+        )
     prefix = text[:offset]
     line = prefix.count("\n") + 1
     previous_newline = prefix.rfind("\n")
@@ -27084,7 +27134,7 @@ def _materialize_crossgl_specialization_constants(
             ),
         )
     try:
-        ast = cgl_spec.parse(source, source_options={"strict_function_bodies": True})
+        ast = cgl_spec.parse(source)
     except Exception as exc:
         raise ProjectSpecializationError(
             f"CrossGL specialization intermediate could not be parsed: {exc}",
@@ -27174,7 +27224,7 @@ def _materialize_crossgl_specialization_constants(
                 diagnostic.message, diagnostics=(diagnostic,)
             )
     try:
-        cgl_spec.parse(materialized, source_options={"strict_function_bodies": True})
+        cgl_spec.parse(materialized)
     except Exception as exc:
         diagnostic = ProjectDiagnostic(
             severity="error",
@@ -27219,7 +27269,6 @@ def _entry_scoped_specialization_names(
             intermediate = reverse_codegen.generate(source_ast)
             crossgl_ast = cgl_spec.parse(
                 intermediate,
-                source_options={"strict_function_bodies": True},
             )
         return _entry_scoped_specialization_names_from_crossgl_ast(
             crossgl_ast, entry_point, target
@@ -27625,9 +27674,6 @@ def _crossgl_ast_for_project_target(
 
     ast = cgl_spec.parse(
         intermediate,
-        source_options={
-            "strict_function_bodies": True,
-        },
     )
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
@@ -29969,7 +30015,7 @@ def _translate_project_impl(
                         translation_defines = (
                             defines if unit.source_backend in {"cgl", "crossgl"} else {}
                         )
-                        translation_source_options = {"strict_function_bodies": True}
+                        translation_source_options = {}
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),

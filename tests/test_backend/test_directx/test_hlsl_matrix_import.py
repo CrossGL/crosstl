@@ -12,7 +12,7 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
 
-def to_crossgl(body, globals_=""):
+def to_crossgl(body, globals_="", matrix_packing=None):
     source = textwrap.dedent(globals_) + textwrap.dedent("""
         RWStructuredBuffer<float> o : register(u0);
         [numthreads(1, 1, 1)]
@@ -20,7 +20,7 @@ def to_crossgl(body, globals_=""):
         %s
         }
         """) % textwrap.indent(textwrap.dedent(body), "    ")
-    output = HLSLToCrossGLConverter().generate(
+    output = HLSLToCrossGLConverter(matrix_packing=matrix_packing).generate(
         HLSLParser(HLSLLexer(source).tokenize()).parse()
     )
     Parser(Lexer(output).get_tokens()).parse()
@@ -83,6 +83,204 @@ def test_casts_truncate_matrices_and_splat_scalars():
     assert "mat3x4 b = mat3x4(world);" in output
     assert "mat3 c = mat3(0);" in output
     assert "mat2 d = mat2(vec2(o[0]), vec2(o[0]));" in output
+
+
+def test_scalar_stored_to_a_matrix_fills_every_component():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        float3x3 a = 1.0;
+        float3x3 b = x;
+        float3x3 m;
+        m = 2.0;
+        o[1] = a[0][0] + b[1][1] + m[2][2] + total(4.0);
+    """,
+        """
+        float total(float3x3 v) { return v[0][0]; }
+        float3x3 filled(float s) { return s; }
+        """,
+    )
+    assert "mat3 a = mat3(vec3(1.0), vec3(1.0), vec3(1.0));" in output
+    assert "mat3 b = mat3(vec3(x), vec3(x), vec3(x));" in output
+    assert "m = mat3(vec3(2.0), vec3(2.0), vec3(2.0));" in output
+    assert "total(mat3(vec3(4.0), vec3(4.0), vec3(4.0)))" in output
+    assert "return mat3(vec3(s), vec3(s), vec3(s));" in output
+
+
+def test_scalar_expressions_are_splatted_like_single_operands():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 r = x * 2.0 + 1.0;
+        float3x3 t = id.x > 0 ? x : 1.0;
+        float3x3 c = (float)id.x;
+        float3x3 n = -x;
+        float3x3 s = sin(x);
+        o[1] = r[0][0] + t[1][1] + c[2][2] + n[0][0] + s[1][2];
+    """)
+    assert "mat3 r = mat3(vec3((x * 2.0) + 1.0)," in output
+    assert "mat3 t = mat3(vec3(id.x > 0 ? x : 1.0)," in output
+    assert (
+        "mat3 c = mat3(vec3(float(id.x)), vec3(float(id.x)), vec3(float(id.x)));"
+        in output
+    )
+    assert "mat3 n = mat3(vec3(-x), vec3(-x), vec3(-x));" in output
+    assert "mat3 s = mat3(vec3(sin(x)), vec3(sin(x)), vec3(sin(x)));" in output
+
+
+def test_scalar_results_of_known_intrinsics_are_splatted():
+    output = to_crossgl("""
+        float3 v = float3(o[0], 1.0, 2.0);
+        float3x3 a = length(v);
+        float3x3 b = dot(v, v);
+        float3x3 c = distance(v, v);
+        float3x3 d = asfloat(id.x) * 1.0;
+        float3x3 e = true;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0];
+    """)
+    assert "mat3 a = mat3(vec3(length(v)), vec3(length(v)), vec3(length(v)));" in output
+    assert "mat3 b = mat3(vec3(dot(v, v)), vec3(dot(v, v)), vec3(dot(v, v)));" in output
+    assert "mat3 c = mat3(vec3(distance(v, v))," in output
+    assert "mat3 d = mat3(vec3(uintBitsToFloat(id.x) * 1.0)," in output
+    assert (
+        "mat3 e = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+
+
+def test_scalar_mul_and_select_are_splatted():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 a = mul(x, 2.0);
+        float3x3 b = select(x > 1.0, 1.0, 2.0);
+        o[1] = a[0][0] + b[1][1];
+    """)
+    assert "mat3 a = mat3(vec3((x * 2.0)), vec3((x * 2.0)), vec3((x * 2.0)));" in output
+    assert "mat3 b = mat3(vec3(select(2.0, 1.0, x > 1.0))," in output
+
+
+def test_bool_and_integer_scalars_are_converted_to_float_before_the_splat():
+    # WGSL's vec3<f32>(true) is a type error, and an integer dot is an integer.
+    output = to_crossgl("""
+        float x = o[0];
+        int3 iv = int3(1, 2, 3);
+        float3x3 a = true;
+        float3x3 b = x > 1.0;
+        float3x3 c = (bool)id.x;
+        float3x3 d = dot(iv, iv);
+        float3x3 e = id.x * 2 + 1;
+        float3x3 f = x * 2.0;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0] + f[0][0];
+    """)
+    assert (
+        "mat3 a = mat3(vec3(float(true)), vec3(float(true)), vec3(float(true)));"
+        in output
+    )
+    assert "mat3 b = mat3(vec3(float(x > 1.0)), vec3(float(x > 1.0))," in output
+    assert "mat3 c = mat3(vec3(float(bool(id.x))), vec3(float(bool(id.x)))," in output
+    assert "mat3 d = mat3(vec3(float(dot(iv, iv))), vec3(float(dot(iv, iv)))," in output
+    assert (
+        "mat3 e = mat3(vec3(float((id.x * 2) + 1)), vec3(float((id.x * 2) + 1)),"
+        in output
+    )
+    # A float stays as it is.
+    assert "mat3 f = mat3(vec3(x * 2.0), vec3(x * 2.0), vec3(x * 2.0));" in output
+
+
+def test_values_of_unknown_type_are_not_written_unchanged():
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl("float3x3 m = mystery;\no[1] = m[0][0];")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["float3x3 m = x++;", "float3x3 m = f(x);", "float3x3 m = (float)(x++);"],
+)
+def test_scalar_stores_that_cannot_be_repeated_are_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\n" + statement + "\no[1] = m[0][0];",
+            "float f(float v) { return v; }\n",
+        )
+
+
+METHOD_STRUCT = """
+    struct S {
+        float3x3 m;
+        float3x3 get() { return m; }
+        float sc() { return m[0][0]; }
+        float two() { float t = m[0][0]; return t * 2.0; }
+        float3x3 bump() { m[0][0] += 1.0; return m; }
+        float sbump() { m[0][0] += 1.0; return m[0][0]; }
+        float tw(inout float q) { q = 1.0; return q; }
+    };
+"""
+
+
+def test_matrix_returned_by_a_method_is_stored_as_it_is():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get();
+        float3x3 b = s.bump();
+        o[1] = a[0][0] + b[1][1];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = S_get(s);" in output
+    assert "mat3 b = S_bump(s);" in output
+
+
+def test_scalar_returned_by_a_pure_method_is_splatted():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        S s;
+        s.m = (float3x3)x;
+        float3x3 a = s.get()[0][0];
+        float3x3 b = s.sc();
+        float3x3 c = s.two();
+        o[1] = a[0][0] + b[1][1] + c[2][2];
+    """,
+        METHOD_STRUCT,
+    )
+    assert "mat3 a = mat3(vec3(S_get(s)[0][0]), vec3(S_get(s)[0][0])," in output
+    assert "mat3 b = mat3(vec3(S_sc(s)), vec3(S_sc(s)), vec3(S_sc(s)));" in output
+    assert "mat3 c = mat3(vec3(S_two(s)), vec3(S_two(s)), vec3(S_two(s)));" in output
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float3x3 a = s.sbump();",
+        "float3x3 a = s.bump()[0][0];",
+        "float3x3 a = s.tw(x);",
+    ],
+)
+def test_scalar_returned_by_a_method_that_changes_state_is_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\nS s;\ns.m = (float3x3)x;\n"
+            + statement
+            + "\no[1] = a[0][0];",
+            METHOD_STRUCT,
+        )
+
+
+def test_matrix_values_are_not_splatted():
+    output = to_crossgl("""
+        float3x3 a = (float3x3)1.0;
+        float3x3 b = a;
+        float3x3 c;
+        c = b;
+        c *= 2.0;
+        c._m00 = 3.0;
+        o[0] = c[0][0];
+    """)
+    assert "mat3 b = a;" in output
+    assert "c = b;" in output
+    assert "c[0][0] = 3.0;" in output
 
 
 def test_rows_elements_and_swizzles():
@@ -227,3 +425,177 @@ def test_unrepresentable_matrix_forms_are_refused(statement, reason):
         """,
             "int next() { return 1; }\n",
         )
+
+
+@pytest.mark.parametrize(
+    "call, hlsl_type, crossgl_type",
+    [
+        ("ObjectToWorld()", "float3x4", "mat4x3"),
+        ("ObjectToWorld3x4()", "float3x4", "mat4x3"),
+        ("ObjectToWorld4x3()", "float4x3", "mat3x4"),
+        ("WorldToObject()", "float3x4", "mat4x3"),
+        ("WorldToObject3x4()", "float3x4", "mat4x3"),
+        ("WorldToObject4x3()", "float4x3", "mat3x4"),
+        ("hlsl::ObjectToWorld3x4()", "float3x4", "mat4x3"),
+    ],
+)
+def test_raytracing_transform_intrinsics_import_as_matrices(
+    call, hlsl_type, crossgl_type
+):
+    source = textwrap.dedent(f"""
+        struct [raypayload] Payload {{
+            float4 color : read(caller) : write(anyhit, closesthit);
+        }};
+        RWStructuredBuffer<float> outp : register(u0);
+        [shader("closesthit")]
+        void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {{
+            {hlsl_type} r = {call};
+            outp[0] = dot(r[0], {call}[0]) + {call}[0].y + {call}[1][2];
+        }}
+    """)
+    rendered_call = call.removeprefix("hlsl::")
+    output = HLSLToCrossGLConverter().generate(
+        HLSLParser(HLSLLexer(source).tokenize()).parse()
+    )
+    Parser(Lexer(output).get_tokens()).parse()
+    assert f"{crossgl_type} r = {rendered_call};" in output
+    assert f"dot(transpose(r)[0], transpose({rendered_call})[0])" in output
+    assert f"{rendered_call}[1][0]" in output
+    assert f"{rendered_call}[2][1]" in output
+
+
+@pytest.mark.parametrize(
+    "method, hlsl_type, crossgl_type",
+    [
+        ("CandidateObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("CandidateObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("CandidateWorldToObject3x4", "float3x4", "mat4x3"),
+        ("CandidateWorldToObject4x3", "float4x3", "mat3x4"),
+        ("CommittedObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("CommittedObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("CommittedWorldToObject3x4", "float3x4", "mat4x3"),
+        ("CommittedWorldToObject4x3", "float4x3", "mat3x4"),
+    ],
+)
+def test_ray_query_transform_methods_import_as_matrices(
+    method, hlsl_type, crossgl_type
+):
+    output = to_crossgl(f"""
+        RayQuery<RAY_FLAG_NONE> obj;
+        {hlsl_type} r = obj.{method}();
+        float2x2 s = obj.{method}()[0][0];
+        o[0] = dot(r[0], r[0]) + r[0].y + s[0][0];
+    """)
+    assert f"{crossgl_type} r = obj.{method}();" in output
+    assert "dot(transpose(r)[0], transpose(r)[0])" in output
+    assert "r[1][0]" in output
+    assert (
+        f"mat2 s = mat2(vec2(obj.{method}()[0][0]), vec2(obj.{method}()[0][0]));"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "method, hlsl_type, crossgl_type",
+    [
+        ("GetObjectToWorld3x4", "float3x4", "mat4x3"),
+        ("GetObjectToWorld4x3", "float4x3", "mat3x4"),
+        ("GetWorldToObject3x4", "float3x4", "mat4x3"),
+        ("GetWorldToObject4x3", "float4x3", "mat3x4"),
+    ],
+)
+def test_hit_object_transform_methods_import_as_matrices(
+    method, hlsl_type, crossgl_type
+):
+    source = textwrap.dedent(f"""
+        RWStructuredBuffer<float> outp : register(u0);
+        [shader("raygeneration")]
+        void main() {{
+            dx::HitObject obj;
+            {hlsl_type} r = obj.{method}();
+            {hlsl_type} c = dx::HitObject::MakeNop().{method}();
+            outp[0] = dot(r[0], c[0]) + r[0].y + c[0].y;
+        }}
+    """)
+    output = HLSLToCrossGLConverter().generate(
+        HLSLParser(HLSLLexer(source).tokenize()).parse()
+    )
+    Parser(Lexer(output).get_tokens()).parse()
+    assert f"{crossgl_type} r = obj.{method}();" in output
+    assert f"{crossgl_type} c = dx::HitObject::MakeNop().{method}();" in output
+    assert "dot(transpose(r)[0], transpose(c)[0])" in output
+    assert "r[1][0]) + c[1][0]" in output
+
+
+def test_raytracing_matrix_operations_casts_and_row_major_packing():
+    output = to_crossgl(
+        """
+        Query rq;
+        float3x3 upper = (float3x3)rq.CommittedObjectToWorld3x4();
+        float3x4 prod = rq.CandidateObjectToWorld3x4() * rq.CommittedWorldToObject3x4();
+        float3 transformed = mul(rq.CommittedObjectToWorld3x4(), float4(1.0, 2.0, 3.0, 1.0));
+        float elem = rq.CommittedObjectToWorld3x4()._m12;
+        o[0] = upper[0][0] + prod[0][0] + transformed.x + elem;
+    """,
+        "typedef RayQuery<RAY_FLAG_NONE> Query;\n",
+    )
+    assert "mat3 upper = mat3(rq.CommittedObjectToWorld3x4());" in output
+    assert (
+        "mat4x3 prod = matrixCompMult(rq.CandidateObjectToWorld3x4(), rq.CommittedWorldToObject3x4());"
+        in output
+    )
+    assert (
+        "vec3 transformed = (rq.CommittedObjectToWorld3x4() * vec4(1.0, 2.0, 3.0, 1.0));"
+        in output
+    )
+    assert "float elem = rq.CommittedObjectToWorld3x4()[2][1];" in output
+
+    row_major = to_crossgl(
+        """
+        RayQuery<RAY_FLAG_NONE> rq;
+        float3x4 r = rq.CommittedObjectToWorld3x4();
+        float3 v = mul(r, float4(1.0, 2.0, 3.0, 1.0));
+        o[0] = r[0].x + v.x;
+    """,
+        matrix_packing="row_major",
+    )
+    assert "mat3x4 r = transpose(rq.CommittedObjectToWorld3x4());" in row_major
+    assert "vec3 v = (vec4(1.0, 2.0, 3.0, 1.0) * r);" in row_major
+
+
+def test_user_struct_method_named_like_hit_object_method_keeps_its_own_type():
+    output = to_crossgl(
+        """
+        Custom s;
+        s.v = o[0];
+        float2x2 m = s.GetObjectToWorld3x4();
+        o[0] = m[0][0];
+    """,
+        """
+        struct Custom {
+            float v;
+            float GetObjectToWorld3x4() { return v; }
+        };
+        """,
+    )
+    assert (
+        "mat2 m = mat2(vec2(Custom_GetObjectToWorld3x4(s)), vec2(Custom_GetObjectToWorld3x4(s)));"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "float3x4 m = unknown_matrix_call();",
+        "float3x4 m = mystery.GetObjectToWorld3x4();",
+        "float3x4 m = mystery.CommittedObjectToWorld3x4();",
+        "RayQuery<RAY_FLAG_NONE> rq; float3x4 m = rq.GetObjectToWorld3x4();",
+        "dx::HitObject hit; float3x4 m = hit.CommittedObjectToWorld3x4();",
+        "float3x4 m = ObjectToWorld3x4(1);",
+        "RayQuery<RAY_FLAG_NONE> rq; float3x4 m = rq.CommittedObjectToWorld3x4(1);",
+    ],
+)
+def test_unknown_or_mismatched_matrix_calls_remain_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(statement + "\no[0] = m[0][0];")

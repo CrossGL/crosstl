@@ -1,3 +1,4 @@
+#pragma cgl_rules(fp_ieee, libm, round_away)
 // HIP to CrossGL conversion
 // Kernel: AddKernel
 @compute

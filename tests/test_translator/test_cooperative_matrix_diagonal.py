@@ -99,7 +99,7 @@ def test_parser_rejects_other_arities(replacement, message):
     else:
         source = source.replace(f"{PLAIN}(src[0])", replacement)
     with pytest.raises(SyntaxError, match=message):
-        Parser(_tokens(source), strict_function_bodies=True).parse()
+        Parser(_tokens(source)).parse()
 
 
 def test_metal_emits_the_one_value_constructor(tmp_path):

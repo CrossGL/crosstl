@@ -15,6 +15,7 @@ from .artifact_contracts import (
     with_artifact_contract_header,
 )
 from .ast import NamedType, PointerType, PrimitiveType, ReferenceType
+from .refusals import MetadataContractError
 from .resource_identity import source_resource_attribute, source_resource_identity
 
 MAX_METADATA_PRECONDITIONS = 256
@@ -43,7 +44,9 @@ def _identifier(value: Any, field: str) -> str:
         or len(value) > 1024
         or not _IDENTIFIER.fullmatch(value)
     ):
-        raise ValueError(f"Metadata precondition {field} requires an identifier.")
+        raise MetadataContractError(
+            f"Metadata precondition {field} requires an identifier."
+        )
     return value
 
 
@@ -53,7 +56,7 @@ def _bounds(minimum: Any, maximum: Any) -> None:
         or type(maximum) is not int
         or not -(1 << 63) <= minimum <= maximum <= (1 << 64) - 1
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "Metadata precondition bounds require an ordered integer range."
         )
 
@@ -83,7 +86,7 @@ class MetadataRangePrecondition:
             or self.source != self.source.strip()
             or any(ord(char) < 32 for char in self.source)
         ):
-            raise ValueError(
+            raise MetadataContractError(
                 "Metadata precondition source requires a nonempty pattern."
             )
 
@@ -102,7 +105,9 @@ class MetadataRangePrecondition:
 def _element(value: Any) -> None:
     """Keep the byte offset representable for every supported integer width."""
     if value is not None and (type(value) is not int or not 0 <= value < (1 << 61)):
-        raise ValueError("Metadata element requires a nonnegative bounded integer.")
+        raise MetadataContractError(
+            "Metadata element requires a nonnegative bounded integer."
+        )
 
 
 def _member(value: Any, element: Any) -> None:
@@ -111,7 +116,9 @@ def _member(value: Any, element: Any) -> None:
         return
     _identifier(value, "member")
     if element is not None:
-        raise ValueError("Metadata precondition selects an element or a member.")
+        raise MetadataContractError(
+            "Metadata precondition selects an element or a member."
+        )
 
 
 def _selector(element, member):
@@ -130,7 +137,7 @@ def _add_selector(selectors, identity, selector):
     kinds = {None if item is None else item[0] for item in previous}
     kind = None if selector is None else selector[0]
     if selector in previous or previous and (kind is None or kinds != {kind}):
-        raise ValueError(
+        raise MetadataContractError(
             "Duplicate or ambiguous metadata source parameter requirements."
         )
     previous.add(selector)
@@ -146,7 +153,7 @@ def parse_metadata_preconditions(
         not isinstance(records, (list, tuple))
         or len(records) > MAX_METADATA_PRECONDITIONS
     ):
-        raise ValueError(
+        raise MetadataContractError(
             f"{field_name} requires at most {MAX_METADATA_PRECONDITIONS} records."
         )
     result, keys = [], {}
@@ -163,7 +170,9 @@ def parse_metadata_preconditions(
                 "element",
                 "member",
             } or not {"entryPoint", "parameter", "minimum", "maximum"} <= set(record):
-                raise ValueError(f"{field_name} has unsupported or missing fields.")
+                raise MetadataContractError(
+                    f"{field_name} has unsupported or missing fields."
+                )
             condition = MetadataRangePrecondition(
                 entry_point=record["entryPoint"],
                 parameter=record["parameter"],
@@ -174,11 +183,13 @@ def parse_metadata_preconditions(
                 member=record.get("member"),
             )
             if "element" in record and record["element"] is None:
-                raise ValueError("Explicit metadata element cannot be null.")
+                raise MetadataContractError("Explicit metadata element cannot be null.")
             if "member" in record and record["member"] is None:
-                raise ValueError("Explicit metadata member cannot be null.")
+                raise MetadataContractError("Explicit metadata member cannot be null.")
         else:
-            raise ValueError(f"{field_name} requires metadata precondition objects.")
+            raise MetadataContractError(
+                f"{field_name} requires metadata precondition objects."
+            )
         key = (condition.source, condition.entry_point, condition.parameter)
         _add_selector(keys, key, _selector(condition.element, condition.member))
         result.append(condition)
@@ -191,7 +202,9 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
         not isinstance(records, (list, tuple))
         or len(records) > MAX_METADATA_PRECONDITIONS
     ):
-        raise ValueError("Resolved metadata preconditions require a bounded sequence.")
+        raise MetadataContractError(
+            "Resolved metadata preconditions require a bounded sequence."
+        )
     result, indices, names, selectors, types = [], {}, {}, {}, {}
     for record in records:
         if not isinstance(record, Mapping) or set(record) - {"element", "member"} != {
@@ -200,14 +213,16 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
             "minimum",
             "maximum",
         }:
-            raise ValueError("Unsupported resolved metadata precondition fields.")
+            raise MetadataContractError(
+                "Unsupported resolved metadata precondition fields."
+            )
         element = record.get("element")
         _element(element)
         if "element" in record and element is None:
-            raise ValueError("Explicit metadata element cannot be null.")
+            raise MetadataContractError("Explicit metadata element cannot be null.")
         member = record.get("member")
         if "member" in record and member is None:
-            raise ValueError("Explicit metadata member cannot be null.")
+            raise MetadataContractError("Explicit metadata member cannot be null.")
         _member(member, element)
         source = record["sourceResource"]
         if (
@@ -217,7 +232,9 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
             or type(source["schemaVersion"]) is not int
             or source["schemaVersion"] != 1
         ):
-            raise ValueError("Unsupported metadata source resource identity.")
+            raise MetadataContractError(
+                "Unsupported metadata source resource identity."
+            )
         source_resource_attribute(
             source["backend"],
             source["entryPoint"],
@@ -227,16 +244,18 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
         _bounds(record["minimum"], record["maximum"])
         dtype = record["dtype"]
         if not isinstance(dtype, str) or dtype not in INTEGER_METADATA_TYPES:
-            raise ValueError("Metadata preconditions require an integer scalar type.")
+            raise MetadataContractError(
+                "Metadata preconditions require an integer scalar type."
+            )
         low, high = INTEGER_METADATA_TYPES[dtype]
         if not low <= record["minimum"] <= record["maximum"] <= high:
-            raise ValueError(
+            raise MetadataContractError(
                 "Metadata precondition bounds exceed the source integer type."
             )
         index = (source["backend"], source["entryPoint"], source["parameterIndex"])
         name = (source["backend"], source["entryPoint"], source["parameter"])
         if indices.get(index, name) != name or names.get(name, index) != index:
-            raise ValueError(
+            raise MetadataContractError(
                 "Duplicate or ambiguous metadata source resource identity."
             )
         indices[index] = name
@@ -244,7 +263,9 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
         # Array elements share one element type; record fields have their own.
         type_key = index if member is None else (index, member)
         if types.get(type_key, dtype) != dtype:
-            raise ValueError("Metadata elements require one source integer type.")
+            raise MetadataContractError(
+                "Metadata elements require one source integer type."
+            )
         types[type_key] = dtype
         _add_selector(selectors, index, _selector(element, member))
         result.append({**record, "sourceResource": dict(source)})
@@ -272,14 +293,18 @@ def metadata_precondition_header(records: Any) -> str:
         ensure_ascii=True,
     )
     if len(header.encode("utf-8")) > MAX_METADATA_PRECONDITION_BYTES:
-        raise ValueError("Metadata precondition header exceeds its byte limit.")
+        raise MetadataContractError(
+            "Metadata precondition header exceeds its byte limit."
+        )
     return header + "\n"
 
 
 def with_metadata_precondition_header(source: str, records: Any) -> str:
     """Retain every existing leading artifact contract when adding obligations."""
     if METADATA_PRECONDITION_PREFIX.rstrip() in source:
-        raise ValueError("Source already contains a metadata precondition marker.")
+        raise MetadataContractError(
+            "Source already contains a metadata precondition marker."
+        )
     return with_artifact_contract_header(source, metadata_precondition_header(records))
 
 
@@ -289,13 +314,15 @@ def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
     if line is None:
         return []
     if len(line.encode("utf-8")) > MAX_METADATA_PRECONDITION_BYTES:
-        raise ValueError("Metadata precondition header exceeds its byte limit.")
+        raise MetadataContractError(
+            "Metadata precondition header exceeds its byte limit."
+        )
 
     def unique(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate metadata precondition key.")
+                raise MetadataContractError("Duplicate metadata precondition key.")
             result[key] = value
         return result
 
@@ -305,7 +332,7 @@ def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
             object_pairs_hook=unique,
         )
     except (ValueError, RecursionError) as error:
-        raise ValueError("Invalid metadata precondition JSON.") from error
+        raise MetadataContractError("Invalid metadata precondition JSON.") from error
     if (
         not isinstance(record, dict)
         or set(record) != {"schemaVersion", "requirements"}
@@ -314,7 +341,7 @@ def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
         or not isinstance(record["requirements"], list)
         or not record["requirements"]
     ):
-        raise ValueError("Unsupported metadata precondition header schema.")
+        raise MetadataContractError("Unsupported metadata precondition header schema.")
     return checked_metadata_preconditions(record["requirements"])
 
 
@@ -501,7 +528,9 @@ def metadata_member_offset(layout, requirement):
     scalar of the required type, aligned to its width and inside the record.
     """
     if not isinstance(layout, Mapping) or not isinstance(requirement, Mapping):
-        raise ValueError("Metadata members require a reflected record layout.")
+        raise MetadataContractError(
+            "Metadata members require a reflected record layout."
+        )
     width = INTEGER_METADATA_BYTES.get(requirement.get("dtype"))
     storage = layout.get("storageLayout")
     if storage == "metal-buffer":
@@ -529,14 +558,18 @@ def metadata_member_offset(layout, requirement):
         or type(size) is not int
         or size <= 0
     ):
-        raise ValueError("Metadata members require a reflected constant record.")
+        raise MetadataContractError(
+            "Metadata members require a reflected constant record."
+        )
     matches = [
         field
         for field in fields
         if isinstance(field, Mapping) and field.get("name") == requirement.get("member")
     ]
     if len(matches) != 1:
-        raise ValueError("Metadata member is missing or ambiguous in the record.")
+        raise MetadataContractError(
+            "Metadata member is missing or ambiguous in the record."
+        )
     (field,) = matches
     offset = field.get("offsetBytes")
     if (
@@ -549,7 +582,9 @@ def metadata_member_offset(layout, requirement):
         or offset % width
         or offset + width > size
     ):
-        raise ValueError("Metadata members require one reflected integer scalar field.")
+        raise MetadataContractError(
+            "Metadata members require one reflected integer scalar field."
+        )
     return offset
 
 
@@ -564,7 +599,9 @@ def apply_metadata_preconditions(resources, records):
             == requirement["sourceResource"]
         ]
         if len(matches) != 1:
-            raise ValueError("Metadata precondition resource is missing or ambiguous.")
+            raise MetadataContractError(
+                "Metadata precondition resource is missing or ambiguous."
+            )
         resource = matches[0]
         layout = resource.get("scalarLayout", {})
         width = INTEGER_METADATA_BYTES[requirement["dtype"]]
@@ -573,7 +610,7 @@ def apply_metadata_preconditions(resources, records):
                 resource.get("access") != "read"
                 or resource.get("kind") != "constant-buffer"
             ):
-                raise ValueError(
+                raise MetadataContractError(
                     "Metadata members require a reflected read-only constant record."
                 )
             metadata_member_offset(layout, requirement)
@@ -605,7 +642,7 @@ def apply_metadata_preconditions(resources, records):
             )
             or "storageEncoding" in layout
         ):
-            raise ValueError(
+            raise MetadataContractError(
                 "Metadata preconditions require a reflected read-only integer scalar."
             )
         pending.append((resource, requirement))
@@ -632,7 +669,9 @@ def binding_metadata_preconditions(bindings):
         if "metadataPrecondition" in provenance:
             record = provenance["metadataPrecondition"]
             if not isinstance(record, Mapping) or {"element", "member"} & set(record):
-                raise ValueError("Scalar metadata requires a scalar precondition.")
+                raise MetadataContractError(
+                    "Scalar metadata requires a scalar precondition."
+                )
             records.append(record)
         for key, selector, label in (
             ("metadataElementPreconditions", "element", "Array metadata"),
@@ -649,6 +688,8 @@ def binding_metadata_preconditions(bindings):
                     for record in selected
                 )
             ):
-                raise ValueError(f"{label} requires explicit {selector} preconditions.")
+                raise MetadataContractError(
+                    f"{label} requires explicit {selector} preconditions."
+                )
             records.extend(selected)
     return checked_metadata_preconditions(records)

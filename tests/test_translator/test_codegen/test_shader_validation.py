@@ -1302,6 +1302,8 @@ shader SpirvTextureQueryComputeValidation {
     sampler linearSampler;
 
     compute {
+        // Implicit-LOD queries in compute need a derivative group: 2x2 quads.
+        layout(local_size_x = 2, local_size_y = 2) in;
         void main() {
             vec2 uv = vec2(0.25, 0.75);
             vec3 uvLayer = vec3(0.25, 0.75, 1.0);

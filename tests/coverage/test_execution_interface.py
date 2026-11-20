@@ -1,5 +1,6 @@
 """The buffers, constants and inputs a translation must keep for its probe to run."""
 
+import xml.etree.ElementTree as ElementTree
 from dataclasses import replace
 
 import numpy as np
@@ -7,6 +8,7 @@ import pytest
 
 from tests.conformance import runner as harness
 from tools.coverage import (
+    chart,
     execution,
     issues,
     lowering,
@@ -45,7 +47,7 @@ COUNTED = """\
 
 def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
     # DXC declares one for a RWStructuredBuffer a function takes; the host binds no such buffer.
-    kept = execution.without_unused_counters(COUNTED)
+    kept = lowering.without_unused_counters(COUNTED)
     assert "counter_var_outp" not in kept
     assert '"main" %id\n' in kept and "%outp Binding 1" in kept
     assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
@@ -78,8 +80,8 @@ def test_rust_spirv_declares_only_the_capabilities_it_uses():
     # lavapipe will not create a pipeline from a module that declares a capability the device does not enable.
     if not (validators.command("spirv-as") and validators.command("spirv-val")):
         pytest.skip("spirv-as or spirv-val is not installed")
-    kept = execution.without_unused_capabilities(OVERDECLARED)
-    assert execution._CAPABILITY.findall(kept) == ["Shader", "Float64"]
+    kept = lowering.without_unused_capabilities(OVERDECLARED)
+    assert lowering._CAPABILITY.findall(kept) == ["Shader", "Float64"]
     assert kept == OVERDECLARED.replace(
         "               OpCapability RayTracingKHR\n", ""
     ).replace("               OpCapability StencilExportEXT\n", "")
@@ -87,17 +89,15 @@ def test_rust_spirv_declares_only_the_capabilities_it_uses():
 
 def test_only_rust_spirv_loses_capabilities(monkeypatch):
     monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: (OVERDECLARED, ""))
-    monkeypatch.setattr(
-        execution, "without_unused_capabilities", lambda text: "trimmed"
-    )
+    monkeypatch.setattr(lowering, "without_unused_capabilities", lambda text: "trimmed")
     assert execution.as_spirv("rust", "") == "trimmed"
     assert execution.as_spirv("wgsl", "") == OVERDECLARED
     monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: ("", "rejected"))
     assert execution.as_spirv("rust", "") == ""
     used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
-    assert execution.without_unused_counters(used) == used
+    assert lowering.without_unused_counters(used) == used
     plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
-    assert execution.without_unused_counters(plain) == plain
+    assert lowering.without_unused_counters(plain) == plain
 
 
 HELPER = """\
@@ -144,7 +144,7 @@ def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
     path = tmp_path / "probe.metal"
     path.write_text(NATIVE)
     case = execution._case(
-        "00000-native", path, "metal", execution.inputs("fin"), None, outputs
+        "00000-native", path, "metal", execution.inputs("fin"), None, outputs, 1
     )
     [record] = harness.run_suite(
         [case], ["metal"], ["strict"], {"metal": []}, tmp_path / "run", reference=True
@@ -191,10 +191,38 @@ def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
     ran = Result(SIN, "output", "supported", runtime="metal-apple")
     data = report.build([ran], ["metal"], ["output"])
     [row] = [b for b in data["backends"] if b["language"] == "metal"]
-    assert (row["runtime"], row["executed"]) == ("metal-apple", 1)
-    assert "Executed: Metal output, 1 probes on metal-apple." in publish.markdown(data)
+    assert (row["executes"], row["runtime"], row["executed"]) == (
+        True,
+        "metal-apple",
+        1,
+    )
+    assert "| 1 | 0 | 0 | 0 | 1 on metal-apple |" in publish.markdown(data)
+    # Measured without --execute, a language that has a runtime says so instead of claiming that none could run.
     plain = report.build([Result(SIN, "output", "supported")], ["metal"], ["output"])
-    assert "Executed:" not in publish.markdown(plain)
+    [row] = [b for b in plain["backends"] if b["language"] == "metal"]
+    assert "executed" not in row and "runtime" not in row
+    assert "| 1 | 0 | 0 | 0 | not run |" in publish.markdown(plain)
+
+
+def test_rows_tell_executed_from_compile_only_and_from_none_ran():
+    cuda = Feature("cuda", "function", "sinf", SIN.signature, crossgl="sin")
+    results = [
+        Result(SIN, "output", "supported"),
+        Result(cuda, "output", "supported"),
+    ]
+    data = report.build(results, ["cuda", "metal"], ["output"], execute=True)
+    rows = {b["language"]: b for b in data["backends"] if b["direction"] == "output"}
+    # Metal has a runtime, so a run with --execute records that none of its probes ran.
+    assert (rows["metal"]["executes"], rows["metal"]["executed"]) == (True, 0)
+    assert "runtime" not in rows["metal"]
+    # The conformance harness has no CUDA runtime: nvcc alone decides the row.
+    assert rows["cuda"]["executes"] is False and "executed" not in rows["cuda"]
+    text = publish.markdown(data)
+    assert "| CUDA | output | 100.0 % | 1 | 0 | 0 | 0 | compile-only |" in text
+    assert "| Metal | output | 100.0 % | 1 | 0 | 0 | 0 | 0 |" in text
+    svg = ElementTree.fromstring(chart.render(data))
+    texts = [t.text for t in svg.iter("{http://www.w3.org/2000/svg}text")]
+    assert "compile-only" in texts and "0 executed" in texts
 
 
 def test_an_execution_bug_is_reproduced_with_execute():

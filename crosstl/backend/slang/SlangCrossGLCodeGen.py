@@ -4,7 +4,8 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from crosstl.translator.integer_literals import crossgl_legacy_octal
-from crosstl.translator.stage_utils import normalize_stage_name
+from crosstl.translator.renames import renamed
+from crosstl.translator.stage_utils import requested_stage_name
 
 from ..import_refusals import SlangImportRefused
 from ..storage_image_texels import (
@@ -143,6 +144,18 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         "transpose",
         "trunc",
     }
+    # Cube texture types, whose sample methods take no texel offset.
+    CUBE_TEXTURE_RESOURCE_BASES = frozenset(
+        {
+            "TextureCube",
+            "TextureCubeArray",
+            "SamplerCube",
+            "SamplerCubeArray",
+            "SamplerCubeShadow",
+            "SamplerCubeArrayShadow",
+        }
+    )
+
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
@@ -666,25 +679,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_IsFrontFace": "gl_FrontFacing",
             "SV_SampleIndex": "gl_SampleID",
             "SV_Barycentrics": "gl_BaryCoordEXT",
-            # Fragment outputs
-            "SV_Target": "Out_Color",
-            "SV_Target0": "Out_Color0",
-            "SV_Target1": "Out_Color1",
-            "SV_Target2": "Out_Color2",
-            "SV_Target3": "Out_Color3",
-            "SV_Target4": "Out_Color4",
-            "SV_Target5": "Out_Color5",
-            "SV_Target6": "Out_Color6",
-            "SV_Target7": "Out_Color7",
-            "SV_Depth": "Out_Depth",
-            "SV_Depth0": "Out_Depth0",
-            "SV_Depth1": "Out_Depth1",
-            "SV_Depth2": "Out_Depth2",
-            "SV_Depth3": "Out_Depth3",
-            "SV_Depth4": "Out_Depth4",
-            "SV_Depth5": "Out_Depth5",
-            "SV_Depth6": "Out_Depth6",
-            "SV_Depth7": "Out_Depth7",
+            # Fragment outputs take the CrossGL spellings the HLSL import gives them: SV_Target is gl_FragColor,
+            # SV_Target<N> is gl_FragData[N] (map_semantic) and SV_Depth is gl_FragDepth.
+            "SV_Target": "gl_FragColor",
+            "SV_Depth": "gl_FragDepth",
             # SV_Coverage is also a fragment input, handled contextually
             # for parameters in map_semantic.
             "SV_Coverage": "gl_SampleMask",
@@ -692,6 +690,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_RenderTargetArrayIndex": "gl_Layer",
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
             "SV_ClipDistance": "gl_ClipDistance",
+            "SV_PointSize": "gl_PointSize",
             "SV_CullDistance": "gl_CullDistance",
             # Compute shader
             "SV_GroupID": "gl_WorkGroupID",
@@ -809,6 +808,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 # Written in its block by generate_function_body.
                 continue
             if isinstance(node, StructNode):
+                self.refuse_struct_subscripts(node)
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
                     code += self.matrix_layout_attributes(member, 2)
@@ -963,7 +963,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
 
     def effective_function_qualifier(self, func):
-        qualifier = normalize_stage_name(getattr(func, "qualifier", None))
+        # ``qualifier`` holds the stage a ``[shader("...")]`` attribute names; one that names no stage is refused.
+        qualifier = getattr(func, "qualifier", None)
+        qualifier = requested_stage_name(qualifier) if qualifier else None
         if qualifier:
             return qualifier
         if getattr(func, "numthreads", None):
@@ -1057,7 +1059,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         return name_map
 
     def format_function_name(self, name):
-        return self.function_name_map.get(name, name)
+        # ``function_name_map`` holds the CrossGL name of every function the program declares, and only declared
+        # functions are written or called through it.
+        return self.function_name_map[name]
 
     def register_global_identifier_renames(self, ast):
         for node in getattr(ast, "global_vars", []) or []:
@@ -1137,9 +1141,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
 
     def format_struct_member_name(self, struct, member_name):
         struct_name = getattr(struct, "name", struct)
-        return self.struct_member_name_maps.get(struct_name, {}).get(
-            member_name, member_name
-        )
+        # Members of a type the program does not declare (a vector's ``x``, a built-in structure's fields) keep
+        # their name; the maps hold the declared structures' members.
+        return renamed(self.struct_member_name_maps.get(struct_name, {}), member_name)
 
     def format_member_access_name(self, expr):
         object_type = self.unwrap_resource_container_type(
@@ -1533,6 +1537,21 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
 
+    def refuse_struct_subscripts(self, node):
+        """Refuse a ``__subscript`` declaration: ``value[i, j]`` would then index a structure CrossGL cannot index."""
+        subscripts = [
+            method
+            for method in getattr(node, "methods", None) or []
+            if getattr(method, "is_subscript", False)
+        ]
+        if subscripts:
+            raise SlangImportRefused(
+                [
+                    f"the __subscript of Slang structure '{node.name}' has no CrossGL form, so an index of a "
+                    f"'{node.name}' value cannot be written"
+                ]
+            )
+
     def generate_block_struct(self, node, indent):
         """Write a structure declared in a function body as a CrossGL block-scoped structure."""
         unsupported = [
@@ -1563,17 +1582,43 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         # The semicolon keeps a following statement from reading as a declarator.
         return code + f"{pad}}};\n"
 
+    SCALAR_LITERAL_VECTOR_PREFIXES = (
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)"), "ivec"),
+        (re.compile(r"(?:0[xX][0-9a-fA-F]+|\d+)[uU]"), "uvec"),
+        (re.compile(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?"), "vec"),
+        (re.compile(r"true|false"), "bvec"),
+    )
+
+    def scalar_literal_swizzle(self, literal, member):
+        """``0.xx`` swizzles the scalar literal 0 into a two-component vector, written ``ivec2(0)`` in CrossGL.
+
+        HLSL, which Slang follows, lets a scalar take a swizzle of ``x`` or ``r`` components; CrossGL reads
+        ``0.xx`` as the float ``0.`` followed by a name.
+        """
+        if not isinstance(member, str) or not re.fullmatch(r"x{1,4}|r{1,4}", member):
+            return None
+        for pattern, prefix in self.SCALAR_LITERAL_VECTOR_PREFIXES:
+            if pattern.fullmatch(str(literal)):
+                if len(member) == 1:
+                    return str(literal)
+                return f"{prefix}{len(member)}({literal})"
+        return None
+
     def generate_statement_label(self, stmt, indent=0):
-        label = getattr(stmt, "label", None)
-        if not label:
-            return ""
-        return "    " * indent + f"{self.format_label_identifier(label)}:\n"
+        # Slang has no goto, so a label is only the target of a labeled break or continue, which
+        # generate_jump_statement refuses; a label no jump names has no effect and is not written.
+        return ""
 
     def generate_jump_statement(self, keyword, node):
         target_label = getattr(node, "target_label", None)
         if not target_label:
             return f"{keyword};"
-        return f"{keyword} {self.format_label_identifier(target_label)};"
+        raise SlangImportRefused(
+            [
+                f"'{keyword} {target_label}' leaves an enclosing labeled statement, and CrossGL has no "
+                "labeled break or continue"
+            ]
+        )
 
     def format_label_identifier(self, label):
         return self.sanitize_crossgl_identifier(str(label), set())
@@ -1665,10 +1710,18 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
 
         code = f"switch ({expression}) {{\n"
         unlabeled_statements = getattr(node, "unlabeled_statements", []) or []
-        if unlabeled_statements:
-            code += self.generate_function_body(
-                unlabeled_statements, indent + 1, is_main, deferred_scopes
+        if any(
+            isinstance(statement, VariableNode) for statement in unlabeled_statements
+        ):
+            # A declaration there is in scope in the cases while its initializer never runs; CrossGL has no
+            # statement before a switch's first label to hold it.
+            raise SlangImportRefused(
+                [
+                    "a declaration before the first case label of a switch has no CrossGL form"
+                ]
             )
+        # The other statements before the first label never run (C11 6.8.4.2/4, which Slang and HLSL follow), so
+        # no statement is written for them.
         ordered_cases = getattr(node, "ordered_cases", None)
         if ordered_cases is not None:
             for case in ordered_cases:
@@ -2236,7 +2289,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             elif function_name in self.type_map and function_name[:1].islower():
                 name = self.map_type(function_name)
             else:
-                name = self.function_map.get(function_name, function_name)
+                name = self.crossgl_intrinsic_name(function_name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
@@ -2285,6 +2338,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             if texel_swizzle is not None:
                 return texel_swizzle
             obj = self.generate_expression(expr.object, is_main)
+            literal_swizzle = self.scalar_literal_swizzle(obj, expr.member)
+            if literal_swizzle is not None:
+                return literal_swizzle
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
             ):
@@ -2610,6 +2666,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return self.map_generic_matrix_type(slang_type)
         return None
 
+    def crossgl_intrinsic_name(self, name):
+        """The CrossGL name of callee ``name``: the CrossGL spelling of a Slang intrinsic ``function_map`` renames.
+
+        Any other callee is carried as written: a constructor, or a Slang or HLSL built-in that CrossGL spells the
+        same way. The IR accepts HLSL built-ins as plain calls for the generators to map or refuse, and
+        ``declared_functions`` refuses any other name (``builtin_function_names``).
+        """
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
+
     def map_generic_vector_type(self, slang_type):
         args = self.generic_type_arguments(slang_type)
         if len(args) != 2:
@@ -2621,7 +2688,8 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return None
 
         if vector_size == "1":
-            return self.type_map.get(scalar_type, scalar_type)
+            # CrossGL has no one-component vector; ``vector<T, 1>`` holds one ``T``.
+            return self.map_type(scalar_type)
 
         vector_prefixes = {
             "float": "vec",
@@ -3384,17 +3452,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return "textureLod", prefix + [coord, *extra_args]
 
         if expr.method == "SampleGrad":
-            if len(extra_args) > 2:
-                ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureGradOffset"
-                if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
-                        "SampleGrad",
-                        self.texture_gradient_extra_parameters(rest),
-                    )
-                    texture_func = f"{diagnostic} {texture_func}"
-                return texture_func, prefix + [coord, ddx, ddy, offset]
-            return "textureGrad", prefix + [coord, *extra_args]
+            return self.crossgl_texture_gradient_call_parts(
+                expr, prefix, coord, extra_args
+            )
 
         if expr.method == "SampleCmp":
             if len(extra_args) > 1:
@@ -3428,72 +3488,81 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         if expr.method == "SampleCmpGrad":
             if len(extra_args) > 3:
                 compare, ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureCompareGradOffset"
                 if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
+                    self.refuse_texture_overload_extras(
                         "SampleCmpGrad",
                         self.texture_gradient_extra_parameters(
                             rest, includes_lod_clamp=False
                         ),
                     )
-                    texture_func = f"{diagnostic} {texture_func}"
                 return (
-                    texture_func,
+                    "textureCompareGradOffset",
                     prefix + [coord, compare, ddx, ddy, offset],
                 )
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
         return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
 
+    def crossgl_texture_gradient_call_parts(self, expr, prefix, coord, extra_args):
+        """``SampleGrad(s, location, ddx, ddy[, offset][, lodClamp][, out status])`` as a CrossGL texture call.
+
+        A cube texture takes no offset. CrossGL carries the minimum-LOD clamp as ``textureGradClamp`` and
+        ``textureGradOffsetClamp``; a status output, which reports tile residency, is refused.
+        """
+        if len(extra_args) <= 2:
+            return "textureGrad", prefix + [coord, *extra_args]
+        resource_base = self.resource_type_base(
+            self.sampleable_resource_expression_type(expr.object)
+        )
+        if resource_base in self.CUBE_TEXTURE_RESOURCE_BASES:
+            ddx, ddy, *rest = extra_args
+            if len(rest) == 1:
+                return "textureGradClamp", prefix + [coord, ddx, ddy, rest[0]]
+        else:
+            ddx, ddy, offset, *rest = extra_args
+            if not rest:
+                return "textureGradOffset", prefix + [coord, ddx, ddy, offset]
+            if len(rest) == 1:
+                return (
+                    "textureGradOffsetClamp",
+                    prefix + [coord, ddx, ddy, offset, rest[0]],
+                )
+        dropped_parameters = ["status output"]
+        if len(rest) > 2:
+            dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleGrad", dropped_parameters)
+
     def crossgl_texture_compare_bias_call_parts(self, expr, prefix, coord, extra_args):
         if len(extra_args) < 2:
             return "textureCompare", prefix + [coord, *extra_args]
 
-        compare = extra_args[0]
+        # SampleCmpBias(s, location, compare, bias[, offset][, clamp][, status]): CrossGL's textureCompare has no
+        # bias operand, so every call with a bias is refused, naming each operand that would be lost.
         resource_base = self.resource_type_base(
             self.sampleable_resource_expression_type(expr.object)
         )
-        offset_index = (
-            2
-            if len(extra_args) > 2
-            and resource_base not in {
-                "TextureCube",
-                "TextureCubeArray",
-                "SamplerCube",
-                "SamplerCubeArray",
-                "SamplerCubeShadow",
-                "SamplerCubeArrayShadow",
-            }
-            else None
+        has_offset = (
+            len(extra_args) > 2
+            and resource_base not in self.CUBE_TEXTURE_RESOURCE_BASES
         )
+        trailing_args = extra_args[3:] if has_offset else extra_args[2:]
         dropped_parameters = ["LOD bias"]
-
-        if offset_index is None:
-            texture_func = "textureCompare"
-            args = prefix + [coord, compare]
-            trailing_args = extra_args[2:]
-        else:
-            texture_func = "textureCompareOffset"
-            args = prefix + [coord, compare, extra_args[offset_index]]
-            trailing_args = extra_args[offset_index + 1 :]
-
         if trailing_args:
             dropped_parameters.append("LOD clamp")
         if len(trailing_args) > 1:
             dropped_parameters.append("status output")
         if len(trailing_args) > 2:
             dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleCmpBias", dropped_parameters)
 
-        diagnostic = self.texture_overload_extras_diagnostic(
-            "SampleCmpBias", dropped_parameters
-        )
-        return f"{diagnostic} {texture_func}", args
-
-    def texture_overload_extras_diagnostic(self, member, dropped_parameters):
+    def refuse_texture_overload_extras(self, member, dropped_parameters):
+        """Refuse a texture method call whose trailing operands CrossGL's texture functions have no place for."""
         parameters = ", ".join(dropped_parameters)
-        return (
-            f"/* unsupported Slang texture overload extras for {member}: "
-            f"dropped {parameters} */"
+        raise SlangImportRefused(
+            [
+                f"texture overload extras for {member}: CrossGL has no operand for "
+                f"{parameters}"
+            ]
         )
 
     def texture_gradient_extra_parameters(self, trailing_args, includes_lod_clamp=True):
@@ -3868,13 +3937,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             target_match = re.fullmatch(r"SV_TARGET(\d*)", str(semantic).upper())
             if target_match:
                 target_index = target_match.group(1)
-                mapped_semantic = f"Out_Color{target_index}"
+                mapped_semantic = (
+                    f"gl_FragData[{int(target_index)}]"
+                    if target_index
+                    else "gl_FragColor"
+                )
         if mapped_semantic is None:
             depth_match = re.fullmatch(
                 r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
             )
             if depth_match:
-                mapped_semantic = "Out_Depth"
+                mapped_semantic = "gl_FragDepth"
         if mapped_semantic is None:
             for hlsl_prefix, crossgl_semantic in (
                 ("SV_CLIPDISTANCE", "gl_ClipDistance"),

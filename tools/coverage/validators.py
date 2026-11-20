@@ -101,6 +101,10 @@ SPIRV_ENVIRONMENT = "vulkan1.1"
 # Vulkan 1.2.
 SPIRV_1_4_ENVIRONMENT = "vulkan1.2"
 SPIRV_1_4_STAGES = frozenset({*RAYTRACING_STAGES, "task", "mesh"})
+# The SPIR-V version spirv-dis prints in an assembly's header, as CrossTL's generator does, and the highest minor
+# version each Vulkan environment accepts (Vulkan 1.1 takes SPIR-V 1.3, Vulkan 1.2 takes 1.5, Vulkan 1.3 takes 1.6).
+_SPIRV_VERSION = re.compile(r"^; Version: 1\.(\d+)$", re.M)
+_ENVIRONMENTS = ((3, SPIRV_ENVIRONMENT), (5, SPIRV_1_4_ENVIRONMENT), (6, "vulkan1.3"))
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
@@ -114,6 +118,10 @@ OPENCL_TARGET = "spir64"
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
 SLANG_VALIDATION = {"SLANG_RUN_SPIRV_VALIDATION": "1"}
+# The targets other than SPIR-V a Slang probe compiles for, each with the compiler that checks what slangc writes.
+# slangc writes HLSL and CUDA source without compiling it, so DXC and nvcc check that source as they check the probes
+# of those languages. The CUDA source includes the prelude header that ships with slangc.
+SLANG_SOURCE_TARGETS = {"hlsl": "dxc", "cuda": "nvcc"}
 # HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
 # targets have none. No GPU is needed: hipcc compiles for the named target.
 HIP_ARCH = "gfx1100"
@@ -196,9 +204,10 @@ def version(name: str) -> str:
 
 def toolchain(language: str, target: str = "") -> tuple[str, ...]:
     """The tools that checking ``language`` probes for ``target`` runs."""
+    if language == "slang" and target in SLANG_SOURCE_TARGETS:
+        return ("slangc", SLANG_SOURCE_TARGETS[target])
     return {
         "spirv": ("spirv-as", "spirv-val"),
-        "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
         "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
@@ -348,7 +357,8 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
     return compiled
 
 
-# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``.
+# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``. The feature
+# list probes such a function for CUDA instead (features.slang.lacking); this catches a comment it does not find.
 _UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\*/")
 
 
@@ -437,7 +447,7 @@ def _slang(
         *(["-entry", entry or "main"] if target or not attributed else []),
         *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
     ]
-    output = "probe.hlsl" if target == "hlsl" else "probe.spv"
+    output = f"probe{SUFFIX[target]}" if target in SLANG_SOURCE_TARGETS else "probe.spv"
     compiled = run(
         [
             *command("slangc"),
@@ -452,10 +462,12 @@ def _slang(
         SLANG_VALIDATION,
         stdout=False,
     )
-    if target != "hlsl" or not compiled.accepted:
+    if target not in SLANG_SOURCE_TARGETS or not compiled.accepted:
         return compiled
-    # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where HLSL lacks
-    # an operation, Slang's library emits a comment in place of the call.
+    if target == "cuda":
+        arguments = (a.format(source=output) for a in COMPILE_ARGUMENTS["cuda"])
+        return run([*command("nvcc"), *arguments], scratch)
+    # Where HLSL lacks an operation, Slang's library emits a comment in place of the call.
     generated = Path(scratch, output).read_text()
     dropped = _UNSUPPORTED_IN_HLSL.search(generated)
     if dropped:
@@ -463,11 +475,29 @@ def _slang(
     return _dxc(output, generated, stage, "", scratch)
 
 
-def _spirv(name: str, stage: str, scratch: str) -> Verdict:
-    environment = [
-        "--target-env",
-        (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
-    ]
+def spirv_environment(assemblies: list[str]) -> str:
+    """The oldest Vulkan environment that accepts every one of ``assemblies``, by the SPIR-V version each declares."""
+    minor = max(
+        (
+            int(found.group(1))
+            for found in map(_SPIRV_VERSION.search, assemblies)
+            if found
+        ),
+        default=0,
+    )
+    return next(
+        (name for highest, name in _ENVIRONMENTS if minor <= highest),
+        _ENVIRONMENTS[-1][1],
+    )
+
+
+def _spirv(name: str, source: str, stage: str, scratch: str) -> Verdict:
+    # A module is checked for the Vulkan version its SPIR-V version needs, as slangc's SPIR-V 1.5 is, and the stages
+    # that need SPIR-V 1.4 for Vulkan 1.2 at least.
+    found = spirv_environment([source])
+    if stage in SPIRV_1_4_STAGES and found == SPIRV_ENVIRONMENT:
+        found = SPIRV_1_4_ENVIRONMENT
+    environment = ["--target-env", found]
     assembled = run(
         [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
     )
@@ -504,7 +534,7 @@ def validate(
             return run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
             return _slang(name, source, stage, entry, target, scratch)
-        return _spirv(name, stage, scratch)
+        return _spirv(name, source, stage, scratch)
 
 
 # slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the

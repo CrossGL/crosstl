@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 
 from ..ast import IdentifierNode, ParameterNode
+from ..refusals import WGSLRefusal
 
 __all__ = [
     "is_two_argument_frexp_or_modf",
@@ -56,20 +57,20 @@ def wgsl_frexp_modf_call(codegen, call):
     value_type = codegen.expression_type(value)
     written_type = codegen.expression_type(written)
     if value_type is None or written_type is None:
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target cannot lower {name}() without known operand types"
         )
     value_type = codegen.type_name_string(value_type)
     written_type = codegen.type_name_string(written_type)
     value_shape = _shape(codegen, value_type)
     if value_shape is None or value_shape[0] != "f32":
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target cannot lower {name}() on {value_type}; only float "
             "scalars and vectors are supported"
         )
     written_shape = _shape(codegen, written_type)
     if written_shape is None or written_shape[1] != value_shape[1]:
-        raise ValueError(
+        raise WGSLRefusal(
             f"WGSL target cannot lower {name}() on {value_type} writing "
             f"{written_type}; the written argument must be a scalar or vector "
             "with the same number of components"

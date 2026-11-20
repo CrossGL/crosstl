@@ -63,9 +63,79 @@ def test_a_language_lists_only_what_it_can_spell():
     }
 
 
-def test_spirv_lists_every_construct():
-    spirv = constructs.features("spirv", GRAMMAR)
-    assert len(spirv) == len(constructs.universe(GRAMMAR))
+def test_spirv_lists_every_construct_glsl_hlsl_or_slang_spells():
+    spirv = {f.name for f in constructs.features("spirv", GRAMMAR)}
+    spelled = {
+        c.name
+        for c in constructs.universe(GRAMMAR)
+        if any(constructs.spells(c.name, lang) for lang in ("glsl", "hlsl", "slang"))
+    }
+    assert spirv == spelled
+    assert not {"vector-halves", "numeric-components"} & spirv
+    # Only Slang spells pointers among the three.
+    assert {"pointer-local", "pointer-arithmetic"} <= spirv
+
+
+def test_pointer_probes_are_absent_where_the_language_has_no_pointers():
+    names = {"pointer-local", "pointer-arithmetic"}
+    listing = {
+        language: names & {f.name for f in constructs.features(language, GRAMMAR)}
+        for language in templates.TEMPLATES
+    }
+    assert {lang for lang, found in listing.items() if found == names} == {
+        "cuda",
+        "hip",
+        "metal",
+        "mojo",
+        "opencl",
+        "slang",
+        "spirv",
+    }
+    # WGSL and rust-gpu have pointers and references but no pointer arithmetic; GLSL and HLSL have neither.
+    assert listing["wgsl"] == listing["rust"] == {"pointer-local"}
+    assert not listing["glsl"] | listing["hlsl"] | listing["webgl"]
+    local = probes.build(construct_feature("opencl", "pointer-local"), "opencl")
+    assert "__global float* p = &outp[i];" in local.source
+    arithmetic = probes.build(construct_feature("slang", "pointer-arithmetic"), "slang")
+    assert "float* p = &outp[0] + i;" in arithmetic.source
+    assert "q = q + i;" in arithmetic.source
+
+
+def test_only_the_kernel_languages_list_a_device_global():
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if "device-global" in {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"cuda", "hip", "opencl"}
+    opencl = probes.build(construct_feature("opencl", "device-global"), "opencl")
+    assert "__global float acc[64] = {1.0f, 2.0f, 4.0f};" in opencl.source
+    # The declaration precedes the kernel, and each invocation rewrites only its own element.
+    assert opencl.source.index("__global float acc") < opencl.source.index("__kernel")
+    assert "acc[i & 63] = acc[i & 63] * 2.0f + fin[i];" in opencl.source
+    crossgl_probe = probes.build(construct_feature("cuda", "device-global"), "crossgl")
+    assert "device float acc[64] = {1.0, 2.0, 4.0};" in crossgl_probe.source
+
+
+def test_only_opencl_lists_its_vector_component_names():
+    names = {"vector-halves", "numeric-components"}
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if names & {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"opencl"}
+    halves = probes.build(construct_feature("opencl", "vector-halves"), "opencl")
+    assert "v.hi;" in halves.source and "v.even = (float2)(" in halves.source
+    assert "v.odd.hi;" in halves.source and "* 16.0f" in halves.source
+    numeric = probes.build(construct_feature("opencl", "numeric-components"), "opencl")
+    assert "v.s32;" in numeric.source and "v.s13 = " in numeric.source
+    assert "v.S2 = v.s0 + 4.0f;" in numeric.source
+    # CrossGL writes the same components as swizzles.
+    crossgl_probe = probes.build(
+        construct_feature("opencl", "vector-halves"), "crossgl"
+    ).source
+    assert "v.zw;" in crossgl_probe and "v.xz = vec2(" in crossgl_probe
 
 
 def test_constructs_share_a_semantic_id_across_languages():
@@ -249,6 +319,7 @@ def test_a_slang_probe_for_hlsl_needs_dxc(monkeypatch):
     )
     assert validators.missing("slang") == ""
     assert validators.missing("slang", "hlsl") == "dxc"
+    assert validators.missing("slang", "cuda") == "nvcc"
     assert not validators.available("slang", "hlsl")
 
 
@@ -470,6 +541,8 @@ def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
         if names is None and construct.name in _UNANCHORED_TYPES | _HLSL_ANCHORED:
             continue
         if names is not None and construct.name not in names:
+            continue
+        if not constructs.spells(construct.name, language):
             continue
         probe = probes.build(construct_feature(language, construct.name), language)
         assembly, log = lowering.lower(

@@ -2,6 +2,8 @@
 
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import MetalSourceRefusal, MetalSyntaxError
+
 from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import MetalPreprocessor
 
@@ -365,7 +367,9 @@ class MetalLexer:
     ):
         """Initialize the lexer with raw Metal source text."""
         if not isinstance(promote_derived_pointer_members, bool):
-            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
+            raise MetalSourceRefusal(
+                "Metal promote_derived_pointer_members must be a boolean"
+            )
         code = code.lstrip("\ufeff")
         self._token_dispatch = ordered_pattern_dispatch(TOKENS)
         self._token_patterns = self._token_dispatch.patterns
@@ -408,7 +412,7 @@ class MetalLexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Illegal character '{self.code[pos]}' at line {line_num}, column {col_num}\n"
                     f"Context: ...{context}..."
                 )
@@ -447,7 +451,7 @@ class MetalLexer:
             if end_pos == -1:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
-                raise SyntaxError(
+                raise MetalSyntaxError(
                     f"Unterminated block comment at line {line_num}, column {col_num}"
                 )
         # Only patterns that can begin with this character are tried, in table

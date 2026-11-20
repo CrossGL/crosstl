@@ -33,8 +33,7 @@ Array and AST helpers
 ---------------------
 
 ``array_utils`` handles array type strings, literal integer sizing, and struct
-member type collection. ``ASTUtils`` converts AST type nodes to backend type
-strings and exposes compatibility helpers for older AST shapes.
+member type collection.
 
 Vector arithmetic
 -----------------

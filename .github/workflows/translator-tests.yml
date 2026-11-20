@@ -167,6 +167,10 @@ jobs:
           python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
 
+      - name: Use Visual Studio's Clang
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-clang
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

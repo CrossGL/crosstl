@@ -7,6 +7,8 @@ import operator
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from ..refusals import TargetRefusal
+
 
 @dataclass(frozen=True)
 class WorkgroupAccessAssertion:
@@ -23,7 +25,7 @@ class WorkgroupAccessAssertion:
         for field_name in ("entry_point", "source", "function", "parameter"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(
+                raise TargetRefusal(
                     f"workgroup access assertion {field_name} must be non-empty"
                 )
             object.__setattr__(self, field_name, value.strip())
@@ -33,9 +35,9 @@ class WorkgroupAccessAssertion:
             or not isinstance(self.minimum, int)
             or not isinstance(self.maximum, int)
         ):
-            raise ValueError("workgroup access assertion bounds must be integers")
+            raise TargetRefusal("workgroup access assertion bounds must be integers")
         if self.minimum > self.maximum:
-            raise ValueError(
+            raise TargetRefusal(
                 "workgroup access assertion minimum must not exceed maximum"
             )
 
@@ -76,7 +78,7 @@ def parse_workgroup_access_assertions(
     if isinstance(value, WorkgroupAccessAssertion):
         return (value,)
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        raise ValueError(f"{field_name} must be an array of assertion tables")
+        raise TargetRefusal(f"{field_name} must be an array of assertion tables")
 
     assertions = []
     for index, record in enumerate(value):
@@ -85,7 +87,7 @@ def parse_workgroup_access_assertions(
             assertions.append(record)
             continue
         if not isinstance(record, Mapping):
-            raise ValueError(f"{record_path} must be a table")
+            raise TargetRefusal(f"{record_path} must be a table")
         entry_point = _selector(
             record,
             "entry_point",
@@ -128,24 +130,24 @@ def _selector(
     default: str | None = None,
 ) -> str:
     if alias is not None and primary in record and alias in record:
-        raise ValueError(f"{field_name} must not define both {primary} and {alias}")
+        raise TargetRefusal(f"{field_name} must not define both {primary} and {alias}")
     value = record.get(primary, record.get(alias) if alias is not None else default)
     if value is None and required:
-        raise ValueError(f"{field_name}.{primary} is required")
+        raise TargetRefusal(f"{field_name}.{primary} is required")
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name}.{primary} must be a non-empty string")
+        raise TargetRefusal(f"{field_name}.{primary} must be a non-empty string")
     return value
 
 
 def _bound(record: Mapping[str, Any], primary: str, alias: str, field_name: str) -> int:
     if primary in record and alias in record:
-        raise ValueError(f"{field_name} must not define both {primary} and {alias}")
+        raise TargetRefusal(f"{field_name} must not define both {primary} and {alias}")
     if primary not in record and alias not in record:
-        raise ValueError(f"{field_name}.{primary} is required")
+        raise TargetRefusal(f"{field_name}.{primary} is required")
     value = record.get(primary, record.get(alias))
     if isinstance(value, bool):
-        raise ValueError(f"{field_name}.{primary} must be an integer")
+        raise TargetRefusal(f"{field_name}.{primary} must be an integer")
     try:
         return operator.index(value)
     except TypeError as exc:
-        raise ValueError(f"{field_name}.{primary} must be an integer") from exc
+        raise TargetRefusal(f"{field_name}.{primary} must be an integer") from exc

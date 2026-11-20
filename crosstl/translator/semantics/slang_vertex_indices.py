@@ -16,7 +16,10 @@ built-ins the Slang generator binds (``gl_InstanceID`` to ``SV_InstanceID``, ``g
   becomes ``gl_VertexID``; :mod:`.builtin_input_reads` then passes them to the helpers that read them;
 - an entry-point parameter carrying ``@gl_InstanceIndex`` is replaced by parameters carrying ``@gl_InstanceID`` and
   ``@gl_BaseInstance`` (an existing one is reused), and the body starts by declaring it as their sum; a parameter
-  carrying ``@gl_VertexIndex`` carries ``@gl_VertexID`` instead.
+  carrying ``@gl_VertexIndex`` carries ``@gl_VertexID`` instead;
+- a stage-level input carrying ``@gl_InstanceIndex`` (the SPIR-V importer's form) is replaced by inputs carrying
+  ``@gl_InstanceID`` and ``@gl_BaseInstance``, and each read of it by their sum; one carrying ``@gl_VertexIndex``
+  carries ``@gl_VertexID`` instead.
 
 Both indices therefore reach Slang as every ``gl_VertexID`` and ``gl_InstanceID`` does.
 """
@@ -192,6 +195,86 @@ def _rewrite_parameters(entry, taken):
     return changed
 
 
+def _rewrite_stage_variables(stage, functions, taken):
+    """Spell the stage's ``@gl_InstanceIndex`` and ``@gl_VertexIndex`` input variables; returns the number changed.
+
+    :func:`.stage_interface_structs.gather_stage_interface_variables` later turns the stage-level built-in inputs
+    into entry-point parameters, so an instance index becomes a ``gl_InstanceID`` and a ``gl_BaseInstance`` input
+    whose sum replaces each read of it.
+    """
+    variables = list(getattr(stage, "local_variables", None) or [])
+    changed = 0
+    base = None
+    for variable in variables:
+        attribute, builtin = _builtin_of(variable)
+        if builtin == _VERTEX_INDEX:
+            attribute.name = "gl_VertexID"
+            changed += 1
+        elif builtin == "gl_BaseInstance" and base is None:
+            base = variable.name
+    for variable in variables:
+        attribute, builtin = _builtin_of(variable)
+        if builtin != _INSTANCE_INDEX:
+            continue
+        var_type = getattr(variable, "var_type", None)
+        if getattr(var_type, "name", None) not in ("int", "uint"):
+            continue
+        if base is None:
+            base = _fresh("base_instance", taken)
+            stage.local_variables.append(
+                A.VariableNode(
+                    base,
+                    A.PrimitiveType("uint"),
+                    attributes=[
+                        A.AttributeNode("input"),
+                        A.AttributeNode("gl_BaseInstance"),
+                    ],
+                )
+            )
+        name = variable.name
+        variable.name = _fresh("instance_id", taken)
+        attribute.name = "gl_InstanceID"
+        changed += 1
+
+        def total(index=variable.name, type_name=var_type.name, base=base):
+            converted = A.FunctionCallNode(
+                A.IdentifierNode(type_name), [A.IdentifierNode(base)]
+            )
+            return A.FunctionCallNode(
+                A.IdentifierNode(type_name),
+                [A.BinaryOpNode(A.IdentifierNode(index), "+", converted)],
+            )
+
+        for function in functions:
+            if name in _declared_locals(function):
+                continue
+            _replace_name(function, name, total)
+    return changed
+
+
+def _declared_locals(function):
+    names = {parameter.name for parameter in function.parameters or []}
+    names.update(
+        node.name
+        for node in _walk(getattr(function, "body", None))
+        if isinstance(node, A.VariableNode)
+    )
+    return names
+
+
+def _replace_name(function, name, replacement):
+    def visit(node):
+        for field, key in list(child_slots(node)):
+            child = get_child(node, field, key)
+            if isinstance(child, A.IdentifierNode) and child.name == name:
+                set_child(node, field, key, replacement())
+            elif isinstance(child, A.ASTNode):
+                visit(child)
+
+    if getattr(function, "body", None) is not None:
+        visit(function.body)
+
+
 def spell_slang_vertex_indices(program, target) -> int:
     """Spell ``gl_InstanceIndex`` and ``gl_VertexIndex`` through OpenGL's built-ins for Slang; returns the rewrites."""
     if str(target or "").lower() != "slang" or not isinstance(program, A.ShaderNode):
@@ -207,6 +290,12 @@ def spell_slang_vertex_indices(program, target) -> int:
         stage_functions = list(getattr(stage, "local_functions", None) or [])
         if entry is not None:
             stage_functions.append(entry)
+        if getattr(stage, "local_variables", None):
+            if taken is None:
+                taken = _names(program)
+            changed += _rewrite_stage_variables(
+                stage, functions + stage_functions, taken
+            )
         for function in functions + stage_functions:
             names = {_INSTANCE_INDEX, _VERTEX_INDEX} - _declared(program, function)
             if names:

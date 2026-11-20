@@ -11,6 +11,7 @@ The helpers take the whole storage and the lane index once, so an index with
 side effects is evaluated exactly once.
 """
 
+from ..refusals import TargetRefusal
 from .array_utils import split_array_type_suffix
 
 INTEGER_ELEMENTS = {"uint8", "int8", "uint16", "int16"}
@@ -22,7 +23,7 @@ class LaneHelpers:
 
     def __init__(self, dialect, value_type, identifier):
         if dialect not in {"hlsl", "glsl"}:
-            raise ValueError(f"unknown lane dialect {dialect!r}")
+            raise TargetRefusal(f"unknown lane dialect {dialect!r}")
         self.dialect = dialect
         self.value_type = value_type
         self.identifier = identifier

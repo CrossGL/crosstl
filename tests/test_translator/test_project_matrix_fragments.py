@@ -223,7 +223,7 @@ def test_project_matrix_policy_preserves_fragment_contract(
     assert data["summary"]["failedCount"] == 1
     diagnostic = data["diagnostics"][0]
     if original == "metal_thread_elements, 32, 2":
-        assert diagnostic["code"] == "project.translate.failed"
+        assert diagnostic["code"] == "project.translate.crossgl-syntax-error"
         assert "no registered contract" in diagnostic["message"]
     else:
         assert (

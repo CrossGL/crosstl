@@ -57,7 +57,7 @@ def _many(count=labels.MINIMUM):
 def test_the_label_file_defines_the_taxonomy_and_little_else():
     names = {label.name for label in load()}
     assert TAXONOMY <= names
-    assert len(names) <= 30
+    assert len(names) <= 31
 
 
 def test_labels_that_workflows_and_dependabot_apply_are_defined():
@@ -177,9 +177,37 @@ def test_every_path_pattern_matches_a_tracked_file():
             ["backend:webgl", "direction:output", "area:codegen"],
         ),
         (["tests/test_translator/test_codegen/test_CUDA_codegen.py"], ["backend:cuda"]),
+        (
+            ["crosstl/translator/codegen/glsl_hlsl_matrix.py"],
+            ["backend:glsl", "backend:hlsl", "direction:output", "area:codegen"],
+        ),
+        (["tests/test_translator/test_vulkan_bfloat16.py"], ["backend:spirv"]),
+        (["crosstl/glsl_builtins.py"], ["backend:glsl"]),
+        (["crosstl/project/metal_runtime.py"], ["backend:metal", "area:runtime"]),
+        (["tests/coverage/test_rust.py"], ["backend:rust", "area:ci"]),
+        (["tests/test_ownership.py", "crosstl/translator/trust.py"], []),
         (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),
         ([".github/workflows/coverage.yml", "tools/coverage/run.py"], ["area:ci"]),
+        (["tools/pytest_shard.py", "tests/test_pytest_shard.py"], ["area:ci"]),
+        (
+            [
+                "tests/conformance/fail_closed.py",
+                "tests/conformance/docker/mesa/Dockerfile",
+            ],
+            ["area:ci"],
+        ),
+        ([".github/dependabot.yml"], ["area:ci"]),
+        (["pyproject.toml"], ["area:ci"]),
+        (["conftest.py", "tests/test_ci_workflows.py"], ["area:ci"]),
         (["docs/source/index.rst", "README.md"], ["area:docs"]),
+        (["SECURITY.md", "CHANGELOG.md", "CITATION.cff"], ["area:docs"]),
+        (
+            [
+                ".github/PULL_REQUEST_TEMPLATE.md",
+                ".github/ISSUE_TEMPLATE/bug_report.yml",
+            ],
+            ["area:docs"],
+        ),
         (["demos/integrations/mlx/README.md"], []),
     ],
 )
@@ -247,15 +275,18 @@ def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
         "schedule",
         "workflow_dispatch",
     }
+    # A merge-queue rebuild requests one Coverage run per group. Those would each
+    # take the concurrency group's pending place and drop a pull request's run.
     assert workflow[True]["workflow_run"] == {
         "workflows": ["Coverage"],
         "types": ["requested"],
+        "branches-ignore": ["gh-readonly-queue/**"],
     }
     assert workflow[True]["push"] == {"branches": ["main"]}
     assert workflow[True]["schedule"]
     (job,) = workflow["jobs"].values()
-    # Coverage also runs on pushes to main and in the merge queue; only a pull
-    # request's run can bring a new pull request.
+    # Coverage also runs on pushes to main; only a pull request's run can bring a
+    # new pull request.
     assert job["if"] == (
         "github.event_name != 'workflow_run'"
         " || github.event.workflow_run.event == 'pull_request'"

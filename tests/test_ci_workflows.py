@@ -18,6 +18,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.fake_commands import write_python_command
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
@@ -143,7 +145,11 @@ def test_no_workflow_runs_pull_request_code_with_a_privileged_token():
 def test_the_coverage_comment_runs_only_main_code_on_the_report():
     workflow = _workflows()["coverage-comment.yml"]
     assert workflow[True] == {
-        "workflow_run": {"workflows": ["Coverage"], "types": ["completed"]}
+        "workflow_run": {
+            "workflows": ["Coverage"],
+            "types": ["completed"],
+            "branches-ignore": ["gh-readonly-queue/**"],
+        }
     }
     job = workflow["jobs"]["comment"]
     assert "github.event.workflow_run.event == 'pull_request'" in job["if"]
@@ -502,6 +508,22 @@ def test_cache_paths_have_no_parent_directory_segments():
             assert ".." not in entry.split("/"), (name, entry)
 
 
+def test_upstream_source_caches_fall_back_to_an_older_cache():
+    # A change to tools/coverage/upstream.py changes every key at once. Without a
+    # fallback, every Coverage job downloads every pinned source from the same host,
+    # and one rate-limited download fails a required check (#4535).
+    keys = []
+    for name, step in _steps():
+        cache = step.get("with") or {}
+        key = str(cache.get("key", ""))
+        if not key.startswith("coverage-upstream-"):
+            continue
+        prefix = key.split("${{ hashFiles(")[0]
+        assert cache.get("restore-keys") == prefix, (name, key)
+        keys.append(key)
+    assert len(keys) == 3
+
+
 def _local_action_text(name):
     path = ACTIONS_DIR / name / "action.yml"
     return path.read_text(encoding="utf-8")
@@ -525,13 +547,13 @@ def test_linux_dxc_installer_pinning(
     assert bash is not None
     mock_bin = tmp_path / "tools"
     mock_bin.mkdir()
-    script = f"#!{sys.executable}\n" + textwrap.dedent("""\
+    script = textwrap.dedent("""\
         import json
         import os
         import sys
         from pathlib import Path
 
-        tool = Path(sys.argv[0]).name
+        tool = Path(sys.argv[0]).stem
         args = sys.argv[1:]
         failure = os.environ["TEST_FAILURE"]
         record = {"tool": tool, "args": args}
@@ -554,9 +576,7 @@ def test_linux_dxc_installer_pinning(
             binary.chmod(0o755)
         """)
     for name in ("curl", "tar", "sha256sum"):
-        tool = mock_bin / name
-        tool.write_text(script, encoding="utf-8")
-        tool.chmod(0o755)
+        write_python_command(mock_bin / name, script)
     output = tmp_path / "runner temp"
     output.mkdir()
     log = tmp_path / "calls.jsonl"
@@ -609,7 +629,7 @@ _APT_STUB = """\
     import sys
     from pathlib import Path
 
-    tool = Path(sys.argv[0]).name
+    tool = Path(sys.argv[0]).stem
     args = sys.argv[1:]
     if tool == "timeout":
         os.execvp(args[1], args[1:])
@@ -679,11 +699,9 @@ def test_apt_installer_retries_only_the_network_steps(
     assert bash is not None
     mock_bin = tmp_path / "tools"
     mock_bin.mkdir()
-    script = f"#!{sys.executable}\n" + textwrap.dedent(_APT_STUB)
+    script = textwrap.dedent(_APT_STUB)
     for name in ("sudo", "timeout", "sleep"):
-        tool = mock_bin / name
-        tool.write_text(script, encoding="utf-8")
-        tool.chmod(0o755)
+        write_python_command(mock_bin / name, script)
     archives = tmp_path / "apt-archives"
     archives.mkdir()
     for name in cached:

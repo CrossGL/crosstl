@@ -9,6 +9,8 @@ type mapping, overload return types and zero values.
 
 import re
 
+from crosstl.translator.refusals import DirectXSourceRefusal
+
 from ..common_ast import (
     ArrayAccessNode,
     BinaryOpNode,
@@ -558,7 +560,7 @@ class HLSLValueShapeMixin:
                 return precise_product
             return f"({right} * {left})"
         if self.matrix_packing == "row_major" and None in (left_shape, right_shape):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "Cannot order HLSL mul operands with row-major matrix packing: "
                 f"unknown operand type in mul({rendered_args[0]}, {rendered_args[1]})"
             )

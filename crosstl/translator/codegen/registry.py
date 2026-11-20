@@ -7,10 +7,14 @@ from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from ..refusals import RegistryRefusal, TranslatorArgumentError
+
 
 def _normalize_backend_name(name: str) -> str:
     if not isinstance(name, str):
-        raise TypeError(f"Backend name must be a string, got {type(name)}")
+        raise TranslatorArgumentError(
+            f"Backend name must be a string, got {type(name)}"
+        )
     return name.strip().lower()
 
 
@@ -68,7 +72,7 @@ class BackendRegistry:
             existing = self._by_name[name]
             if existing.codegen_class is spec.codegen_class:
                 return existing
-            raise ValueError(f"Backend '{name}' already registered")
+            raise RegistryRefusal(f"Backend '{name}' already registered")
 
         self._by_name[name] = spec
 
@@ -77,7 +81,7 @@ class BackendRegistry:
             if alias_key in self._by_alias and not overwrite:
                 if self._by_alias[alias_key] == name:
                     continue
-                raise ValueError(f"Backend alias '{alias_key}' already registered")
+                raise RegistryRefusal(f"Backend alias '{alias_key}' already registered")
             self._by_alias[alias_key] = name
 
         for alias in (*spec.target_aliases, *spec.target_profiles):
@@ -85,7 +89,7 @@ class BackendRegistry:
             if alias_key in self._by_alias and not overwrite:
                 if self._by_alias[alias_key] == name:
                     continue
-                raise ValueError(
+                raise RegistryRefusal(
                     f"Backend target name '{alias_key}' already registered"
                 )
             self._by_alias[alias_key] = name
@@ -95,7 +99,7 @@ class BackendRegistry:
             if extension_key in self._by_extension and not overwrite:
                 if self._by_extension[extension_key] == name:
                     continue
-                raise ValueError(
+                raise RegistryRefusal(
                     f"Backend extension '{extension_key}' already registered"
                 )
             self._by_extension[extension_key] = name
@@ -168,7 +172,7 @@ class BackendRegistry:
         spec = self.get(name)
         if not spec:
             supported = ", ".join(self.names())
-            raise ValueError(
+            raise RegistryRefusal(
                 f"Unsupported backend '{name}'. Supported backends: {supported}"
             )
         key = _normalize_backend_name(name)

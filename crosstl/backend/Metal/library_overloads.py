@@ -20,6 +20,8 @@ overloads a target lacks; ``thread T &`` parameters are kept as written.
 from functools import lru_cache
 from typing import Dict, FrozenSet, Optional, Sequence, Tuple
 
+from crosstl.translator.refusals import MetalSourceRefusal
+
 __all__ = [
     "LIBRARY_OVERLOAD_NAMES",
     "library_overload_precedence",
@@ -227,7 +229,9 @@ def _group_types(types: str) -> Tuple[str, ...]:
             for width in widths.split():
                 spelling = library_type_spelling(element, int(width))
                 if spelling is None:
-                    raise ValueError(f"unknown library element type {element!r}")
+                    raise MetalSourceRefusal(
+                        f"unknown library element type {element!r}"
+                    )
                 spellings.append(spelling)
     return tuple(spellings)
 

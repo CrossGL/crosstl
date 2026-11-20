@@ -30,6 +30,8 @@ from crosstl.backend.slang.SlangLexer import SlangLexer
 from crosstl.backend.slang.SlangParser import SlangParser
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
+from crosstl.translator.refusals import MojoSyntaxError
+from tests.conformance.fuzz import outcomes
 
 SECONDS = 20
 
@@ -111,6 +113,64 @@ def test_opencl_unterminated_comment_after_parameter_qualifier_is_rejected(tmp_p
     source.write_text("__kernel void k(__global /* a\nb\n")
     error = finishes(lambda: crosstl.translate(str(source), backend="directx"))
     assert isinstance(error, SyntaxError), repr(error)
+
+
+def test_opencl_template_argument_list_cut_off_by_the_end_of_input_is_rejected(
+    tmp_path,
+):
+    # The OpenCL importer parses types with the HIP parser, which read the token after the end of the input.
+    source = tmp_path / "k.cl"
+    source.write_text(
+        "__kernel void hazard(__global const int *inp, __global int <||outp) {\n"
+        "    size_t i = get_global_id("
+    )
+    error = finishes(lambda: crosstl.translate(str(source), backend="cgl"))
+    assert isinstance(error, SyntaxError), repr(error)
+    assert "Unterminated template argument list" in str(error)
+
+
+def test_mojo_range_inside_square_type_arguments_is_rejected(tmp_path):
+    # ``DType..float32`` has two consecutive dots and must be rejected by the Mojo importer itself.
+    source = tmp_path / "k.mojo"
+    source.write_text(
+        "fn main():\n    var v = SIMD[DType..float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+    )
+    error = finishes(
+        lambda: crosstl.translate(str(source), backend="cgl", format_output=False)
+    )
+    assert isinstance(error, MojoSyntaxError), repr(error)
+    assert error.project_diagnostic_code == "project.translate.mojo-syntax-error"
+    assert "Expected IDENTIFIER after dot, got DOT" in str(error)
+    assert outcomes.classify(error) == "refused"
+
+
+def test_crossgl_range_inside_square_type_arguments_is_rejected(tmp_path):
+    # ``b..c`` inside square-bracket type arguments has no spelling as a type argument (#4502).
+    source = tmp_path / "range.cgl"
+    source.write_text(
+        "shader main {\n"
+        "    compute {\n"
+        "        void main() {\n"
+        "            float c = a[b..c, 4];\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    error = finishes(
+        lambda: crosstl.translate(str(source), backend="cgl", format_output=False)
+    )
+    assert isinstance(error, SyntaxError), repr(error)
+    assert getattr(error, "project_diagnostic_code", None), repr(error)
+    assert "RangeNode cannot be a type argument" in str(error)
+    assert outcomes.classify(error) == "refused"
+
+
+def test_mojo_square_type_arguments_still_import(tmp_path):
+    source = tmp_path / "k.mojo"
+    source.write_text(
+        "fn main():\n    var v = SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+    )
+    assert crosstl.translate(str(source), backend="cgl", format_output=False)
 
 
 def test_directx_stray_hash_after_tokens_is_rejected(tmp_path):

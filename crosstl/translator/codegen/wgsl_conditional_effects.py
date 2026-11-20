@@ -44,6 +44,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import WGSLRefusal
 
 __all__ = ["WGSLConditionalEffectsMixin", "is_effectful_builtin"]
 
@@ -221,7 +222,7 @@ class WGSLConditionalEffectsMixin:
                 isinstance(node, IdentifierNode) and node.name == stmt.name
                 for node in _nodes(value)
             ):
-                raise ValueError(
+                raise WGSLRefusal(
                     f"WGSL target cannot lower the conditional that initializes {stmt.name}: "
                     f"it reads a variable named {stmt.name}, which would name the new variable "
                     "once its declaration moves above the if/else; rename one of them"
@@ -262,7 +263,7 @@ class WGSLConditionalEffectsMixin:
         """Refuse the conditional ``expr`` when ``select`` would run a side effect its condition skips."""
         if not self.effectful_branches(expr):
             return
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot lower this conditional expression: a branch calls a function with a "
             "side effect, and WGSL select evaluates both branches; such a conditional is lowered only "
             "as a whole initializer, assignment value, return value or expression statement"

@@ -13,6 +13,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.translator.refusals import OpenCLSyntaxError
 
 from .OpenCLAst import (
     OpenCLBlockLiteralNode,
@@ -26,6 +27,7 @@ from .OpenCLLexer import OpenCLLexer
 class OpenCLParser(HipParser):
     """Parse OpenCL C tokens into the OpenCL backend AST."""
 
+    syntax_error = OpenCLSyntaxError
     MEMBER_NAME_TOKENS = {*HipParser.MEMBER_NAME_TOKENS, "TYPENAME"}
     DECLARATOR_NAME_TOKENS = {
         *HipParser.DECLARATOR_NAME_TOKENS,

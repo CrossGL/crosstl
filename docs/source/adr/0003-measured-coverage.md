@@ -31,17 +31,17 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to, including the non-uniform instructions that the GLSL subgroup extensions below map their functions to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
-| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
+| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification, and the subgroup functions of `GL_KHR_shader_subgroup`, `GL_KHR_shader_subgroup_rotate`, `GL_EXT_shader_quad_control` and `GL_NV_shader_subgroup_partitioned` (`extensions/`), the extensions whose functions compile to SPIR-V's non-uniform instructions |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
 | Metal | The standard-library headers of Apple's Metal toolchain, read once by a script in the repository into `metal.txt`, which records the toolchain and language version |
-| CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h` and `__clang_cuda_device_functions.h` |
-| HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
+| CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h`, `__clang_cuda_device_functions.h` and `__clang_cuda_intrinsics.h`, the last read as a compile for the architecture nvcc validates the probes for |
+| HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h`, `amd_device_functions.h` and `amd_warp_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
-| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
-| OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, at the release of the clang that validates the probes; vendor extensions are left out |
-| Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules of the release that validates the probes; the `num_traits::Float` trait and glam's `Vec3` methods, at the versions its lock file resolves |
+| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export, and, at the same tag, the warp functions of MAX's `max.gpu.primitives.warp` and the synchronization functions `max.gpu.sync` exports |
+| OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, plus the `as_type` operators and `printf` of `opencl-c-base.h`, the pipe, device-side enqueue and address-space built-ins of `Builtins.def` and the `vec_step` operator of `TokenKinds.def`, at the release of the clang that validates the probes; vendor extensions are left out |
+| Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules, the `spirv_std::float` packing functions and the `Image` (with each image operand of its `ImageWithMethods` forms), `SampledImage`, `ByteAddressableBuffer`, `RuntimeArray`, `RayQuery` and `AccelerationStructure` methods and the `debug_printf` macros of the release that validates the probes; the `num_traits::Float` trait and the methods of glam's vectors, matrices and quaternions, each method name once per family, at the versions its lock file resolves |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
@@ -55,11 +55,12 @@ SPIR-V is compiler output rather than a language people write, so its input prob
 feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
-compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V
-(Slang), the Mojo compiler with MAX's GPU package (Mojo), rustc with the rust-gpu
-backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
-validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
-OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
+compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V,
+or to CUDA that nvcc checks for a function SPIR-V and HLSL lack (Slang), the Mojo compiler with MAX's GPU package (Mojo),
+rustc with the rust-gpu backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile.
+Input probes are validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C
+generator, so an OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked
+by DXC.
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
@@ -72,11 +73,13 @@ naga or rust-gpu) and run on lavapipe; a probe that compiler cannot lower, whose
 its validation result. llvmpipe's OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a
 native GLSL probe, or a 4.60 translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for
 them on lavapipe. CI executes the Metal rows on the macOS job, the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's
-llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The two outputs must match bit
-for bit, so a probe must compute a result that the compiler's permitted rewrites cannot change. A product that feeds a
-sum should scale by a power of two, which is exact, so contracting it into a fused multiply-add gives the same value.
-Constants should sum exactly before an input joins the sum, because Mesa reassociates additions that the SPIR-V does not
-mark `NoContraction`.
+llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The chart and `COVERAGE.md`
+give each row the number of probes that ran, or mark it compile-only when the harness has no runtime for its language
+(CUDA, HIP, OpenCL C, Mojo, and WebGL 2, which has no compute stage), so that its score rests on the reference tool
+alone. The two outputs must match bit for bit, so a probe must compute a result that the compiler's permitted rewrites
+cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
+fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
+reassociates additions that the SPIR-V does not mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
@@ -110,7 +113,7 @@ generator, such as Rust output's missing `#![no_std]`, then stays a gap of that 
 as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
 translation that computes the operation with other instructions does not count. CrossGL probes come from a small
 template layer, `tools/coverage/crossgl/`, and the
-spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
+spelling tables in `tools/coverage/spellings.py` and `tools/coverage/rust_spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.
 

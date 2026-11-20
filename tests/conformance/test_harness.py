@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from . import runner, runtimes, scoreboard, toolchains, validators
+from . import native, runner, runtimes, scoreboard, toolchains, validators
 from .cases import BY_ID, CASES, CASES_DIR, compare
 from .heldout import heldout_cases
 from .interface import InterfaceChanged, hlsl_reflected_strides, interface
@@ -468,9 +468,21 @@ def test_native_command_configurations_are_retained(tmp_path, recorded):
     validate(source, "spirv", binary, "main", environment="vulkan1.3")
     assert recorded[-1][0] == "spirv-val" and "vulkan1.3" in recorded[-1]
     validate(source, "metal", binary, "main", config="relaxed")
-    assert "-ffast-math" in recorded[-1]
+    assert "-ffast-math" in recorded[-1] and "-std=metal3.1" in recorded[-1]
     with pytest.raises(ValueError):
         validate(source, "metal", binary, "main", config="fast")
+
+
+def test_metal_compiles_name_one_language_version():
+    """The driver compile uses the MSL version the offline check names, never the device's own default."""
+
+    class Bindings:
+        MTLLanguageVersion3_1 = 196609
+
+    assert native.METAL_LANGUAGE_VERSION == (3, 1)
+    assert native.metal_language_version(Bindings) == 196609
+    # Bindings older than the constant fall back to its documented encoding, major << 16 | minor.
+    assert native.metal_language_version(object()) == 3 << 16 | 1
 
 
 def test_unsigned_dxil_is_invalid(tmp_path, recorded, monkeypatch):
@@ -738,7 +750,7 @@ def test_scoreboard_results_scope_keeps_other_routes_and_configs():
     fresh = [record()]
     merged = merge(baseline, fresh, results_scope(fresh))
     assert set(merged["cells"]) == set(baseline["cells"])
-    assert merged["counts"] == {"diverged": 2, "preserved": 1}
+    assert scoreboard.counts(merged) == {"diverged": 2, "preserved": 1}
 
 
 def test_scoreboard_merge_replaces_only_the_runs_scope():
@@ -752,8 +764,18 @@ def test_scoreboard_merge_replaces_only_the_runs_scope():
         "preserved",
         "diverged",
     }
-    assert merged["counts"] == {"diverged": 1, "preserved": 1}
+    assert scoreboard.counts(merged) == {"diverged": 1, "preserved": 1}
     assert scoreboard.SCHEMA == merged["schemaVersion"]
+
+
+def test_committed_scoreboards_store_only_cells():
+    """Stored totals would make every pair of scoreboard updates conflict; they are derived on demand."""
+    paths = sorted((CASES_DIR.parent / "scoreboards").glob("*.json"))
+    assert paths
+    for path in paths:
+        data = json.loads(path.read_text())
+        assert set(data) == {"schemaVersion", "keys", "cells"}, path.name
+        assert sum(scoreboard.counts(data).values()) == len(data["cells"])
 
 
 def test_native_16_bit_hlsl_is_compiled_with_16_bit_types(tmp_path):

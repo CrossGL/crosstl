@@ -128,7 +128,7 @@ def test_constructor_lookup_does_not_override_source_function_types():
         ),
         (
             "bfloat16(1.0)",
-            "project.translate.failed",
+            "project.translate.metal-refused",
             "total widths are 32 and 16 bits",
         ),
     ),

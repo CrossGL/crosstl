@@ -1,6 +1,6 @@
 """The dialect of each language a probe can be written in. GLSL, Metal, WGSL and WebGL are here. HLSL and Slang are
-in :mod:`.hlsl`, CUDA, HIP, Mojo and Rust in :mod:`.kernels`, OpenCL C in :mod:`.opencl` and CrossGL in
-:mod:`.crossgl`."""
+in :mod:`.hlsl`, CUDA, HIP and Mojo in :mod:`.kernels`, Rust in :mod:`.rust`, OpenCL C in :mod:`.opencl` and CrossGL
+in :mod:`.crossgl`."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from .crossgl import DIALECT as CROSSGL
 from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .hlsl import HLSL, Slang
-from .kernels import CUDA, HIP, Mojo, Rust
+from .kernels import CUDA, HIP, Mojo
 from .model import Type
 from .opencl import OpenCL
+from .rust import Rust
 
 
 class GLSL(Dialect):
@@ -32,11 +33,17 @@ class GLSL(Dialect):
         )
         return f"layout({layout}) uniform {spelling} {name};"
 
+    def enable(self, extension: str) -> list[str]:
+        # A feature may need several extensions, separated by spaces: subgroupQuadAll needs
+        # GL_KHR_shader_subgroup_vote and GL_EXT_shader_quad_control.
+        return [f"#extension {name} : require" for name in extension.split()]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lanes = parts.get("lanes", 1)
         lines = [
             "#version 460",
             *parts.get("prelude", ()),
-            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
+            f"layout(local_size_x = {lanes}, local_size_y = 1, local_size_z = 1) in;",
             *self._globals(buffers, parts),
         ]
         lines += ["void main() {", "    uint i = gl_GlobalInvocationID.x;"]
@@ -243,7 +250,7 @@ class WGSL(Dialect):
         )
         lines = [
             *self._globals(buffers, parts),
-            "@compute @workgroup_size(1, 1, 1)",
+            f"@compute @workgroup_size({parts.get('lanes', 1)}, 1, 1)",
             f"fn main({params}) {{",
             "    let i = id.x;",
         ]

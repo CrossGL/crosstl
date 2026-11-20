@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import FrozenSet, Optional, Tuple
 
+from .refusals import CrossGLRefusal, TranslationRefusal
+
 
 class ArithmeticScalarKind(str, Enum):
     """Scalar categories used by source arithmetic conversion rules."""
@@ -49,8 +51,10 @@ class ArithmeticConversion:
     result_type: str
 
 
-class UnrepresentableArithmeticConversion(ValueError):
+class UnrepresentableArithmeticConversion(TranslationRefusal):
     """Raised when recognized numeric operands have no faithful target form."""
+
+    code = "project.translate.arithmetic-conversion-unrepresentable"
 
     def __init__(self, reason: str, attempted_common_type: Optional[str]):
         super().__init__(reason)
@@ -136,6 +140,15 @@ _SOURCE_VECTOR_COMPONENTS = {
     "i64vec": "int64_t",
     "u64vec": "uint64_t",
 }
+# The component of an ``<component><lanes>`` vector spelling: a scalar type name (``int3``) or a GLSL sized-vector
+# prefix (``i16vec3``).
+_SOURCE_INTEGER_VECTOR_COMPONENTS = {
+    **_SOURCE_INTEGER_TYPES,
+    **{
+        prefix: _SOURCE_INTEGER_TYPES[scalar]
+        for prefix, scalar in _SOURCE_VECTOR_COMPONENTS.items()
+    },
+}
 
 
 def _normalized_source_type(type_name: str) -> str:
@@ -177,8 +190,7 @@ def source_integer_shape(
     if vector is None:
         return None
     component_name, lanes_text = vector.groups()
-    component_name = _SOURCE_VECTOR_COMPONENTS.get(component_name, component_name)
-    component = _SOURCE_INTEGER_TYPES.get(component_name)
+    component = _SOURCE_INTEGER_VECTOR_COMPONENTS.get(component_name)
     if component is None:
         return None
     return component[0], component[1], int(lanes_text)
@@ -258,7 +270,7 @@ def arithmetic_type_name(kind: ArithmeticScalarKind, bits: int, lanes: int = 1) 
         (ArithmeticScalarKind.FLOATING, 64): "double",
     }.get((kind, bits))
     if scalar_name is None:
-        raise ValueError(
+        raise CrossGLRefusal(
             f"Unsupported arithmetic scalar kind/width: {kind.value}/{bits}"
         )
     if lanes == 1:

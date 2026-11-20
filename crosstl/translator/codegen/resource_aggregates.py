@@ -81,6 +81,9 @@ class ResourceAggregateError(ValueError):
         self.source_location = getattr(node, "source_location", None)
 
 
+_SIXTY_FOUR_BIT_INTEGER_SPELLINGS = {"int64": "int64_t", "uint64": "uint64_t"}
+
+
 @dataclass(frozen=True)
 class _Pointer:
     element: str
@@ -91,6 +94,10 @@ class _Pointer:
 
 # CrossGL spellings of the 16-bit floating storage types.
 _NARROW_FLOAT_ELEMENTS = frozenset({"float16", "bfloat16"})
+# CrossGL spellings of their two- and four-lane vectors.
+_NARROW_FLOAT_VECTOR_ELEMENTS = frozenset(
+    {"f16vec2", "f16vec4", "bfloat16vec2", "bfloat16vec4"}
+)
 # Other spellings of binary16 that type aliases may name.
 _BINARY16_SPELLINGS = frozenset({"f16", "half"})
 
@@ -252,9 +259,12 @@ def _pointer_type(value, owner=None, *, allow_thread=False):
             ):
                 raise ResourceAggregateError("unsupported-vector-pointee", owner)
             return arithmetic_type_name(component.kind, component.bits, value.size)
-        return {"int64": "int64_t", "uint64": "uint64_t"}.get(
-            _name(value), _name(value)
-        )
+        # A pointee keeps its CrossGL type name. The 64-bit integers take one spelling, so that pointers to the
+        # same element type compare equal.
+        name = _name(value)
+        if name in _SIXTY_FOUR_BIT_INTEGER_SPELLINGS:
+            return _SIXTY_FOUR_BIT_INTEGER_SPELLINGS[name]
+        return name
 
     if (
         isinstance(value, NamedType)
@@ -625,9 +635,12 @@ class _Lowering:
             if isinstance(element, PointerType):
                 continue
             numeric = _numeric(element)
-            # Binary16 and bfloat16 scalars keep their own element type; the
-            # target backends already lay out and convert shared 16-bit arrays.
-            narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
+            # Binary16 and bfloat16 scalars and two- or four-lane vectors keep
+            # their own element type; the target backends already lay out and
+            # convert shared 16-bit arrays.
+            narrow_float = (
+                _name(element) in _NARROW_FLOAT_ELEMENTS | _NARROW_FLOAT_VECTOR_ELEMENTS
+            )
             # Padding-free records of one 32-bit scalar type are element types
             # the targets load, store and copy whole.
             lane_record = self.lane_record(element)

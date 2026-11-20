@@ -13,6 +13,8 @@ characters:
 import re
 from typing import Sequence
 
+from crosstl.translator.refusals import MetalSourceRefusal
+
 _ORDINARY = re.compile(r'"((?:\\.|[^"\\])*)"\Z', re.DOTALL)
 _RAW = re.compile(r'R"(?P<delim>[^\s()\\]{0,16})\((?P<body>[\s\S]*?)\)(?P=delim)"\Z')
 _ESCAPE = re.compile(r"\\(?:x[0-9A-Fa-f]+|[0-7]{1,3}|.)", re.DOTALL)
@@ -34,7 +36,7 @@ def _literal_body(spelling: str) -> str:
         )
     ordinary = _ORDINARY.match(spelling)
     if ordinary is None:
-        raise ValueError(f"not a Metal string literal: {spelling!r}")
+        raise MetalSourceRefusal(f"not a Metal string literal: {spelling!r}")
     return ordinary.group(1)
 
 
@@ -55,7 +57,7 @@ def _seal_trailing_escape(body: str, following: str) -> str:
     else:
         return body
     if value > _MAX_NARROW_CHARACTER:
-        raise ValueError(
+        raise MetalSourceRefusal(
             f"escape '{escape}' does not fit a narrow character and cannot be concatenated"
         )
     return body[: last.start()] + f"\\{value:03o}"
@@ -64,7 +66,7 @@ def _seal_trailing_escape(body: str, following: str) -> str:
 def concatenate_string_literals(spellings: Sequence[str]) -> str:
     """Fold adjacent string literal spellings into one ordinary literal spelling."""
     if not spellings:
-        raise ValueError("no string literals to concatenate")
+        raise MetalSourceRefusal("no string literals to concatenate")
     if len(spellings) == 1:
         return spellings[0]
     bodies = [_literal_body(spelling) for spelling in spellings]

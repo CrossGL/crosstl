@@ -4,6 +4,8 @@ import re
 from enum import Enum, auto
 from typing import Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import RustSyntaxError
+
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
@@ -405,7 +407,7 @@ class RustLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise RustSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

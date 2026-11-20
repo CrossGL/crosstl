@@ -210,13 +210,26 @@ class GLSLHlslPreciseMixin:
         """Return whether an assignment target is a local of the function.
 
         Locals and output parameters of a precise function are precise, and a
-        written value parameter is copied into a precise local.
+        written value parameter is copied into a precise local. A resource
+        parameter of a stage entry is declared as a global buffer or image, so
+        a store through it is not a store to a local.
         """
+        resources = self.glsl_stage_entry_resource_names()
         return any(
-            name in self.local_variable_types
+            name in self.local_variable_types and name not in resources
             for name in self.glsl_mutation_target_names(target)
             if "." not in name
         )
+
+    def glsl_stage_entry_resource_names(self):
+        """Source and emitted names of the stage entry parameters declared as global resources."""
+        declared = self.stage_entry_resource_declaration_names
+        names = set(declared)
+        for aliases in self.stage_entry_resource_parameter_aliases.values():
+            for original, emitted in aliases.items():
+                if str(emitted).split("[", 1)[0] in declared:
+                    names.add(original)
+        return names
 
     GLSL_PRECISE_COMPOUND_OPERATORS = {"+=", "-=", "*=", "/="}
 

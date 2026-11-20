@@ -49,11 +49,12 @@ BORROWED = {
 # ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
 UNIDENTIFIED = {("rust", "vec3"): "glam computes it with Rust arithmetic"}
 # Instructions that only move or address values, or structure control flow. They never identify a call; the
-# unreachable block after a call that never returns, such as Rust's ``kill() -> !``, ends in OpUnreachable.
+# unreachable block after a call that never returns, such as Rust's ``kill() -> !``, ends in OpUnreachable, and the
+# match by which spirv_std turns a ray query's intersection type into an enumeration lowers to OpSwitch.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "
-    "OpLine OpNoLine OpLabel OpBranch OpBranchConditional OpSelectionMerge OpLoopMerge OpPhi OpUndef OpReturn "
-    "OpReturnValue OpUnreachable OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
+    "OpLine OpNoLine OpLabel OpBranch OpBranchConditional OpSwitch OpSelectionMerge OpLoopMerge OpPhi OpUndef "
+    "OpReturn OpReturnValue OpUnreachable OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
 )
 # Instructions that also reshape or convert the call's result for the output buffer. They identify a call only when
 # it lowers to nothing else, as a bit cast or a select does.
@@ -72,10 +73,25 @@ _ALIASES = {
 _CONSTANT_OPERANDS = frozenset(
     {"OpControlBarrier", "OpMemoryBarrier", "OpGroupNonUniformQuadSwap"}
 )
-# The GroupOperation operand tells a reduction from an inclusive or exclusive scan.
-_GROUP_OPERATIONS = frozenset(
-    {"Reduce", "InclusiveScan", "ExclusiveScan", "ClusteredReduce"}
-)
+# The GroupOperation operand tells a reduction from an inclusive or exclusive scan, and one over the invocations of a
+# partition (HLSL's WaveMultiPrefix*, GLSL's subgroupPartitioned*NV) from one over the whole subgroup. SPIRV-Tools
+# releases before the EXT names print the partitioned operations with the NV suffix.
+_GROUP_OPERATIONS = {
+    operation: operation
+    for operation in (
+        "Reduce",
+        "InclusiveScan",
+        "ExclusiveScan",
+        "ClusteredReduce",
+        "PartitionedReduceEXT",
+        "PartitionedInclusiveScanEXT",
+        "PartitionedExclusiveScanEXT",
+    )
+} | {
+    "PartitionedReduceNV": "PartitionedReduceEXT",
+    "PartitionedInclusiveScanNV": "PartitionedInclusiveScanEXT",
+    "PartitionedExclusiveScanNV": "PartitionedExclusiveScanEXT",
+}
 _INSTRUCTION = re.compile(r"^\s*(?:%\w+\s*=\s*)?(Op\w+)(.*)$")
 _IMPORT = re.compile(r'^\s*(%\w+)\s*=\s*OpExtInstImport\s+"([^"]+)"')
 _CONSTANT = re.compile(r"^\s*(%\w+)\s*=\s*OpConstant\s+%\w+\s+(\S+)")
@@ -134,7 +150,9 @@ def _token(
     opcode = _ALIASES.get(opcode, opcode)
     if opcode in _CONSTANT_OPERANDS:
         return f"{opcode}({','.join(constants[w] for w in words if w in constants)})"
-    operation = next((w for w in words if w in _GROUP_OPERATIONS), "")
+    operation = next(
+        (_GROUP_OPERATIONS[w] for w in words if w in _GROUP_OPERATIONS), ""
+    )
     return f"{opcode}.{operation}" if operation else opcode
 
 

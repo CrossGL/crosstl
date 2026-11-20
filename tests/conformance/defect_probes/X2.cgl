@@ -1,0 +1,8 @@
+shader S {
+  enum Mode { A, B }
+  compute {
+    buffer int o[];
+    @workgroup_size(1,1,1)
+    void main() { o[0] = 1; }
+  }
+}

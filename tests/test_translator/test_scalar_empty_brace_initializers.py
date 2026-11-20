@@ -130,3 +130,157 @@ def test_empty_brace_initializer_of_a_sized_integer_is_its_zero(
 def test_crossgl_output_keeps_the_braces(tmp_path):
     output = translate(tmp_path, KERNEL, "cgl")
     assert "var one: f32 = {};" in output
+
+
+# An empty brace list whose destination is a scalar outside a scalar's declaration (#3751).
+ASSIGNED = """
+shader P {
+    compute {
+        buffer float* outp;
+        void main() {
+            float x = outp[1];
+            x = {};
+            outp[0] = x;
+        }
+    }
+}
+"""
+
+RETURNED = """
+shader P {
+    float zero() { return {}; }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = zero(); }
+    }
+}
+"""
+
+MEMBER = """
+shader P {
+    struct S { float a; float b; };
+    compute {
+        buffer float* outp;
+        void main() {
+            S s = {{}, 1.0};
+            outp[0] = s.a + s.b;
+        }
+    }
+}
+"""
+
+ELEMENT = """
+shader P {
+    compute {
+        buffer float* outp;
+        void main() {
+            float a[2] = {{}, 1.0};
+            outp[0] = a[0] + a[1];
+        }
+    }
+}
+"""
+
+POSITION_EXPECTED = {
+    "assigned": {
+        "directx": "x = 0.0;",
+        "opengl": "x = 0.0;",
+        "wgsl": "x = 0.0;",
+        "metal": "x = 0.0;",
+    },
+    "returned": {
+        "directx": "return 0.0;",
+        "opengl": "return 0.0;",
+        "wgsl": "return 0.0;",
+        "metal": "return 0.0;",
+    },
+    "member": {
+        "directx": "s.a = 0.0;",
+        "opengl": "S s = S(0.0, 1.0);",
+        "wgsl": "var s: S = S(0.0, 1.0);",
+        "metal": "S s = {0.0, 1.0};",
+    },
+    "element": {
+        "directx": "float a[2] = {0.0, 1.0};",
+        "opengl": "float a[2] = float[2](0.0, 1.0);",
+        "wgsl": "var a: array<f32, 2> = array(0.0, 1.0);",
+        "metal": "float a[2] = {0.0, 1.0};",
+    },
+}
+POSITION_SOURCES = {
+    "assigned": ASSIGNED,
+    "returned": RETURNED,
+    "member": MEMBER,
+    "element": ELEMENT,
+}
+
+
+@pytest.mark.parametrize("backend", ["directx", "opengl", "wgsl", "metal"])
+@pytest.mark.parametrize("position", sorted(POSITION_SOURCES))
+def test_empty_brace_list_with_a_scalar_destination_is_zero(
+    tmp_path, position, backend
+):
+    output = translate(tmp_path, POSITION_SOURCES[position], backend, ".cgl")
+    assert POSITION_EXPECTED[position][backend] in output
+    assert "{}" not in output
+    assert "array()" not in output
+
+
+IMPORTED = textwrap.dedent("""
+    struct S { float a; float b; };
+    extern "C" __global__ void first(float* out) {
+        float x = out[1];
+        x = {};
+        int n = 3;
+        n = {};
+        S s = {{}, 1.0f};
+        out[0] = x + (float)n + s.a + s.b;
+    }
+""")
+
+
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+@pytest.mark.parametrize("backend", ["directx", "opengl", "wgsl"])
+def test_imported_empty_brace_list_with_a_scalar_destination_is_zero(
+    tmp_path, backend, suffix
+):
+    output = translate(tmp_path, IMPORTED, backend, suffix)
+    assert "x = 0.0;" in output
+    assert "n = 0;" in output
+    assert "{}" not in output
+    assert "array()" not in output
+
+
+def test_empty_brace_list_with_a_vector_destination_keeps_its_braces(tmp_path):
+    source = """
+    shader P {
+        compute {
+            buffer float* outp;
+            void main() {
+                float2 v = float2(outp[1], outp[2]);
+                v = {};
+                outp[0] = v.x;
+            }
+        }
+    }
+    """
+    output = translate(tmp_path, source, "metal", ".cgl")
+    assert "v = {};" in output
+
+
+def test_empty_brace_list_after_brace_elision_keeps_its_braces(tmp_path):
+    # ``1.0`` starts the array member ``a``, so ``{}`` is ``a[1]`` rather than ``b``.
+    source = """
+    shader P {
+        struct S { float a[2]; float b; float c; };
+        compute {
+            buffer float* outp;
+            void main() {
+                S s = {1.0, {}, 2.0};
+                outp[0] = s.b;
+            }
+        }
+    }
+    """
+    output = translate(tmp_path, source, "metal", ".cgl")
+    assert "{1.0, {}, 2.0}" in output
