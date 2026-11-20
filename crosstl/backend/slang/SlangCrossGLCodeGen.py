@@ -33,6 +33,14 @@ from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
 
+# Slang declares these three for its CUDA target only (``hlsl.meta.slang``), returning CUDA's ``threadIdx``,
+# ``blockIdx`` and ``blockDim``. CrossGL names the same values for every target.
+CUDA_THREAD_BUILTINS = {
+    "cudaThreadIdx": "gl_LocalInvocationID",
+    "cudaBlockIdx": "gl_WorkGroupID",
+    "cudaBlockDim": "gl_WorkGroupSize",
+}
+
 
 class UnsupportedSlangConformanceError(ValueError):
     """Raised when Slang conformance semantics cannot be represented."""
@@ -2261,6 +2269,15 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             if bitcast_call is not None:
                 return bitcast_call
             args = ", ".join(rendered_args)
+            if (
+                function_name in CUDA_THREAD_BUILTINS
+                and not expr.args
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return CUDA_THREAD_BUILTINS[function_name]
             if (
                 function_name == "saturate"
                 and len(expr.args) == 1
