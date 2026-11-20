@@ -332,6 +332,10 @@ class HipCodeGen(
         )
         self.value_array_struct_names = collect_struct_names(node)
         self.helper_functions = {}
+        # File-scope constants already folded, by name (cuda_constant_folding).
+        self.folded_constants = {}
+        # Workgroup variables declared at file scope because a stage function uses them (cuda_shared_memory).
+        self.file_scope_shared_variable_ids = set()
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
