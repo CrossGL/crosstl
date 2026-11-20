@@ -7314,6 +7314,14 @@ class MetalCodeGen(
             return f"({rendered[0]} - {rendered[1]})"
         if operation == "negate":
             return f"(-{rendered[0]})"
+        if operation in {"load", "store"}:
+            # The pointer operand names the memory it addresses. An element
+            # such as ``input[64]`` is that element's address in the other
+            # generators, but ``simdgroup_load`` and ``simdgroup_store`` take
+            # a ``device``/``threadgroup`` pointer, so take the address here.
+            pointer_index = 1 if operation == "load" else 0
+            if isinstance(arguments[pointer_index], ArrayAccessNode):
+                rendered[pointer_index] = f"&{rendered[pointer_index]}"
         if operation == "store":
             rendered = [rendered[1], rendered[0], *rendered[2:]]
         intrinsic = self.METAL_COOPERATIVE_MATRIX_FUNCTIONS.get(operation)
