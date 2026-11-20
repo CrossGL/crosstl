@@ -102,6 +102,7 @@ from ..metadata_preconditions import (
 )
 from ..refusals import OpenGLRefusal, TranslatorArgumentError
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
+from ..semantics.array_values import array_constructor_shape
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.declared_types import declared_type_names
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
@@ -41401,6 +41402,15 @@ complex64_t crossgl_complex64_mod_assign(
                 and func_name in self.function_map
             ):
                 func_name = self.function_map[func_name]
+            array_constructor = array_constructor_shape(expr)
+            if (
+                array_constructor is not None
+                and original_func_name not in self.function_return_types
+            ):
+                # ``i32[3](...)`` names its element in CrossGL; GLSL spells it ``int[3](...)``.
+                element, size = array_constructor
+                func_name = f"{self.map_type(element)}[{size}]"
+                callee = func_name
             self.validate_fragment_only_helper_call(original_func_name)
 
             sizeof_bytes = sizeof_call_bytes(

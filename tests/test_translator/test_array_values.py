@@ -589,3 +589,47 @@ def test_by_value_array_parameters_keep_their_names_on_value_targets(tmp_path, t
     code = _translate(tmp_path, PARAMETERS_GLSL, ".frag", target)
 
     assert "cgl_array_argument" not in code
+
+
+TYPED_ARRAY_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int a[3] = i32[3](4, 5, 6);
+            %s
+            outp[0] = float(a[1]) + float(i32[3](4, 5, 6)[1]);
+        }
+    }
+}
+"""
+
+
+def test_glsl_spells_the_element_type_of_array_constructors(tmp_path):
+    source = TYPED_ARRAY_CONSTRUCTOR_CGL % "int b[3]; b = i32[3](7, 8, 9);"
+
+    code = _translate(tmp_path, source, ".cgl", "opengl")
+
+    assert "b = int[3](7, 8, 9);" in code
+    assert "int[3](4, 5, 6)[1]" in code
+    assert "i32[" not in code
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_build_indexed_array_constructors_in_a_local(tmp_path, target):
+    code = _translate(tmp_path, TYPED_ARRAY_CONSTRUCTOR_CGL % "", ".cgl", target)
+
+    assert "int cgl_array_value_0[3] = {4, 5, 6};" in code
+    assert "cgl_array_value_0[1]" in code
+    assert "i32" not in code
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_refuse_array_constructors_assigned_to_arrays(target):
+    source = TYPED_ARRAY_CONSTRUCTOR_CGL % "int b[3]; b = i32[3](7, 8, 9);"
+
+    with pytest.raises(ArrayConstructorUnsupportedError) as raised:
+        hoist_array_constructors(parse(source), target)
+
+    assert raised.value.reason_code == "array-constructor-assigned"
