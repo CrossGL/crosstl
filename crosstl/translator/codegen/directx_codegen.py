@@ -219,6 +219,7 @@ from .hlsl_byte_address_atomics import (
 )
 from .hlsl_byteaddress_typed_access import hlsl_byteaddress_component_refusal
 from .hlsl_call_argument_order import hlsl_ordered_call_expression
+from .hlsl_call_cycles import validate_hlsl_call_cycles
 from .hlsl_exact_float_builtins import (
     emit_hlsl_exact_float_helpers,
     hlsl_exact_float_expression,
@@ -1053,6 +1054,7 @@ class HLSLCodeGen(
         }
         # Typed binary16 loads, stores and selections may change NaN payloads.
         ast = lower_half_private_storage(ast, self.map_type)
+        validate_hlsl_call_cycles(ast)
         self.hlsl_groupshared_variable_names = hlsl_groupshared_variable_names(ast)
         target_stage = requested_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
