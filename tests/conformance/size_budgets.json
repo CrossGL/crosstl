@@ -110,8 +110,7 @@
   "crosstl/translator/codegen/metal_codegen.py": 29942,
   "crosstl/translator/codegen/mojo_codegen.py": 16295,
   "crosstl/translator/codegen/rust_codegen.py": 14799,
-  "crosstl/translator/codegen/slang_codegen.py": 16595,
-  "crosstl/translator/codegen/wgsl_codegen.py": 10027
+  "crosstl/translator/codegen/slang_codegen.py": 16595
  },
  "schemaVersion": 1
 }
