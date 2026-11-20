@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ElementTree
 from urllib.parse import unquote
 
 from tools.coverage import __main__ as cli
-from tools.coverage import chart, issues, publish
+from tools.coverage import chart, issues, publish, report
 from tools.coverage.causes import grouped
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -301,7 +301,7 @@ def test_history_appends_runs_replaces_reruns_and_stays_bounded(monkeypatch):
     assert {r["commit"] for r in _history_rows(third)} == {"aaaa"}
 
 
-def test_publish_command_writes_the_five_files(tmp_path):
+def test_publish_command_writes_every_file_of_the_coverage_branch(tmp_path):
     report_path = tmp_path / "coverage.json"
     report_path.write_text(json.dumps(_report()))
     old = tmp_path / "old.csv"
@@ -320,13 +320,17 @@ def test_publish_command_writes_the_five_files(tmp_path):
         )
         == 0
     )
-    assert sorted(p.name for p in site.iterdir()) == [
+    assert sorted(str(p.relative_to(site)) for p in site.rglob("*.*")) == [
         "COVERAGE.md",
         "coverage.json",
         "coverage.svg",
+        "features/crossgl-ir.json",
+        "features/glsl-input.json",
+        "features/glsl-output.json",
         "history.csv",
         "trend.svg",
     ]
+    assert report.load(site / "coverage.json") == _report()
     assert {r["commit"] for r in _history_rows((site / "history.csv").read_text())} == {
         "old",
         "0123456789abcdef",
@@ -347,3 +351,15 @@ def test_publish_command_writes_the_five_files(tmp_path):
         )
         == 0
     )
+
+
+def test_publishing_stops_before_writing_a_file_over_the_size_limit(
+    tmp_path, monkeypatch, capsys
+):
+    report_path = tmp_path / "coverage.json"
+    report_path.write_text(json.dumps(_report()))
+    monkeypatch.setattr(publish, "SIZE_LIMIT", 1000)
+    site = tmp_path / "site"
+    assert cli.main(["publish", str(report_path), "--output-dir", str(site)]) == 2
+    assert "over the 1000-byte limit" in capsys.readouterr().err
+    assert not site.exists()

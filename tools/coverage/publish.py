@@ -1,8 +1,9 @@
 """What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
 bounded ``history.csv`` and the trend chart drawn from it.
 
-``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all five files. Only CI
-runs it; contributors never regenerate anything.
+``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes them all, with the
+report's feature rows in ``features/`` (see :func:`tools.coverage.report.site`). Only CI runs it; contributors never
+regenerate anything.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ from urllib.parse import quote
 from . import chart, ir, trend
 from .causes import cause, diagnostic, grouped, headline
 from .model import OUTCOMES
-from .report import dumps
+from .report import site
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
 HISTORY_RUNS = 400
 HISTORY_FIELDS = ("date", "commit", "language", "direction", "score", *OUTCOMES)
+# The most bytes a published file may have (ADR 0003, section 5).
+SIZE_LIMIT = 1_000_000
 DETAIL_LIMIT = 160
 # A cause in COVERAGE.md is longer, so that two causes do not read the same once cut.
 CAUSE_LIMIT = 400
@@ -370,19 +373,28 @@ def write_site(
     previous_history: str = "",
     repository: str = "CrossGL/crosstl",
 ) -> list[Path]:
-    """Write the five published files into ``directory`` and return their paths."""
-    directory.mkdir(parents=True, exist_ok=True)
+    """Write the published files into ``directory`` and return their paths.
+
+    Raises ``ValueError`` before writing anything if a file would exceed :data:`SIZE_LIMIT`.
+    """
     runs = history(report, previous_history)
     files = {
-        "coverage.json": dumps(report),
+        **site(report),
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
         "history.csv": runs,
         "trend.svg": trend.render(runs),
     }
+    for filename, text in files.items():
+        size = len(text.encode("utf-8"))
+        if size > SIZE_LIMIT:
+            raise ValueError(
+                f"{filename} would be {size} bytes, over the {SIZE_LIMIT}-byte limit for a published file"
+            )
     paths = []
     for filename, text in files.items():
         path = directory / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         paths.append(path)
     return paths
