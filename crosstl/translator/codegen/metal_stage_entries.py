@@ -15,6 +15,7 @@ from .array_utils import (
 from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import metal_semantic_index
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
+from .metal_post_tessellation import post_tessellation_plan
 from .metal_stage_refusals import refuse_metal_stages
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import collect_resource_array_size_hints
@@ -386,19 +387,22 @@ class MetalStageEntryMixin:
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
 
     def metal_stage_entry_functions(self, ast, expected_stage_name, target_stage=None):
-        if not stage_matches(target_stage, expected_stage_name):
-            return []
-
         functions = []
-        for func in getattr(ast, "functions", []) or []:
-            if function_stage_name(func) == expected_stage_name:
-                functions.append(func)
+        if stage_matches(target_stage, expected_stage_name):
+            for func in getattr(ast, "functions", []) or []:
+                if function_stage_name(func) == expected_stage_name:
+                    functions.append(func)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
-            if normalize_stage_name(stage_type) != expected_stage_name:
-                continue
+            stage_name = normalize_stage_name(stage_type)
             entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
+            if entry_point is None or not stage_matches(target_stage, stage_name):
+                continue
+            if stage_name == expected_stage_name or (
+                # A planned domain entry is written as a vertex function (:mod:`.metal_post_tessellation`).
+                expected_stage_name == "vertex"
+                and post_tessellation_plan(entry_point) is not None
+            ):
                 functions.append(entry_point)
         return functions
 
