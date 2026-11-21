@@ -476,10 +476,12 @@ class _StructMethodLowering:
         return marked
 
     def method_for(self, owner, function):
-        for method in self.methods[owner][str(function.name)]:
-            if method.function is function:
-                return method
-        raise KeyError(function.name)
+        """The lowered method of ``function``, which :meth:`run` registered under ``owner``."""
+        return next(
+            method
+            for method in self.methods[owner][str(function.name)]
+            if method.function is function
+        )
 
     def callees_first(self, owner, kept):
         """``kept`` ordered so that a member function follows the member functions of ``owner`` it calls."""
