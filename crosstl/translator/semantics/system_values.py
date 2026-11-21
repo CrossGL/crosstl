@@ -47,6 +47,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ..refusals import TranslationRefusal
+
 __all__ = [
     "SYSTEM_VALUES",
     "SystemValue",
@@ -56,8 +58,10 @@ __all__ = [
 ]
 
 
-class SystemValueError(ValueError):
+class SystemValueError(TranslationRefusal):
     """An ``SV_`` spelling Direct3D does not define, or with a semantic index the value does not take."""
+
+    code = "project.translate.directx-system-value-invalid"
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,7 @@ SYSTEM_VALUES = {
         SystemValue("SV_GroupID", 0, "gl_WorkGroupID"),
         SystemValue("SV_GroupIndex", 0, "gl_LocalInvocationIndex"),
         SystemValue("SV_GroupThreadID", 0, "gl_LocalInvocationID"),
+        SystemValue("SV_DispatchGrid", 0, _KEEP),
         SystemValue("SV_TessFactor", 0, _KEEP),
         SystemValue("SV_InsideTessFactor", 0, _KEEP),
         SystemValue("SV_ViewID", 0, "gl_ViewIndex"),

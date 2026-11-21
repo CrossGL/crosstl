@@ -241,6 +241,10 @@ bvec lessThan(uvec x, uvec y)
 genFType dFdx(genFType p)
 ----
 """
+# A GL_KHR_shader_subgroup text that defines no function.
+NO_SUBGROUP_FUNCTIONS = (
+    "Additions to Chapter 8 of the OpenGL Shading Language Specification\n"
+)
 CORE_TABLE = {
     "OpDPdx": ("dFdx", ""),
     "OpFOrdLessThan": ("lessThan", "float"),
@@ -251,7 +255,7 @@ CORE_TABLE = {
 
 def test_spirv_core_instructions_take_the_overload_that_selects_them(monkeypatch):
     monkeypatch.setattr(spirv, "CORE", CORE_TABLE)
-    features = by_name(spirv.core(CORE_GRAMMAR, CORE_GLSL))
+    features = by_name(spirv.core(CORE_GRAMMAR, CORE_GLSL, NO_SUBGROUP_FUNCTIONS))
     assert sorted(features) == sorted(CORE_TABLE)
     for name, scalar in (
         ("OpFOrdLessThan", "float"),
@@ -273,10 +277,10 @@ def test_spirv_core_instructions_take_the_overload_that_selects_them(monkeypatch
 def test_spirv_core_table_entries_must_exist_upstream(monkeypatch):
     monkeypatch.setattr(spirv, "CORE", {"OpIAdd": ("lessThan", "")})
     with pytest.raises(ValueError, match="OpIAdd is not an instruction"):
-        spirv.core(CORE_GRAMMAR, CORE_GLSL)
+        spirv.core(CORE_GRAMMAR, CORE_GLSL, NO_SUBGROUP_FUNCTIONS)
     monkeypatch.setattr(spirv, "CORE", {"OpSLessThan": ("lessThan", "bool")})
     with pytest.raises(ValueError, match="no overload on bool"):
-        spirv.core(CORE_GRAMMAR, CORE_GLSL)
+        spirv.core(CORE_GRAMMAR, CORE_GLSL, NO_SUBGROUP_FUNCTIONS)
 
 
 def test_spirv_glsl_std_450_instructions_are_not_core():

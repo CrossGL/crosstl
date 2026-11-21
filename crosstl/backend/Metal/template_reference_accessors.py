@@ -77,12 +77,13 @@ def inline_template_reference_accessor(
     )
 
 
-class TemplateReferenceAccessor(Exception):
+class _TemplateReferenceAccessor(Exception):
     """Raised by member-template overload selection when the selected overload returns a reference.
 
     It carries the concrete (instantiated) method, so the caller can inline the
     call as storage with the direct-accessor proof instead of emitting a
-    by-value function. Only callers that ask for it receive it.
+    by-value function. Only callers that ask for it receive it. It is a signal the preprocessor raises and
+    catches, never a refusal, so it is private and carries no diagnostic code.
     """
 
     def __init__(self, method) -> None:

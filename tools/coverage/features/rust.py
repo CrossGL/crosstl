@@ -1,14 +1,18 @@
-"""Rust GPU functions: ``spirv_std::arch``, the ``num_traits::Float`` methods and glam's ``Vec3`` methods.
+"""Rust GPU functions: ``spirv_std::arch``, ``spirv_std::float``, the ``num_traits::Float`` methods and glam's
+``Vec3`` methods.
 
-rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch``, do scalar math through the ``num_traits::Float``
-trait ``spirv_std`` re-exports, and vector math through glam's methods, ``Vec3`` among them. The lists are read from
-the sources of the versions rust-gpu's lock file resolves. ``spirv_std::arch`` defines some functions with
-``macro_rules!`` macros, which are expanded here. A function generic over a numeric trait is probed with the scalar
-type :data:`_BOUNDS` names for the trait; constant generic parameters take the values of :data:`_CONSTANTS`.
+rust-gpu shaders call the GPU intrinsics of ``spirv_std::arch`` and the packing functions of ``spirv_std::float``, do
+scalar math through the ``num_traits::Float`` trait ``spirv_std`` re-exports, and vector math through glam's methods,
+``Vec3`` among them; :mod:`.glam` reads glam's other types, :mod:`.spirv_std` the image and byte-buffer methods and
+:mod:`.ray_query` the ray-tracing ones. The lists are read from the sources of the versions rust-gpu's lock file
+resolves. ``spirv_std::arch`` defines some functions with ``macro_rules!`` macros, which are expanded here. A function
+generic over a numeric trait is probed with the scalar type :data:`_BOUNDS` names for the trait; constant generic
+parameters take the values of :data:`_CONSTANTS`.
 """
 
 from __future__ import annotations
 
+import math
 import re
 
 from .. import spellings
@@ -43,7 +47,7 @@ _GLAM = {"": "float", "D": "double", "I": "int", "U": "uint", "B": "bool"}
 # The cargo features spirv-std 0.11 enables on its glam 0.34 dependency (crates/spirv-std/Cargo.toml). glam puts its
 # other vector widths behind features, so a method such as ``Vec3::as_i16vec3`` is absent from the glam a rust-gpu
 # shader links, and is not a rust-gpu feature.
-_GLAM_FEATURES = frozenset({"f64", "i32", "libm", "u32"})
+GLAM_FEATURES = frozenset({"f64", "i32", "libm", "u32"})
 _GATED = re.compile(
     r'#\[cfg\(feature = "([\w-]+)"\)\]\s*(?:#\[[^\]]*\]\s*)*pub (?:const )?(?:unsafe )?fn (\w+)'
 )
@@ -128,6 +132,16 @@ _TEMPLATE = re.compile(r"pub (?:const )?(?:unsafe )?fn \$name")
 _CLOSURE = re.compile(r"(Fn(?:Mut|Once)?)\s*\(([^()]*)\)\s*->\s*(\w+)")
 # A slice parameter, ``&[T]`` or ``&mut [T]``. The probe passes its input buffer for one the function reads.
 _SLICE = re.compile(r"&\s*(mut\s+)?\[([^;\]]+)\]")
+# glam's quaternions, which :func:`rust_type` keeps opaque, hold four values: x, y, z and w.
+_QUATERNIONS = frozenset({"Quat", "DQuat"})
+
+
+def _components(kind: Type) -> int:
+    """How many values a vector, a matrix or a quaternion holds, which is how many it writes to a slice; 0 for
+    another type."""
+    if kind.opaque:
+        return 4 if kind.opaque in _QUATERNIONS else 0
+    return math.prod(kind.shape) if kind.shape else 0
 
 
 def _nesting(text: str, index: int) -> int:
@@ -140,7 +154,7 @@ def _nesting(text: str, index: int) -> int:
     return 0
 
 
-def _split(text: str, separators: str = ",") -> list[str]:
+def separated(text: str, separators: str = ",") -> list[str]:
     """``text`` split at its top-level separators."""
     parts, depth, start = [], 0, 0
     for index, char in enumerate(text):
@@ -152,7 +166,7 @@ def _split(text: str, separators: str = ",") -> list[str]:
     return [part for part in parts if part]
 
 
-def _group(text: str, start: int) -> tuple[str, int]:
+def enclosed(text: str, start: int) -> tuple[str, int]:
     """The text inside the bracket group that opens at ``text[start]``, and the index just past it."""
     closing = {"(": ")", "<": ">", "{": "}", "[": "]"}[text[start]]
     depth = 0
@@ -176,8 +190,8 @@ def header(text: str, position: int) -> Header:
     while text[position] == " ":
         position += 1
     if text[position] == "<":
-        generics, position = _group(text, position)
-    parameters, position = _group(text, position)
+        generics, position = enclosed(text, position)
+    parameters, position = enclosed(text, position)
     depth, end = 0, position
     while depth or text[end] not in "{;":
         depth += _nesting(text, end)
@@ -190,13 +204,13 @@ def header(text: str, position: int) -> Header:
 def _bound(generics: str, where: str) -> str:
     """``generics`` with the bounds a ``where`` clause gives its unbounded type parameters."""
     bounds = {}
-    for predicate in _split(where):
+    for predicate in separated(where):
         name, _, bound = predicate.partition(":")
         if re.fullmatch(r"\w+", name.strip()) and bound.strip():
             bounds[name.strip()] = bound.strip()
     return ", ".join(
         f"{part}: {bounds[part]}" if part in bounds else part
-        for part in _split(generics)
+        for part in separated(generics)
     )
 
 
@@ -209,7 +223,7 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
     """The probe type of each type parameter, and every parameter in order as ``(name, is_constant)``."""
     types: dict[str, Type] = {}
     order = []
-    for part in _split(generics):
+    for part in separated(generics):
         if part.startswith("const "):
             order.append((part.split()[1].rstrip(":"), True))
             continue
@@ -222,8 +236,8 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
             continue
         closure = _CLOSURE.fullmatch(bounds.strip())
         if closure:
-            # A closure keeps its bound as its type, from which a probe writes one (kernels.Rust.handle).
-            arguments = ", ".join(_split(closure.group(2)))
+            # A closure keeps its bound as its type, from which a probe writes one (..rust.Rust.handle).
+            arguments = ", ".join(separated(closure.group(2)))
             types[name] = Type.other(
                 f"{closure.group(1)}({arguments}) -> {closure.group(3)}"
             )
@@ -268,6 +282,10 @@ def rust_type(
     glam = re.fullmatch(r"([DIUB]?)Vec([234])", spelling)
     if glam:
         return Type(_GLAM[glam.group(1)], (int(glam.group(2)),))
+    matrix = re.fullmatch(r"(D?)Mat([234])", spelling)
+    if matrix:
+        size = int(matrix.group(2))
+        return Type(_GLAM[matrix.group(1)], (size, size))
     vector = re.fullmatch(r"impl\s+Vector<\s*(\w+)\s*,\s*\w+\s*>", spelling)
     if vector:
         element = rust_type(vector.group(1), generics, self_type)
@@ -276,14 +294,15 @@ def rust_type(
     array = re.fullmatch(r"\[(.+);\s*(\d+)\]", spelling)
     if array:
         element = rust_type(array.group(1), generics, self_type, aliases)
-        if not element.opaque:
+        # An array of arrays stays opaque: a probe passes arrays of values only.
+        if not element.opaque and not element.count:
             return Type(element.scalar, element.shape, count=int(array.group(2)))
     # A tuple or an option stays opaque, spelled with the types it holds so that a probe can read its first value.
     held = re.fullmatch(r"\((.+)\)|Option<(.+)>", spelling)
     if held:
         parts = [
             _spelling(rust_type(part, generics, self_type, aliases))
-            for part in _split(held.group(1) or held.group(2))
+            for part in separated(held.group(1) or held.group(2))
         ]
         if held.group(1):
             return Type.other(f"({', '.join(parts)})")
@@ -297,7 +316,8 @@ def _spelling(kind: Type) -> str:
         return kind.opaque
     if kind.shape:
         prefixes = {scalar: prefix for prefix, scalar in _GLAM.items()}
-        return f"{prefixes.get(kind.scalar, kind.scalar)}Vec{kind.shape[0]}"
+        family = "Mat" if len(kind.shape) == 2 else "Vec"
+        return f"{prefixes.get(kind.scalar, kind.scalar)}{family}{kind.shape[0]}"
     return {scalar: name for name, scalar in _SCALARS.items()}[kind.scalar]
 
 
@@ -313,10 +333,12 @@ def signature(
     generics, parameters, result = parsed
     types, order = _generic_types(generics)
     params, method = [], False
-    for part in _split(parameters):
+    for part in separated(parameters):
         if re.fullmatch(r"(?:mut\s+)?&?(?:mut\s+)?self", part):
             method = True
-            params.append(Param(self_type))
+            # ``&mut self`` changes the receiver in place, so the probe declares it mutable and stores it afterwards.
+            changed = bool(re.fullmatch(r"&\s*mut\s+self", part))
+            params.append(Param(self_type, "mutable" if changed else "in"))
             continue
         kind = part.partition(":")[2].strip()
         direction = "in"
@@ -325,15 +347,22 @@ def signature(
         if element and not element.opaque and not sliced.group(1):
             params.append(Param(element, "buffer"))
             continue
-        if element and not element.opaque and len(self_type.shape) == 1:
-            # A vector's mutable slice holds one value per component, as glam requires, so the probe passes a local
-            # array of that length.
-            array = Type(element.scalar, element.shape, count=self_type.shape[0])
+        if element and not element.opaque and _components(self_type):
+            # A mutable slice holds one value per component of the receiver, as glam requires: a matrix writes its
+            # columns in order and a quaternion x, y, z and w. The probe passes a local array of that length.
+            array = Type(element.scalar, element.shape, count=_components(self_type))
             params.append(Param(array, "out"))
             continue
+        mutable = bool(re.match(r"&\s*mut\b", kind))
         if kind.startswith("&"):
             direction, kind = "inout", re.sub(r"^&\s*(?:mut\s+)?", "", kind)
-        params.append(Param(rust_type(kind, types, self_type, aliases), direction))
+        found = rust_type(kind, types, self_type, aliases)
+        # A shared reference to a vector, a matrix, an array or a glam type is a value the function only reads, which
+        # the probe passes by reference; one to a scalar is an atomic operand, and one to a payload is the payload.
+        if direction == "inout" and not mutable and found.opaque != "udt":
+            if found.shape or found.count or found.opaque:
+                direction = "address"
+        params.append(Param(found, direction))
     # A function that never returns (``-> !``) is called as a statement, like one that returns nothing.
     returned = (
         rust_type(result, types, self_type, aliases)
@@ -361,7 +390,7 @@ def _expand(text: str) -> str:
     """
     templates: dict[str, str] = {}
     for match in _MACRO.finditer(text):
-        body, _ = _group(text, match.end() - 1)
+        body, _ = enclosed(text, match.end() - 1)
         found = _TEMPLATE.search(body)
         if found:
             end = body.index("{", body.index(")", found.end()))
@@ -369,8 +398,8 @@ def _expand(text: str) -> str:
     expanded = []
     for macro, template in templates.items():
         for match in re.finditer(rf"^{macro}!\(", text, re.M):
-            arguments, _ = _group(text, match.end() - 1)
-            parts = _split(arguments, ",;")
+            arguments, _ = enclosed(text, match.end() - 1)
+            parts = separated(arguments, ",;")
             candidates = parts[1:] if "$scalar" in template else parts
             names = [p for p in candidates if re.fullmatch(r"[a-z_][a-z0-9_]*", p)]
             for name in names:
@@ -416,7 +445,7 @@ def arch(
             )
         trait = re.search(r"^pub unsafe trait Derivative\b[^{]*\{", text, re.M)
         if trait:
-            body, _ = _group(text, trait.end() - 1)
+            body, _ = enclosed(text, trait.end() - 1)
             for match in _TRAIT_METHOD.finditer(body):
                 name = match.group(2)
                 found, spelling, note = signature(
@@ -458,7 +487,7 @@ def methods(
     block = re.search(opening, text, re.M)
     if block is None:
         raise ValueError(f"no block matching {opening!r}")
-    body, _ = _group(text, block.end() - 1)
+    body, _ = enclosed(text, block.end() - 1)
     owner = "f32" if prefix == "Float" else prefix
     features: list[Feature] = []
     pattern = _TRAIT_METHOD if opening.startswith("^pub trait") else _IMPL_METHOD
@@ -518,6 +547,23 @@ def _feature(
     )
 
 
+def packing(text: str, glsl_names: set[str] | frozenset[str]) -> list[Feature]:
+    """The top-level functions of ``spirv_std::float``, which pack floats into integers and unpack them. A probe
+    names them by their path, since the probes import ``spirv_std::arch`` only. The module's ``powi`` methods of
+    ``f32`` and ``f64`` are what a ``Float::powi`` probe already calls: Rust picks an inherent method over a trait's.
+    """
+    text = clean(text)
+    features = []
+    for match in _FUNCTION.finditer(text):
+        name = match.group(2)
+        found, _, note = signature(name, header(text, match.end()))
+        path = f"spirv_std::float::{name}"
+        features.append(
+            _feature(name, "packing", found, path, note, "compute", glsl_names)
+        )
+    return features
+
+
 def parse(
     modules: dict[str, str],
     num_traits_float: str,
@@ -541,6 +587,6 @@ def parse(
         Type("float", (3,)),
         "vec3",
         glsl_names,
-        _GLAM_FEATURES,
+        GLAM_FEATURES,
     )
     return sorted(features, key=lambda f: (f.group, f.name))

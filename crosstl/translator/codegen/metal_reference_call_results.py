@@ -46,6 +46,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 from ..semantics.lower import COMPOUND_TARGET_READ
 from .metal_reference_argument_order import (
     _copied_lvalue_indices,
@@ -252,7 +253,7 @@ def _local_type(codegen, expr, what):
         or "*" in type_name
         or codegen.is_resource_parameter_type(type_name)
     ):
-        raise ValueError(
+        raise MetalRefusal(
             f"Metal cannot copy a reference argument back before the rest of the statement reads it: {what} "
             f"'{codegen.generate_expression(expr)}' has type '{type_name}', which cannot be evaluated into a "
             "local first; assign the call result to a local first"
@@ -318,7 +319,7 @@ def generate_call_result_statement(codegen, stmt, indent, writebacks):
         stores_root = target_root in roots
         if not path:
             if stores_root or _references(codegen, value, roots, call):
-                raise ValueError(
+                raise MetalRefusal(
                     f"Metal cannot copy the reference arguments of '{codegen.function_call_name(call)}' back "
                     "before the rest of the statement reads them: the call is nested in an expression whose "
                     "evaluation order is not modelled; assign the call result to a local first"

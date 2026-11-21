@@ -1,0 +1,30 @@
+; SPIR-V
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %Out Block
+OpMemberDecorate %Out 0 Offset 0
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%Out = OpTypeStruct %int
+%pOut = OpTypePointer StorageBuffer %Out
+%pint = OpTypePointer StorageBuffer %int
+%pfint = OpTypePointer Function %int
+%out = OpVariable %pOut StorageBuffer
+%c0 = OpConstant %int 0
+%c1 = OpConstant %int 1
+%c2 = OpConstant %int 2
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%v = OpVariable %pfint Function
+OpStore %v %c1
+%l = OpLoad %int %v
+OpStore %v %c2
+%dst = OpAccessChain %pint %out %c0
+OpStore %dst %l
+OpReturn
+OpFunctionEnd

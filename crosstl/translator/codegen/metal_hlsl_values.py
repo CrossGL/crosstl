@@ -10,6 +10,7 @@ emulated integer and boolean matrices, and HLSL logical intrinsics.
 import re
 
 from ..ast import FunctionCallNode, LiteralNode, UnaryOpNode
+from ..refusals import MetalRefusal
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
 from .metal_narrow_builtin_arguments import (
@@ -585,7 +586,7 @@ class MetalHlslValueMixin:
                 return None
             metal_type = self.map_type(type_name)
             if not self.is_matrix_value_type(metal_type):
-                raise ValueError(
+                raise MetalRefusal(
                     f"Cannot convert an HLSL integer or bool matrix to '{metal_type}'"
                 )
             component = self.vector_component_type(metal_type)
@@ -615,7 +616,7 @@ class MetalHlslValueMixin:
         elif len(args) == columns and all(count == rows for count in counts):
             column_values = [f"{column_type}({value})" for value in rendered]
         else:
-            raise ValueError(
+            raise MetalRefusal(
                 f"Unsupported constructor arguments for HLSL matrix '{type_name}'"
             )
         return f"{mapped_type}{{{{{', '.join(column_values)}}}}}"

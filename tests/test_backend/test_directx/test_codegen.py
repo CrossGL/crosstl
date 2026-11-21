@@ -784,7 +784,11 @@ def test_effect_compile_pixel_shader_wires_opengl_fragment_entry_body():
     )
 
     assert "void main()" in generated
-    assert "vec4 tex = texture(Texture, texCoord);" in generated
+    # An OpenGL compilation reads the combined Texture; a Vulkan one pairs it with TextureSampler.
+    assert (
+        "vec4 tex = texture(CROSSGL_SAMPLED(sampler2D(Texture, TextureSampler), Texture),"
+        " texCoord);"
+    ) in generated
     assert "fragColor = (tex * color);" in generated
 
 
@@ -3309,8 +3313,9 @@ def test_codegen_canonicalizes_dynamic_render_target_and_depth_semantics():
     """)
 
     assert "vec4 color @ gl_FragData[8];" in output
-    assert "float depth @ gl_FragDepth;" in output
-    assert "out float fallbackDepth @ gl_FragDepth" in output
+    # The direction each semantic promises stays as CrossGL's conservative depth layout.
+    assert "float depth @ gl_FragDepth @ depth_greater;" in output
+    assert "out float fallbackDepth @ gl_FragDepth @ depth_less" in output
     assert "@ SV_Target8" not in output
     assert "@ SV_DEPTHGREATEREQUAL" not in output
     assert "@ SV_DEPTHLESSEQUAL" not in output
@@ -4023,8 +4028,10 @@ def test_codegen_is_helper_lane_round_trips_to_hlsl():
             outp[id.x] = r ? 1 : 0;
         }
     """)
+    # Outside pixel shaders IsHelperLane() is false (Shader Model 6.6), which the importer writes as is.
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
-    assert "bool r = IsHelperLane();" in hlsl
+    assert "bool r = false;" in hlsl
+    assert "IsHelperLane" not in hlsl
     assert "gl_HelperInvocation" not in hlsl
 
 

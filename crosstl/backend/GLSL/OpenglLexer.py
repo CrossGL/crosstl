@@ -3,6 +3,8 @@
 import re
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import OpenGLSyntaxError
+
 from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import GLSLPreprocessor
 
@@ -292,7 +294,7 @@ class GLSLLexer:
                 if self.code.find("*/", pos + 2) == -1:
                     line_num = self.code[:pos].count("\n") + 1
                     col_num = pos - self.code.rfind("\n", 0, pos)
-                    raise SyntaxError(
+                    raise OpenGLSyntaxError(
                         f"Unterminated block comment at line {line_num}, column {col_num}"
                     )
             token = self._next_token(pos)
@@ -300,7 +302,7 @@ class GLSLLexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
-                raise SyntaxError(
+                raise OpenGLSyntaxError(
                     f"Illegal character '{self.code[pos]}' at line {line_num}, column {col_num}\n"
                     f"Context: ...{context}..."
                 )

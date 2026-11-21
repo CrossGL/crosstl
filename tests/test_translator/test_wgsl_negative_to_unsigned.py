@@ -71,3 +71,28 @@ def test_other_conversions_to_uint_are_unchanged(tmp_path):
     )
     assert "var w: u32 = u32(k);" in output
     assert "var v: u32 = u32(3);" in output
+
+
+def test_negative_literal_splat_to_a_uint_vector_is_an_i32(tmp_path):
+    # The vector splat path used to write vec3<u32>(u32(-1)), which naga rejects (#4504).
+    output = translate(
+        tmp_path,
+        "uvec3 w = -1; uvec3 u = uvec3(i); u = -2; u &= -1; u += -1; u |= -3; "
+        "u -= -4; u ^= -5; values[i] = float(u.x + w.y);",
+    )
+    assert "var w: vec3<u32> = vec3<u32>(u32(-1i));" in output
+    assert "u = vec3<u32>(u32(-2i));" in output
+    assert "u &= vec3<u32>(u32(-1i));" in output
+    assert "u += vec3<u32>(u32(-1i));" in output
+    assert "u |= vec3<u32>(u32(-3i));" in output
+    assert "u -= vec3<u32>(u32(-4i));" in output
+    assert "u ^= vec3<u32>(u32(-5i));" in output
+    assert "u32(-1)" not in output
+
+
+def test_non_negative_literal_splat_to_a_uint_vector_is_unchanged(tmp_path):
+    output = translate(
+        tmp_path, "uvec2 u = 3; ivec2 s = -1; values[i] = float(u.x) + float(s.y);"
+    )
+    assert "var u: vec2<u32> = vec2<u32>(u32(3));" in output
+    assert "var s: vec2<i32> = vec2<i32>(-1);" in output

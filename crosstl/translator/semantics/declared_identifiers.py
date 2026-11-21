@@ -32,10 +32,12 @@ from ..codegen.spirv_ray_builtins import ray_constant_value
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..float_limit_constants import float_limit_constant
 from ..ray_query_vocabulary import ray_query_constant
+from ..refusals import supersedes_pending_refusals
 from ..standard_constants import standard_math_constant
 from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .declared_types import dead_function_ids, declared_type_names
 from .rewrite import child_slots, get_child
+from .work_graph_nodes import BARRIER_FLAGS
 
 __all__ = [
     "UndeclaredIdentifierError",
@@ -110,6 +112,7 @@ def _is_builtin_value(name):
         name in _LANGUAGE_VALUES
         or name in _FENCE_ARGUMENTS
         or name in RAY_FLAG_CONSTANTS
+        or name in BARRIER_FLAGS
         or name.startswith("gl_")
         or standard_math_constant(name) is not None
         or float_limit_constant(name) is not None
@@ -565,10 +568,12 @@ def refuse_recorded_undeclared_identifier(program, cause=None):
 
 
 def is_typed_diagnostic(error) -> bool:
-    """Whether ``error`` is a refusal that names its own construct, which takes precedence over the recorded one."""
-    return isinstance(error, TranslationDiagnostic) or bool(
-        getattr(error, "project_diagnostic_code", None)
-    )
+    """Whether ``error`` is a refusal that names its own construct, which takes precedence over the recorded one.
+
+    A site refusal (:class:`~crosstl.translator.refusals.TranslationRefusal`) does not: a generator raises one when
+    it meets the undeclared name, so the recorded refusal is the better diagnostic.
+    """
+    return supersedes_pending_refusals(error)
 
 
 def generate_refusing_undeclared_identifiers(program, generate, *, refuse_after=True):

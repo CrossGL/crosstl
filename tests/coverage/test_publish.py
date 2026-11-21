@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ElementTree
 from urllib.parse import unquote
 
 from tools.coverage import __main__ as cli
-from tools.coverage import chart, issues, publish
+from tools.coverage import chart, issues, publish, report
 from tools.coverage.causes import grouped
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -39,6 +39,14 @@ def _row(language, direction, **counts):
     }
 
 
+def _with_compile_only(data):
+    """``data`` with a row whose language the conformance harness has no runtime for."""
+    data["backends"].insert(
+        0, _row("cuda", "output", supported=1) | {"executes": False}
+    )
+    return data
+
+
 def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
     return {
         "schema": 1,
@@ -65,7 +73,11 @@ def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
         },
         "validators": {"glslangValidator": "16.0", "metal": None},
         "backends": [
-            _row("glsl", "output", supported=3, wrong=1, untested=2),
+            _row("glsl", "output", supported=3, wrong=1, untested=2) | {
+                "executes": True,
+                "executed": 2,
+                "runtime": "vulkan-lavapipe",
+            },
             _row("glsl", "input", supported=4),
             {
                 "language": "wgsl",
@@ -79,18 +91,25 @@ def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
 
 
 def test_chart_is_valid_svg_with_scores_commit_and_date():
-    svg = chart.render(_report())
+    svg = chart.render(_with_compile_only(_report()))
     root = ElementTree.fromstring(svg)
     texts = [t.text for t in root.iter(f"{SVG}text")]
     assert "0123456 · 2026-10-19" in texts
     assert "75.0 %" in texts and "100.0 %" in texts
     assert "3 of 4, 2 untested" in texts
+    # Each row says whether its probes ran; the legend says what that means.
+    assert "2 executed" in texts and "compile-only" in texts
+    assert texts[-1] == chart.LEGEND[-1]
+    assert "CUDA output 100.0 %, compile-only" in root.find(f"{SVG}desc").text
     assert "not offered: CrossTL has no WGSL source frontend" in texts
     assert "CrossGL IR" in texts
     assert root.find(f"{SVG}title").text.startswith("CrossTL coverage")
     # The supported share of the bar, in the direction's colour, is proportional to the score.
     bars = [r for r in root.iter(f"{SVG}rect") if r.get("class") == "output"]
-    assert [float(r.get("width")) for r in bars] == [chart.BAR_WIDTH * 0.75]
+    assert [float(r.get("width")) for r in bars] == [
+        chart.BAR_WIDTH,
+        chart.BAR_WIDTH * 0.75,
+    ]
 
 
 def test_chart_has_no_gradients_or_scripts_and_is_deterministic():
@@ -111,10 +130,15 @@ def test_chart_shows_unmeasured_rows_without_a_bar():
 
 
 def test_markdown_lists_scores_sources_and_gaps():
-    text = publish.markdown(_report())
-    assert "| GLSL | output | 75.0 % | 3 | 0 | 1 | 2 |" in text
-    assert "| WGSL | input | not offered | | | | |" in text
-    assert "| CrossGL IR | expressiveness | 100.0 % | 2 | 0 | 0 | 5 |" in text
+    text = publish.markdown(_with_compile_only(_report()))
+    lines = text.splitlines()
+    assert "| GLSL | output | 75.0 % | 3 | 0 | 1 | 2 | 2 on vulkan-lavapipe |" in lines
+    # A report measured without running probes says so for a language that has a runtime.
+    assert "| GLSL | input | 100.0 % | 4 | 0 | 0 | 0 | not run |" in lines
+    assert "| CUDA | output | 100.0 % | 1 | 0 | 0 | 0 | compile-only |" in lines
+    assert "| WGSL | input | not offered | | | | | |" in lines
+    assert "| CrossGL IR | expressiveness | 100.0 % | 2 | 0 | 0 | 5 |  |" in lines
+    assert "The Executed column counts the compute probes" in text
     assert "https://github.com/CrossGL/crosstl/commit/0123456789abcdef" in text
     assert (
         "KhronosGroup/GLSL/blob/0099bf83b0288469917fc2e2972cb0a2b74d6711/chapters"
@@ -277,7 +301,29 @@ def test_history_appends_runs_replaces_reruns_and_stays_bounded(monkeypatch):
     assert {r["commit"] for r in _history_rows(third)} == {"aaaa"}
 
 
-def test_publish_command_writes_the_five_files(tmp_path):
+def test_history_drops_the_oldest_runs_that_would_take_it_over_the_size_limit(
+    monkeypatch,
+):
+    runs = ""
+    for day in range(10, 20):
+        runs = publish.history(
+            _report(commit=f"c{day}", date=f"2026-10-{day}T03:41:00Z"), runs
+        )
+    assert len({r["commit"] for r in _history_rows(runs)}) == 10
+    size = len(runs.encode("utf-8"))
+    # Room for about half of the runs: the newest ones stay, whole, and the file fits.
+    monkeypatch.setattr(publish, "SIZE_LIMIT", size // 2)
+    kept = publish.history(_report(commit="c20", date="2026-10-20T03:41:00Z"), runs)
+    commits = [r["commit"] for r in _history_rows(kept)]
+    assert len(kept.encode("utf-8")) <= size // 2
+    assert sorted(set(commits)) == [
+        f"c{day}" for day in range(20 - len(set(commits)) + 1, 21)
+    ]
+    assert 3 <= len(set(commits)) < 10
+    assert all(commits.count(c) == 3 for c in set(commits))
+
+
+def test_publish_command_writes_every_file_of_the_coverage_branch(tmp_path):
     report_path = tmp_path / "coverage.json"
     report_path.write_text(json.dumps(_report()))
     old = tmp_path / "old.csv"
@@ -296,13 +342,17 @@ def test_publish_command_writes_the_five_files(tmp_path):
         )
         == 0
     )
-    assert sorted(p.name for p in site.iterdir()) == [
+    assert sorted(str(p.relative_to(site)) for p in site.rglob("*.*")) == [
         "COVERAGE.md",
         "coverage.json",
         "coverage.svg",
+        "features/crossgl-ir.json",
+        "features/glsl-input.json",
+        "features/glsl-output.json",
         "history.csv",
         "trend.svg",
     ]
+    assert report.load(site / "coverage.json") == _report()
     assert {r["commit"] for r in _history_rows((site / "history.csv").read_text())} == {
         "old",
         "0123456789abcdef",
@@ -323,3 +373,15 @@ def test_publish_command_writes_the_five_files(tmp_path):
         )
         == 0
     )
+
+
+def test_publishing_stops_before_writing_a_file_over_the_size_limit(
+    tmp_path, monkeypatch, capsys
+):
+    report_path = tmp_path / "coverage.json"
+    report_path.write_text(json.dumps(_report()))
+    monkeypatch.setattr(publish, "SIZE_LIMIT", 1000)
+    site = tmp_path / "site"
+    assert cli.main(["publish", str(report_path), "--output-dir", str(site)]) == 2
+    assert "over the 1000-byte limit" in capsys.readouterr().err
+    assert not site.exists()

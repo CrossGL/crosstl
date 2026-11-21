@@ -22,6 +22,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXSoftwareSubgroupError,
     HLSLCodeGen,
 )
+from tests.cooperative_matrix_parsing import keeping_untyped_cooperative_matrices
 from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_directx_float_atomics import _compile
@@ -183,11 +184,11 @@ def test_software_matrix_generation_state_is_reset():
     ],
 )
 def test_software_matrix_rejects_invalid_operands(arguments, reason):
+    # The parser refuses an operand without a contract; the generator checks the tree it is given as well.
+    with keeping_untyped_cooperative_matrices():
+        tree = parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});"))
     with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as error:
-        _codegen().generate_stage(
-            parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});")),
-            "compute",
-        )
+        _codegen().generate_stage(tree, "compute")
     assert error.value.reason == reason
 
 

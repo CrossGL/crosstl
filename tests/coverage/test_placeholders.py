@@ -26,6 +26,15 @@ RUST_RESOURCE = (
             "x = 0  # using default value for the lane count",
             "# using default value for the lane count",
         ),
+        # The Mojo and Rust generators label their preludes with the plural.
+        (
+            "# CrossGL synchronization placeholders\nfn barrier():\n    pass",
+            "# CrossGL synchronization placeholders",
+        ),
+        (
+            "// CrossGL mesh/task placeholders\nfn set_mesh_output_counts() {}",
+            "// CrossGL mesh/task placeholders",
+        ),
     ],
 )
 def test_a_comment_that_marks_a_loss_is_a_placeholder(source, expected):

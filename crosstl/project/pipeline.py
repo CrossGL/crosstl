@@ -35,6 +35,7 @@ from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
 )
+from crosstl.backend.Metal.bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from crosstl.backend.Metal.deduction_operand_types import (
     is_unary_sign_position,
     operand_expression_type,
@@ -72,6 +73,7 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project import preprocessed_locations
 from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -99,6 +101,7 @@ from crosstl.project.dispatch_planning import (
     DispatchArtifactPlanError,
     plan_dispatch_artifacts,
 )
+from crosstl.project.glsl_entry_split import host_sizes_unit, per_entry_split
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -107,6 +110,10 @@ from crosstl.project.host_reflection import (
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
+)
+from crosstl.project.metal_source_scans import (
+    next_identifier_scan_stop,
+    next_statement_scan_stop,
 )
 from crosstl.project.namespace_alias_scopes import (
     alias_visible_at,
@@ -10403,10 +10410,17 @@ class _ProjectTranslationCheckpointRun:
 def _regular_project_translation_jobs(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
+    target: str | None = None,
 ) -> Iterator[_ProjectArtifactTranslationJob]:
-    entry_points: tuple[str | None, ...] = _resolved_entry_points_for_unit(
-        config, unit
-    ) or (None,)
+    entry_points: tuple[str | None, ...] = (
+        _resolved_entry_points_for_unit(config, unit)
+        or (
+            per_entry_split(unit, target)
+            if target is not None and not host_sizes_unit(config, unit)
+            else ()
+        )
+        or (None,)
+    )
     for variant, defines in _variant_jobs(config):
         for entry_point in entry_points:
             yield _ProjectArtifactTranslationJob(
@@ -10545,7 +10559,7 @@ def _project_translation_jobs_for_target(
 ) -> Iterator[_ProjectArtifactTranslationJob]:
     artifacts = dispatch_artifacts.get(unit.relative_path, ())
     if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
-        return _regular_project_translation_jobs(config, unit)
+        return _regular_project_translation_jobs(config, unit, target)
     return _dispatch_project_translation_jobs(config, unit.relative_path, artifacts)
 
 
@@ -12392,6 +12406,8 @@ def _project_workgroup_rule_execution_metadata(
         provenance = fallback_provenance
     else:
         return None
+    target_split_entries: tuple[str, ...] = ()
+    host_names: list[str] = []
     contract_details: dict[str, Any] = {"path": provenance["path"]}
     if fallback_source_pattern is not None and fallback_components is not None:
         contract_details.update(
@@ -12423,8 +12439,13 @@ def _project_workgroup_rule_execution_metadata(
         ]
         # Split artifacts retain one materialization, but rule coverage belongs
         # to the source's complete project selection, including sibling jobs.
+        # When the target holds one entry per artifact (glsl_entry_split), the
+        # siblings are every discovered entry of the unit.
+        selected_entry_points = _resolved_entry_points_for_unit(config, unit)
+        if entry_scoped and not selected_entry_points:
+            target_split_entries = per_entry_split(unit, target)
         rule_entry_points = (
-            _resolved_entry_points_for_unit(config, unit) or host_names
+            selected_entry_points or target_split_entries or host_names
             if entry_scoped
             else host_names
         )
@@ -12448,6 +12469,18 @@ def _project_workgroup_rule_execution_metadata(
                 },
                 materialization_details={"hostNames": sorted(rule_entry_points)},
             )
+    if (
+        target_split_entries
+        and fallback_components is None
+        and host_names
+        and not any(
+            _configured_entry_workgroup_size_rule(config, unit.relative_path, name)
+            for name in host_names
+        )
+    ):
+        # A one-entry artifact of a target split whose entry no rule names keeps
+        # the size the source or the host gives it, as an unconfigured unit does.
+        return None
     joined = _workgroup_materialization_join(
         stages=stages,
         materialization=materialization,
@@ -14190,12 +14223,39 @@ def _is_template_hostile_target(target: str) -> bool:
 def _metal_preprocess_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
-    return memoized_preprocessor_run(
+    text = memoized_preprocessor_run(
         preprocessor,
         code,
         file_path=file_path,
         source_backend="metal",
         run=_expand_metal_without_template_materialization,
+    )
+    _record_metal_line_origins(preprocessor, code, text, file_path=file_path)
+    return text
+
+
+def _record_metal_line_origins(
+    preprocessor: Any, code: str, text: str, *, file_path: str
+) -> None:
+    """Record where each line of ``text`` comes from, so that diagnostics found
+    in it name the line the user wrote. The run reads ``code`` without its
+    leading compiler diagnostics, which moves every line of the unit itself."""
+    origins = list(getattr(preprocessor, "line_origins", None) or ())
+    if not origins:
+        return
+    source = preprocessor._strip_leading_compiler_diagnostics(code)
+    shift = code[: len(code) - len(source)].count("\n") if code.endswith(source) else 0
+
+    def shifted(origin: Any) -> Any:
+        if origin is None or not shift:
+            return origin
+        path, line, site = origin
+        if site is None:
+            return (path, line + shift, None) if path == file_path else origin
+        return (path, line, shifted(site))
+
+    preprocessed_locations.record_preprocessed_text(
+        file_path, code, text, [shifted(origin) for origin in origins]
     )
 
 
@@ -15115,7 +15175,7 @@ def _metal_find_implicit_template_function_calls(
                 i = end + 2
                 continue
             if not (body[i].isalpha() or body[i] == "_"):
-                i += 1
+                i = next_identifier_scan_stop(body, i + 1, len(body))
                 continue
             ident, consumed = preprocessor._read_identifier(body, i)
             if preprocessor._is_member_identifier_context(body, i):
@@ -15193,6 +15253,20 @@ class _MetalMaterializationTypeEnvironmentCache:
     ) = None
     struct_fields_by_name: dict[str, dict[str, str]] | None = None
     lexical_scopes: list[tuple[int, int]] | None = None
+    # The whole scoped statement scan of each function body, by body span, of ``statement_scan_source``.
+    statement_scans: dict[tuple[int, int], list[tuple[int, int]]] = field(
+        default_factory=dict
+    )
+    statement_scan_source: str | None = None
+
+    def statement_scans_of(
+        self, source: str
+    ) -> dict[tuple[int, int], list[tuple[int, int]]]:
+        """The statement scans of ``source``, dropping any kept for other text."""
+        if self.statement_scan_source is not source:
+            self.statement_scans = {}
+            self.statement_scan_source = source
+        return self.statement_scans
 
 
 @dataclass
@@ -16657,6 +16731,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
     paren_depth = bracket_depth = angle_depth = brace_depth = 0
     i = start
     while i < end:
+        i = next_statement_scan_stop(source, i, end)
+        if i >= end:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16712,15 +16789,53 @@ def _metal_scoped_statement_spans(
     end: int,
     position: int,
     lexical_scopes: Sequence[tuple[int, int]] | None = None,
+    scans: dict[tuple[int, int], list[tuple[int, int]]] | None = None,
 ) -> list[tuple[int, int]]:
+    """The statements of ``source[start:end]`` that end by ``position`` in a scope open at ``position``.
+
+    The scan runs left to right and its state at a character depends only on the characters before it, so the
+    statements a scan up to ``position`` finds are those of the whole range that end by ``position``. ``scans``
+    keeps each range's whole scan, so that the calls for several positions in one function scan it once.
+    """
     if lexical_scopes is None:
         lexical_scopes = preprocessor._find_lexical_brace_scopes(source)
+    if scans is None:
+        spans = _metal_scoped_statement_scan(source, start, min(end, position))
+    else:
+        whole = scans.get((start, end))
+        if whole is None:
+            whole = scans[(start, end)] = _metal_scoped_statement_scan(
+                source, start, end
+            )
+        spans = [span for span in whole if span[1] <= position]
+    active_scopes = {
+        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
+    }
+    return [
+        span
+        for span in spans
+        if preprocessor._innermost_lexical_scope(
+            lexical_scopes,
+            span[0],
+            len(source),
+        )
+        in active_scopes
+    ]
+
+
+def _metal_scoped_statement_scan(
+    source: str, start: int, stop: int
+) -> list[tuple[int, int]]:
+    """The statement spans of ``source[start:stop]``; a block statement starts a new statement scan boundary."""
     spans: list[tuple[int, int]] = []
     statement_start = start
     paren_depth = bracket_depth = 0
     statement_scope_stack: list[bool] = []
     i = start
-    while i < min(end, position):
+    while i < stop:
+        i = next_statement_scan_stop(source, i, stop)
+        if i >= stop:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16790,20 +16905,7 @@ def _metal_scoped_statement_spans(
             if closes_statement_scope:
                 statement_start = i + 1
         i += 1
-
-    active_scopes = {
-        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
-    }
-    return [
-        span
-        for span in spans
-        if preprocessor._innermost_lexical_scope(
-            lexical_scopes,
-            span[0],
-            len(source),
-        )
-        in active_scopes
-    ]
+    return spans
 
 
 def _read_metal_string_for_project(source: str, start: int) -> tuple[str, int]:
@@ -17644,6 +17746,7 @@ def _metal_function_type_environment(
                 if cache is not None and cache.lexical_scopes is not None
                 else None
             ),
+            cache.statement_scans_of(source) if cache is not None else None,
         )
     )
     for start, end in statement_spans:
@@ -18207,6 +18310,11 @@ class _SpanLookup:
         self._spans = merged
         self._starts = [start for start, _end in merged]
 
+    def next_start(self, position: int, default: int) -> int:
+        """The start of the first span that starts at or after ``position``, else ``default``."""
+        index = bisect.bisect_left(self._starts, position)
+        return self._starts[index] if index < len(self._starts) else default
+
     def containing(self, position: int) -> tuple[int, int] | None:
         index = bisect.bisect_right(self._starts, position) - 1
         if index < 0:
@@ -18254,7 +18362,11 @@ def _metal_template_reference_names(
                 i = min(excluded_span[1], scan_end)
                 continue
             if not (source[i].isalpha() or source[i] == "_"):
-                i += 1
+                # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+                i = min(
+                    next_identifier_scan_stop(source, i + 1, scan_end),
+                    excluded.next_start(i + 1, scan_end),
+                )
                 continue
 
             ident, consumed = preprocessor._read_identifier(source, i)
@@ -18413,7 +18525,11 @@ def _plain_template_helper_call_sites(
                 )
                 i = paren_end + 1
                 continue
-            i += 1
+            # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+            i = min(
+                next_identifier_scan_stop(source, i + 1, scan_end),
+                excluded.next_start(i + 1, scan_end),
+            )
     return calls
 
 
@@ -22675,6 +22791,7 @@ def _project_template_materialization_for_artifact(
         if cached is not None:
             return cached
         preprocessor._configure_integral_constant_contracts(preprocessed)
+        preprocessed = expand_bool_dispatch_callbacks(preprocessor, preprocessed)
         preprocessed = _canonicalize_metal_struct_template_aliases(
             preprocessor,
             preprocessed,
@@ -25719,6 +25836,20 @@ def _metal_template_parameter_name(parameter: str) -> str | None:
 def _source_location_at_offset(
     unit: ProjectTranslationUnit, text: str, offset: int, length: int
 ) -> SourceLocation:
+    span = preprocessed_locations.source_span(
+        str(unit.path), unit.relative_path, text, offset, length
+    )
+    if span is not None:
+        return SourceLocation(
+            file=span.file,
+            line=span.line,
+            column=span.column,
+            offset=span.offset,
+            length=span.end_offset - span.offset,
+            end_line=span.end_line,
+            end_column=span.end_column,
+            end_offset=span.end_offset,
+        )
     prefix = text[:offset]
     line = prefix.count("\n") + 1
     previous_newline = prefix.rfind("\n")
@@ -27084,7 +27215,7 @@ def _materialize_crossgl_specialization_constants(
             ),
         )
     try:
-        ast = cgl_spec.parse(source, source_options={"strict_function_bodies": True})
+        ast = cgl_spec.parse(source)
     except Exception as exc:
         raise ProjectSpecializationError(
             f"CrossGL specialization intermediate could not be parsed: {exc}",
@@ -27174,7 +27305,7 @@ def _materialize_crossgl_specialization_constants(
                 diagnostic.message, diagnostics=(diagnostic,)
             )
     try:
-        cgl_spec.parse(materialized, source_options={"strict_function_bodies": True})
+        cgl_spec.parse(materialized)
     except Exception as exc:
         diagnostic = ProjectDiagnostic(
             severity="error",
@@ -27219,7 +27350,6 @@ def _entry_scoped_specialization_names(
             intermediate = reverse_codegen.generate(source_ast)
             crossgl_ast = cgl_spec.parse(
                 intermediate,
-                source_options={"strict_function_bodies": True},
             )
         return _entry_scoped_specialization_names_from_crossgl_ast(
             crossgl_ast, entry_point, target
@@ -27625,9 +27755,6 @@ def _crossgl_ast_for_project_target(
 
     ast = cgl_spec.parse(
         intermediate,
-        source_options={
-            "strict_function_bodies": True,
-        },
     )
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
@@ -29969,7 +30096,7 @@ def _translate_project_impl(
                         translation_defines = (
                             defines if unit.source_backend in {"cgl", "crossgl"} else {}
                         )
-                        translation_source_options = {"strict_function_bodies": True}
+                        translation_source_options = {}
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),

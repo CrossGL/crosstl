@@ -16,11 +16,11 @@ graphics triad expresses this per sample:
 
 CrossGL spells the clamp after every other operand except a bias, in GL_ARB_sparse_texture_clamp order::
 
-    textureClamp(t[, s], P, clamp[, bias])           textureCompareClamp(t[, s], P, ref, clamp)
+    textureClamp(t[, s], P, clamp[, bias])           textureCompareClamp(t[, s], P, ref, clamp[, bias])
     textureOffsetClamp(t[, s], P, offset, clamp[, bias])
     textureGradClamp(t[, s], P, dPdx, dPdy, clamp)  textureCompareGradClamp(t[, s], P, ref, dPdx, dPdy, clamp)
     textureGradOffsetClamp(t[, s], P, dPdx, dPdy, offset, clamp)
-    textureCompareOffsetClamp(t[, s], P, ref, offset, clamp)
+    textureCompareOffsetClamp(t[, s], P, ref, offset, clamp[, bias])
     textureCompareGradOffsetClamp(t[, s], P, ref, dPdx, dPdy, offset, clamp)
 
 Each operation is its unclamped counterpart (``texture``, ``textureOffset``, ... ``textureCompareGradOffset``)
@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from ..ast import FunctionCallNode, IdentifierNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import TargetRefusal
 
 __all__ = [
     "GLSL_LOD_CLAMP_EXTENSION",
@@ -93,13 +94,16 @@ TEXTURE_LOD_CLAMP_FORMS = {
             gradient=True,
             offset=True,
         ),
-        TextureLodClampForm("textureCompareClamp", "textureCompare", 1, compare=True),
+        TextureLodClampForm(
+            "textureCompareClamp", "textureCompare", 1, compare=True, accepts_bias=True
+        ),
         TextureLodClampForm(
             "textureCompareOffsetClamp",
             "textureCompareOffset",
             2,
             compare=True,
             offset=True,
+            accepts_bias=True,
         ),
         TextureLodClampForm(
             "textureCompareGradClamp",
@@ -192,7 +196,7 @@ def split_texture_lod_clamp_call(backend_name, operation, args, explicit_sampler
     expected = [form.operands + 1] + ([form.operands + 2] if form.accepts_bias else [])
     if len(args) <= coordinate_index or len(trailing) not in expected:
         counts = " or ".join(str(coordinate_index + 1 + count) for count in expected)
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' accepts {counts} argument(s), got {len(args)}"
         )
     has_bias = len(trailing) == form.operands + 2

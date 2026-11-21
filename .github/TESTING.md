@@ -20,13 +20,18 @@ touches Metal or Direct3D.
   - Path-filtered demo workflows for the files they cover.
 - **Merge queue tier.** The `merge_group` event runs each gating workflow once
   more on the exact commit that will land on `main`. That run covers every
-  supported Python version (3.11 through 3.15) and the MLX smoke job. The full
-  MLX native, parity, corpus and host tier runs in the queue only when the
-  group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
-  to `main`. A pull request merges only when this run passes.
+  supported Python version (3.11 through 3.15) once: the Complete Test Suite
+  runs every test on Python 3.12, and the translator and backend workflows run
+  their whole suites on the other versions. It also runs the MLX smoke job.
+  The full MLX native, parity, corpus and host tier runs in the queue only
+  when the group changes `demos/integrations/mlx/**` or the MLX workflow, as
+  for pushes to `main`. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
-  backend, complete, examples and conformance workflows skip a push whose
-  commit already passed the merge queue, and run in full for any other commit.
+  backend, complete and examples workflows skip a push whose commits already
+  passed the merge queue, and run in full for any other commit. Conformance,
+  the corpus and ComputeSharp report no required check, so they do not run in
+  the merge queue: conformance and ComputeSharp test the push to `main`, and
+  the corpus tests `main` nightly.
   The MLX tier, conformance, the corpus and coverage also run nightly, and
   fuzzing runs weekly.
 
@@ -57,6 +62,14 @@ The merge queue requires:
 A gating workflow runs on every pull request and uses a planning job, not a
 `paths` filter, to skip work, so its `result` job always reports.
 
+GitHub starts no `pull_request` workflow when the message of the head commit
+contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]` or
+`[actions skip]`. Such a pull request reports none of the required checks and
+cannot join the merge queue. Starting the workflows with `gh workflow run`
+does not help, because a dispatched run does not report into the pull request.
+Push a commit without the marker instead. When the branch is behind `main`,
+`gh pr update-branch <number>` makes one by merging `main` into it.
+
 ## Workflows
 
 | Workflow | Checks |
@@ -68,7 +81,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main` |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
-| `computesharp.yml` | The ComputeSharp port, on Metal and OpenGL; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
+| `computesharp.yml` | The ComputeSharp port: the upstream tests on Direct3D WARP on Windows as the baseline, and the translated tests on Metal on macOS and on Mesa OpenGL on Linux; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
 | `conformance.yml` | Differential execution of `tests/conformance`; Linux on pull requests, all three platforms on `main` and nightly |
 | `corpus.yml` | The pinned third-party corpus in `tests/conformance/corpus` |
 | `fuzz.yml` | Weekly crash fuzzing of every importer |
@@ -76,7 +89,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `docs.yml` | The Sphinx documentation build, which fails on any warning |
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
-| `pull-request-labels.yml` | When a pull request's Coverage run starts, on every push to `main`, and hourly: labels each open pull request that has none from the paths it changes |
+| `pull-request-labels.yml` | When a pull request's Coverage run starts, and hourly: labels each open pull request that has none from the paths it changes |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
 | `orphaned-runs.yml` | On every merge group, then every 5 minutes while the queue has groups: cancels the runs of merge groups the queue has discarded, the runs of pull requests that merged or closed, and merge-group runs that already have a failed job, so the queue drops a failing entry without waiting for its slowest leg (`tools/orphaned_runs.py`) |
 
@@ -87,7 +100,8 @@ toolchain pins and timeouts.
 
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
-| Backend, translator and example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Backend and translator tests | Python 3.11, 3.13, 3.14 and 3.15, with 3.12 in the complete suite (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
 | Complete core and demo unit suite | Required | Covered by focused platform jobs | Covered by focused platform jobs |
 | Complete DirectX demo corpus compilation | Pinned Linux DXC | Native execution | Not required |
 | Direct3D execution and host integration | Not applicable | Required WARP and dispatch checks | Not applicable |

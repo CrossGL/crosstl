@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 
+from crosstl.translator.refusals import MetalSourceRefusal
+
 from ...translator.float_limit_constants import float_limit_constant
 from ...translator.standard_constants import standard_math_constant
 
@@ -110,7 +112,7 @@ def round_to_format(decimal: str, metal_type: str) -> Fraction:
     significand_bits, min_exponent, max_exponent = _FORMATS[metal_type]
     value = Fraction(decimal)
     if value <= 0:
-        raise ValueError(f"{decimal} is not a positive constant")
+        raise MetalSourceRefusal(f"{decimal} is not a positive constant")
     exponent = max(_exponent(value), min_exponent)
     quantum = Fraction(2) ** (exponent - (significand_bits - 1))
     quotient = value / quantum
@@ -121,7 +123,7 @@ def round_to_format(decimal: str, metal_type: str) -> Fraction:
     rounded = whole * quantum
     largest = (2 - Fraction(2) ** (1 - significand_bits)) * Fraction(2) ** max_exponent
     if rounded > largest:
-        raise ValueError(f"{decimal} overflows {metal_type}")
+        raise MetalSourceRefusal(f"{decimal} overflows {metal_type}")
     return rounded
 
 
@@ -130,7 +132,7 @@ def _literal(value: Fraction) -> str:
     # the shortest decimal that reads back as that double, hence as that float.
     as_float = float(value)
     if Fraction(as_float) != value:
-        raise ValueError(f"{value} is not exact as a double")
+        raise MetalSourceRefusal(f"{value} is not exact as a double")
     text = repr(as_float)
     return text if any(mark in text for mark in ".e") else f"{text}.0"
 

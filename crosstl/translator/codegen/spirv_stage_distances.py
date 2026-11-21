@@ -11,6 +11,7 @@ is refused.
 
 from __future__ import annotations
 
+from ..refusals import VulkanRefusal
 from .stage_distance_layout import DistanceLayout, distance_layout
 
 __all__ = [
@@ -61,7 +62,7 @@ def entry_point_distance_variable(codegen, builtin, size, storage_class):
     builtin_name, capability = _BUILTINS[builtin]
     execution_model = codegen.current_execution_model
     if execution_model not in _STAGES[storage_class]:
-        raise ValueError(
+        raise VulkanRefusal(
             f"SPIR-V {builtin} is not a {storage_class.lower()} of the "
             f"{execution_model or 'current'} stage"
         )
@@ -72,7 +73,7 @@ def entry_point_distance_variable(codegen, builtin, size, storage_class):
             codegen.variable_value_types.get(existing.id)
         )
         if declared is not None and declared[1] != size:
-            raise ValueError(
+            raise VulkanRefusal(
                 f"SPIR-V {builtin} is declared with {declared[1]} elements and with {size}"
             )
         codegen.mark_builtin_interface_variable(existing)

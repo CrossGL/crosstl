@@ -12,6 +12,7 @@ through their access mode.
 
 from __future__ import annotations
 
+from ..refusals import WGSLRefusal
 from .wgsl_parameter_lowering import lvalue_root
 
 READ_ONLY_QUALIFIERS = frozenset({"uniform", "const", "constant"})
@@ -50,7 +51,7 @@ def validate_writable_module_root(codegen, target, action="write '{name}'"):
         return
     if codegen.is_local_identifier(name) or codegen.is_current_parameter_name(name):
         return
-    raise ValueError(
+    raise WGSLRefusal(
         f"WGSL target cannot {action.format(name=name)}: it is a module-scope "
         "uniform or constant, which WGSL makes read-only"
     )

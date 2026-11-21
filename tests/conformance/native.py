@@ -19,6 +19,12 @@ FILES = ("input.bin", "output.bin")
 CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
 
+# The Metal Shading Language version of every Metal compile: ``xcrun metal -std=metal3.1`` offline and
+# ``MTLCompileOptions.languageVersion`` in the driver. Left unset, the driver picks its own default, which is the
+# newest version on an Apple GPU but older than 3.1 on the Apple Paravirtual device of hosted macOS runners, so one
+# artifact compiled under two languages. MSL 3.1 is the first with ``bfloat`` (MSL specification section 2.1).
+METAL_LANGUAGE_VERSION = (3, 1)
+
 
 class DriverRejected(RuntimeError):
     """The driver's own compiler or pipeline creation refused an artifact the offline checker accepted."""
@@ -61,6 +67,12 @@ def _constants(job, *kinds):
     return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
+def metal_language_version(metal):
+    """``METAL_LANGUAGE_VERSION`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
+    major, minor = METAL_LANGUAGE_VERSION
+    return getattr(metal, f"MTLLanguageVersion{major}_{minor}", major << 16 | minor)
+
+
 def execute_metal(job):
     import Metal
 
@@ -69,6 +81,7 @@ def execute_metal(job):
         raise RuntimeError("No Metal device")
     identity = _expect(job, str(device.name()))
     options = Metal.MTLCompileOptions.new()
+    options.setLanguageVersion_(metal_language_version(Metal))
     strict = job["config"] == "strict"
     options.setMathMode_(Metal.MTLMathModeSafe if strict else Metal.MTLMathModeFast)
     options.setMathFloatingPointFunctions_(

@@ -3,6 +3,8 @@
 import re
 from typing import Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import MojoSyntaxError
+
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 TRIPLE_STRING_PREFIXES = {
@@ -67,8 +69,8 @@ TOKENS = tuple(
             r"0[xX](?=[0-9a-fA-F_]*[0-9a-fA-F])[0-9a-fA-F_]+|"
             r"0[bB](?=[01_]*[01])[01_]+|"
             r"0[oO](?=[0-7_]*[0-7])[0-7_]+|"
-            r"((\d[\d_]*)?\.\d[\d_]*|\d[\d_]*\.|\d[\d_]*)[eE][+-]?\d[\d_]*|"
-            r"(\d[\d_]*)?\.\d[\d_]*|\d[\d_]*\.|\d[\d_]*",
+            r"(\d[\d_]*\.\d[\d_]*|(?<!\.)\.\d[\d_]*|\d[\d_]*\.(?!\.))([eE][+-]?\d[\d_]*)?|"
+            r"\d[\d_]*([eE][+-]?\d[\d_]*)?",
         ),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -203,13 +205,13 @@ class MojoLexer:
                     indent_stack.append(indent_width)
                     yield ("INDENT", indent_text)
                 else:
-                    raise SyntaxError("Inconsistent Mojo indentation")
+                    raise MojoSyntaxError("Inconsistent Mojo indentation")
 
             pos = len(indent_text)
             while pos < len(line):
                 token = self._next_token(line, pos)
                 if token is None:
-                    raise SyntaxError(
+                    raise MojoSyntaxError(
                         f"Illegal character '{line[pos]}' at position {pos}"
                     )
                 new_pos, token_type, text = token
@@ -261,7 +263,7 @@ class MojoLexer:
                 if code[pos : pos + 1] in {'"', "'"}:
                     body_end = self._find_simple_string_end(code, pos + 1, code[pos])
                     if body_end is None:
-                        raise SyntaxError("Unterminated Mojo string literal")
+                        raise MojoSyntaxError("Unterminated Mojo string literal")
                     pieces.append(code[pos : body_end + 1])
                     pos = body_end + 1
                     continue
@@ -276,7 +278,9 @@ class MojoLexer:
                         interpolation="t" in prefix.lower(),
                     )
                     if body_end is None:
-                        raise SyntaxError("Unterminated Mojo prefixed string literal")
+                        raise MojoSyntaxError(
+                            "Unterminated Mojo prefixed string literal"
+                        )
                     pieces.append(code[pos : body_end + 1])
                     pos = body_end + 1
                     continue
@@ -290,7 +294,7 @@ class MojoLexer:
             body_start = pos + len(prefix) + len(quote)
             body_end = code.find(quote, body_start)
             if body_end == -1:
-                raise SyntaxError("Unterminated Mojo triple-quoted string literal")
+                raise MojoSyntaxError("Unterminated Mojo triple-quoted string literal")
 
             literal_source = code[pos : body_end + len(quote)]
             if self._is_standalone_triple_string(code, pos, prefix):
@@ -371,7 +375,7 @@ class MojoLexer:
             if code[pos : pos + 1] in {'"', "'"}:
                 body_end = self._find_simple_string_end(code, pos + 1, code[pos])
                 if body_end is None:
-                    raise SyntaxError("Unterminated Mojo string literal")
+                    raise MojoSyntaxError("Unterminated Mojo string literal")
                 pieces.append(code[pos : body_end + 1])
                 pos = body_end + 1
                 continue
@@ -390,7 +394,7 @@ class MojoLexer:
                 interpolation="t" in prefix.lower(),
             )
             if body_end is None:
-                raise SyntaxError("Unterminated Mojo prefixed string literal")
+                raise MojoSyntaxError("Unterminated Mojo prefixed string literal")
 
             body = code[body_start:body_end]
             pieces.append(f'{prefix}"{self._escape_simple_string_body(body)}"')
@@ -468,7 +472,7 @@ class MojoLexer:
         body_start = pos + len(prefix) + 1
         body_end = self._find_simple_string_end(code, body_start, quote)
         if body_end is None:
-            raise SyntaxError("Unterminated Mojo nested string literal")
+            raise MojoSyntaxError("Unterminated Mojo nested string literal")
         return body_end + 1
 
     def _find_simple_string_end(self, code: str, pos: int, quote: str) -> Optional[int]:

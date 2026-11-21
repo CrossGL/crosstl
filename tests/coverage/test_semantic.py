@@ -1,3 +1,6 @@
+import re
+import shutil
+import subprocess
 from collections import Counter
 
 import pytest
@@ -67,6 +70,17 @@ def test_identify_subtracts_the_baseline_and_the_plumbing():
         {"OpLoad": 3, "OpStore": 1, "OpIAdd": 2, "OpKill": 1, "OpUnreachable": 1}
     )
     assert semantic.identify(killed, baseline) == "OpKill"
+    # A switch is control flow too: spirv_std matches the intersection type a ray query returns.
+    matched = Counter(
+        {
+            "OpLoad": 3,
+            "OpStore": 1,
+            "OpIAdd": 2,
+            "OpRayQueryGetIntersectionTypeKHR": 1,
+            "OpSwitch": 1,
+        }
+    )
+    assert semantic.identify(matched, baseline) == "OpRayQueryGetIntersectionTypeKHR"
 
 
 def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeypatch):
@@ -142,6 +156,118 @@ def test_instructions_keep_the_operands_that_change_the_operation():
     assert found["OpControlBarrier(2,2,264)"] == 1
     assert found["OpGroupNonUniformIAdd.ExclusiveScan"] == 1
     assert found["OpGroupNonUniformAll"] == 1
+
+
+def test_without_aliases_a_khr_vote_keeps_its_own_name():
+    found = semantic.instructions(BARRIERS, aliases=False)
+    assert found["OpSubgroupAllKHR"] == 1 and "OpGroupNonUniformAll" not in found
+    # The other tokens do not depend on the aliases.
+    assert found["OpControlBarrier(2,2,264)"] == 1
+    assert semantic.canonical("OpSubgroupAnyKHR") == "OpGroupNonUniformAny"
+    assert semantic.canonical("OpGroupNonUniformAny") == "OpGroupNonUniformAny"
+
+
+# HLSL's WaveMultiPrefixSum and GLSL's subgroupPartitionedAddNV, as DXC and glslang write them; an older SPIRV-Tools
+# prints the group operation with the NV suffix.
+PARTITIONED = """
+          %4 = OpFunction %3 None %5
+         %30 = OpGroupNonUniformFAdd %float %20 PartitionedExclusiveScanEXT %31 %32
+         %33 = OpGroupNonUniformFAdd %float %20 PartitionedReduceNV %31 %32
+         %34 = OpGroupNonUniformFAdd %float %20 Reduce %31
+               OpFunctionEnd
+"""
+
+
+def test_a_partitioned_operation_is_not_the_one_over_the_whole_subgroup():
+    found = semantic.instructions(PARTITIONED)
+    assert sorted(token for token in found if "NonUniform" in token) == [
+        "OpGroupNonUniformFAdd.PartitionedExclusiveScanEXT",
+        "OpGroupNonUniformFAdd.PartitionedReduceEXT",
+        "OpGroupNonUniformFAdd.Reduce",
+    ]
+
+
+def test_hlsl_reordering_shares_the_id_of_the_spirv_reorder_instruction():
+    reorder = Feature("hlsl", "function", "dx::MaybeReorderThread", None)
+    assert semantic.lower(reorder) == ("OpReorderThreadWithHintEXT", "")
+
+
+# The arguments of each GLSL function's call in the SPIRV-Cross check: ``x`` is a float and ``u`` a uint.
+_TWIN_ARGUMENTS = {
+    "subgroupAnd": "u",
+    "subgroupOr": "u",
+    "subgroupXor": "u",
+    "subgroupElect": "",
+    "subgroupBroadcast": "x, 3u",
+    "subgroupShuffle": "x, u",
+    "subgroupShuffleXor": "x, 1u",
+    "subgroupShuffleUp": "x, 1u",
+    "subgroupShuffleDown": "x, 1u",
+    "subgroupRotate": "x, 1u",
+    "subgroupQuadBroadcast": "x, 1u",
+    "subgroupQuadAll": "u > 1u",
+    "subgroupQuadAny": "u > 1u",
+}
+_TWIN_SHADER = """#version 460
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_vote : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+#extension GL_KHR_shader_subgroup_shuffle_relative : enable
+#extension GL_KHR_shader_subgroup_quad : enable
+#extension GL_KHR_shader_subgroup_rotate : enable
+#extension GL_EXT_shader_quad_control : enable
+layout(local_size_x = 32) in;
+layout(std430, binding = 0) buffer Data { float f[32]; uint w[32]; float r[32]; };
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    float x = f[i];
+    uint u = w[i];
+    r[i] = float(CALL);
+}
+"""
+
+
+@pytest.mark.skipif(
+    not (shutil.which("glslangValidator") and shutil.which("spirv-cross")),
+    reason="glslangValidator or spirv-cross is missing",
+)
+@pytest.mark.parametrize(
+    ("metal", "glsl"), sorted(semantic.CROSS_COMPILED["metal"].items())
+)
+def test_spirv_cross_writes_each_metal_function_for_its_glsl_twin(
+    tmp_path, metal, glsl
+):
+    call = f"{glsl}({_TWIN_ARGUMENTS.get(glsl, 'x')})"
+    source, binary = tmp_path / "twin.comp", tmp_path / "twin.spv"
+    source.write_text(_TWIN_SHADER.replace("CALL", call))
+    subprocess.run(
+        [
+            "glslangValidator",
+            "-V",
+            "--target-env",
+            "vulkan1.3",
+            str(source),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    msl = subprocess.run(
+        ["spirv-cross", str(binary), "--msl", "--msl-version", "30000"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    # SPIRV-Cross writes some calls through a helper of its own, as spvSubgroupBroadcast, which calls the Metal
+    # function; the output names that function and no other of the table's.
+    named = {
+        name
+        for name in semantic.CROSS_COMPILED["metal"]
+        if re.search(rf"\b{name}\(", msl)
+    }
+    assert named == {metal}, msl
 
 
 def slang(name, result, *params):

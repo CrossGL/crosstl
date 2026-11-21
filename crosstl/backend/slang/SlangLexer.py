@@ -3,6 +3,8 @@
 import re
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import SlangSyntaxError
+
 from .preprocessor import SlangPreprocessor
 
 # using sets for faster lookup
@@ -206,7 +208,7 @@ class SlangLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

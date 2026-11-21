@@ -309,9 +309,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "switch (++a) {",
             "switch (index) {",
-            "a += 10;",
             "outputBuffer[index] = a;",
         ],
+        # A statement before a switch's first case label never runs (C11 6.8.4.2/4).
+        "not_contains": ["a += 10;"],
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -490,13 +491,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "outer:",
-            "break outer;",
-            "break;",
-            "return result;",
-        ],
+        # CrossGL has no labeled break; the import is refused rather than written as text.
+        "refused": "'break outer' leaves an enclosing labeled statement",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1291,16 +1287,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct MyVec {",
-            "float x;",
-            "float y;",
-            "v.x = 5.0;",
-            "v.y = 9.0;",
-            'printf("%g\\n%g\\n", v[0], v[1]);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "FunctionNode("],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": "the __subscript of Slang structure 'MyVec' has no CrossGL form",
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1338,18 +1326,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct TestStruct {",
-            "float arr[5];",
-            "TestStruct ts;",
-            "ts.arr[2] = 20.0;",
-            "uint idx = 2;",
-            "float v0 = ts[int(2)];",
-            "float v1 = ts[idx];",
-            'printf("%g %g\\n", v0, v1);',
-        ],
-        "not_contains": ["__subscript", "operator[]", "where T"],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'TestStruct' has no CrossGL form"
+        ),
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1461,17 +1441,10 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "struct FixedArray {",
-            "int data[4];",
-        ],
-        "not_contains": [
-            "interface IIndexable",
-            ": IIndexable",
-            "__subscript",
-            "operator[]",
-        ],
+        # The __subscript was dropped, so ``value[i]`` indexed a structure; the import is refused instead.
+        "refused": (
+            "the __subscript of Slang structure 'FixedArray' has no CrossGL form"
+        ),
     },
     {
         "id": "slang_2026_dyn_interface_parameter_codegen_reparse",
@@ -2397,7 +2370,8 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2DMS tex;",
-            "return imageLoad(tex, 0.xx, 0).x;",
+            # ``0.xx`` is the literal 0 swizzled into an int2.
+            "return imageLoad(tex, ivec2(0), 0).x;",
         ],
         "not_contains": ["Expected COMMA or RPAREN"],
     },

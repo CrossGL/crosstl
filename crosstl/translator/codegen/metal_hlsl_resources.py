@@ -26,10 +26,12 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 from ..semantics.constant_buffers import constant_buffer_element
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
+    STD140_LAYOUT,
     STD430_LAYOUT,
     declared_buffer_layout,
     member_explicit_alignment,
@@ -202,6 +204,10 @@ class MetalHlslResourceMixin:
         ``std430`` or ``scalar``, and the element types of
         structured buffers marked ``@ buffer_layout(hlsl_structured)`` get Metal
         declarations with the exact member offsets of those layouts.
+
+        A constant buffer that declares no layout is a std140 block, as the GLSL and SPIR-V generators declare it
+        (GLSL 4.60 section 7.6.2.2); MSL's natural layout differs for ``vec3``, ``bool``, arrays and matrices (MSL
+        3.2 section 2.2). A constant buffer marked ``@ buffer_layout(metal)`` keeps the natural layout.
         """
         self.metal_hlsl_cbuffer_plans = {}
         self.metal_hlsl_struct_plans = {}
@@ -217,6 +223,8 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
             layout = self.metal_constant_block_layout(cbuffer, cbuffer.name)
+            if layout is None:
+                layout = STD140_LAYOUT
             if layout != HLSL_CBUFFER_LAYOUT and layout not in GLSL_BLOCK_LAYOUTS:
                 continue
             try:
@@ -292,7 +300,7 @@ class MetalHlslResourceMixin:
                 ) from exc
             previous = self.metal_hlsl_structured_buffers.get(node.name)
             if previous is not None and previous != storage:
-                raise ValueError(
+                raise MetalRefusal(
                     f"Cannot reproduce the {LAYOUT_LABELS[layout]} layouts of the structured buffers named "
                     f"'{node.name}' in Metal: they hold different element types"
                 )
@@ -516,14 +524,14 @@ class MetalHlslResourceMixin:
                     label, words = "HLSL structured-buffer", "words"
                 else:
                     label, words = LAYOUT_LABELS[layout], "words"
-                raise ValueError(
+                raise MetalRefusal(
                     f"Cannot store to part of {label} {kind} '{node.member}' "
                     f"in Metal: it is held as {words}"
                 )
             if isinstance(node, ArrayAccessNode):
                 storage = self.metal_hlsl_structured_buffer_storage(node.array)
                 if storage is not None and storage[0] in planner.matrix_storages:
-                    raise ValueError(
+                    raise MetalRefusal(
                         "Cannot store to part of a matrix element of HLSL structured buffer "
                         f"'{self.expression_name(node)}' in Metal: it is held as words"
                     )

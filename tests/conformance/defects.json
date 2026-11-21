@@ -1,0 +1,929 @@
+{
+  "schemaVersion": 1,
+  "source": "Defect audit of CrossTL 575bd374 (2026-10-16): 31 silent (S), 12 invalid-output (V) and 3 crash (X) defect classes",
+  "statuses": {
+    "fixed": "the construct now translates with its meaning; the cited cases, probes and tests prove it",
+    "refused": "the construct is refused with a typed diagnostic on the routes that cannot express it",
+    "open": "the defect still reproduces on main; note says what remains",
+    "unverified": "no current evidence either way; note says what must be checked"
+  },
+  "defects": [
+    {
+      "id": "S1",
+      "class": "silent",
+      "component": "Metal emitter (GLSL and HLSL sources)",
+      "summary": "signed + - * emitted as C++ operators, so Metal folds x + 1 > x",
+      "status": "fixed",
+      "cases": [
+        "g_add_wrap",
+        "g_mul_wrap",
+        "h_add_wrap",
+        "h_mul_wrap",
+        "s_add_wrap",
+        "s_mul_wrap"
+      ],
+      "targets": [
+        "metal"
+      ]
+    },
+    {
+      "id": "S2",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "isnan became an ordered self-compare of a constant; isinf, transpose and inverse became a neutral value with a WARNING comment",
+      "status": "fixed",
+      "cases": [
+        "g_isnan",
+        "m_isnan"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "probes": [
+        {
+          "source": "S2.comp",
+          "target": "vulkan",
+          "expect": "translated",
+          "present": [
+            "OpTranspose",
+            "MatrixInverse"
+          ],
+          "absent": [
+            "WARNING"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_SPIRV/test_codegen.py::test_spirv_cross_isnan_isinf_codegen_reparse"
+      ]
+    },
+    {
+      "id": "S3",
+      "class": "silent",
+      "component": "SPIR-V emitter (HLSL source)",
+      "summary": "for (k = s; k < s + 4; ++k) initialised k to 0 and re-tested s < s + 4, so the loop did not terminate",
+      "status": "fixed",
+      "cases": [
+        "h_loop_wrap",
+        "g_loop_wrap"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "exceptions": [
+        {
+          "cell": "g_loop_wrap|glsl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp",
+          "reason": "KosmicKrisp only: MoltenVK and lavapipe run the same SPIR-V module, which has no NoSignedWrap or NoUnsignedWrap decoration, and preserve the result"
+        },
+        {
+          "cell": "g_loop_wrap|glsl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp",
+          "reason": "KosmicKrisp only: MoltenVK and lavapipe run the same SPIR-V module, which has no NoSignedWrap or NoUnsignedWrap decoration, and preserve the result"
+        },
+        {
+          "cell": "h_loop_wrap|hlsl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp",
+          "reason": "KosmicKrisp only: MoltenVK and lavapipe run the same SPIR-V module, which has no NoSignedWrap or NoUnsignedWrap decoration, and preserve the result"
+        },
+        {
+          "cell": "h_loop_wrap|hlsl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp",
+          "reason": "KosmicKrisp only: MoltenVK and lavapipe run the same SPIR-V module, which has no NoSignedWrap or NoUnsignedWrap decoration, and preserve the result"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "class": "silent",
+      "component": "SPIR-V emitter (HLSL source)",
+      "summary": "precise was not lowered to NoContraction",
+      "status": "fixed",
+      "cases": [
+        "h_precise",
+        "g_precise",
+        "s_nocontraction"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_hlsl_precise_local_qualifier_reaches_spirv",
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_values_computed_into_other_locals_first_are_precise"
+      ],
+      "note": "NoContraction follows the data flow into every operation that contributes to a precise value (#4529), so h_precise, g_precise and s_nocontraction are preserved on lavapipe, MoltenVK and KosmicKrisp. The D3D12 WARP cells of these cases still diverge, the native HLSL reference included: WARP fuses DXC's unfused fmul and fsub, which is a property of the WARP JIT, not of the SPIR-V route."
+    },
+    {
+      "id": "S5",
+      "class": "silent",
+      "component": "WGSL emitter",
+      "summary": "precise dropped without a diagnostic, although WGSL cannot forbid contraction",
+      "status": "refused",
+      "probes": [
+        {
+          "source": "S5.hlsl",
+          "target": "wgsl",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_precise_evaluation.py::test_precise_local_is_refused_on_wgsl",
+        "tests/test_translator/test_precise_evaluation.py::test_targets_without_precise_evaluation_refuse_it"
+      ],
+      "note": "WGSL has no way to forbid contraction (WGSL section 15.7.5), so precise is refused with PreciseEvaluationUnsupportedError."
+    },
+    {
+      "id": "S6",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "8- and 16-bit integers widened to 32 bits without re-narrowing (255 + 1 = 256)",
+      "status": "fixed",
+      "cases": [
+        "m_uchar_wrap",
+        "u_uchar_wrap",
+        "c_uchar_wrap"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_integral_constant_types.py::test_conversions_to_narrow_types_wrap"
+      ]
+    },
+    {
+      "id": "S7",
+      "class": "silent",
+      "component": "SPIR-V and WGSL emitters",
+      "summary": "half arithmetic computed in binary32 without binary16 rounding",
+      "status": "fixed",
+      "cases": [
+        "m_half_mul",
+        "m_half_div",
+        "m_half_sqrt",
+        "m_half_fma",
+        "m_half_round"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "probes": [
+        {
+          "source": "S7.cgl",
+          "target": "wgsl",
+          "expect": "translated",
+          "present": [
+            "cgl_half_round\\(\\(a \\* b\\)\\)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S8",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "fmod lowered to OpFMod (sign of the divisor) instead of OpFRem",
+      "status": "fixed",
+      "cases": [
+        "m_fmod_sign"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_backend/test_SPIRV/test_floating_modulo.py::test_fmod_imports_as_floored_mod_and_frem_as_remainder"
+      ]
+    },
+    {
+      "id": "S9",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "fmin could not be lowered and stored the constant 0.0",
+      "status": "fixed",
+      "cases": [
+        "m_fmin_nan",
+        "u_fminf_nan",
+        "c_fmin_nan",
+        "h_min_nan"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_spirv_arithmetic_semantics.py::test_fmin_fmax_return_the_non_nan_operand"
+      ]
+    },
+    {
+      "id": "S10",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "mixed int < uint compared as signed",
+      "status": "fixed",
+      "cases": [
+        "m_cmp_mixed",
+        "g_cmp_mixed",
+        "h_cmp_mixed",
+        "u_cmp_mixed",
+        "c_cmp_mixed"
+      ],
+      "targets": [
+        "spirv"
+      ]
+    },
+    {
+      "id": "S11",
+      "class": "silent",
+      "component": "HLSL and SPIR-V emitters",
+      "summary": "matrix constructor and mul orientation transposed; float4x4(1.0) not the identity; SPIR-V mat4(1.0) zero-padded",
+      "status": "fixed",
+      "cases": [
+        "g_matrix_orientation",
+        "h_matrix_orientation",
+        "g_matrix_expression_columns",
+        "g_matrix_storage"
+      ],
+      "targets": [
+        "hlsl",
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_codegen/test_SPIRV_codegen.py::test_one_argument_matrix_constructors_follow_glsl_identity_rules"
+      ]
+    },
+    {
+      "id": "S12",
+      "class": "silent",
+      "component": "GLSL and WGSL emitters",
+      "summary": "long, ulong and size_t narrowed to 32 bits",
+      "status": "fixed",
+      "cases": [
+        "m_ulong_mul",
+        "u_u64_mul"
+      ],
+      "targets": [
+        "glsl"
+      ],
+      "probes": [
+        {
+          "source": "S12.metal",
+          "target": "opengl",
+          "expect": "translated",
+          "present": [
+            "GL_ARB_gpu_shader_int64",
+            "uint64_t o\\[\\]"
+          ]
+        },
+        {
+          "source": "S12.metal",
+          "target": "wgsl",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_integer_literals.py::test_glsl_narrowed_wide_literals_require_int64"
+      ]
+    },
+    {
+      "id": "S13",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "bfloat16 product not rounded back to bfloat16",
+      "status": "fixed",
+      "cases": [
+        "x_bfloat16_arithmetic"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_spirv_bfloat16_arithmetic.py::test_bfloat16_results_are_rounded_back_to_bfloat16"
+      ]
+    },
+    {
+      "id": "S14",
+      "class": "silent",
+      "component": "CUDA and HIP emitters",
+      "summary": "WaveActiveSum helper was a shuffle-down tree correct only in lane 0 and under full masks",
+      "status": "fixed",
+      "tests": [
+        "tests/test_translator/test_warp_wave_helpers.py"
+      ]
+    },
+    {
+      "id": "S15",
+      "class": "silent",
+      "component": "Metal importer",
+      "summary": "packed_float3 became vec3 or float3: element stride 12 became 16 bytes and struct offsets changed",
+      "status": "fixed",
+      "cases": [
+        "m_packed_float3",
+        "m_packed_struct",
+        "m_packed_mixed",
+        "m_packed_helper"
+      ],
+      "tests": [
+        "tests/test_translator/test_metal_packed_buffers.py::test_import_keeps_packed_members_no_other_layout_reproduces"
+      ]
+    },
+    {
+      "id": "S16",
+      "class": "silent",
+      "component": "Metal importer with SPIR-V and GLSL emitters",
+      "summary": "whole-file multi-kernel translation: the second kernel loses its entry status or bindings collide",
+      "status": "refused",
+      "note": "A GLSL compilation unit has one entry point per stage (GLSL 4.60 section 6.1). Whole-file GLSL translation of a program with two entries of one stage raises OpenGLRepeatedStageEntryError; translate with entry_point gives one artifact per entry, with its own bindings. SPIR-V, HLSL and Metal keep every entry in one module. Open M3 gap: HLSL keeps both kernels but moves the second one's buffer(0) to register(u1), and translate_with_metadata reports no HLSL bindings, so a host binding by the source slots binds the wrong buffer.",
+      "probes": [
+        {
+          "source": "S16.metal",
+          "target": "opengl",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_glsl_guarded_stage_entries.py"
+      ]
+    },
+    {
+      "id": "S17",
+      "class": "silent",
+      "component": "SPIR-V importer",
+      "summary": "OpLoad forwarded as a variable reference, so it read a later store",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S17.spvasm",
+          "target": "cgl",
+          "expect": "translated",
+          "present": [
+            "v = 1;\\s*int l = v;\\s*v = 2;\\s*out_\\[0\\]\\.member0 = l;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S18",
+      "class": "silent",
+      "component": "SPIR-V importer",
+      "summary": "sequential selection constructs flattened into unconditional stores",
+      "status": "fixed",
+      "cases": [
+        "s_structured_control_flow",
+        "s_structured_control_flow_phi"
+      ],
+      "tests": [
+        "tests/test_backend/test_SPIRV/test_structured_cfg_import.py::test_unstructured_control_flow_is_refused_for_every_target"
+      ]
+    },
+    {
+      "id": "S19",
+      "class": "silent",
+      "component": "HLSL importer",
+      "summary": "a helper named like a stage (assign...) became a task-stage entry",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S19.hlsl",
+          "target": "cgl",
+          "expect": "translated",
+          "present": [
+            "float assignValue\\(float x\\)",
+            "compute \\{"
+          ],
+          "absent": [
+            "\\btask\\b",
+            "amplification"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_directx/test_entry_stage_hints.py::test_helpers_with_stage_like_names_stay_helpers"
+      ]
+    },
+    {
+      "id": "S20",
+      "class": "silent",
+      "component": "GLSL importer",
+      "summary": "a loose std140 UBO lost its binding (3 became 0) and its block name",
+      "status": "fixed",
+      "cases": [
+        "g_constant_array_arguments",
+        "g_row_major_members",
+        "g_row_major_struct_members",
+        "g_std140_uniform",
+        "g_array_arguments",
+        "s_std140_uniform",
+        "h_cbuffer_packing",
+        "h_cbuffer_row_major",
+        "m_constant_struct"
+      ],
+      "probes": [
+        {
+          "source": "S20.comp",
+          "target": "cgl",
+          "expect": "translated",
+          "present": [
+            "cbuffer Params @binding\\(3\\) @buffer_layout\\(std140\\)"
+          ]
+        },
+        {
+          "source": "S20.comp",
+          "target": "directx",
+          "expect": "translated",
+          "present": [
+            "register\\(\\s*b3"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_GLSL/test_default_block_layouts.py::test_default_uniform_layout_does_not_reach_loose_uniforms"
+      ]
+    },
+    {
+      "id": "S21",
+      "class": "silent",
+      "component": "CUDA importer",
+      "summary": "__nv_bfloat16 imported as binary16 and size_t as a 32-bit integer",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S21.cu",
+          "target": "cgl",
+          "expect": "translated",
+          "present": [
+            "array<bfloat16>",
+            "\\bu64 n\\b|\\bn: u64\\b",
+            "var i: u64 = "
+          ],
+          "absent": [
+            "\\bf16\\b",
+            "__bfloat162float",
+            "\\bsize_t\\b"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_and_ptrdiff_t_import_as_64_bit",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_index_arithmetic_is_64_bit_on_metal_and_spirv",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_imports_as_bfloat16_with_its_conversions",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_buffers_keep_two_byte_elements",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_sizeof_operands_import_as_crossgl_types"
+      ],
+      "note": "size_t and ptrdiff_t import as u64 and i64 on CUDA and HIP; OpenGL refuses a 64-bit subscript rather than truncating it."
+    },
+    {
+      "id": "S22",
+      "class": "silent",
+      "component": "HIP importer",
+      "summary": "warpSize hard-coded to 32",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S22.hip",
+          "target": "cgl",
+          "expect": "translated",
+          "present": [
+            "= int\\(gl_SubgroupSize\\);"
+          ],
+          "absent": [
+            "= *32\\b"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_HIP/test_warp_width.py"
+      ]
+    },
+    {
+      "id": "S23",
+      "class": "silent",
+      "component": "CrossGL front end (lenient mode)",
+      "summary": "an unparseable function body was replaced by an empty block",
+      "status": "refused",
+      "probes": [
+        {
+          "source": "S23.cgl",
+          "target": "metal",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_function_body_parse_refusal.py::test_translating_a_program_with_an_unparseable_body_is_refused"
+      ]
+    },
+    {
+      "id": "S24",
+      "class": "silent",
+      "component": "WGSL emitter",
+      "summary": "if (c) return; (non-block body) emitted as if (c) {}",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S24.cgl",
+          "target": "wgsl",
+          "expect": "translated",
+          "present": [
+            "if \\(\\(c > 0\\)\\)\\s*\\{\\s*return;\\s*\\}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S25",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "loose uniforms became Private variables that the host cannot set",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "S25.comp",
+          "target": "vulkan",
+          "expect": "translated",
+          "present": [
+            "OpMemberName %\\w+ 0 \"scale\""
+          ],
+          "absent": [
+            "\\bPrivate\\b"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_spirv_default_uniforms.py::test_loose_uniforms_share_one_block_and_no_private_copy"
+      ]
+    },
+    {
+      "id": "S26",
+      "class": "silent",
+      "component": "Metal importer",
+      "summary": "the source-owned precise::pow wrapper calls the target pow for finite cases, 23.9 ulp under Apple's default options",
+      "status": "fixed",
+      "cases": [
+        "m_precise_pow"
+      ],
+      "tests": [
+        "tests/test_translator/test_metal_power.py::test_precise_power_runs_the_portable_power_over_the_normal_range",
+        "tests/test_translator/test_metal_power.py::test_power_executes_metal_subnormal_control"
+      ],
+      "note": "precise::pow now calls __crossgl_metal_precise_power_float, whose finite path is the fdlibm binary32 power over every normal result and overflow; only subnormal results and subnormal operands keep the target's pow, because flushing them is the target's choice. Before the fix m_precise_pow diverged on 9 of the 10 executed Metal, OpenGL and Vulkan cells: by up to 483 ulp between 2^-120 and 2^120, and by overflowing or vanishing at the ends of the range. After it every cell is within 1 ulp. An unqualified metal::pow keeps the target's pow unless the portable-finite profile is selected."
+    },
+    {
+      "id": "S27",
+      "class": "silent",
+      "component": "SPIR-V emitter",
+      "summary": "signed % emitted as OpSMod (sign of the divisor) instead of OpSRem",
+      "status": "fixed",
+      "cases": [
+        "u_srem_sign",
+        "m_srem_sign"
+      ],
+      "targets": [
+        "spirv"
+      ],
+      "tests": [
+        "tests/test_translator/test_wide_integer_arithmetic.py::test_glsl_signed_remainder_uses_truncating_division"
+      ]
+    },
+    {
+      "id": "S28",
+      "class": "silent",
+      "component": "CUDA importer",
+      "summary": "fmodf(x, y) became the floored mod(x, y)",
+      "status": "fixed",
+      "cases": [
+        "u_fmodf_sign"
+      ],
+      "tests": [
+        "tests/test_translator/test_codegen/test_CUDA_codegen.py::test_scalar_float_remainder_is_truncated_fmodf"
+      ]
+    },
+    {
+      "id": "S29",
+      "class": "silent",
+      "component": "Metal and CUDA single-file translation",
+      "summary": "the host-chosen work-group size became numthreads(1,1,1) or LocalSize 1 1 1, so subgroup collectives saw one lane",
+      "status": "open",
+      "cases": [
+        "u_warp_reduce",
+        "x_warp_vote",
+        "x_warp_sync_memory",
+        "m_simd_sum",
+        "m_simd_divergent"
+      ],
+      "note": "Single-file host-sized kernels now take the host's size from the threadgroup_size source option, or emit specialization constants (SPIR-V, GLSL) or macros (HLSL), and refuse where a size is required. CUDA warp shuffles, votes, reductions, __match_any_sync and __syncwarp no longer lower to wave operations, whose subgroup has 4 or 8 lanes on lavapipe: they are emulated per 32-lane warp through workgroup memory (u_warp_reduce and x_warp_vote are preserved on lavapipe, llvmpipe, MoltenVK, KosmicKrisp and Metal); __syncwarp and the CUDA and HIP __syncthreads fence all memory on each side of the workgroup barrier (x_warp_sync_memory), and __activemask and __match_all_sync are refused. Remaining: the WARP cells of u_warp_reduce need a fresh Windows run, and m_simd_sum and m_simd_divergent are driver-rejected on llvmpipe GL."
+    },
+    {
+      "id": "S30",
+      "class": "silent",
+      "component": "Metal emitter",
+      "summary": "a recursive __device__ function was emitted unchanged and hung the GPU",
+      "status": "refused",
+      "cases": [
+        "u_recursion"
+      ],
+      "probes": [
+        {
+          "source": "S30.cu",
+          "target": "metal",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_recursion_refusal.py::test_direct_recursion_from_cuda_is_refused"
+      ]
+    },
+    {
+      "id": "S31",
+      "class": "silent",
+      "component": "SPIR-V importer",
+      "summary": "GLSL.std.450 NMin and NMax imported as min and max, losing the NaN rule",
+      "status": "fixed",
+      "cases": [
+        "s_nmin_nan"
+      ],
+      "probes": [
+        {
+          "source": "S31.spvasm",
+          "target": "vulkan",
+          "expect": "translated",
+          "present": [
+            "NMin",
+            "OpSelect"
+          ]
+        }
+      ],
+      "tests": [
+        "tests/test_backend/test_SPIRV/test_nan_min_max_import.py::test_nmin_nmax_and_nclamp_import_as_nan_avoiding_calls"
+      ]
+    },
+    {
+      "id": "V1",
+      "class": "invalid",
+      "component": "WGSL emitter",
+      "summary": "var<storage, write> (an illegal access mode)",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "V1.cgl",
+          "target": "wgsl",
+          "expect": "translated",
+          "present": [
+            "var<storage, read_write>"
+          ],
+          "absent": [
+            "var<storage, write>"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "V2",
+      "class": "invalid",
+      "component": "WGSL emitter (Metal sources)",
+      "summary": "@builtin(global_invocation_id) typed u32",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "V2.metal",
+          "target": "wgsl",
+          "expect": "translated",
+          "present": [
+            "@builtin\\(global_invocation_id\\) \\w+: vec3<u32>"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "V3",
+      "class": "invalid",
+      "component": "WGSL emitter",
+      "summary": "atomics on non-atomic types, mat4x4(1.0), undefined isnan, fmod and uint8, C type names passed through",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "V3.cgl",
+          "target": "wgsl",
+          "expect": "translated",
+          "present": [
+            "array<atomic<u32>>",
+            "atomicAdd\\(&o\\[0\\], 1u\\)"
+          ],
+          "absent": [
+            "mat4x4<f32>\\(1\\.0\\)",
+            "\\bisnan\\(",
+            "\\bfmod\\(",
+            "\\buint8\\b"
+          ],
+          "validator": "naga"
+        }
+      ]
+    },
+    {
+      "id": "V4",
+      "class": "invalid",
+      "component": "GLSL emitter",
+      "summary": "name collision, and the position output not routed to gl_Position, in the README PBR shader",
+      "status": "fixed",
+      "tests": [
+        "tests/test_translator/test_spirv_default_uniforms.py::test_readme_showcase_uniforms_reach_the_host",
+        "tests/conformance/test_defects.py::test_readme_showcase_glsl_validates_per_stage"
+      ]
+    },
+    {
+      "id": "V5",
+      "class": "invalid",
+      "component": "GLSL emitter",
+      "summary": "combined multi-stage file: guard macros cannot be #define'd; renamed fragment inputs break linkage",
+      "status": "unverified",
+      "tests": [
+        "tests/test_translator/test_codegen/test_shader_validation.py::test_generated_glsl_combined_stages_validate_separately_with_glslang"
+      ],
+      "note": "Per-stage output (generate_stage) validates with glslang. The combined file guards each stage with GL_<STAGE>_SHADER, which glslang predefines; whether OpenGL drivers accept it, and whether stage interfaces link, has not been measured on a driver."
+    },
+    {
+      "id": "V6",
+      "class": "invalid",
+      "component": "HLSL, GLSL, Metal and WGSL emitters",
+      "summary": "unknown identifiers passed through verbatim",
+      "status": "refused",
+      "probes": [
+        {
+          "source": "V6.cgl",
+          "target": "metal",
+          "expect": "refused"
+        },
+        {
+          "source": "V6.cgl",
+          "target": "directx",
+          "expect": "refused"
+        },
+        {
+          "source": "V6.cgl",
+          "target": "opengl",
+          "expect": "refused"
+        },
+        {
+          "source": "V6.cgl",
+          "target": "wgsl",
+          "expect": "refused"
+        }
+      ]
+    },
+    {
+      "id": "V7",
+      "class": "invalid",
+      "component": "CUDA and HIP emitters",
+      "summary": "module-scope buffers emitted as host globals used in __global__ code; uchar, ushort, ulong and bfloat are not CUDA scalars",
+      "status": "unverified",
+      "note": "Module-scope buffers are now __device__ pointers and narrow types use CUDA spellings, but no nvcc or clang CUDA compile of that output is in the suite."
+    },
+    {
+      "id": "V8",
+      "class": "invalid",
+      "component": "Rust and Mojo emitters",
+      "summary": "CrossGL char became Rust char or Mojo String",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "V8.cgl",
+          "target": "rust",
+          "expect": "translated",
+          "present": [
+            "\\bc: i8\\b"
+          ],
+          "absent": [
+            ":\\s*char\\b"
+          ]
+        },
+        {
+          "source": "V8.cgl",
+          "target": "mojo",
+          "expect": "translated",
+          "present": [
+            "\\bInt8\\b"
+          ],
+          "absent": [
+            "\\bString\\b"
+          ]
+        }
+      ],
+      "note": "CrossGL char is a signed 8-bit integer: Rust i8 and Mojo Int8, with C integer promotion on Mojo; a literal without a one-byte value is refused.",
+      "tests": [
+        "tests/test_translator/test_codegen/test_rust_codegen.py::test_char_is_a_signed_8_bit_integer_in_rust",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::test_rust_refuses_a_char_literal_without_a_single_byte_value",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::test_mojo_char_and_short_operands_promote_to_int",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::test_mojo_refuses_a_char_literal_without_a_single_byte_value"
+      ]
+    },
+    {
+      "id": "V9",
+      "class": "invalid",
+      "component": "examples and CI",
+      "summary": "an example claimed SPIR-V rejects a feature that now emits an invalid module",
+      "status": "unverified",
+      "tests": [
+        "tests/test_translator/test_codegen/test_shader_validation.py::test_generated_spirv_codegen_examples_validate_with_spirv_tools"
+      ],
+      "note": "examples/test.py has to be re-read against the current SPIR-V emitter."
+    },
+    {
+      "id": "V10",
+      "class": "invalid",
+      "component": "SPIR-V and WGSL emitters",
+      "summary": "recursion emitted instead of refused",
+      "status": "refused",
+      "probes": [
+        {
+          "source": "S30.cu",
+          "target": "vulkan",
+          "expect": "refused"
+        },
+        {
+          "source": "S30.cu",
+          "target": "wgsl",
+          "expect": "refused"
+        }
+      ],
+      "tests": [
+        "tests/test_translator/test_recursion_refusal.py::test_mutual_recursion_in_crossgl_is_refused_with_its_cycle"
+      ]
+    },
+    {
+      "id": "V11",
+      "class": "invalid",
+      "component": "CUDA and HIP emitters",
+      "summary": "a graphics entry point emitted as a __device__ function instead of a refusal",
+      "status": "refused",
+      "probes": [
+        {
+          "source": "V11.frag",
+          "target": "cuda",
+          "expect": "refused"
+        },
+        {
+          "source": "V11.frag",
+          "target": "hip",
+          "expect": "refused"
+        }
+      ],
+      "note": "CUDA and HIP declare only __global__ kernels; vertex, fragment, geometry, tessellation, mesh, task and ray-tracing entries are refused with StageUnsupportedError instead of becoming __device__ functions or no-op placeholder hooks.",
+      "tests": [
+        "tests/test_translator/test_codegen/test_backend_registry.py::test_kernel_only_backends_refuse_graphics_stages",
+        "tests/test_translator/test_translation_pipeline.py::test_native_graphics_sources_are_refused_on_kernel_only_targets",
+        "tests/test_examples_contract.py::test_graphics_examples_are_refused_on_kernel_only_targets"
+      ]
+    },
+    {
+      "id": "V12",
+      "class": "invalid",
+      "component": "emitters (Mojo sources)",
+      "summary": "generic type arguments of Mojo programs printed as Python reprs of syntax-tree nodes",
+      "status": "unverified",
+      "note": "A reduced Mojo puzzle is refused for an undeclared alias before generic arguments are reached; the puzzle corpus has to be rerun."
+    },
+    {
+      "id": "X1",
+      "class": "crash",
+      "component": "CUDA and HIP emitters",
+      "summary": "KeyError: 0 in codegen/vector_arithmetic.py",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "X1.cgl",
+          "target": "cuda",
+          "expect": "translated"
+        },
+        {
+          "source": "X1.cgl",
+          "target": "hip",
+          "expect": "translated"
+        }
+      ]
+    },
+    {
+      "id": "X2",
+      "class": "crash",
+      "component": "WGSL emitter",
+      "summary": "AttributeError on enumeration declarations",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "X2.cgl",
+          "target": "wgsl",
+          "expect": "translated"
+        }
+      ]
+    },
+    {
+      "id": "X3",
+      "class": "crash",
+      "component": "Rust emitter",
+      "summary": "KeyError on u8 and i8",
+      "status": "fixed",
+      "probes": [
+        {
+          "source": "X3.cgl",
+          "target": "rust",
+          "expect": "translated",
+          "present": [
+            ": i8 = ",
+            ": u8 = "
+          ]
+        }
+      ]
+    }
+  ]
+}

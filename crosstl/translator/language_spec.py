@@ -19,6 +19,8 @@ from . import lexer as lexer_module
 from . import parser as parser_module
 from . import stage_utils
 from . import validation as validation_module
+from .parsing import named_types as parser_named_types
+from .parsing import vocabulary as parser_vocabulary
 
 SPEC_SCHEMA_VERSION = 0
 SPEC_KIND = "crosstl-frontend-language-spec-snapshot"
@@ -149,6 +151,8 @@ AST_CATEGORY_ROOTS = (
 class LanguageSpecExtractionError(RuntimeError):
     """Raised when bounded source introspection cannot extract a known shape."""
 
+    project_diagnostic_code = "project.translate.language-spec-extraction-failed"
+
 
 def repository_root() -> Path:
     """Return the repository root containing this translator package."""
@@ -170,7 +174,14 @@ def _source_hash(module: ModuleType) -> str:
 
 
 def _source_inventory() -> list[dict[str, str]]:
-    modules = (lexer_module, parser_module, ast_module, validation_module)
+    modules = (
+        lexer_module,
+        parser_module,
+        parser_named_types,
+        parser_vocabulary,
+        ast_module,
+        validation_module,
+    )
     return [
         {
             "path": _relative_module_path(module),
@@ -594,45 +605,21 @@ def _stage_spec() -> dict[str, Any]:
     }
 
 
-def _literal_value(node: py_ast.AST) -> Any:
-    try:
-        return py_ast.literal_eval(node)
-    except (TypeError, ValueError) as exc:
-        raise LanguageSpecExtractionError(
-            f"unsupported parser literal: {py_ast.dump(node)}"
-        ) from exc
-
-
 def _extract_parse_type_sampler_map() -> dict[str, str]:
-    """Extract Parser.parse_type's local sampler/image resource table."""
-    source = textwrap.dedent(inspect.getsource(parser_module.Parser.parse_type))
-    parsed = py_ast.parse(source)
-    assignments = [
-        node
-        for node in py_ast.walk(parsed)
-        if isinstance(node, py_ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], py_ast.Name)
-        and node.targets[0].id == "sampler_types"
-    ]
-    if len(assignments) != 1:
-        raise LanguageSpecExtractionError(
-            "Parser.parse_type must contain exactly one sampler_types assignment"
-        )
-
-    sampler_types = _literal_value(assignments[0].value)
+    """Return the sampler, texture and image keywords that ``Parser.parse_type`` accepts."""
+    sampler_types = parser_named_types.SAMPLER_IMAGE_TYPE_NAMES
     if not isinstance(sampler_types, dict) or not sampler_types:
-        raise LanguageSpecExtractionError("Parser.parse_type sampler_types is empty")
+        raise LanguageSpecExtractionError("SAMPLER_IMAGE_TYPE_NAMES is empty")
     return {str(key): str(value) for key, value in sorted(sampler_types.items())}
 
 
 def _parser_spec() -> dict[str, Any]:
-    resources = _extract_constants(parser_module, PARSER_RESOURCE_CONSTANTS)
+    resources = _extract_constants(parser_vocabulary, PARSER_RESOURCE_CONSTANTS)
     resources["SAMPLER_IMAGE_TYPE_NAMES"] = _jsonable(_extract_parse_type_sampler_map())
 
     return {
-        "qualifiers": _extract_constants(parser_module, PARSER_QUALIFIER_CONSTANTS),
-        "intrinsics": _extract_constants(parser_module, PARSER_INTRINSIC_CONSTANTS),
+        "qualifiers": _extract_constants(parser_vocabulary, PARSER_QUALIFIER_CONSTANTS),
+        "intrinsics": _extract_constants(parser_vocabulary, PARSER_INTRINSIC_CONSTANTS),
         "resources": resources,
     }
 
@@ -953,8 +940,7 @@ def extract_raw_language_facts() -> dict[str, Any]:
             "files": _source_inventory(),
             "method": (
                 "live module constants/classes plus bounded static extraction "
-                "of Parser.parse_type resource literals and AST constructor "
-                "public field assignments"
+                "of AST constructor public field assignments"
             ),
         },
         "lexer": _lexer_spec(),

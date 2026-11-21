@@ -35,6 +35,10 @@ from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
+from .compute_entry_resources import (
+    ComputeEntryResourceError,
+    hoist_compute_entry_resources,
+)
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_buffer_layouts import hoist_constant_buffer_layouts
 from .constant_buffer_size import (
@@ -72,6 +76,10 @@ from .device_private_globals import (
 from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
+)
+from .device_variables import (
+    DeviceVariableUnsupportedError,
+    refuse_device_variables,
 )
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
@@ -142,6 +150,11 @@ from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .partitioned_waves import (
+    PartitionedWaveUnsupportedError,
+    lower_partitioned_wave_operations,
+)
+from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
     RelativeVertexIdUnsupportedError,
@@ -155,7 +168,7 @@ from .row_major_struct_members import (
     orient_row_major_struct_members,
 )
 from .rule_pragmas import take_declared_families
-from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
+from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES, source_families
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_brace_values import (
     ScalarBraceInitializerError,
@@ -173,6 +186,7 @@ from .shader_records import (
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instance_ids import InstanceIdUnsupportedError, lower_spirv_instance_ids
 from .spirv_instructions import (
     SpirvOperationUnsupportedError,
     refuse_spirv_instructions,
@@ -198,13 +212,20 @@ from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
 )
+from .storage_variables import StorageVariableUnsupportedError, lower_storage_variables
 from .struct_constructor_conversions import convert_struct_constructor_arguments
+from .struct_declarations import (
+    ConflictingConstantError,
+    ConflictingStructError,
+    refuse_conflicting_structs,
+)
 from .struct_methods import StructMethodUnsupportedError, lower_struct_methods
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
     StructuredLayoutUnsupportedError,
     legalize_structured_layouts,
 )
+from .subgroup_rotations import WaveRotationUnsupportedError, lower_wave_rotations
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
 from .template_assertions import resolve_template_assertions
@@ -214,9 +235,17 @@ from .tessellation_patches import (
 )
 from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
+from .texture_operands import (
+    TextureOperandError,
+    TextureOperandUnsupportedError,
+    check_texture_operands,
+    register_texture_operand_target,
+)
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
+from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
+from .uniform_variables import lower_uniform_variables
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
     UnsizedArrayUnsupportedError,
@@ -230,9 +259,17 @@ from .vertex_input_positions import (
 from .void_casts import VoidCastError, lower_void_casts
 from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .work_graph_nodes import (
+    WorkGraphNodeError,
+    WorkGraphUnsupportedError,
+    check_work_graph_nodes,
+    refuse_work_graph_nodes,
+)
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
+    "ConflictingConstantError",
+    "ConflictingStructError",
     "AggregateEqualityOperandError",
     "AggregateEqualityUnsupportedError",
     "AmbiguousMatrixSpellingError",
@@ -240,6 +277,7 @@ __all__ = [
     "BindingIndexUnresolvedError",
     "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
+    "ComputeEntryResourceError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
     "DevicePrivateGlobalUnsupportedError",
@@ -248,9 +286,12 @@ __all__ = [
     "TessFactorUnsupportedError",
     "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
+    "PartitionedWaveUnsupportedError",
+    "WaveRotationUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
+    "DeviceVariableUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FeedbackTextureUnsupportedError",
@@ -260,6 +301,8 @@ __all__ = [
     "HalfFloatUnsupportedError",
     "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
+    "WorkGraphNodeError",
+    "WorkGraphUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
@@ -275,6 +318,7 @@ __all__ = [
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
     "RelativeVertexIdUnsupportedError",
+    "InstanceIdUnsupportedError",
     "RuleInexpressibleError",
     "RowMajorMemberError",
     "RuleReport",
@@ -291,11 +335,15 @@ __all__ = [
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "StorageBufferParameterUnsupportedError",
+    "StorageVariableUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
+    "TextureOperandError",
+    "TextureOperandUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "TupleFieldUnsupportedError",
     "TypeAliasUnsupportedError",
     "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
@@ -305,6 +353,8 @@ __all__ = [
     "VoidValueError",
     "apply_rule_carrying",
     "generate_refusing_undeclared_identifiers",
+    "check_texture_operands",
+    "register_texture_operand_target",
 ]
 
 
@@ -337,6 +387,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Two different structures of one name in a scope are then refused with :class:`ConflictingStructError`, two
+    different program constants of one name with :class:`ConflictingConstantError`, and a repeated identical one
+    is kept once (:mod:`.struct_declarations`).
     Shader-scope functions that name a stage's declarations become functions of the stages that call them
     (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
@@ -448,7 +501,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`), and partitioned
+    wave reductions and scans become loops over the subgroup's lanes, or are refused with
+    :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`), and subgroup rotations become
+    ``WaveReadLaneAt`` reads of the rotated lane (:mod:`.subgroup_rotations`). HLSL's
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
@@ -457,7 +513,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
     operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
-    target but CrossGL (:mod:`.spirv_instructions`). The AST is
+    target but CrossGL (:mod:`.spirv_instructions`). Families a target meets for the whole program, such as
+    ``fp_ieee``, are discharged last (:mod:`.program_families`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
@@ -467,12 +524,15 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
+    refuse_conflicting_structs(program, report.target)
     fill_generic_struct_defaults(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
+    refuse_work_graph_nodes(program, report.target)
+    check_work_graph_nodes(program, report.target)
     # These three passes only read the program, so they share one computation of its unreachable functions.
     with shared_dead_functions():
         refuse_undeclared_types(program, report.target)
@@ -480,14 +540,17 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
         refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
+    refuse_tuple_fields(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
     lower_relative_vertex_ids(program, report.target)
+    lower_spirv_instance_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    refuse_device_variables(program, report.target)
     fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
@@ -503,6 +566,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    lower_storage_variables(program, report.target)
+    lower_uniform_variables(program, report.target)
     orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
@@ -530,6 +595,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
+    hoist_compute_entry_resources(program, report.target)
     adopt_module_stage_outputs(program, report.target)
     convert_signed_builtin_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)
@@ -564,6 +630,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
+    check_texture_operands(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
     refuse_feedback_textures(program, report.target)
@@ -577,6 +644,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
+    lower_partitioned_wave_operations(program, report.target)
+    lower_wave_rotations(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
@@ -584,6 +653,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
+    discharge_program_families(
+        program, source_families(report.source) | declared_families, report
+    )
     annotations = getattr(program, "annotations", None)
     if isinstance(annotations, dict):
         annotations["rule_carrying"] = report.to_json()

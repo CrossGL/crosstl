@@ -4,6 +4,8 @@ import re
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import CudaSyntaxError
+
 from .preprocessor import CudaPreprocessor
 
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -540,7 +542,7 @@ class CudaLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise CudaSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

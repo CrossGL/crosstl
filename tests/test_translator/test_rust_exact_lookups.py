@@ -125,7 +125,8 @@ shader S {
 
 def test_trace_ray_with_the_runtime_argument_count_is_called():
     code = _rust(_RAY_PROGRAM % "TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);")
-    assert "trace_ray(*SCENE, 0, 255, 0, 1, 0, ray, payload);" in code
+    # The acceleration structure is a bound entry parameter (rust_resource_bindings), not a static.
+    assert "trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in code
 
 
 def test_trace_ray_with_another_argument_count_is_refused():

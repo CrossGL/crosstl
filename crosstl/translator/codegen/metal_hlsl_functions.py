@@ -33,9 +33,14 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
 from .metal_reference_argument_aliasing import metal_reference_argument_aliases
+from .metal_reference_parameters import (
+    binds_address_space_reference,
+    has_parameter_value_type,
+)
 from .metal_refusals import MetalLoweringRefused
 from .stage_utils import (
     function_stage_name,
@@ -251,7 +256,7 @@ class MetalHlslFunctionMixin:
                     )
                     if space not in {None, "thread"}:
                         # A thread temporary cannot bind a reference in another address space.
-                        raise ValueError(
+                        raise MetalRefusal(
                             f"Metal cannot bind this argument to the {space} reference "
                             f"parameter of '{self.function_call_name(expr)}': it is not "
                             f"whole {space} storage"
@@ -274,7 +279,7 @@ class MetalHlslFunctionMixin:
                             ]
                         )
                     if not self.metal_expression_is_side_effect_free(argument):
-                        raise ValueError(
+                        raise MetalRefusal(
                             "Metal reference argument of "
                             f"'{self.function_call_name(expr)}' must be free of "
                             "side effects to be copied in and out"
@@ -291,7 +296,7 @@ class MetalHlslFunctionMixin:
         for expression in self.metal_statement_evaluated_expressions(stmt):
             visit(expression, False)
         if writebacks and isinstance(stmt, (ReturnNode, BackendReturnNode)):
-            raise ValueError(
+            raise MetalRefusal(
                 "Metal cannot copy a reference argument back after a return "
                 "statement; assign the call result to a local first"
             )
@@ -792,6 +797,12 @@ class MetalHlslFunctionMixin:
         ):
             return self.generate_expression(arg)
         if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
+            return self.generate_expression(arg)
+        if binds_address_space_reference(
+            self, func_name, index
+        ) and has_parameter_value_type(self, arg, param_type):
+            # The parameter is a `constant T&` or `device T&` reference, which binds
+            # the argument itself; a conversion would leave no object to bind.
             return self.generate_expression(arg)
         if (
             self.is_metal_bfloat_storage_read(arg)

@@ -5,13 +5,16 @@ import re
 from crosstl.translator.renames import renamed
 
 from ..comma_expressions import crossgl_tuple_literal
+from ..import_refusals import ImportRefusalMixin, MojoImportRefused
 from .MojoAst import *
 from .MojoLexer import *
 from .MojoParser import *
 
 
-class MojoToCrossGLConverter:
+class MojoToCrossGLConverter(ImportRefusalMixin):
     """Serialize Mojo backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = MojoImportRefused
 
     VERTEX_ATTRIBUTES = {"vertex", "vertex_main", "vertex_shader"}
     FRAGMENT_ATTRIBUTES = {"fragment", "fragment_main", "fragment_shader"}
@@ -314,6 +317,10 @@ class MojoToCrossGLConverter:
         }
 
     def generate(self, ast):
+        """Render ``ast`` as CrossGL; raise :class:`MojoImportRefused` if a construct has no CrossGL form."""
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         self.user_function_arities = self.collect_user_function_arities(ast)
         self.user_function_names = set(self.user_function_arities)
         self.imported_module_aliases = self.collect_imported_module_aliases(ast)
@@ -1641,6 +1648,14 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, ArrayAccessNode):
             if self.should_elide_empty_postfix_access(expr):
                 return self.generate_expression(expr.array)
+            if self.is_empty_array_access(expr):
+                # ``p[]`` calls ``__getitem__()`` with no index: a pointer dereference, or another type's own
+                # operation. The importer does not know which, and writing ``p`` would copy the pointer.
+                return self.refuse_import(
+                    f"the empty subscript '{self.generate_expression(expr.array)}[]' has no CrossGL form: "
+                    "the importer cannot tell a pointer dereference from another type's __getitem__()",
+                    placeholder="0",
+                )
             if self.is_mlir_type_literal_access(expr):
                 return self.generate_mlir_type_literal_expression(expr)
             array = self.generate_expression(expr.array)
@@ -1692,12 +1707,11 @@ class MojoToCrossGLConverter:
         return f"{func_name}({', '.join(args)})"
 
     def should_elide_empty_postfix_access(self, expr):
+        """``Type[]`` names ``Type`` with its default parameters, so the brackets can go; a value's ``[]`` cannot."""
         if not self.is_empty_array_access(expr):
             return False
 
         array = expr.array
-        if isinstance(array, MemberAccessNode):
-            return True
         if isinstance(array, VariableNode) and array.name:
             return array.name[0].isupper()
         return False
@@ -1806,6 +1820,13 @@ class MojoToCrossGLConverter:
         return self.generate_expression(pattern)
 
     def generate_slice_index(self, index):
+        """Refuse a slice: CrossGL has no slice values, and ``a[i:]`` is not a CrossGL index."""
+        return self.refuse_import(
+            f"the slice '{self.render_slice_text(index)}' has no CrossGL form: CrossGL has no slice values",
+            placeholder="0",
+        )
+
+    def render_slice_text(self, index):
         start = self.generate_expression(index.start) if index.start is not None else ""
         stop = self.generate_expression(index.stop) if index.stop is not None else ""
         if index.has_step:
@@ -1819,6 +1840,11 @@ class MojoToCrossGLConverter:
         """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
+        if isinstance(mojo_type, str) and self.has_malformed_type_dots(mojo_type):
+            return self.refuse_import(
+                f"malformed Mojo type '{mojo_type}': '..' is not a valid Mojo type argument",
+                placeholder="int",
+            )
         if isinstance(mojo_type, str) and mojo_type.startswith("*"):
             mojo_type = mojo_type[1:].lstrip()
         mojo_type = self.strip_reference_type(mojo_type)
@@ -1836,6 +1862,31 @@ class MojoToCrossGLConverter:
         if matrix_type:
             return matrix_type
         return self.normalize_type_expression_operators(mojo_type)
+
+    def has_malformed_type_dots(self, text):
+        quote = None
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char == ".":
+                run_end = index + 1
+                while run_end < len(text) and text[run_end] == ".":
+                    run_end += 1
+                run_length = run_end - index
+                if run_length not in {1, 3}:
+                    return True
+                index = run_end
+                continue
+            index += 1
+        return False
 
     def map_mojo_gpu_builtin_name(self, name):
         if self.current_function_is_mojo_gpu_kernel:

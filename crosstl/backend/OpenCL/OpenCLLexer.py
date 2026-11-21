@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from crosstl.backend.HIP.HipLexer import SKIP_TOKENS
 from crosstl.backend.HIP.HipLexer import TOKENS as HIP_TOKENS
 from crosstl.backend.HIP.HipLexer import Token
+from crosstl.translator.refusals import OpenCLSyntaxError
 
 from .preprocessor import OpenCLPreprocessor
 
@@ -212,7 +213,7 @@ class OpenCLLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                raise SyntaxError(
+                raise OpenCLSyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
             new_pos, token_type, text = token

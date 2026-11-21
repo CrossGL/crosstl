@@ -273,6 +273,59 @@ def test_a_core_instruction_is_probed_with_the_glsl_call_that_compiles_to_it():
         spirv_input.build(signed)
 
 
+BOOL = Type("bool", ())
+# OpSubgroupAllKHR, from SPV_KHR_subgroup_vote, means what the core OpGroupNonUniformAll means. glslang compiles
+# GLSL 4.60's allInvocations to the first and GL_KHR_shader_subgroup_vote's subgroupAll to the second.
+VOTE_KHR = Feature(
+    "spirv",
+    "function",
+    "OpSubgroupAllKHR",
+    Signature(BOOL, (Param(BOOL),)),
+    group="core-group",
+    crossgl="allInvocations",
+    spelling="allInvocations",
+)
+VOTE = dataclasses.replace(
+    VOTE_KHR,
+    name="OpGroupNonUniformAll",
+    group="core-non-uniform",
+    crossgl="subgroupAll",
+    spelling="subgroupAll",
+    extension="GL_KHR_shader_subgroup_vote",
+)
+
+
+@needs_glslang
+def test_each_vote_encoding_has_a_probe_of_its_own():
+    khr, core = spirv_input.build(VOTE_KHR).source, spirv_input.build(VOTE).source
+    assert " OpSubgroupAllKHR " in khr and "OpGroupNonUniformAll" not in khr
+    assert " OpGroupNonUniformAll " in core and "OpSubgroupAllKHR" not in core
+    assert validators.validate("spirv", khr).accepted
+    assert validators.validate("spirv", core).accepted
+    # The KHR instruction does not stand in for the core one in the probe.
+    with pytest.raises(
+        ProbeError,
+        match="glslang does not lower allInvocations to OpGroupNonUniformAll",
+    ):
+        spirv_input.build(dataclasses.replace(VOTE, spelling="allInvocations"))
+
+
+def test_a_round_trip_may_write_a_vote_in_the_other_encoding():
+    body = (
+        "%main = OpFunction %void None %3\n"
+        "%5 = OpGroupNonUniformAll %bool %uint_3 %4\n"
+        "OpFunctionEnd\n"
+    )
+    assert spirv_input.dropped(VOTE_KHR, body) == ""
+    assert spirv_input.dropped(VOTE, body) == ""
+    khr = body.replace("OpGroupNonUniformAll %bool %uint_3", "OpSubgroupAllKHR %bool")
+    assert spirv_input.dropped(VOTE, khr) == ""
+    assert (
+        spirv_input.dropped(VOTE_KHR, body.replace("All", "Any"))
+        == "the round trip no longer calls OpSubgroupAllKHR"
+    )
+
+
 @needs_glslang
 def test_a_vertex_stream_probe_declares_the_geometry_streams_capability():
     probe = spirv_input.build(STREAM)
@@ -340,6 +393,30 @@ def test_a_construct_glsl_cannot_spell_is_probed_in_hlsl():
     )
     assert spirv_input.source_language(domain) == "glsl"
     assert spirv_input.source_language(FABS) == "glsl"
+
+
+def test_a_construct_neither_glsl_nor_hlsl_spells_is_probed_in_slang():
+    pointer = Feature(
+        "spirv", "type", "pointer-local", None, group="OpAccessChain OpStore"
+    )
+    assert spirv_input.source_language(pointer) == "slang"
+
+
+@pytest.mark.skipif(
+    not (lowering.can_lower("slang") and validators.available("spirv")),
+    reason="slangc or SPIRV-Tools is missing",
+)
+def test_the_slang_fallback_moves_storage_buffer_pointers():
+    # slangc writes Slang's pointer arithmetic as OpPtrAccessChain on storage-buffer pointers, which SPIR-V 1.5 and
+    # VariablePointersStorageBuffer allow in Vulkan's logical addressing.
+    probe = spirv_input.build(
+        Feature("spirv", "type", "pointer-arithmetic", None, group="OpPtrAccessChain")
+    )
+    assert "OpCapability VariablePointersStorageBuffer" in probe.source
+    assert "OpPtrAccessChain %_ptr_StorageBuffer_float" in probe.source
+    # The probe is the SPIR-V a Slang project ships, without the debug information the IR row's lowering keeps.
+    assert "NonSemantic.Shader.DebugInfo" not in probe.source
+    assert validators.validate("spirv", probe.source).accepted
 
 
 def test_the_hlsl_fallback_needs_dxc(monkeypatch):

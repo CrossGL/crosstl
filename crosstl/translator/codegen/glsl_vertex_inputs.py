@@ -17,12 +17,14 @@ from __future__ import annotations
 import re
 
 from ..ast import ArrayType, MatrixType
+from ..refusals import TranslationRefusal
 from .glsl_draw_parameters import vertex_builtin_spelling
 from .stage_io_semantic_locations import allocate_locations
 
 __all__ = (
     "VertexInputLocationError",
     "allocated_stage_layouts",
+    "location_span",
     "vertex_input_builtin",
     "vertex_input_layouts",
     "vertex_parameter_layouts",
@@ -31,8 +33,10 @@ __all__ = (
 _LOCATION = re.compile(r"\blocation\s*=\s*(\d+)")
 
 
-class VertexInputLocationError(ValueError):
+class VertexInputLocationError(TranslationRefusal):
     """A vertex input whose locations cannot be counted."""
+
+    code = "project.translate.opengl-vertex-input-location-invalid"
 
 
 def vertex_input_builtin(codegen, member) -> str | None:
@@ -118,6 +122,11 @@ def _layouts(codegen, nodes, type_of, occupied=()):
 def allocated_stage_layouts(codegen, nodes, type_of, occupied=()):
     """The layout of each user stage variable in ``nodes``: its own, with the allocated location when it has none."""
     return _layouts(codegen, nodes, type_of, occupied)
+
+
+def location_span(codegen, type_node) -> int:
+    """Locations a stage variable of ``type_node`` occupies (:func:`_span`)."""
+    return _span(codegen, type_node)
 
 
 def _span(codegen, type_node) -> int:

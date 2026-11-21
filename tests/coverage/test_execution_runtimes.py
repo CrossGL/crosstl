@@ -178,9 +178,9 @@ def test_hlsl_slang_and_wgsl_probes_run_as_spirv_on_vulkan(
 )
 def test_spirv_runs_in_the_oldest_environment_that_takes_its_version(version, expected):
     header = f"; SPIR-V\n; Version: {version}\n" if version else ""
-    assert execution.environment([f"{header}OpCapability Shader\n"]) == expected
+    assert validators.spirv_environment([f"{header}OpCapability Shader\n"]) == expected
     older = "; SPIR-V\n; Version: 1.0\n"
-    assert execution.environment([older, header]) == expected
+    assert validators.spirv_environment([older, header]) == expected
 
 
 def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(

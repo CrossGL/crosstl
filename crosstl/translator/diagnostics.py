@@ -66,7 +66,8 @@ class TranslationDiagnostic(ValueError):
     ) -> None:
         if code is not None:
             if not code.startswith(CODE_PREFIX):
-                raise ValueError(
+                # A caller passing a malformed code is a translator defect, not a refusal.
+                raise AssertionError(
                     f"Diagnostic codes start with {CODE_PREFIX!r}: {code!r}"
                 )
             self.code = code

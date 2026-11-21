@@ -4,10 +4,13 @@ An instruction is reached from CrossGL through the GLSL built-in function of the
 ``SAbs`` are ``abs`` on float and int operands. The probe signature is the GLSL specification's overload with the
 instruction's operand count and operand type.
 
-The core instructions measured are the ones a GLSL built-in function compiles to (:data:`CORE`). Their probe is the
-GLSL function's, on the overload whose operands select the instruction, and they are grouped by the core grammar's
-instruction class. Core instructions that only GLSL operators, declarations or statements reach are measured as
-language-level features (:mod:`..constructs`) or not at all.
+The core instructions measured are the ones a GLSL built-in function compiles to (:data:`CORE`), and the
+``OpGroupNonUniform*`` instructions, which the functions of the GLSL subgroup extensions compile to as their
+specifications list (:func:`.glsl_subgroup.instructions`). Their probe is the GLSL function's, on the overload whose
+operands select the instruction, and they are grouped by the core grammar's instruction class. A non-uniform
+instruction that no function of those extensions compiles to is listed without a probe. Core instructions that only
+GLSL operators, declarations or statements reach are measured as language-level features (:mod:`..constructs`) or not
+at all.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import re
 
 from ..model import Feature, Param, Signature, Type
 from ..objects import UNIFORMS
-from . import glsl
+from . import glsl, glsl_subgroup
 from .common import pick
 
 # Instructions whose GLSL name does not follow from the opname by dropping the type prefix.
@@ -89,9 +92,6 @@ CORE = {
     "OpFwidth": ("fwidth", ""),
     "OpFwidthCoarse": ("fwidthCoarse", ""),
     "OpFwidthFine": ("fwidthFine", ""),
-    "OpGroupNonUniformAll": ("allInvocations", ""),
-    "OpGroupNonUniformAllEqual": ("allInvocationsEqual", ""),
-    "OpGroupNonUniformAny": ("anyInvocation", ""),
     "OpIAddCarry": ("uaddCarry", ""),
     "OpIEqual": ("equal", "int"),
     "OpINotEqual": ("notEqual", "int"),
@@ -126,6 +126,12 @@ CORE = {
     "OpSLessThan": ("lessThan", "int"),
     "OpSLessThanEqual": ("lessThanEqual", "int"),
     "OpSMulExtended": ("imulExtended", ""),
+    # glslang compiles GLSL 4.60's vote functions to the SPV_KHR_subgroup_vote instructions. The core
+    # OpGroupNonUniformAll, Any and AllEqual are probed with GL_KHR_shader_subgroup_vote's subgroupAll, subgroupAny
+    # and subgroupAllEqual, as that specification maps them, so an importer is measured on both encodings.
+    "OpSubgroupAllEqualKHR": ("allInvocationsEqual", ""),
+    "OpSubgroupAllKHR": ("allInvocations", ""),
+    "OpSubgroupAnyKHR": ("anyInvocation", ""),
     "OpTranspose": ("transpose", ""),
     "OpUGreaterThan": ("greaterThan", "uint"),
     "OpUGreaterThanEqual": ("greaterThanEqual", "uint"),
@@ -135,6 +141,7 @@ CORE = {
 }
 # The group of a core instruction is this prefix and its grammar class, as ``core-relational-and-logical``.
 CORE_GROUP = "core-"
+NON_UNIFORM = "OpGroupNonUniform"
 _TYPED = re.compile(r"(F|S|U)([A-Z]\w*)")
 _PREFIX_SCALAR = {"F": "float", "S": "int", "U": "uint"}
 
@@ -248,16 +255,31 @@ def is_core(feature: Feature) -> bool:
     return feature.language == "spirv" and feature.group.startswith(CORE_GROUP)
 
 
-def core(grammar_text: str, glsl_text: str) -> list[Feature]:
-    """The core instructions of :data:`CORE`, each probed like the GLSL function that compiles to it."""
+def core(grammar_text: str, glsl_text: str, *subgroup_texts: str) -> list[Feature]:
+    """The core instructions of :data:`CORE` and the non-uniform instructions, each probed like the GLSL function that
+    compiles to it. ``subgroup_texts`` are the specifications of :data:`.glsl_subgroup.SOURCES`.
+    """
+    grammar = json.loads(grammar_text)["instructions"]
     classes = {
-        instruction["opname"]: instruction.get("class", "")
-        for instruction in json.loads(grammar_text)["instructions"]
+        instruction["opname"]: instruction.get("class", "") for instruction in grammar
     }
-    functions = glsl.overloads(glsl_text)
-    native = {feature.name: feature for feature in glsl.parse(glsl_text)}
+    # A specification may name an instruction by an alias, as GL_NV_shader_subgroup_partitioned names
+    # OpGroupNonUniformPartitionNV, which the grammar now lists as OpGroupNonUniformPartitionEXT.
+    canonical = {
+        alias: instruction["opname"]
+        for instruction in grammar
+        for alias in instruction.get("aliases", ())
+    }
+    functions = glsl.overloads(glsl_text) | glsl_subgroup.functions(*subgroup_texts)
+    native = {
+        feature.name: feature
+        for feature in glsl.parse(glsl_text) + glsl_subgroup.parse(*subgroup_texts)
+    }
+    mapping = dict(CORE)
+    for opname, pair in glsl_subgroup.instructions(*subgroup_texts).items():
+        mapping.setdefault(canonical.get(opname, opname), pair)
     features = []
-    for opname, (name, operand) in sorted(CORE.items()):
+    for opname, (name, operand) in sorted(mapping.items()):
         if opname not in classes:
             raise ValueError(
                 f"{opname} is not an instruction of the pinned core grammar"
@@ -284,8 +306,24 @@ def core(grammar_text: str, glsl_text: str) -> list[Feature]:
                 language="spirv",
                 name=opname,
                 signature=signature,
-                group=CORE_GROUP + classes[opname].lower().replace("_", "-"),
+                group=_group(classes[opname]),
                 spelling=name,
             )
         )
+    features += [
+        Feature(
+            "spirv",
+            "function",
+            opname,
+            None,
+            group=_group(kind),
+            note="no function of a GLSL subgroup extension compiles to it",
+        )
+        for opname, kind in sorted(classes.items())
+        if opname.startswith(NON_UNIFORM) and opname not in mapping
+    ]
     return features
+
+
+def _group(kind: str) -> str:
+    return CORE_GROUP + kind.lower().replace("_", "-")

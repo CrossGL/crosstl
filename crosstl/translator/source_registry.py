@@ -10,11 +10,12 @@ from typing import Any, Callable, Mapping, Sequence
 from .entry_discovery import SourceEntryDiscovery
 from .lexer import Lexer as CglLexer
 from .parser import Parser as CglParser
+from .refusals import RegistryRefusal, TranslatorArgumentError
 
 
 def _normalize_source_name(name: str) -> str:
     if not isinstance(name, str):
-        raise TypeError(f"Source name must be a string, got {type(name)}")
+        raise TranslatorArgumentError(f"Source name must be a string, got {type(name)}")
     return name.strip().lower()
 
 
@@ -28,7 +29,7 @@ def _normalize_extension(ext: str) -> str:
 def _coerce_path_or_extension(path_or_ext: str | os.PathLike[str]) -> str:
     path_or_ext = os.fspath(path_or_ext)
     if not isinstance(path_or_ext, str):
-        raise TypeError(
+        raise TranslatorArgumentError(
             "Source path or extension must be a string or path-like object "
             f"returning str, got {type(path_or_ext)}"
         )
@@ -50,7 +51,7 @@ def _extract_tokens(lexer) -> Any:
             return result
     if hasattr(lexer, "token_generator"):
         return list(lexer.token_generator())
-    raise ValueError(f"Unsupported lexer interface: {type(lexer)}")
+    raise RegistryRefusal(f"Unsupported lexer interface: {type(lexer)}")
 
 
 def _accepts_keyword(callable_obj, keyword: str) -> bool:
@@ -194,13 +195,13 @@ class SourceSpec:
                 kwargs[name] = value
         result = self.entry_point_discoverer(code, **kwargs)
         if not isinstance(result, SourceEntryDiscovery):
-            raise TypeError(
+            raise TranslatorArgumentError(
                 f"Source entry discoverer for '{self.name}' must return "
                 "SourceEntryDiscovery"
             )
         expected_backend = _normalize_source_name(self.name)
         if result.source_backend != expected_backend:
-            raise ValueError(
+            raise RegistryRefusal(
                 f"Source entry discoverer for '{self.name}' returned backend "
                 f"'{result.source_backend}'"
             )
@@ -223,7 +224,7 @@ class SourceRegistry:
             existing = self._by_name[name]
             if existing.load_lexer_parser is spec.load_lexer_parser:
                 return existing
-            raise ValueError(f"Source '{name}' already registered")
+            raise RegistryRefusal(f"Source '{name}' already registered")
 
         self._by_name[name] = spec
 
@@ -232,7 +233,7 @@ class SourceRegistry:
             if alias_key in self._by_alias and not overwrite:
                 if self._by_alias[alias_key] == name:
                     continue
-                raise ValueError(f"Source alias '{alias_key}' already registered")
+                raise RegistryRefusal(f"Source alias '{alias_key}' already registered")
             self._by_alias[alias_key] = name
 
         for ext in spec.extensions:
@@ -242,7 +243,7 @@ class SourceRegistry:
             if ext_key in self._by_extension and not overwrite:
                 if self._by_extension[ext_key] == name:
                     continue
-                raise ValueError(f"Extension '{ext_key}' already registered")
+                raise RegistryRefusal(f"Extension '{ext_key}' already registered")
             self._by_extension[ext_key] = name
             self._unsupported_extensions.pop(ext_key, None)
 
@@ -254,13 +255,15 @@ class SourceRegistry:
         """Register a known-but-unsupported source extension diagnostic."""
         ext_key = _normalize_extension(ext)
         if not ext_key:
-            raise ValueError("Unsupported source extension must be non-empty")
+            raise RegistryRefusal("Unsupported source extension must be non-empty")
         if ext_key in self._by_extension and not overwrite:
-            raise ValueError(f"Extension '{ext_key}' already registered")
+            raise RegistryRefusal(f"Extension '{ext_key}' already registered")
         if ext_key in self._unsupported_extensions and not overwrite:
             if self._unsupported_extensions[ext_key] == message:
                 return
-            raise ValueError(f"Unsupported extension '{ext_key}' already registered")
+            raise RegistryRefusal(
+                f"Unsupported extension '{ext_key}' already registered"
+            )
         self._unsupported_extensions[ext_key] = message
 
     def unsupported_extension_message(
@@ -313,7 +316,7 @@ class SourceRegistry:
         path_or_ext = _coerce_path_or_extension(path_or_ext)
         unsupported_message = self.unsupported_extension_message(path_or_ext)
         if unsupported_message:
-            raise ValueError(unsupported_message)
+            raise RegistryRefusal(unsupported_message)
 
         ext = path_or_ext
         if path_or_ext:
@@ -367,8 +370,9 @@ WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
     "registered CrossGL or native backend source file first."
 )
 WEBGL_SOURCE_UNSUPPORTED_MESSAGE = (
-    "WebGL target files (.webgl.glsl) are not supported as native source input; "
-    "provide OpenGL GLSL source (.glsl) or CrossGL source first."
+    "WebGL target files (.webgl.glsl) are not read as source by their extension; "
+    "pass source_backend='webgl' (--source-backend webgl) to read GLSL ES 3.00 "
+    "source, or use a GLSL extension such as .vert or .frag."
 )
 
 _COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES = {
@@ -792,7 +796,9 @@ def register_default_sources() -> None:
             ),
             load_lexer_parser=_load_glsl,
             reverse_codegen_factory=_reverse_glsl,
-            aliases=("glsl", "ogl"),
+            # GLSL ES 3.00, the shading language of WebGL 2, is a GLSL profile the GLSL frontend reads; its
+            # ``#version 300 es`` line defines GL_ES and is kept for the GLSL and WebGL generators.
+            aliases=("glsl", "ogl", "webgl", "webgl2", "essl", "glsl-es"),
             shader_type_from_path=_glsl_shader_type_from_path,
         )
     )

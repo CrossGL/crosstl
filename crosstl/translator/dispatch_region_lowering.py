@@ -26,6 +26,7 @@ from .ast import (
 )
 from .codegen.stage_utils import collect_stage_entry_records
 from .dispatch_regions import DispatchRegion
+from .refusals import MetadataContractError, TranslatorArgumentError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 _SEMANTICS = {
@@ -72,7 +73,7 @@ def _coordinate_type(value):
         or scalar.name not in {"uint", "int"}
         or width not in (1, 2, 3)
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "Dispatch coordinates require int/uint scalars or vectors of width 1..3"
         )
     return scalar.name, width
@@ -81,7 +82,9 @@ def _coordinate_type(value):
 def _constant(values, value_type):
     scalar, width = _coordinate_type(value_type)
     if scalar == "int" and any(n > 0x7FFFFFFF for n in values[:width]):
-        raise ValueError("Dispatch coordinate exceeds the signed parameter range")
+        raise MetadataContractError(
+            "Dispatch coordinate exceeds the signed parameter range"
+        )
     args = [LiteralNode(n, PrimitiveType(scalar)) for n in values[:width]]
     if width == 1:
         return args[0]
@@ -192,19 +195,23 @@ def specialize_dispatch_region(ast, region: DispatchRegion):
     This pass does not submit work or silently round a native dispatch.
     """
     if not isinstance(region, DispatchRegion):
-        raise TypeError("region must be a DispatchRegion")
+        raise TranslatorArgumentError("region must be a DispatchRegion")
     if ast.annotations.get("dispatch_region") is not None:
-        raise ValueError("Compute AST is already specialized for a dispatch region")
+        raise MetadataContractError(
+            "Compute AST is already specialized for a dispatch region"
+        )
     entries = collect_stage_entry_records(ast, None, STAGE_QUALIFIER_NAMES)
     if len(entries) != 1 or entries[0][1] != "compute":
-        raise ValueError(
+        raise MetadataContractError(
             "Dispatch region specialization requires exactly one compute entry"
         )
     result = copy.deepcopy(ast)
     entries = collect_stage_entry_records(result, None, STAGE_QUALIFIER_NAMES)
     entry = entries[0][2]
     if not isinstance(entry.body, BlockNode):
-        raise ValueError("Dispatch region specialization requires a compute entry body")
+        raise MetadataContractError(
+            "Dispatch region specialization requires a compute entry body"
+        )
     names = {getattr(node, "name", None) for node in _walk(result)}
     names.discard(None)
     captures = {}
@@ -250,7 +257,7 @@ def specialize_dispatch_region(ast, region: DispatchRegion):
                 isinstance(node, BuiltinVariableNode)
                 and node.builtin_name in _SEMANTICS
             ):
-                raise ValueError(
+                raise MetadataContractError(
                     "Dispatch coordinates in global initializers require entry-local initialization"
                 )
     visited = set()
@@ -270,7 +277,9 @@ def specialize_dispatch_region(ast, region: DispatchRegion):
             parameters.append(parameter)
             continue
         if len(kinds) != 1:
-            raise ValueError("Entry parameter has conflicting dispatch semantics")
+            raise MetadataContractError(
+                "Entry parameter has conflicting dispatch semantics"
+            )
         kind = kinds.pop()
         scalar, width = _coordinate_type(parameter.param_type)
         physical = None
@@ -281,7 +290,7 @@ def specialize_dispatch_region(ast, region: DispatchRegion):
                 else region.source_workgroup_count
             )
             if scalar == "int" and any(n - 1 > 0x7FFFFFFF for n in extent[:width]):
-                raise ValueError(
+                raise MetadataContractError(
                     "Dispatch coordinate exceeds the signed parameter range"
                 )
             physical = capture(kind)

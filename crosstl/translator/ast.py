@@ -4,10 +4,12 @@ from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+from .ast_copy import node_deepcopy
 from .cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from .refusals import CrossGLRefusal
 
 
 class ASTNode:
@@ -17,6 +19,9 @@ class ASTNode:
         self.source_location = source_location
         self.annotations = annotations or {}
         self.parent = None
+
+    # The same copy as ``copy.deepcopy``'s default protocol, built directly (:mod:`.ast_copy`).
+    __deepcopy__ = node_deepcopy
 
     def accept(self, visitor):
         """Dispatch this node to a visitor method named for its class."""
@@ -339,7 +344,7 @@ class CooperativeMatrixType(TypeNode):
             ("elements_per_lane", self.elements_per_lane),
         ):
             if isinstance(value, bool) or (type(value) is int and value <= 0):
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"CooperativeMatrix {name} must be a positive integer, "
                     f"got {value}"
                 )
@@ -348,12 +353,12 @@ class CooperativeMatrixType(TypeNode):
             self.fragment_mapping_provenance is not None
             and self.fragment_mapping is None
         ):
-            raise ValueError(
+            raise CrossGLRefusal(
                 "CooperativeMatrix fragment_mapping_provenance requires a "
                 "fragment_mapping"
             )
         if self.fragment_mapping is not None and self.fragment_layout is None:
-            raise ValueError(
+            raise CrossGLRefusal(
                 "CooperativeMatrix fragment_mapping requires a fragment_layout"
             )
 
@@ -373,7 +378,7 @@ class CooperativeMatrixType(TypeNode):
             matrix_elements = self.rows * self.cols
             distributed_elements = self.subgroup_size * self.elements_per_lane
             if matrix_elements != distributed_elements:
-                raise ValueError(
+                raise CrossGLRefusal(
                     f"CooperativeMatrix {self.fragment_layout} fragment layout is "
                     "inconsistent: "
                     f"rows={self.rows} * columns={self.cols} produces "
@@ -397,7 +402,7 @@ class CooperativeMatrixType(TypeNode):
             self.elements_per_lane,
         )
         if mapping is None:
-            raise ValueError(
+            raise CrossGLRefusal(
                 f"CooperativeMatrix fragment mapping '{self.fragment_mapping}' has "
                 "no registered contract for "
                 f"rows={self.rows}, columns={self.cols}, "
@@ -548,6 +553,7 @@ class ShaderStage(Enum):
     RAY_MISS = "ray_miss"
     RAY_ANY_HIT = "ray_any_hit"
     RAY_CALLABLE = "ray_callable"
+    NODE = "node"
 
 
 class ExecutionModel(Enum):
@@ -1833,7 +1839,9 @@ class CooperativeMatrixOpNode(ExpressionNode):
         **kwargs,
     ):
         if operation not in self.SUPPORTED_OPERATIONS:
-            raise ValueError(f"Unsupported cooperative matrix operation: {operation}")
+            raise CrossGLRefusal(
+                f"Unsupported cooperative matrix operation: {operation}"
+            )
         resolved_expression_type = (
             expression_type if expression_type is not None else result_type
         )

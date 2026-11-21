@@ -24,6 +24,7 @@ from ..ast import (
     VectorType,
 )
 from ..explicit_specializations import explicit_specializations
+from ..refusals import WGSLRefusal
 from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
@@ -124,7 +125,7 @@ class WGSLGenericFunctionSpecializer:
         )
         keys = (generator.function_signature_key(func), func.name)
         if any(key in mapping for key in keys for mapping in resource_maps):
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot specialize generic function "
                 f"'{func.name}' with texture, sampler or buffer parameters; "
                 "declare a concrete helper for resource arguments"
@@ -157,7 +158,7 @@ class WGSLGenericFunctionSpecializer:
         if not matches:
             if not explicit_args and self._concrete_overloads(base_name, arguments):
                 return node
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target cannot infer concrete type arguments for generic "
                 f"function '{base_name}' ({', '.join(self._parameter_list(generics))})"
                 f" from call arguments ({self._argument_list(argument_types)}); "
@@ -165,7 +166,7 @@ class WGSLGenericFunctionSpecializer:
             )
         matches.sort(key=lambda match: match[0], reverse=True)
         if len(matches) > 1 and matches[0][0] == matches[1][0]:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target found an ambiguous call to generic function "
                 f"'{base_name}' with arguments ({self._argument_list(argument_types)})"
             )
@@ -348,7 +349,7 @@ class WGSLGenericFunctionSpecializer:
         if existing is not None:
             return existing.name
         if len(self.specializations) >= _MAX_SPECIALIZATIONS:
-            raise ValueError(
+            raise WGSLRefusal(
                 "WGSL target stopped specializing generic function "
                 f"'{func.name}' after {_MAX_SPECIALIZATIONS} instantiations; "
                 "the generic instantiates itself without bound"

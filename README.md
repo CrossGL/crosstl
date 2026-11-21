@@ -12,14 +12,13 @@ directly and generate every target from one source file.
 
 ![CrossTL coverage per language and direction](https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg)
 
-CI measures this chart on every push to `main` and nightly. Every feature in a pinned upstream feature list gets a
-generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result.
-Compute probes also run, on the GPU or on Mesa's software drivers, where the translation must compute what the
-native probe computes: Metal, GLSL and SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
-reference compilers produce. A translation must also keep the built-ins and decorations, such as `flat` or the subgroup
-size, that the feature needs in the SPIR-V its compiler produces, or in the AIR for Metal. The score is supported /
-(supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
-lists every gap behind each bar.
+CI rebuilds this chart on every push to `main` and every night. Each language has a feature list generated from
+pinned upstream specifications and compiler tables. Every feature gets a probe: CrossTL translates it, and the
+language's reference compiler or validator checks the result. Where CI has a runtime for the language, on a GPU or
+on Mesa's software drivers, the translated compute probes also run and must compute what the native probes compute.
+CI has no runtime for CUDA, HIP, OpenCL C, Mojo or WebGL, so the chart marks those rows compile-only. The score is
+supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+defines each outcome and lists every gap behind each bar.
 
 ## Install
 
@@ -64,14 +63,17 @@ glsl = crosstl.translate("blur.hlsl", backend="opengl")
 crossgl = crosstl.translate("blur.hlsl", backend="cgl")
 ```
 
-or from the command line:
+or from the command line, where the target comes from the output file's extension:
 
 ```bash
-crosstl translate saxpy.cgl --backend directx --output saxpy.hlsl
+crosstl saxpy.cgl -o saxpy.hlsl
+crosstl blur.hlsl -o blur.metal
 crosstl translate saxpy.cgl --backend vulkan --output -
 ```
 
-`python -m crosstl` is the same command. The `examples/` directory has larger CrossGL programs.
+`--backend` chooses the target explicitly; without it, `-o -` writes CrossGL to standard output. An output file
+name whose extension names no language CrossTL writes is refused. `python -m crosstl` is the same command. The
+`examples/` directory has larger CrossGL programs.
 
 ## Languages
 

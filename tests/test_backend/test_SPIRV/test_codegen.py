@@ -6126,7 +6126,7 @@ def test_spirv_assembly_matrix_interface_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float4x4 model @input @location(0);" in generated_code
+    assert "mat4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -6415,7 +6415,7 @@ def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "float4 glPos @output @location(5);" in generated_code
-    assert "float4x4 mvp @output @location(0);" in generated_code
+    assert "mat4 mvp @output @location(0);" in generated_code
     assert "float4 v @input @location(0);" in generated_code
     assert "glPos = (mvp * v);" in generated_code
     assert "glPos = transformed;" not in generated_code
@@ -6878,7 +6878,7 @@ def test_spirv_assembly_push_constant_block_codegen():
         "cbuffer PushConstants @push_constant @buffer_layout(std430) {"
         in generated_code
     )
-    assert "float4x4 model;" in generated_code
+    assert "mat4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
 
@@ -6891,7 +6891,7 @@ def test_spirv_assembly_uniform_block_codegen():
     assert (
         "cbuffer Camera @set(0) @binding(2) @buffer_layout(std140) {" in generated_code
     )
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
 
@@ -8172,9 +8172,9 @@ def test_glslang_std450_matrix_extinst_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float2x2 inputMatrix @input @location(0);" in generated_code
+    assert "mat2 inputMatrix @input @location(0);" in generated_code
     assert "float determinantOut @output @location(0);" in generated_code
-    assert "float2x2 inverseOut @output @location(1);" in generated_code
+    assert "mat2 inverseOut @output @location(1);" in generated_code
     assert "determinantOut = determinant(inputMatrix);" in generated_code
     assert "inverseOut = inverse(inputMatrix);" in generated_code
     assert "spirv_GLSL_std_450_Determinant" not in generated_code
@@ -8762,7 +8762,7 @@ def test_vulkan_layout_blocks_emit_crossgl_resources():
     assert ast.global_variables[1].layout_type == "BUFFER"
     assert ast.global_variables[2].data_type == "vec3"
     assert "cbuffer Camera" in generated_code
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "struct Particles" in generated_code
     assert (
         "RWStructuredBuffer<Particles> particles @set(0) @binding(1);" in generated_code
@@ -8916,7 +8916,7 @@ def test_vulkan_uniform_block_instance_member_access_flattens_to_cbuffer_member(
     generated_code = generate_code(ast)
 
     assert "cbuffer Camera" in generated_code
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "gl_Position = (viewProj * float4(position, 1.0));" in generated_code
     assert "camera.viewProj" not in generated_code
 
@@ -8951,10 +8951,10 @@ def test_vulkan_samples_grid_uniform_members_alias_interface_outputs():
 
     parse_crossgl(generated_code)
     assert "cbuffer Ubo @binding(0) {" in generated_code
-    assert "float4x4 ubo_projection;" in generated_code
-    assert "float4x4 ubo_view;" in generated_code
-    assert "float4x4 view @output @location(2);" in generated_code
-    assert "float4x4 projection @output @location(6);" in generated_code
+    assert "mat4 ubo_projection;" in generated_code
+    assert "mat4 ubo_view;" in generated_code
+    assert "mat4 view @output @location(2);" in generated_code
+    assert "mat4 projection @output @location(6);" in generated_code
     assert "view = ubo_view;" in generated_code
     assert "projection = ubo_projection;" in generated_code
     assert "view = view;" not in generated_code
@@ -8979,7 +8979,7 @@ def test_vulkan_push_constant_block_emits_marked_cbuffer():
     assert ast.global_variables[0].push_constant is True
     assert "cbuffer PushConstants @push_constant {" in generated_code
     assert "cbuffer PushConstants {\n" not in generated_code
-    assert "float4x4 model;" in generated_code
+    assert "mat4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "gl_Position = (model * float4(1.0, 0.0, 0.0, 1.0));" in generated_code
     assert "pc.model" not in generated_code
@@ -8998,7 +8998,7 @@ def test_vulkan_layout_blocks_preserve_array_members():
         ("vec4", "positions[128]"),
         ("float", "masses[128]"),
     ]
-    assert "float4x4 transforms[64];" in generated_code
+    assert "mat4 transforms[64];" in generated_code
     assert "float4 weights[4];" in generated_code
     assert "float4 positions[128];" in generated_code
     assert "float masses[128];" in generated_code
@@ -9028,7 +9028,7 @@ def test_vulkan_layout_blocks_preserve_custom_struct_members():
     assert "float3 position;" in generated_code
     assert "cbuffer Scene" in generated_code
     assert "Light lights[4];" in generated_code
-    assert "float4x4 view;" in generated_code
+    assert "mat4 view;" in generated_code
 
 
 def test_vulkan_custom_struct_uniform_type_codegen():
@@ -10467,7 +10467,7 @@ def test_const_vector_declaration_codegen_maps_base_type():
     assert "const vec3 tint" not in generated_code
 
 
-def test_const_matrix_global_declaration_codegen_maps_base_type():
+def test_const_matrix_global_declaration_codegen_keeps_crossgl_matrix_type():
     code = """
     const mat4 VIEW = mat4(1.0);
     void main() {}
@@ -10477,8 +10477,9 @@ def test_const_matrix_global_declaration_codegen_maps_base_type():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "const float4x4 VIEW = float4x4(1.0);" in generated_code
-    assert "const mat4 VIEW" not in generated_code
+    # CrossGL spells a square matrix matN, which its matrix passes recognize; floatNxN is a plain type name.
+    assert "const mat4 VIEW = mat4(1.0);" in generated_code
+    assert "float4x4" not in generated_code
 
 
 def test_const_global_declaration_codegen():

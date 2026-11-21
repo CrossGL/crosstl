@@ -9,6 +9,7 @@ import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.translator.diagnostics import TranslationDiagnostic
+from tests.stage_entry_helpers import translate_each_entry
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ROOT = ROOT / "examples"
@@ -42,6 +43,22 @@ WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES = set(WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
 # workgroup barrier that emulates a warp shuffle outside uniform control flow (WGSL section 15.2), and its subgroups
 # have an implementation-chosen size, so the shuffle is refused with a typed diagnostic.
 CUDA_WARP_EXAMPLE_DIAGNOSTICS = (("gpu_computing/MatrixMultiplication.cgl", "wgsl"),)
+# Mojo has no lowering of warp shuffles, so the same kernel is refused rather than given a one-lane stand-in.
+MOJO_WARP_EXAMPLE_REFUSALS = (("gpu_computing/MatrixMultiplication.cgl", "mojo"),)
+
+# CUDA and HIP declare only __global__ kernels, so every example with a vertex or fragment entry is refused there.
+KERNEL_ONLY_EXAMPLE_REFUSALS = tuple(
+    (relative_path, backend)
+    for relative_path in (
+        "advanced/ArrayTest.cgl",
+        "advanced/GenericPatternMatching.cgl",
+        "cross_platform/UniversalPBRShader.cgl",
+        "graphics/ComplexShader.cgl",
+        "graphics/PerlinNoise.cgl",
+        "graphics/SimpleShader.cgl",
+    )
+    for backend in ("cuda", "hip")
+)
 
 MOJO_PLACEHOLDER_MARKERS = (
     "# CrossGL builtin placeholders",
@@ -56,19 +73,6 @@ MOJO_PLACEHOLDER_MARKERS = (
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
-        "compute/ParticleSimulation.cgl",
-        "mojo",
-        ("# CrossGL synchronization placeholders",),
-    ),
-    (
-        "gpu_computing/MatrixMultiplication.cgl",
-        "mojo",
-        (
-            "# CrossGL synchronization placeholders",
-            "# CrossGL wave/subgroup placeholders",
-        ),
-    ),
-    (
         "cross_platform/UniversalPBRShader.cgl",
         "mojo",
         ("# CrossGL resource placeholders",),
@@ -78,6 +82,11 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
         "mojo",
         ("# CrossGL resource placeholders",),
     ),
+)
+# Mojo has no global variables, and a storage block declared outside a function is not a kernel argument yet
+# (#2338), so Mojo output refuses these examples and names the declaration.
+MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS = (
+    ("compute/ParticleSimulation.cgl", "mojo", "particle_buffer: ParticleBuffer"),
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS = {
     (relative_path, backend)
@@ -89,7 +98,11 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
     for backend in codegen.backend_names()
     if (relative_path, backend) not in WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES
     and (relative_path, backend) not in CUDA_WARP_EXAMPLE_DIAGNOSTICS
+    and (relative_path, backend) not in MOJO_WARP_EXAMPLE_REFUSALS
     and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
+    and (relative_path, backend)
+    not in {(path, name) for path, name, _ in MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS}
+    and (relative_path, backend) not in KERNEL_ONLY_EXAMPLE_REFUSALS
 )
 
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
@@ -111,10 +124,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
-ADDITIONAL_FIXED_CASES = (
-    ("advanced/GenericPatternMatching.cgl", "hip"),
-    ("cross_platform/UniversalPBRShader.cgl", "slang"),
-)
+ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
@@ -206,11 +216,14 @@ def test_vulkan_example_outputs_validate_with_spirv_tools(tmp_path, relative_pat
 
 @pytest.mark.parametrize("relative_path,backend", FULL_BACKEND_EXAMPLE_CASES)
 def test_portable_examples_translate_to_all_registered_backends(relative_path, backend):
-    generated = crosstl.translate(
-        str(_example_path(relative_path)), backend=backend, format_output=False
+    # GLSL holds one compute entry per unit, so an example with two kernels is translated per kernel there.
+    artifacts = translate_each_entry(
+        _example_path(relative_path), backend, format_output=False
     )
 
-    _assert_generated_output_is_usable(generated)
+    assert artifacts
+    for generated in artifacts.values():
+        _assert_generated_output_is_usable(generated)
 
 
 @pytest.mark.parametrize("relative_path,backend", WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
@@ -233,6 +246,40 @@ def test_cuda_warp_examples_report_typed_refusals(relative_path, backend):
     assert raised.value.code == (
         f"project.translate.{backend}-cuda-warp-intrinsic-unsupported"
     )
+
+
+@pytest.mark.parametrize("relative_path,backend", KERNEL_ONLY_EXAMPLE_REFUSALS)
+def test_graphics_examples_are_refused_on_kernel_only_targets(relative_path, backend):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == f"project.translate.{backend}-stage-unsupported"
+    assert raised.value.stages == ("fragment", "vertex")
+
+
+@pytest.mark.parametrize("relative_path,backend", MOJO_WARP_EXAMPLE_REFUSALS)
+def test_mojo_warp_examples_report_typed_refusals(relative_path, backend):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == "project.translate.mojo-refused"
+    assert "warp" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,declaration", MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS
+)
+def test_mojo_module_variable_examples_report_typed_refusals(
+    relative_path, backend, declaration
+):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == "project.translate.mojo-refused"
+    assert f"declared outside a function ({declaration})" in str(raised.value)
 
 
 @pytest.mark.parametrize(

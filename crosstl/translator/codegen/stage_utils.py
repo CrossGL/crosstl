@@ -4,6 +4,7 @@ from ..host_workgroup_size import (  # noqa: F401
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..refusals import TargetRefusal
 from ..stage_utils import (
     STAGE_QUALIFIER_NAMES,
     normalize_stage_name,
@@ -283,7 +284,7 @@ def deduplicate_named_declarations(nodes, kind):
             continue
 
         if existing != signature:
-            raise ValueError(f"Conflicting {kind} declaration for '{name}'")
+            raise TargetRefusal(f"Conflicting {kind} declaration for '{name}'")
 
     return declarations
 

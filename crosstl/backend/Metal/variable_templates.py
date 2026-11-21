@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+from crosstl.translator.refusals import TranslationRefusal
+
 _DEFINITION = re.compile(
     r"\s*(?:static\s+)?constexpr\s+(?:static\s+)?(?:constant\s+)?(?:const\s+)?"
     r"(?P<type>(?:unsigned\s+(?:int|long|short|char)|unsigned|[A-Za-z_]\w*))\s+"
@@ -59,8 +61,10 @@ _SPELLING = {
 _ONE_TOKEN_TYPE = re.compile(r"[A-Za-z_]\w*")
 
 
-class MetalValueVariableTemplateError(ValueError):
+class MetalValueVariableTemplateError(TranslationRefusal):
     """A value variable template whose declared type has no functional-cast spelling."""
+
+    code = "project.translate.metal-variable-template-unsupported"
 
 
 def _cast_spelling(value_type: str) -> str:

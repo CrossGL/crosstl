@@ -58,6 +58,7 @@ from crosstl.translator.codegen.mojo_codegen import (
 from crosstl.translator.codegen.mojo_refusals import MojoLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.refusals import MojoRefusal
 
 
 def tokenize_code(code: str) -> List:
@@ -160,8 +161,8 @@ def test_struct():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "struct VSInput:" in generated_code
-        assert "struct VSOutput:" in generated_code
+        assert "struct VSInput(TrivialRegisterPassable):" in generated_code
+        assert "struct VSOutput(TrivialRegisterPassable):" in generated_code
         assert "var texCoord: SIMD[DType.float32, 2]" in generated_code
         assert "var color: SIMD[DType.float32, 4]" in generated_code
         print(generated_code)
@@ -181,7 +182,7 @@ def test_cbuffer_type_nodes_emit_mojo_storage_types():
 
     assert "var viewProj: CrossGLMatrixF32C4R4" in generated_code
     assert "var tint: SIMD[DType.float32, 4]" in generated_code
-    assert "var weights: InlineArray[Float32, 4]" in generated_code
+    assert "var weights: StaticTuple[Float32, 4]" in generated_code
     assert "MatrixType(" not in generated_code
     assert "VectorType(" not in generated_code
     assert "ArrayType(" not in generated_code
@@ -201,9 +202,14 @@ def test_cbuffer_members_emit_mojo_placeholders_for_unqualified_access():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "var values = InlineArray[Float32, 4]" in generated_code
-    assert "var colors = InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
-    assert "return (values[int(index)] + colors[0][0])" in generated_code
+    # Each constant-buffer member the function reads is an extra argument, since Mojo has no global variables.
+    assert "\nvar values" not in generated_code
+    assert "\nvar colors" not in generated_code
+    assert (
+        "def readValue(index: Int32, values: StaticTuple[Float32, 4], "
+        "colors: StaticTuple[SIMD[DType.float32, 4], 2]) -> Float32:"
+    ) in generated_code
+    assert "return (values[Int(index)] + colors[0][0])" in generated_code
     assert "use of unknown declaration" not in generated_code
 
 
@@ -218,7 +224,7 @@ def test_cbuffer_type_nodes_compile_with_mojo(tmp_path):
     };
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "cbuffer_type_nodes.mojo"
     source_path.write_text(generated_code)
@@ -260,17 +266,17 @@ def test_cbuffer_structs_register_for_mojo_value_usage(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "# CrossGL resource metadata: name=Camera kind=cbuffer" in generated_code
-    assert "struct Camera:" in generated_code
+    assert "struct Camera(ImplicitlyCopyable, Movable):" in generated_code
     assert "var transform: CrossGLMatrixF32C2R2" in generated_code
     assert "var tint: SIMD[DType.float32, 4]" in generated_code
-    assert "var weights: InlineArray[Float32, 2]" in generated_code
+    assert "var weights: Array[Float32, 2]" in generated_code
     assert "var camera = Camera(" in generated_code
-    assert "camera.weights[int(index)] = 2.0" in generated_code
-    assert "return camera.weights[int(index)]" in generated_code
+    assert "camera.weights[Int(index)] = 2.0" in generated_code
+    assert "return camera.weights[Int(index)]" in generated_code
     assert "var camera: Camera" not in generated_code
 
     generated_code += """
-fn main():
+def main():
     var camera = makeCamera(1)
     print(readTint(camera))
     print(readWeight(camera, 1))
@@ -299,7 +305,9 @@ def test_uniform_block_parses_as_mojo_cbuffer():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct Material:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct Material(TrivialRegisterPassable):" in generated_code
+    )
     assert "var tint: SIMD[DType.float32, 4]" in generated_code
     assert "var roughness: Float32" in generated_code
     assert (
@@ -326,7 +334,12 @@ def test_legacy_constants_cbuffer_nodes_emit_mojo_structs():
 
     generated_code = generate_code(ast)
 
-    assert generated_code.count("@value\nstruct LegacyConstants:") == 1
+    assert (
+        generated_code.count(
+            "@fieldwise_init\nstruct LegacyConstants(TrivialRegisterPassable):"
+        )
+        == 1
+    )
     assert "var scale: Float32" in generated_code
     assert "var offset: SIMD[DType.float32, 4]" in generated_code
     assert (
@@ -416,12 +429,12 @@ def test_braced_struct_constructors_zero_fill_nested_struct_and_array_fields():
 
     assert (
         "return Outer(inner=Inner(0.0, SIMD[DType.float32, 2](0.0, 0.0)), "
-        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=5.0)" in generated_code
+        "weights=StaticTuple[Float32, 2](fill=0.0), scalar=5.0)" in generated_code
     )
     assert (
         "return Outer(inner=Inner(value=1.0, "
         "offset=SIMD[DType.float32, 2](0.0, 0.0)), "
-        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=0.0)" in generated_code
+        "weights=StaticTuple[Float32, 2](fill=0.0), scalar=0.0)" in generated_code
     )
     assert "Outer(scalar=5.0)" not in generated_code
     assert (
@@ -469,16 +482,15 @@ def test_braced_struct_constructors_zero_fill_matrix_and_array_struct_fields():
 
     assert (
         f"return MatrixBundle(transform={matrix_zero}, "
-        f"leaves=InlineArray[Leaf, 2]({leaf_zero}, {leaf_zero}), scalar=7.0)"
-        in generated_code
+        f"leaves=StaticTuple[Leaf, 2](fill={leaf_zero}), scalar=7.0)" in generated_code
     )
     assert (
         f"return MatrixBundle(transform={matrix_zero}, "
-        f"leaves=InlineArray[Leaf, 2]({leaf_partial}, {leaf_zero}), scalar=0.0)"
+        f"leaves=StaticTuple[Leaf, 2]({leaf_partial}, {leaf_zero}), scalar=0.0)"
         in generated_code
     )
     assert "MatrixBundle(scalar=7.0)" not in generated_code
-    assert "leaves=InlineArray[Leaf, 2](Leaf(weight=3.0))" not in generated_code
+    assert "leaves=StaticTuple[Leaf, 2](Leaf(weight=3.0))" not in generated_code
 
 
 def test_braced_struct_positional_missing_fields_zero_fill_direct_ast():
@@ -544,7 +556,7 @@ def test_braced_struct_constructors_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     print(makePair(4.0, 5.0).y)
     print(makePositionalPair(6.0, 7.0).x)
     print(sumPair())
@@ -580,7 +592,7 @@ def test_braced_struct_matrix_and_array_struct_zero_fill_compile_with_mojo(tmp_p
         )
     )
     generated_code += """
-fn main():
+def main():
     print(makeMatrixBundle().transform.c0)
     print(makeMatrixBundle().leaves[1].offset)
     print(makeMatrixBundle().scalar)
@@ -624,7 +636,7 @@ def test_unit_enums_lower_to_mojo_aliases():
     assert "comptime Mode_Add = 0" in generated_code
     assert "comptime Mode_Multiply = 4" in generated_code
     assert "comptime Mode_Screen = 5" in generated_code
-    assert "fn choose(mode: Mode) -> Int32:" in generated_code
+    assert "def choose(mode: Mode) -> Int32:" in generated_code
     assert "if (mode == Mode_Multiply):" in generated_code
     assert "return Int32(Mode_Screen)" in generated_code
     assert "Mode::" not in generated_code
@@ -648,7 +660,7 @@ def test_unit_enums_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    print(choose(Mode_Multiply))\n"
+    generated_code += "\ndef main():\n    print(choose(Mode_Multiply))\n"
 
     source_path = tmp_path / "unit_enums.mojo"
     source_path.write_text(generated_code)
@@ -704,7 +716,7 @@ def test_enum_flag_values_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    print(mask())\n"
+    generated_code += "\ndef main():\n    print(mask())\n"
 
     source_path = tmp_path / "enum_flag_values.mojo"
     source_path.write_text(generated_code)
@@ -735,7 +747,7 @@ def test_integer_enum_underlying_types_are_preserved():
 
     assert "comptime Small = UInt16" in generated_code
     assert "comptime Small_Auto = 3" in generated_code
-    assert "fn pick() -> UInt16:" in generated_code
+    assert "def pick() -> UInt16:" in generated_code
     assert "return UInt16(Small_Auto)" in generated_code
 
 
@@ -762,7 +774,9 @@ def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct MaybeInt:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct MaybeInt(TrivialRegisterPassable):" in generated_code
+    )
     assert "var variant: Int32" in generated_code
     assert "var Some_0: Int32" in generated_code
     assert "var value: Float32" in generated_code
@@ -770,7 +784,7 @@ def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
     assert "comptime MaybeInt_Some = 0" in generated_code
     assert "comptime MaybeInt_Named = 1" in generated_code
     assert "comptime MaybeInt_None = 2" in generated_code
-    assert "fn MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
+    assert "def MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
     assert (
         "return MaybeInt(variant=MaybeInt_Some, Some_0=payload0, value=0.0, flag=False)"
     ) in generated_code
@@ -818,7 +832,7 @@ def test_payload_enum_variants_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(inspect(makeSome(7)))\n"
         "    print(inspect(makeNamed(3)))\n"
         "    print(inspect(makeNone()))\n"
@@ -893,9 +907,9 @@ def test_basic_shader():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert generated_code is not None
-        assert "fn vertex_main(" in generated_code
-        assert "fn fragment_main(" in generated_code
-        assert "fn main(" not in generated_code
+        assert "def vertex_main(" in generated_code
+        assert "def fragment_main(" in generated_code
+        assert "def main(" not in generated_code
         assert "# CrossGL shader stage: vertex" in generated_code
         assert "# CrossGL shader stage: fragment" in generated_code
         assert "@vertex_shader" not in generated_code
@@ -932,11 +946,11 @@ def test_vertex_fragment_shader_entries_compile_as_mojo_package(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn vertex_main(input: VSInput) -> VSOutput:" in generated_code
-    assert "fn fragment_main(input: VSOutput) -> SIMD[DType.float32, 4]:" in (
+    assert "def vertex_main(input: VSInput) -> VSOutput:" in generated_code
+    assert "def fragment_main(input: VSOutput) -> SIMD[DType.float32, 4]:" in (
         generated_code
     )
-    assert "fn main(" not in generated_code
+    assert "def main(" not in generated_code
 
     package_dir = tmp_path / "vf_shader_pkg"
     package_dir.mkdir()
@@ -968,7 +982,7 @@ def test_compute_non_executable_main_signatures_compile_as_mojo_package(tmp_path
                 }
             }
             """,
-            "fn compute_main(globalId: SIMD[DType.uint32, 4]) -> None:",
+            "def compute_main(globalId: SIMD[DType.uint32, 4]) -> None:",
             (
                 "# CrossGL parameter semantic: stage=compute name=globalId "
                 "semantic=global_invocation_id source=gl_GlobalInvocationID"
@@ -985,7 +999,7 @@ def test_compute_non_executable_main_signatures_compile_as_mojo_package(tmp_path
                 }
             }
             """,
-            "fn compute_main() -> Float32:",
+            "def compute_main() -> Float32:",
             None,
         ),
     ]
@@ -995,7 +1009,7 @@ def test_compute_non_executable_main_signatures_compile_as_mojo_package(tmp_path
 
         assert "# CrossGL shader stage: compute" in generated_code
         assert signature in generated_code
-        assert "fn main(" not in generated_code
+        assert "def main(" not in generated_code
         if semantic_comment is not None:
             assert semantic_comment in generated_code
             assert "globalId: SIMD[DType.uint32, 4]  #" not in generated_code
@@ -1305,11 +1319,19 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     compute_output = generate_code(parse_code(tokenize_code(compute_code)))
 
-    assert "fn compute_main(" in compute_output
-    assert "fn main(" not in compute_output
-    assert "globalId: SIMD[DType.uint32, 4]" in compute_output
-    assert "localId: SIMD[DType.uint32, 4]" in compute_output
-    assert "groupIndex: UInt32" in compute_output
+    assert "def compute_main(" in compute_output
+    assert "def main(" not in compute_output
+    # A Mojo kernel reads its GPU indices from global_idx and thread_idx instead of taking them as arguments.
+    assert "def compute_main() -> None:" in compute_output
+    assert (
+        "var globalId = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in compute_output
+    assert (
+        "var localId = SIMD[DType.uint32, 4](UInt32(thread_idx.x), "
+        "UInt32(thread_idx.y), UInt32(thread_idx.z), UInt32(0))"
+    ) in compute_output
+    assert "var groupIndex: UInt32 = UInt32(" in compute_output
     assert "globalId: SIMD[DType.uint32, 4]  #" not in compute_output
     assert (
         "# CrossGL parameter semantic: stage=compute name=globalId "
@@ -1456,7 +1478,7 @@ def test_direct_function_return_semantic_sv_target_produces_output_annotation():
         "# CrossGL return semantic: stage=fragment semantic=color(0) "
         "source=SV_Target" in generated_code
     )
-    assert "fn fragment_main() -> SIMD[DType.float32, 4]:" in generated_code
+    assert "def fragment_main() -> SIMD[DType.float32, 4]:" in generated_code
 
 
 def test_multiple_stage_parameters_with_different_semantics_all_handled():
@@ -1565,8 +1587,8 @@ def test_compute_stage_local_helper_functions_emit_before_entry_point():
     generated_code = generate_code(ast)
 
     assert len(next(iter(ast.stages.values())).local_functions) == 1
-    helper_signature = "fn helper(value: Float32) -> Float32:"
-    entry_signature = "fn main() -> None:"
+    helper_signature = "def helper(value: Float32) -> Float32:"
+    entry_signature = "def compute_main() -> None:"
     assert helper_signature in generated_code
     assert entry_signature in generated_code
     assert generated_code.index(helper_signature) < generated_code.index(
@@ -1593,9 +1615,9 @@ def test_stage_local_forward_declarations_do_not_emit_duplicate_mojo_functions()
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    signature = "fn helper(value: Float32) -> Float32:"
+    signature = "def helper(value: Float32) -> Float32:"
     assert generated_code.count(signature) == 1
-    assert "fn helper(value: Float32) -> Float32:\n    pass\n" not in generated_code
+    assert "def helper(value: Float32) -> Float32:\n    pass\n" not in generated_code
 
 
 def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
@@ -1613,7 +1635,7 @@ def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    print(readScale())\n"
+    generated_code += "\ndef main():\n    print(readScale())\n"
 
     assert "comptime SCALE = 2.0" in generated_code
     assert "comptime LIMIT = 4" in generated_code
@@ -1653,7 +1675,7 @@ def test_keyword_like_crossgl_bindings_are_escaped_for_mojo():
     assert "comptime alias_ = 2" in generated_code
     assert "    var return_: Int32" in generated_code
     assert "    var fn_: Int32" in generated_code
-    assert "fn fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
+    assert "def fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
     assert "var struct_: Int32 = ((var_ + loop) + alias_)" in generated_code
     assert "return struct_" in generated_code
 
@@ -1686,9 +1708,9 @@ def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
 
     assert "# CrossGL resource metadata: name=shadowMap kind=texture" in generated_code
     assert generated_code.count("var shadowMap: Texture2D = Texture2D()") == 1
-    assert "fn sampleShadow(uv: SIMD[DType.float32, 2])" in generated_code
+    assert "def sampleShadow(uv: SIMD[DType.float32, 2])" in generated_code
     assert "return sample(shadowMap, uv)" in generated_code
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
+    assert "def sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
 
 
 def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_path):
@@ -1746,8 +1768,8 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "# CrossGL mesh/task placeholders" in generated_code
-    assert "fn _crossgl_set_mesh_output_counts" in generated_code
-    assert "fn _crossgl_dispatch_mesh" in generated_code
+    assert "def _crossgl_set_mesh_output_counts" in generated_code
+    assert "def _crossgl_dispatch_mesh" in generated_code
     assert "# CrossGL shader stage: task" in generated_code
     assert "# CrossGL mesh/task stage: stage=task" in generated_code
     assert "# CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
@@ -1762,10 +1784,10 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
         "# CrossGL mesh parameter role: mesh_payload:payload->MeshPayload, "
         "vertices:verts->MeshVertex[3], indices:tris->uvec3[1]" in generated_code
     )
-    assert "fn task_main() -> None:" in generated_code
-    assert "fn object_main() -> None:" in generated_code
-    assert "fn amplification_main() -> None:" in generated_code
-    assert "fn mesh_main(" in generated_code
+    assert "def task_main() -> None:" in generated_code
+    assert "def object_main() -> None:" in generated_code
+    assert "def amplification_main() -> None:" in generated_code
+    assert "def mesh_main(" in generated_code
     assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
     assert "_crossgl_dispatch_mesh(2, 3, 4)" in generated_code
     assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
@@ -1924,8 +1946,8 @@ def test_geometry_stage_lowers_to_mojo_metadata_and_stream_placeholders():
         in generated_code
     )
     assert (
-        "fn geometry_main(input: InlineArray[GSInput, 3], "
-        "stream: CrossGLMojoTriangleStream[GSOutput]) -> None:" in generated_code
+        "def geometry_main(input: StaticTuple[GSInput, 3], "
+        "mut stream: CrossGLMojoTriangleStream[GSOutput]) -> None:" in generated_code
     )
     assert "stream.Append(output)" in generated_code
     assert "stream.RestartStrip()" in generated_code
@@ -2063,15 +2085,15 @@ def test_tessellation_stages_lower_to_mojo_metadata_and_patch_placeholders(tmp_p
         in generated_code
     )
     assert (
-        "fn HSConst(patch: CrossGLMojoInputPatch[HSInput, 3]) -> PatchConstants:"
+        "def HSConst(patch: CrossGLMojoInputPatch[HSInput, 3]) -> PatchConstants:"
         in generated_code
     )
     assert (
-        "fn tessellation_control_main("
+        "def tessellation_control_main("
         "patch: CrossGLMojoInputPatch[HSInput, 3]) -> HSOutput:" in generated_code
     )
     assert (
-        "fn tessellation_evaluation_main("
+        "def tessellation_evaluation_main("
         "patch: CrossGLMojoOutputPatch[HSOutput, 3]) -> None:" in generated_code
     )
     assert "output.position = patch[0].position" in generated_code
@@ -2250,8 +2272,8 @@ def test_ray_tracing_stages_emit_mojo_metadata_and_hooks(tmp_path):
     assert "# CrossGL shader stage: ray_miss" in generated_code
     assert "# CrossGL shader stage: ray_callable" in generated_code
     assert "# CrossGL shader stage: ray_intersection" in generated_code
-    assert "fn ray_generation_main() -> None:" in generated_code
-    assert "fn ray_closest_hit_main(" in generated_code
+    assert "def ray_generation_main() -> None:" in generated_code
+    assert "def ray_closest_hit_main(" in generated_code
     assert "semantic=ray_payload source=payload" in generated_code
     assert "semantic=hit_attribute source=hit_attribute" in generated_code
     assert "semantic=callable_data source=callableDataInEXT" in generated_code
@@ -2339,8 +2361,8 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn _crossgl_workgroup_barrier():" in generated_code
-    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "def _crossgl_workgroup_barrier():" in generated_code
+    assert "def _crossgl_memory_barrier():" in generated_code
     for helper in [
         "_crossgl_memory_barrier_shared",
         "_crossgl_memory_barrier_buffer",
@@ -2349,7 +2371,7 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
         "_crossgl_all_memory_barrier",
         "_crossgl_device_memory_barrier",
     ]:
-        assert f"fn {helper}():" in generated_code
+        assert f"def {helper}():" in generated_code
         assert generated_code.count(f"{helper}()") == 2
     assert generated_code.count("_crossgl_workgroup_barrier()") == 3
     assert generated_code.count("_crossgl_memory_barrier()") == 2
@@ -2362,7 +2384,7 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
     assert "groupMemoryBarrier()" not in generated_code
     assert "allMemoryBarrier()" not in generated_code
     assert "deviceMemoryBarrier()" not in generated_code
-    generated_code += "\nfn main():\n    sync()\n"
+    generated_code += "\ndef main():\n    sync()\n"
 
     source_path = tmp_path / "synchronization_builtins.mojo"
     source_path.write_text(generated_code)
@@ -2396,8 +2418,8 @@ def test_user_defined_synchronization_names_are_not_lowered():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn barrier() -> None:" in generated_code
-    assert "fn memoryBarrier() -> None:" in generated_code
+    assert "def barrier() -> None:" in generated_code
+    assert "def memoryBarrier() -> None:" in generated_code
     assert "_crossgl_workgroup_barrier" not in generated_code
     assert "_crossgl_memory_barrier" not in generated_code
 
@@ -2409,13 +2431,11 @@ def test_direct_sync_nodes_emit_mojo_helpers_without_ast_repr():
     memory_stmt = codegen.generate_statement(SyncNode("memoryBarrier"))
     shared_stmt = codegen.generate_statement(SyncNode("memoryBarrierShared"))
 
-    assert workgroup_stmt == "    _crossgl_workgroup_barrier()\n"
-    assert memory_stmt == "_crossgl_memory_barrier()\n"
-    assert shared_stmt == "_crossgl_memory_barrier_shared()\n"
+    assert workgroup_stmt == "    barrier()\n"
+    assert memory_stmt == "threadfence()\n"
+    assert shared_stmt == "threadfence()\n"
     assert "SyncNode(" not in workgroup_stmt
-    assert "_crossgl_workgroup_barrier" in codegen.required_sync_helpers
-    assert "_crossgl_memory_barrier" in codegen.required_sync_helpers
-    assert "_crossgl_memory_barrier_shared" in codegen.required_sync_helpers
+    assert codegen.requires_threadfence_import
 
 
 def test_direct_sync_nodes_reject_unknown_or_argument_forms():
@@ -2840,7 +2860,7 @@ def test_sampler3d_type_maps_to_texture3d():
     generated_code = generate_code(ast)
 
     assert "var volumeMap: Texture3D" in generated_code
-    assert "fn sampleVolume(tex: Texture3D, uvw:" in generated_code
+    assert "def sampleVolume(tex: Texture3D, uvw:" in generated_code
     assert "return sample(tex, uvw)" in generated_code
     assert "sampler3D" not in generated_code
 
@@ -2908,42 +2928,42 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "var cubeMap: TextureCube = TextureCube()" in generated_code
     assert "var probeArray: TextureCubeArray = TextureCubeArray()" in generated_code
     assert "var linearSampler: Sampler = Sampler(0, 0)" in generated_code
-    assert "fn sample(tex: Texture1D, coord: Float32)" in generated_code
+    assert "def sample(tex: Texture1D, coord: Float32)" in generated_code
     assert (
-        "fn sample(tex: Texture1DArray, coord: SIMD[DType.float32, 2])"
+        "def sample(tex: Texture1DArray, coord: SIMD[DType.float32, 2])"
         in generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
+    assert "def sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
     assert (
-        "fn sample(tex: Texture2DArray, coord: SIMD[DType.float32, 4])"
+        "def sample(tex: Texture2DArray, coord: SIMD[DType.float32, 4])"
         in generated_code
     )
-    assert "fn sample(tex: Texture3D, coord: SIMD[DType.float32, 4])" in generated_code
+    assert "def sample(tex: Texture3D, coord: SIMD[DType.float32, 4])" in generated_code
     assert (
-        "fn sample(tex: TextureCube, coord: SIMD[DType.float32, 4])" in generated_code
+        "def sample(tex: TextureCube, coord: SIMD[DType.float32, 4])" in generated_code
     )
     assert (
-        "fn sample(tex: TextureCubeArray, coord: SIMD[DType.float32, 4])"
-        in generated_code
-    )
-    assert (
-        "fn sample_lod(tex: Texture2D, coord: SIMD[DType.float32, 2], lod: Float32)"
+        "def sample(tex: TextureCubeArray, coord: SIMD[DType.float32, 4])"
         in generated_code
     )
     assert (
-        "fn sample_grad(tex: Texture2D, coord: SIMD[DType.float32, 2], "
+        "def sample_lod(tex: Texture2D, coord: SIMD[DType.float32, 2], lod: Float32)"
+        in generated_code
+    )
+    assert (
+        "def sample_grad(tex: Texture2D, coord: SIMD[DType.float32, 2], "
         "ddx: SIMD[DType.float32, 2], ddy: SIMD[DType.float32, 2])" in generated_code
     )
     assert (
-        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert (
-        "fn sample_lod_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_lod_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2], lod: Float32)" in generated_code
     )
     assert (
-        "fn sample_grad_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_grad_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2], ddx: SIMD[DType.float32, 2], "
         "ddy: SIMD[DType.float32, 2])" in generated_code
     )
@@ -2955,7 +2975,7 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "sample_sampler(tex, state, uv)" in generated_code
     assert "sample_lod_sampler(tex, state, uv, 1.0)" in generated_code
     assert "sample_grad_sampler(tex, state, uv, uv, uv)" in generated_code
-    assert "fn noop() -> None:\n    pass" in generated_code
+    assert "def noop() -> None:\n    pass" in generated_code
     assert "sampler1D" not in generated_code
     assert "sampler1DArray" not in generated_code
     assert "sampler2D" not in generated_code
@@ -2988,18 +3008,18 @@ def test_hlsl_texture2d_sampler_uses_concrete_mojo_resource_bindings(tmp_path):
     assert "var set: Int32" in generated_code
     assert "var binding: Int32" in generated_code
     assert "var texels: List[SIMD[DType.float32, 4]]" in generated_code
-    assert "fn _crossgl_texture_coord_index(coord: Float32, extent: Int32)" in (
+    assert "def _crossgl_texture_coord_index(coord: Float32, extent: Int32)" in (
         generated_code
     )
     assert "var g_texture: Texture2D = Texture2D(0, 0)" in generated_code
     assert "var g_sampler: Sampler = Sampler(0, 0)" in generated_code
-    assert "fn sample_sampler(tex: Texture2D, sampler: Sampler" in generated_code
+    assert "def sample_sampler(tex: Texture2D, sampler: Sampler" in generated_code
     assert "return tex.sample(coord, sampler)" in generated_code
     assert "return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)" not in generated_code
     assert "return sample_sampler(g_texture, g_sampler, uv)" in generated_code
 
     generated_code += """
-fn main():
+def main():
     var texels = List[SIMD[DType.float32, 4]]()
     texels.append(SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0))
     texels.append(SIMD[DType.float32, 4](0.0, 2.0, 0.0, 1.0))
@@ -3050,12 +3070,12 @@ def test_mojo_integer_texture_lod_uses_integer_vector_result_types():
         "var counterLayers: Texture2DArrayUInt = Texture2DArrayUInt()" in generated_code
     )
     assert (
-        "fn sample_lod_sampler(tex: Texture2DInt, sampler: Sampler, "
+        "def sample_lod_sampler(tex: Texture2DInt, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2], lod: Float32) -> SIMD[DType.int32, 4]:"
         in generated_code
     )
     assert (
-        "fn sample_lod_sampler(tex: Texture2DArrayUInt, sampler: Sampler, "
+        "def sample_lod_sampler(tex: Texture2DArrayUInt, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4], lod: Float32) -> SIMD[DType.uint32, 4]:"
         in generated_code
     )
@@ -3120,7 +3140,7 @@ def test_resource_placeholders_compile_with_mojo(tmp_path):
     void noop() {}
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "resource_placeholders.mojo"
     source_path.write_text(generated_code)
@@ -3209,7 +3229,7 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert ".CalculateLevelOfDetailUnclamped(" not in generated_code
     assert ".Load(" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "hlsl_sampled_texture_aliases.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -3355,7 +3375,7 @@ def test_mojo_vulkan_explicit_format_image_descriptor_arrays_remap_target_bindin
     assert "image_store(labelImages[1], pixel, label)" in generated_code
     assert "struct IImage2DInt4:" in generated_code
     assert (
-        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.int32, 4]:" in generated_code
     )
 
@@ -3446,7 +3466,7 @@ def test_hlsl_rw_texture_aliases_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_rw_texture_aliases.mojo"
     source_path.write_text(generated_code)
@@ -3580,30 +3600,31 @@ def test_hlsl_typed_float_image_aliases_preserve_mojo_value_signatures():
     assert "struct Image1D:\n" not in generated_code
     assert "struct Image2D:\n" not in generated_code
     assert (
-        "fn image_load(image: Image1DFloat, coord: Int32) -> Float32:" in generated_code
-    )
-    assert (
-        "fn image_store(image: Image1DFloat, coord: Int32, value: Float32):"
+        "def image_load(image: Image1DFloat, coord: Int32) -> Float32:"
         in generated_code
     )
     assert (
-        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_store(image: Image1DFloat, coord: Int32, value: Float32):"
+        in generated_code
+    )
+    assert (
+        "def image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float32, 2]):" in generated_code
     )
     assert (
-        "fn image_load(image: Image2DFloat3, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DFloat3, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DFloat3, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DFloat3, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float32, 4]):" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DArrayFloat4, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: Image2DArrayFloat4, coord: SIMD[DType.int32, 4], "
         "value: SIMD[DType.float32, 4]):" in generated_code
     )
 
@@ -3646,19 +3667,19 @@ def test_hlsl_typed_integer_image_aliases_preserve_vector_value_signatures():
     assert "var signedPairs: IImage2DInt2 = IImage2DInt2()" in generated_code
     assert "var counters: UImage2DUInt4 = UImage2DUInt4()" in generated_code
     assert (
-        "fn image_load(image: IImage2DInt2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: IImage2DInt2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.int32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: IImage2DInt2, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: IImage2DInt2, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.int32, 2]):" in generated_code
     )
     assert (
-        "fn image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.uint32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.uint32, 4]):" in generated_code
     )
 
@@ -3706,19 +3727,19 @@ def test_hlsl_16bit_typed_image_aliases_preserve_mojo_value_signatures():
     assert "var smallSigned: IImage2DInt16 = IImage2DInt16()" in generated_code
     assert "var smallCounters: UImage3DUInt164 = UImage3DUInt164()" in generated_code
     assert (
-        "fn image_store(image: Image2DHalf2, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DHalf2, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float16, 2]):" in generated_code
     )
     assert (
-        "fn image_load(image: Image2DHalf3, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DHalf3, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float16, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: IImage2DInt16, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: IImage2DInt16, coord: SIMD[DType.int32, 2], "
         "value: Int16):" in generated_code
     )
     assert (
-        "fn image_store(image: UImage3DUInt164, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: UImage3DUInt164, coord: SIMD[DType.int32, 4], "
         "value: SIMD[DType.uint16, 4]):" in generated_code
     )
 
@@ -3761,20 +3782,20 @@ def test_hlsl_typed_writable_image_arrays_preserve_mojo_element_placeholders():
 
     assert "struct Image2DFloat2:" in generated_code
     assert "struct UImage2DArrayUInt4:" in generated_code
-    assert "var rgImages = InlineArray[Image2DFloat2, 2]" in generated_code
-    assert "var counters = InlineArray[UImage2DArrayUInt4, 3]" in generated_code
+    assert "var rgImages = StaticTuple[Image2DFloat2, 2]" in generated_code
+    assert "var counters = StaticTuple[UImage2DArrayUInt4, 3]" in generated_code
     assert (
-        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
         "value: SIMD[DType.uint32, 4]):" in generated_code
     )
-    assert "return image_load(rgImages[int(slot)], pixel)" in generated_code
-    assert "image_store(rgImages[int(slot)], pixel, value)" in generated_code
-    assert "return image_load(counters[int(slot)], pixelLayer)" in generated_code
-    assert "image_store(counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "return image_load(rgImages[Int(slot)], pixel)" in generated_code
+    assert "image_store(rgImages[Int(slot)], pixel, value)" in generated_code
+    assert "return image_load(counters[Int(slot)], pixelLayer)" in generated_code
+    assert "image_store(counters[Int(slot)], pixelLayer, value)" in generated_code
     assert "RWTexture2D<float2>" not in generated_code
     assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
     assert ".Load(" not in generated_code
@@ -3802,7 +3823,7 @@ def test_hlsl_typed_writable_image_arrays_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_typed_writable_image_arrays.mojo"
     source_path.write_text(generated_code)
@@ -3838,21 +3859,21 @@ def test_hlsl_typed_writable_image_array_struct_members_preserve_mojo_placeholde
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct ResourceGroup:" in generated_code
-    assert "var rgImages: InlineArray[Image2DFloat2, 2]" in generated_code
-    assert "var counters: InlineArray[UImage2DArrayUInt4, 3]" in generated_code
+    assert "struct ResourceGroup(TrivialRegisterPassable):" in generated_code
+    assert "var rgImages: StaticTuple[Image2DFloat2, 2]" in generated_code
+    assert "var counters: StaticTuple[UImage2DArrayUInt4, 3]" in generated_code
     assert (
-        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
         "value: SIMD[DType.uint32, 4]):" in generated_code
     )
-    assert "return image_load(group.rgImages[int(slot)], pixel)" in generated_code
-    assert "image_store(group.rgImages[int(slot)], pixel, value)" in generated_code
-    assert "return image_load(group.counters[int(slot)], pixelLayer)" in generated_code
-    assert "image_store(group.counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "return image_load(group.rgImages[Int(slot)], pixel)" in generated_code
+    assert "image_store(group.rgImages[Int(slot)], pixel, value)" in generated_code
+    assert "return image_load(group.counters[Int(slot)], pixelLayer)" in generated_code
+    assert "image_store(group.counters[Int(slot)], pixelLayer, value)" in generated_code
     assert "RWTexture2D<float2>" not in generated_code
     assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
     assert ".Load(" not in generated_code
@@ -3877,23 +3898,23 @@ def test_hlsl_typed_writable_image_array_parameters_preserve_mojo_placeholders()
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn readParam(images: InlineArray[Image2DFloat2, 2], slot: Int32, "
+        "def readParam(images: StaticTuple[Image2DFloat2, 2], slot: Int32, "
         "pixel: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn writeParam(images: InlineArray[Image2DFloat2, 2], slot: Int32, "
+        "def writeParam(images: StaticTuple[Image2DFloat2, 2], slot: Int32, "
         "pixel: SIMD[DType.int32, 2], value: SIMD[DType.float32, 2]) -> None:"
         in generated_code
     )
     assert (
-        "fn readCounterParam(counters: InlineArray[UImage2DArrayUInt4, 3], "
+        "def readCounterParam(counters: StaticTuple[UImage2DArrayUInt4, 3], "
         "slot: Int32, pixelLayer: SIMD[DType.int32, 4]) -> "
         "SIMD[DType.uint32, 4]:" in generated_code
     )
-    assert "return image_load(images[int(slot)], pixel)" in generated_code
-    assert "image_store(images[int(slot)], pixel, value)" in generated_code
-    assert "return image_load(counters[int(slot)], pixelLayer)" in generated_code
-    assert "image_store(counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "return image_load(images[Int(slot)], pixel)" in generated_code
+    assert "image_store(images[Int(slot)], pixel, value)" in generated_code
+    assert "return image_load(counters[Int(slot)], pixelLayer)" in generated_code
+    assert "image_store(counters[Int(slot)], pixelLayer, value)" in generated_code
     assert "RWTexture2D<float2>" not in generated_code
     assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
     assert ".Load(" not in generated_code
@@ -3987,7 +4008,7 @@ def test_hlsl_typed_writable_image_array_members_and_parameters_compile_with_moj
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_typed_writable_image_array_members_params.mojo"
     source_path.write_text(generated_code)
@@ -4083,23 +4104,23 @@ def test_typed_image_array_branch_contexts_preserve_mojo_placeholders():
         "_crossgl_image_atomic_exchange_UImage2DArray_SIMD_DType_int32_4_UInt32"
     )
 
-    assert "struct ResourceGroup:" in generated_code
-    assert "var rgImages: InlineArray[Image2DFloat2, 2]" in generated_code
-    assert "var counters: InlineArray[UImage2DArray, 2]" in generated_code
+    assert "struct ResourceGroup(TrivialRegisterPassable):" in generated_code
+    assert "var rgImages: StaticTuple[Image2DFloat2, 2]" in generated_code
+    assert "var counters: StaticTuple[UImage2DArray, 2]" in generated_code
     assert (
-        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float32, 2]):" in generated_code
     )
-    assert f"fn {atomic_add}" in generated_code
-    assert f"fn {atomic_max}" in generated_code
-    assert f"fn {atomic_exchange}" in generated_code
+    assert f"def {atomic_add}" in generated_code
+    assert f"def {atomic_max}" in generated_code
+    assert f"def {atomic_exchange}" in generated_code
     assert (
         "return (image_load(group.rgImages[0], pixel) if useFirst else "
-        "image_load(group.rgImages[int(slot)], pixel))" in generated_code
+        "image_load(group.rgImages[Int(slot)], pixel))" in generated_code
     )
     assert (
         "var __cgl_match_value_0: SIMD[DType.float32, 2] = "
@@ -4109,14 +4130,14 @@ def test_typed_image_array_branch_contexts_preserve_mojo_placeholders():
         generated_code
     )
     assert (
-        "__cgl_match_value_0 = image_load(group.rgImages[int(slot)], pixel)"
+        "__cgl_match_value_0 = image_load(group.rgImages[Int(slot)], pixel)"
         in generated_code
     )
     assert "image_store(group.rgImages[0], pixel, value)" in generated_code
-    assert "image_store(group.rgImages[int(slot)], pixel, value)" in generated_code
+    assert "image_store(group.rgImages[Int(slot)], pixel, value)" in generated_code
     assert (
         f"return ({atomic_add}(group.counters[0], pixelLayer, value) if useFirst "
-        f"else {atomic_max}(group.counters[int(slot)], pixelLayer, value))"
+        f"else {atomic_max}(group.counters[Int(slot)], pixelLayer, value))"
         in generated_code
     )
     assert "var __cgl_match_value_1: UInt32 = 0" in generated_code
@@ -4126,7 +4147,7 @@ def test_typed_image_array_branch_contexts_preserve_mojo_placeholders():
     )
     assert (
         f"__cgl_match_value_1 = {atomic_exchange}("
-        "group.counters[int(slot)], pixelLayer, value)" in generated_code
+        "group.counters[Int(slot)], pixelLayer, value)" in generated_code
     )
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
@@ -4140,7 +4161,7 @@ def test_typed_image_array_branch_contexts_compile_with_mojo(tmp_path):
     generated_code = generate_code(
         parse_code(tokenize_code(_typed_image_array_branch_context_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "typed_image_array_branch_contexts.mojo"
     source_path.write_text(generated_code)
@@ -4427,10 +4448,10 @@ def test_hlsl_multisample_writable_texture_aliases_emit_mojo_image_helpers(
     assert f"var msImage: {image_type} = {image_type}()" in generated_code
     assert "return image_load(msImage, pixel, sampleIndex)" in generated_code
     assert "image_store(msImage, pixel, sampleIndex, value)" in generated_code
-    assert f"fn image_load(image: {image_type}, coord: {coord_mojo_type}" in (
+    assert f"def image_load(image: {image_type}, coord: {coord_mojo_type}" in (
         generated_code
     )
-    assert f"fn image_store(image: {image_type}, coord: {coord_mojo_type}" in (
+    assert f"def image_store(image: {image_type}, coord: {coord_mojo_type}" in (
         generated_code
     )
     assert resource_type not in generated_code
@@ -4481,7 +4502,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_mojo_image_helpers(
                 return Result::Ok(msImages);
             }
             """,
-            "var Ok_0: InlineArray[UImage2DMSArray, 2]",
+            "var Ok_0: StaticTuple[UImage2DMSArray, 2]",
             "RWTexture2DMSArray",
         ),
         (
@@ -4541,7 +4562,7 @@ def test_hlsl_multisample_writable_texture_aliases_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_multisample_writable_texture_aliases.mojo"
     source_path.write_text(generated_code)
@@ -4600,7 +4621,7 @@ def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_rasterizer_ordered_texture_aliases.mojo"
     source_path.write_text(generated_code)
@@ -4667,45 +4688,45 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
     assert "var rawBytes: RWByteAddressBuffer = RWByteAddressBuffer()" in (
         generated_code
     )
-    assert "InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert "StaticTuple[RWByteAddressBuffer, 2]" in generated_code
     assert (
         "# CrossGL resource metadata: name=bins kind=buffer set=1 "
         "binding=2 binding_source=explicit register=u2" in generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWBuffer[UInt32], index: UInt32) -> UInt32:"
+        "def buffer_load(buffer: RWBuffer[UInt32], index: UInt32) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWBuffer[UInt32], index: UInt32, value: UInt32):"
+        "def buffer_store(buffer: RWBuffer[UInt32], index: UInt32, value: UInt32):"
         in generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWStructuredBuffer[Int32], "
+        "def buffer_store(buffer: RWStructuredBuffer[Int32], "
         "index: UInt32, value: Int32):"
     ) in generated_code
     assert (
-        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        "def buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
+        "def buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
         in generated_code
     )
     assert (
-        "fn buffer_load3(buffer: RWByteAddressBuffer, "
+        "def buffer_load3(buffer: RWByteAddressBuffer, "
         "index: UInt32) -> SIMD[DType.uint32, 4]:"
     ) in generated_code
     assert (
-        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "def buffer_store4(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 4]):"
     ) in generated_code
     assert (
-        "fn buffer_dimensions(buffer: RWBuffer[UInt32], dimensions: UInt32):"
+        "def buffer_dimensions(buffer: RWBuffer[UInt32], dimensions: UInt32):"
         in generated_code
     )
     assert "return buffer_load(bins, index)" in generated_code
@@ -4718,10 +4739,10 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
     assert "buffer_store4(rawBytes, offset, value)" in generated_code
     assert "var __cgl_dimensions_0 = buffer_dimensions(bins)" in generated_code
     assert "count = UInt32(__cgl_dimensions_0[0])" in generated_code
-    assert "var previous: UInt32 = buffer_load(rawArray[int(slot)], offset)" in (
+    assert "var previous: UInt32 = buffer_load(rawArray[Int(slot)], offset)" in (
         generated_code
     )
-    assert "buffer_store(rawArray[int(slot)], offset, (previous + UInt32(1)))" in (
+    assert "buffer_store(rawArray[Int(slot)], offset, (previous + UInt32(1)))" in (
         generated_code
     )
     assert "RasterizerOrdered" not in generated_code
@@ -4773,7 +4794,7 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_rasterizer_ordered_buffer_aliases.mojo"
     source_path.write_text(generated_code)
@@ -4810,11 +4831,11 @@ def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers():
         "binding=1 binding_source=explicit register=u1" in generated_code
     )
     assert (
-        "fn buffer_load(buffer: Buffer[Float32], index: UInt32) -> Float32:"
+        "def buffer_load(buffer: Buffer[Float32], index: UInt32) -> Float32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWBuffer[Float32], index: UInt32, value: Float32):"
+        "def buffer_store(buffer: RWBuffer[Float32], index: UInt32, value: Float32):"
         in generated_code
     )
     assert "return buffer_load(inputValues, index)" in generated_code
@@ -4840,7 +4861,7 @@ def test_hlsl_typed_buffer_aliases_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_typed_buffer_aliases.mojo"
     source_path.write_text(generated_code)
@@ -4921,35 +4942,35 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "var signedImage: IImage2D = IImage2D()" in generated_code
     assert "var counterImage: UImage2D = UImage2D()" in generated_code
     assert (
-        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
-    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
-    assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
+    assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: UImage2DMS) -> Int32:" in generated_code
     assert "return SIMD[DType.int32, 2](tex.width, tex.height)" in generated_code
     assert "return tex.levels" in generated_code
     assert "return tex.samples" in generated_code
     assert "return image.samples" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
+        "def texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
     assert (
-        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
         "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
     )
-    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert (
-        "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
+        "def image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
         in generated_code
     )
     assert (
-        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        "def image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
         in generated_code
     )
     assert "return texture_size(tex, 0)" in generated_code
@@ -4999,10 +5020,10 @@ def test_resource_query_helpers_use_mojo_metadata_fields(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "struct Texture2D:" in generated_code
-    assert "fn __init__(inout self, set: Int32 = 0, binding: Int32 = 0" in (
+    assert "def __init__(out self, set: Int32 = 0, binding: Int32 = 0" in (
         generated_code
     )
-    assert "fn _crossgl_mip_dimension(value: Int32, lod: Int32) -> Int32:" in (
+    assert "def _crossgl_mip_dimension(value: Int32, lod: Int32) -> Int32:" in (
         generated_code
     )
     assert (
@@ -5024,7 +5045,7 @@ def test_resource_query_helpers_use_mojo_metadata_fields(tmp_path):
     assert "\nstruct Image2DArray:\n    pass\n" not in generated_code
 
     generated_code += """
-fn main():
+def main():
     var tex = Texture2D(width=640, height=480, levels=6)
     var array_tex = Texture2DArray(width=256, height=128, depth_or_layers=9, levels=8)
     var ms = Texture2DMS(width=128, height=64, samples=4)
@@ -5315,15 +5336,15 @@ def test_resource_size_target_shape_contexts_for_mojo_codegen():
         parse_code(tokenize_code(_resource_size_target_shape_source()))
     )
 
-    assert "fn texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
+    assert "def texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
     assert (
-        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
     assert (
-        "fn texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
     ) in generated_code
-    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert "var width: Int32 = texture_size(tex, 0)" in generated_code
     assert "var dims: SIMD[DType.int32, 2] = texture_size(tex, 0)" in generated_code
     assert "dims = image_size(image)" in generated_code
@@ -5381,13 +5402,13 @@ def test_nested_resource_size_target_shape_contexts_for_mojo_codegen():
         parse_code(tokenize_code(_nested_resource_size_target_shape_source()))
     )
 
-    assert "fn chooseDims" in generated_code
+    assert "def chooseDims" in generated_code
     assert (
         "return (texture_size(tex, 0) if useTexture else image_size(image))"
         in generated_code
     )
     assert (
-        "return InlineArray[SIMD[DType.int32, 2], 2]("
+        "return StaticTuple[SIMD[DType.int32, 2], 2]("
         "texture_size(tex, 0), image_size(image))"
     ) in generated_code
     assert "var info: SizeInfo = SizeInfo(" in generated_code
@@ -5410,18 +5431,18 @@ def test_nested_array_resource_size_target_shape_contexts_for_mojo_codegen():
         parse_code(tokenize_code(_nested_array_resource_size_target_shape_source()))
     )
 
-    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
-    nested_type = f"InlineArray[{row_type}, 2]"
+    row_type = "StaticTuple[SIMD[DType.int32, 2], 2]"
+    nested_type = f"StaticTuple[{row_type}, 2]"
     assert (
-        f"fn rowDims(tex: Texture2D, image: Image2D) -> {row_type}:" in generated_code
+        f"def rowDims(tex: Texture2D, image: Image2D) -> {row_type}:" in generated_code
     )
     assert (
-        f"fn nestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
+        f"def nestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
         in generated_code
     )
     assert f"var dims: {nested_type} = {nested_type}(" in generated_code
     assert (
-        f"fn directNestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
+        f"def directNestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
         in generated_code
     )
     assert (
@@ -5438,8 +5459,8 @@ def test_value_expression_resource_size_target_shape_contexts_for_mojo_codegen()
         parse_code(tokenize_code(_value_expression_resource_size_target_shape_source()))
     )
 
-    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
-    nested_type = f"InlineArray[{row_type}, 2]"
+    row_type = "StaticTuple[SIMD[DType.int32, 2], 2]"
+    nested_type = f"StaticTuple[{row_type}, 2]"
     assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
     assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
     assert "__cgl_match_value_0 = image_size(image)" in generated_code
@@ -5459,9 +5480,9 @@ def test_nested_match_resource_size_target_shape_contexts_for_mojo_codegen():
         parse_code(tokenize_code(_nested_match_resource_size_target_shape_source()))
     )
 
-    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
+    row_type = "StaticTuple[SIMD[DType.int32, 2], 2]"
     assert (
-        "fn collectMatchDims(mode: Int32, tex: Texture2D, image: Image2D) "
+        "def collectMatchDims(mode: Int32, tex: Texture2D, image: Image2D) "
         f"-> {row_type}:"
     ) in generated_code
     assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
@@ -5494,7 +5515,7 @@ def test_constructor_match_resource_size_target_shape_contexts_for_mojo_codegen(
         )
     )
 
-    assert "fn vectorMatchConstructor" in generated_code
+    assert "def vectorMatchConstructor" in generated_code
     assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
     assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
     assert "__cgl_match_value_0 = image_size(image)" in generated_code
@@ -5511,14 +5532,21 @@ def test_constructor_match_resource_size_target_shape_contexts_for_mojo_codegen(
     assert "__cgl_match_value_3 = texture_size(tex, 0)" in generated_code
     assert "__cgl_match_value_3 = 7" in generated_code
     assert "return Float32(__cgl_match_value_3)" in generated_code
-    assert "return Float32((texture_size(tex, 1) if highMip else 7))" in generated_code
-    assert "return Float32((image_size(image) if useWidth else 3))" in generated_code
+    assert (
+        "return Float32((texture_size(tex, 1) if highMip else Int32(7)))"
+        in generated_code
+    )
+    assert (
+        "return Float32((image_size(image) if useWidth else Int32(3)))"
+        in generated_code
+    )
     assert "var __cgl_match_value_4: Int32" in generated_code
     assert "__cgl_match_value_4 = texture_query_levels(tex)" in generated_code
     assert "__cgl_match_value_4 = 1" in generated_code
     assert "return Float32(__cgl_match_value_4)" in generated_code
     assert (
-        "return Float32((texture_samples(tex) if useSamples else 1))" in generated_code
+        "return Float32((texture_samples(tex) if useSamples else Int32(1)))"
+        in generated_code
     )
     assert (
         "return ((Float32(texture_size(strip)) + "
@@ -5810,7 +5838,7 @@ def test_match_expression_payload_enum_destructuring_patterns_compile_with_mojo(
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(inspect(MaybeInt_Some_make(5)))\n"
         "    print(inspect(MaybeInt_Some_make(3)))\n"
         "    print(inspect(MaybeInt_Named_make(8, True)))\n"
@@ -5961,7 +5989,7 @@ def test_match_expression_guarded_struct_destructuring_compile_with_mojo(tmp_pat
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(pick(Point(x=4, y=9)))\n"
         "    print(pick(Point(x=0, y=9)))\n"
     )
@@ -5997,7 +6025,7 @@ def test_match_expression_struct_destructuring_patterns_compile_with_mojo(tmp_pa
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n    var point = Point(x=4, y=9)\n    print(sum(point))\n"
+        "\ndef main():\n    var point = Point(x=4, y=9)\n    print(sum(point))\n"
     )
 
     source_path = tmp_path / "struct_destructuring.mojo"
@@ -6041,18 +6069,21 @@ def test_generic_payload_enum_variants_lower_to_specialized_mojo_structs():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct Result_int_int:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct Result_int_int(TrivialRegisterPassable):"
+        in generated_code
+    )
     assert "comptime Result_Ok = 0" in generated_code
     assert "comptime Result_Err = 1" in generated_code
     assert (
-        "fn Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
+        "def Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
         in generated_code
     )
     assert (
-        "fn Result_int_int_Err_make(payload0: Int32) -> Result_int_int:"
+        "def Result_int_int_Err_make(payload0: Int32) -> Result_int_int:"
         in generated_code
     )
-    assert "fn makeOk(value: Int32) -> Result_int_int:" in generated_code
+    assert "def makeOk(value: Int32) -> Result_int_int:" in generated_code
     assert "return Result_int_int_Ok_make(value)" in generated_code
     assert "if value.variant == Result_Ok:" in generated_code
     assert "else:\n        __cgl_match_value_0 = (value.Err_0 + 10)" in generated_code
@@ -6089,7 +6120,7 @@ def test_generic_payload_enum_variants_compile_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n    print(inspect(makeOk(7)))\n    print(inspect(makeErr(3)))\n"
+        "\ndef main():\n    print(inspect(makeOk(7)))\n    print(inspect(makeErr(3)))\n"
     )
 
     source_path = tmp_path / "generic_payload_enum.mojo"
@@ -6153,16 +6184,16 @@ def test_generic_payload_enum_struct_and_array_payload_bindings_for_mojo_codegen
         parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
     )
 
-    assert "struct Result_Payload_int:" in generated_code
+    assert "struct Result_Payload_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: Payload" in generated_code
-    assert "struct Result_int_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[Int32, 2]" in generated_code
+    assert "struct Result_int_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[Int32, 2]" in generated_code
     assert (
-        "Ok_0=Payload(0, InlineArray[Int32, 2](0, 0)), Err_0=payload0)"
+        "Ok_0=Payload(0, StaticTuple[Int32, 2](fill=0)), Err_0=payload0)"
         in generated_code
     )
-    assert "value.Ok_0.x + value.Ok_0.values[int(index)]" in generated_code
-    assert "value.Ok_0[int(index)]" in generated_code
+    assert "value.Ok_0.x + value.Ok_0.values[Int(index)]" in generated_code
+    assert "value.Ok_0[Int(index)]" in generated_code
     assert "Ok_0=Payload()" not in generated_code
     assert "value.Ok_0[0]" not in generated_code
     assert "value.Ok_0.values[index]" not in generated_code
@@ -6175,7 +6206,7 @@ def test_generic_payload_enum_struct_and_array_payloads_compile_with_mojo(tmp_pa
         parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
     )
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(inspectPayload(makePayloadResult(4, 5, 6), 1))\n"
         "    print(inspectArray(makeArray(7, 8), 1))\n"
     )
@@ -6353,53 +6384,53 @@ def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
         )
     )
 
-    assert "struct Result_ResourceSet_int:" in generated_code
+    assert "struct Result_ResourceSet_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: ResourceSet" in generated_code
-    assert "struct Result_ResourceSet_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[ResourceSet, 2]" in generated_code
+    assert "struct Result_ResourceSet_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[ResourceSet, 2]" in generated_code
     assert (
-        "Ok_0=ResourceSet(InlineArray[Texture2D, 2](Texture2D(), Texture2D()), "
-        "Sampler(), InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+        "Ok_0=ResourceSet(StaticTuple[Texture2D, 2](fill=Texture2D()), "
+        "Sampler(), StaticTuple[Image2D, 2](fill=Image2D())" in generated_code
     )
     assert "Ok_0=ResourceSet()" not in generated_code
     assert (
-        "sample_sampler(value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)"
+        "sample_sampler(value.Ok_0.textures[Int(slot)], value.Ok_0.state, uv)"
         in generated_code
     )
     assert (
         "sample_sampler(value.Ok_0.singleTexture, value.Ok_0.state, uv)"
         in generated_code
     )
-    assert "image_load(value.Ok_0.inputs[int(slot)], pixel)" in generated_code
+    assert "image_load(value.Ok_0.inputs[Int(slot)], pixel)" in generated_code
     assert "image_load(value.Ok_0.singleInput, pixel)" in generated_code
-    assert "buffer_load(value.Ok_0.values[int(slot)], index)" in generated_code
+    assert "buffer_load(value.Ok_0.values[Int(slot)], index)" in generated_code
     assert "buffer_load(value.Ok_0.singleValues, index)" in generated_code
-    assert "image_store(value.Ok_0.outputs[int(slot)], pixel, color)" in generated_code
+    assert "image_store(value.Ok_0.outputs[Int(slot)], pixel, color)" in generated_code
     assert "image_store(value.Ok_0.singleOutput, pixel, color)" in generated_code
-    assert "buffer_store(value.Ok_0.values[int(slot)], index, scalar)" in generated_code
+    assert "buffer_store(value.Ok_0.values[Int(slot)], index, scalar)" in generated_code
     assert "buffer_store(value.Ok_0.singleValues, index, scalar)" in generated_code
     assert (
-        "buffer_store4(value.Ok_0.rawBuffers[int(slot)], offset, data)"
+        "buffer_store4(value.Ok_0.rawBuffers[Int(slot)], offset, data)"
         in generated_code
     )
     assert "buffer_store4(value.Ok_0.singleRaw, offset, data)" in generated_code
     assert (
-        "sample_sampler(value.Ok_0[int(index)].textures[int(slot)], "
-        "value.Ok_0[int(index)].state, uv)" in generated_code
+        "sample_sampler(value.Ok_0[Int(index)].textures[Int(slot)], "
+        "value.Ok_0[Int(index)].state, uv)" in generated_code
     )
     assert (
-        "buffer_load(value.Ok_0[int(index)].values[int(slot)], bufferIndex)"
+        "buffer_load(value.Ok_0[Int(index)].values[Int(slot)], bufferIndex)"
         in generated_code
     )
     assert (
-        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2])" in generated_code
     )
-    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+    assert "def image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
     )
-    assert "fn buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
-    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "def buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "def buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
     assert "Result<" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
@@ -6414,7 +6445,7 @@ def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_pat
             tokenize_code(_generic_payload_enum_resource_struct_payload_source())
         )
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_payload_resource_struct_payloads.mojo"
     source_path.write_text(generated_code)
@@ -6991,38 +7022,57 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
         )
     )
 
-    assert "struct Result_sampler2D_int:" in generated_code
+    assert "struct Result_sampler2D_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: Texture2D" in generated_code
-    assert "struct Result_sampler2D_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[Texture2D, 2]" in generated_code
-    assert "struct Result_image2D_int:" in generated_code
+    assert "struct Result_sampler2D_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[Texture2D, 2]" in generated_code
+    assert "struct Result_image2D_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: Image2D" in generated_code
-    assert "struct Result_image2D_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[Image2D, 2]" in generated_code
-    assert "struct Result_sampler2DMS_int:" in generated_code
+    assert "struct Result_image2D_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[Image2D, 2]" in generated_code
+    assert "struct Result_sampler2DMS_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: Texture2DMS" in generated_code
-    assert "struct Result_sampler2DMS_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[Texture2DMS, 2]" in generated_code
-    assert "struct Result_image2DMS_int:" in generated_code
+    assert "struct Result_sampler2DMS_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[Texture2DMS, 2]" in generated_code
+    assert "struct Result_image2DMS_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: Image2DMS" in generated_code
-    assert "struct Result_image2DMS_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[Image2DMS, 2]" in generated_code
-    assert "struct Result_sampler2DMSArray_int:" in generated_code
+    assert "struct Result_image2DMS_2_int(TrivialRegisterPassable):" in generated_code
+    assert "var Ok_0: StaticTuple[Image2DMS, 2]" in generated_code
+    assert (
+        "struct Result_sampler2DMSArray_int(TrivialRegisterPassable):" in generated_code
+    )
     assert "var Ok_0: Texture2DMSArray" in generated_code
-    assert "struct Result_image2DMSArray_int:" in generated_code
+    assert (
+        "struct Result_image2DMSArray_int(TrivialRegisterPassable):" in generated_code
+    )
     assert "var Ok_0: Image2DMSArray" in generated_code
-    assert "struct Result_MSArrayBox_int:" in generated_code
+    assert "struct Result_MSArrayBox_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: MSArrayBox" in generated_code
-    assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
+    assert (
+        "struct Result_RWStructuredBuffer_int_int(TrivialRegisterPassable):"
+        in generated_code
+    )
     assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
-    assert "struct Result_ByteAddressBuffer_int:" in generated_code
+    assert (
+        "struct Result_ByteAddressBuffer_int(TrivialRegisterPassable):"
+        in generated_code
+    )
     assert "var Ok_0: ByteAddressBuffer" in generated_code
-    assert "struct Result_RWByteAddressBuffer_int:" in generated_code
+    assert (
+        "struct Result_RWByteAddressBuffer_int(TrivialRegisterPassable):"
+        in generated_code
+    )
     assert "var Ok_0: RWByteAddressBuffer" in generated_code
-    assert "struct Result_RWStructuredBuffer_int_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
-    assert "struct Result_RWByteAddressBuffer_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert (
+        "struct Result_RWStructuredBuffer_int_2_int(TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert "var Ok_0: StaticTuple[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert (
+        "struct Result_RWByteAddressBuffer_2_int(TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert "var Ok_0: StaticTuple[RWByteAddressBuffer, 2]" in generated_code
     assert "texture_size(value.Ok_0, 0)" in generated_code
     assert "image_size(value.Ok_0)" in generated_code
     assert "sample_sampler(value.Ok_0, state, uv)" in generated_code
@@ -7040,19 +7090,19 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
     assert "buffer_load4(value.Ok_0, offset)" in generated_code
     assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
-    assert "sample_sampler(value.Ok_0[int(slot)], state, uv)" in generated_code
-    assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
-    assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
-    assert "texel_fetch(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
-    assert "image_load(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
+    assert "sample_sampler(value.Ok_0[Int(slot)], state, uv)" in generated_code
+    assert "image_load(value.Ok_0[Int(slot)], pixel)" in generated_code
+    assert "image_store(value.Ok_0[Int(slot)], pixel, color)" in generated_code
+    assert "texel_fetch(value.Ok_0[Int(slot)], pixel, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0[Int(slot)], pixel, sampleIndex)" in generated_code
     assert (
-        "image_store(value.Ok_0[int(slot)], pixel, sampleIndex, color)"
+        "image_store(value.Ok_0[Int(slot)], pixel, sampleIndex, color)"
         in generated_code
     )
-    assert "buffer_load(value.Ok_0[int(slot)], index)" in generated_code
-    assert "buffer_store(value.Ok_0[int(slot)], index, scalar)" in generated_code
-    assert "buffer_load4(value.Ok_0[int(slot)], offset)" in generated_code
-    assert "buffer_store4(value.Ok_0[int(slot)], offset, data)" in generated_code
+    assert "buffer_load(value.Ok_0[Int(slot)], index)" in generated_code
+    assert "buffer_store(value.Ok_0[Int(slot)], index, scalar)" in generated_code
+    assert "buffer_load4(value.Ok_0[Int(slot)], offset)" in generated_code
+    assert "buffer_store4(value.Ok_0[Int(slot)], offset, data)" in generated_code
     assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
     assert "image_load(value.Ok_0.image, pixel)" in generated_code
     assert "texture_samples(value.Ok_0.tex)" in generated_code
@@ -7063,42 +7113,42 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
         "image_store(value.Ok_0.image, pixelLayer, sampleIndex, color)"
         in generated_code
     )
-    assert "fn reassignDirectPayloadWrapper() -> None:" in generated_code
+    assert "def reassignDirectPayloadWrapper() -> None:" in generated_code
     assert "value = Result_image2D_int_Err_make(0)" in generated_code
-    assert "fn texture_size(tex: Texture2D, lod: Int32)" in generated_code
-    assert "fn image_size(image: Image2D)" in generated_code
-    assert "fn image_store(image: Image2D, " in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def texture_size(tex: Texture2D, lod: Int32)" in generated_code
+    assert "def image_size(image: Image2D)" in generated_code
+    assert "def image_store(image: Image2D, " in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
         "lod: Int32)" in generated_code
     )
-    assert "fn texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
+        "def texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
         "lod: Int32)" in generated_code
     )
-    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert (
-        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "def image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
         "sample: Int32)" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
         "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
     )
-    assert "fn image_samples(image: Image2DMSArray) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMSArray) -> Int32:" in generated_code
     assert (
-        "fn image_load(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
+        "def image_load(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
         "sample: Int32)" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
         "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
     )
-    assert "fn buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
-    assert "fn buffer_load4(buffer: ByteAddressBuffer, " in generated_code
-    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "def buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "def buffer_load4(buffer: ByteAddressBuffer, " in generated_code
+    assert "def buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
     assert "Result<" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
@@ -7112,7 +7162,7 @@ def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_pat
             tokenize_code(_generic_payload_enum_direct_resource_payload_source())
         )
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_payload_direct_resource_payloads.mojo"
     source_path.write_text(generated_code)
@@ -8029,36 +8079,40 @@ def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
         parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
     )
 
-    assert "struct Result_QueryResources_int:" in generated_code
-    assert "var Ok_0: QueryResources" in generated_code
-    assert "struct Result_QueryResources_2_int:" in generated_code
-    assert "var Ok_0: InlineArray[QueryResources, 2]" in generated_code
     assert (
-        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "struct Result_QueryResources_int(TrivialRegisterPassable):" in generated_code
+    )
+    assert "var Ok_0: QueryResources" in generated_code
+    assert (
+        "struct Result_QueryResources_2_int(TrivialRegisterPassable):" in generated_code
+    )
+    assert "var Ok_0: StaticTuple[QueryResources, 2]" in generated_code
+    assert (
+        "def texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
-    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
-    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
-    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "def image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert "_crossgl_texture_query_lod_sampler_Texture2D_Sampler" in generated_code
-    assert "texture_size(value.Ok_0.textures[int(slot)], 0)" in generated_code
-    assert "texture_query_levels(value.Ok_0.textures[int(slot)])" in generated_code
-    assert "texture_samples(value.Ok_0.msTextures[int(slot)])" in generated_code
-    assert "image_size(value.Ok_0.images[int(slot)])" in generated_code
-    assert "image_samples(value.Ok_0.msImages[int(slot)])" in generated_code
+    assert "texture_size(value.Ok_0.textures[Int(slot)], 0)" in generated_code
+    assert "texture_query_levels(value.Ok_0.textures[Int(slot)])" in generated_code
+    assert "texture_samples(value.Ok_0.msTextures[Int(slot)])" in generated_code
+    assert "image_size(value.Ok_0.images[Int(slot)])" in generated_code
+    assert "image_samples(value.Ok_0.msImages[Int(slot)])" in generated_code
     assert (
-        "texel_fetch(value.Ok_0.msTextures[int(slot)], pixel, sampleIndex)"
+        "texel_fetch(value.Ok_0.msTextures[Int(slot)], pixel, sampleIndex)"
         in generated_code
     )
     assert (
         "_crossgl_texture_query_lod_sampler_Texture2D_Sampler_SIMD_DType_float32_2("
-        "value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)" in generated_code
+        "value.Ok_0.textures[Int(slot)], value.Ok_0.state, uv)" in generated_code
     )
     assert (
-        "texture_size(value.Ok_0[int(index)].textures[int(slot)], 0)" in generated_code
+        "texture_size(value.Ok_0[Int(index)].textures[Int(slot)], 0)" in generated_code
     )
-    assert "image_samples(value.Ok_0[int(index)].msImages[int(slot)])" in generated_code
+    assert "image_samples(value.Ok_0[Int(index)].msImages[Int(slot)])" in generated_code
     assert "textureSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
@@ -8073,7 +8127,7 @@ def test_generic_payload_enum_resource_query_bindings_compile_with_mojo(tmp_path
     generated_code = generate_code(
         parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_payload_resource_query_bindings.mojo"
     source_path.write_text(generated_code)
@@ -8300,25 +8354,25 @@ def test_helper_returned_resource_aliases_preserve_mojo_qualifiers_and_compile(
         parse_code(tokenize_code(_helper_returned_resource_alias_source()))
     )
 
-    assert "fn chooseInput(inputImage: Image2D) -> Image2D:" in generated_code
-    assert "fn chooseViaNestedHelper(outputImage: Image2D) -> Image2D:" in (
+    assert "def chooseInput(inputImage: Image2D) -> Image2D:" in generated_code
+    assert "def chooseViaNestedHelper(outputImage: Image2D) -> Image2D:" in (
         generated_code
     )
-    assert "var selected: Image2D = chooseInput(inputs[int(slot)])" in generated_code
+    assert "var selected: Image2D = chooseInput(inputs[Int(slot)])" in generated_code
     assert "return image_load(selected, pixel)" in generated_code
     assert (
-        "var selected: Image2D = chooseViaNestedHelper(outputs[int(slot)])"
+        "var selected: Image2D = chooseViaNestedHelper(outputs[Int(slot)])"
         in generated_code
     )
     assert "image_store(selected, pixel, color)" in generated_code
-    assert "return texture_size(chooseTexture(textures[int(slot)]), 0)" in (
+    assert "return texture_size(chooseTexture(textures[Int(slot)]), 0)" in (
         generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
     assert "textureSize(" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "helper_returned_resource_aliases.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -8459,11 +8513,12 @@ def test_generic_function_call_emits_concrete_specialization_for_mojo_codegen():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn fallback_zero_float(value: Float32, enabled: Bool) -> Float32:" in generated
+        "def fallback_zero_float(value: Float32, enabled: Bool) -> Float32:"
+        in generated
     )
     assert "return 0.0" in generated
     assert "return fallback_zero_float(value, False)" in generated
-    assert "fn fallback_zero(value: T" not in generated
+    assert "def fallback_zero(value: T" not in generated
     assert "return fallback_zero(value, False)" not in generated
     assert "T::zero" not in generated
 
@@ -8632,7 +8687,7 @@ def test_nested_generic_payload_enum_field_patterns_compile_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(inspect(RenderCommand_Draw_make(Option_int_Some_make(3), 4)))\n"
         "    print(inspect(RenderCommand_Draw_make(Option_int_None_make(), 4)))\n"
         "    print(inspect(RenderCommand_Clear_make()))\n"
@@ -8691,7 +8746,7 @@ def test_match_expression_guarded_bindings_compile_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += (
-        "\nfn main():\n"
+        "\ndef main():\n"
         "    print(guardedValue(0))\n"
         "    print(guardedValue(4))\n"
         "    print(guardedStatement(5))\n"
@@ -8772,8 +8827,8 @@ def test_match_argument_nested_array_resource_size_target_shape_direct_ir_for_mo
 
     generated_code = generate_code(ast)
 
-    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
-    nested_type = f"InlineArray[{row_type}, 2]"
+    row_type = "StaticTuple[SIMD[DType.int32, 2], 2]"
+    nested_type = f"StaticTuple[{row_type}, 2]"
     assert f"var __cgl_match_value_0: {nested_type} = {nested_type}(" in generated_code
     assert f"__cgl_match_value_0 = {nested_type}(" in generated_code
     assert (
@@ -9188,7 +9243,7 @@ def test_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
     generated_code = generate_code(
         parse_code(tokenize_code(_resource_size_target_shape_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9207,7 +9262,7 @@ def test_nested_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
     generated_code = generate_code(
         parse_code(tokenize_code(_nested_resource_size_target_shape_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9226,7 +9281,7 @@ def test_nested_array_resource_size_target_shape_contexts_compile_with_mojo(tmp_
     generated_code = generate_code(
         parse_code(tokenize_code(_nested_array_resource_size_target_shape_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_array_resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9247,7 +9302,7 @@ def test_value_expression_resource_size_target_shape_contexts_compile_with_mojo(
     generated_code = generate_code(
         parse_code(tokenize_code(_value_expression_resource_size_target_shape_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "value_expression_resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9266,7 +9321,7 @@ def test_nested_match_resource_size_target_shape_contexts_compile_with_mojo(tmp_
     generated_code = generate_code(
         parse_code(tokenize_code(_nested_match_resource_size_target_shape_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_match_resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9289,7 +9344,7 @@ def test_constructor_match_resource_size_target_shape_contexts_compile_with_mojo
             tokenize_code(_constructor_match_resource_size_target_shape_source())
         )
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "constructor_match_resource_size_target_shapes.mojo"
     source_path.write_text(generated_code)
@@ -9355,7 +9410,7 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "resource_query_image_placeholders.mojo"
     source_path.write_text(generated_code)
@@ -9636,26 +9691,26 @@ def test_multisample_resource_placeholders_compile_with_mojo(tmp_path):
     assert "struct Image2DMS:" in generated_code
     assert "struct UImage2DMSArray:" in generated_code
     assert (
-        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+        "def texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
     )
     assert (
-        "fn texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
         in generated_code
     )
     assert (
-        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], lod: Int32)"
+        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
     assert (
-        "fn texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
+        "def texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
         "lod: Int32)" in generated_code
     )
     assert (
-        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "def image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
         "sample: Int32) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: UImage2DMSArray, coord: SIMD[DType.int32, 4], "
+        "def image_store(image: UImage2DMSArray, coord: SIMD[DType.int32, 4], "
         "sample: Int32, value: UInt32):" in generated_code
     )
     assert "return texture_size(tex)" in generated_code
@@ -9663,7 +9718,7 @@ def test_multisample_resource_placeholders_compile_with_mojo(tmp_path):
     assert "return image_load(image, pixel, sampleIndex)" in generated_code
     assert "image_store(image, pixelLayer, sampleIndex, value)" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "multisample_resource_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -9692,12 +9747,12 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "var textures = InlineArray[Texture2D, 2]" in generated_code
-    assert "var images = InlineArray[Image2D, 2]" in generated_code
-    assert "return sample(textures[int(index)], uv)" in generated_code
-    assert "return image_load(images[int(index)], pixel)" in generated_code
+    assert "var textures = Array[Texture2D, 2]" in generated_code
+    assert "var images = Array[Image2D, 2]" in generated_code
+    assert "return sample(textures[Int(index)], uv)" in generated_code
+    assert "return image_load(images[Int(index)], pixel)" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "resource_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -9770,17 +9825,17 @@ def test_unsized_resource_arrays_use_mojo_lists_bindings_and_compile(tmp_path):
         "# CrossGL resource metadata: name=values kind=buffer set=0 "
         "binding=1 binding_source=automatic" in generated_code
     )
-    assert "sample_sampler(textures[int(index)], samplers[int(index)], uv)" in (
+    assert "sample_sampler(textures[Int(index)], samplers[Int(index)], uv)" in (
         generated_code
     )
-    assert "image_load(images[int(index)], pixel)" in generated_code
-    assert "buffer_load(values[int(index)], offset)" in generated_code
-    assert "buffer_load(rawBytes[int(index)], offset)" in generated_code
-    assert "buffer_store(rawOut[int(index)], offset, raw)" in generated_code
+    assert "image_load(images[Int(index)], pixel)" in generated_code
+    assert "buffer_load(values[Int(index)], offset)" in generated_code
+    assert "buffer_load(rawBytes[Int(index)], offset)" in generated_code
+    assert "buffer_store(rawOut[Int(index)], offset, raw)" in generated_code
     assert "texture(textures" not in generated_code
     assert "imageLoad(images" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "unsized_resource_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -9836,7 +9891,7 @@ def test_resource_binding_metadata_comments_compile_with_mojo(tmp_path):
         "binding=6 binding_source=explicit" in generated_code
     )
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "resource_binding_metadata.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -9881,7 +9936,7 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_mojo_codegen
     assert "sample_sampler(colorMap, linearSampler, uv)" in generated_code
     assert "sample_sampler(colorMap, pointSampler, uv)" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "texture_sampler_binding_namespaces.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -11265,9 +11320,9 @@ def test_match_selected_resource_array_aliases_remain_field_specific():
 
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
-    assert "image_load(wrapped.Ok_0.readable[int(slot)], pixel)" in generated_code
+    assert "image_load(wrapped.Ok_0.readable[Int(slot)], pixel)" in generated_code
     assert (
-        "image_store(wrapped.Ok_0.writable[int(slot)], pixel, value)" in generated_code
+        "image_store(wrapped.Ok_0.writable[Int(slot)], pixel, value)" in generated_code
     )
     assert "wrapped = __cgl_match_value_" in generated_code
     assert "Result<" not in generated_code
@@ -11551,12 +11606,12 @@ def test_nested_generic_resource_array_aliases_remain_field_specific():
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
     assert (
-        "image_load(__cgl_match_subject_0.Ok_0.payload.readable[int(slot)], pixel)"
+        "image_load(__cgl_match_subject_0.Ok_0.payload.readable[Int(slot)], pixel)"
         in generated_code
     )
     assert (
         "image_store("
-        "__cgl_match_subject_1.Ok_0.payload.writable[int(slot)], pixel, value)"
+        "__cgl_match_subject_1.Ok_0.payload.writable[Int(slot)], pixel, value)"
         in generated_code
     )
     assert "var __cgl_match_subject_0: Result_OuterPair_int" in generated_code
@@ -11673,11 +11728,11 @@ def test_image_prefixed_struct_array_return_aliases_remain_field_specific():
 
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
-    assert "struct ImageBox:" in generated_code
+    assert "struct ImageBox(TrivialRegisterPassable):" in generated_code
     assert "var readable: Image2DFloat2" in generated_code
     assert "var writable: Image2DFloat2" in generated_code
-    assert "image_load(selected[int(slot)].readable, pixel)" in generated_code
-    assert "image_store(selected[int(slot)].writable, pixel, value)" in generated_code
+    assert "image_load(selected[Int(slot)].readable, pixel)" in generated_code
+    assert "image_store(selected[Int(slot)].writable, pixel, value)" in generated_code
     assert "ImageBox kind=image" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
@@ -11812,13 +11867,32 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert not codegen.resource_access_aliasable_type("TextureBox<int>")
     assert not codegen.resource_access_aliasable_type("BufferBox<int>")
     assert not codegen.resource_access_aliasable_type("SamplerBox<float>")
-    assert "struct TextureBox[T: Copyable]:" in generated_code
-    assert "struct BufferBox[T: Copyable]:" in generated_code
-    assert "struct SamplerBox[T: Copyable]:" in generated_code
+    assert (
+        "struct TextureBox[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert (
+        "struct BufferBox[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert (
+        "struct SamplerBox[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
+    )
     assert "comptime TextureMode = Int32" in generated_code
-    assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
-    assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
-    assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
+    # Private variables, not resources: each function that uses one takes the kernel's local by reference.
+    assert (
+        "def readTextureBox(mut globalTextureBox: TextureBox[Int32], mut globalMode: TextureMode) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "def readBufferBox(mut globalBufferBox: BufferBox[Int32]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "def readSamplerBox(mut globalSamplerBox: SamplerBox[Float32]) -> Float32:"
+        in generated_code
+    )
     assert "var local: TextureBox[Int32] = TextureBox[Int32](3, 1)" in generated_code
     assert "var local: BufferBox[Int32] = BufferBox[Int32](5, 2)" in generated_code
     assert (
@@ -11843,10 +11917,8 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
         Box<T> left;
         Box<T> right;
     };
-    Box<int> globalBox;
-    Pair<float> globalPair;
 
-    int readBox(Box<int> payload) {
+    int readBox(Box<int> payload, Box<int> globalBox) {
         return payload.value + globalBox.value;
     }
 
@@ -11857,23 +11929,33 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
     codegen = MojoCodeGen()
     generated_code = codegen.generate(parse_code(tokenize_code(source)))
 
-    assert "struct Box[T: Copyable]:" in generated_code
-    assert "struct Pair[T: Copyable]:" in generated_code
-    assert "var left: Box[T]" in generated_code
-    assert "var right: Box[T]" in generated_code
-    assert "var globalBox = Box[Int32](0, 0)" in generated_code
     assert (
-        "var globalPair = Pair[Float32](Box[Float32](0.0, 0), Box[Float32](0.0, 0))"
-    ) in generated_code
-    assert "fn readBox(payload: Box[Int32]) -> Int32:" in generated_code
-    assert "fn readPair(payload: Pair[Float32]) -> Float32:" in generated_code
+        "struct Box[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert (
+        "struct Pair[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
+    )
+    assert "var left: Box[Self.T]" in generated_code
+    assert "var right: Box[Self.T]" in generated_code
+    assert (
+        "def readBox(payload: Box[Int32], globalBox: Box[Int32]) -> Int32:"
+        in generated_code
+    )
+    assert "def readPair(payload: Pair[Float32]) -> Float32:" in generated_code
     assert "return (payload.value + globalBox.value)" in generated_code
     assert "return (payload.left.value + payload.right.value)" in generated_code
     assert codegen.generic_struct_fields_for_type("Pair<float>") == {
         "left": "Box<float>",
         "right": "Box<float>",
     }
+    codegen.register_variable_type("globalPair", "Pair<float>")
     assert codegen.expression_path_result_type("globalPair.left.value") == "float"
+    assert (
+        codegen.zero_value_for_type("Pair<float>")
+        == "Pair[Float32](Box[Float32](0.0, 0), Box[Float32](0.0, 0))"
+    )
     assert "Box<int>" not in generated_code
     assert "Pair<float>" not in generated_code
 
@@ -11939,10 +12021,8 @@ def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
         Box<T> left;
         Box<T> right;
     };
-    Box<int> globalBox;
-    Pair<float> globalPair;
 
-    int readBox(Box<int> payload) {
+    int readBox(Box<int> payload, Box<int> globalBox) {
         return payload.value + globalBox.value;
     }
 
@@ -11951,7 +12031,7 @@ def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(source)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_specializations.mojo"
     source_path.write_text(generated_code)
@@ -12036,14 +12116,14 @@ def _generic_user_struct_function_body_ast():
 def test_generic_user_struct_function_bodies_emit_specialized_types():
     generated_code = generate_code(_generic_user_struct_function_body_ast())
 
-    assert "fn makeBox(v: Int32) -> Box[Int32]:" in generated_code
+    assert "def makeBox(v: Int32) -> Box[Int32]:" in generated_code
     assert "    var local: Box[Int32] = Box[Int32](v, 7)" in generated_code
     assert "    return local" in generated_code
-    assert "fn makePair(a: Int32, b: Int32) -> Pair[Int32]:" in generated_code
+    assert "def makePair(a: Int32, b: Int32) -> Pair[Int32]:" in generated_code
     assert (
         "    return Pair[Int32](Box[Int32](a, 1), Box[Int32](b, 2))" in generated_code
     )
-    assert "fn readPair(pair: Pair[Int32]) -> Int32:" in generated_code
+    assert "def readPair(pair: Pair[Int32]) -> Int32:" in generated_code
     assert "    var picked: Box[Int32] = pair.left" in generated_code
     assert "    return (picked.value + pair.right.tag)" in generated_code
     assert "Box<int>" not in generated_code
@@ -12053,7 +12133,7 @@ def test_generic_user_struct_function_bodies_emit_specialized_types():
 def test_generic_user_struct_function_bodies_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
     generated_code = generate_code(_generic_user_struct_function_body_ast())
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_function_bodies.mojo"
     source_path.write_text(generated_code)
@@ -12153,25 +12233,25 @@ def _generic_user_struct_array_and_ternary_ast():
 def test_generic_user_struct_arrays_and_ternaries_emit_specialized_types():
     generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
 
-    assert "fn chooseBox(useLeft: Bool) -> Int32:" in generated_code
+    assert "def chooseBox(useLeft: Bool) -> Int32:" in generated_code
     assert "    var left: Box[Int32] = Box[Int32](1, 2)" in generated_code
     assert "    var right: Box[Int32] = Box[Int32](3, 4)" in generated_code
     assert "    var chosen: Box[Int32] = (left if useLeft else right)" in generated_code
     assert "    return (chosen.value + chosen.tag)" in generated_code
-    assert "fn readBoxArray(index: Int32) -> Int32:" in generated_code
+    assert "def readBoxArray(index: Int32) -> Int32:" in generated_code
     assert (
-        "    var boxes: InlineArray[Box[Int32], 2] = "
-        "InlineArray[Box[Int32], 2](Box[Int32](1, 2), Box[Int32](3, 4))"
+        "    var boxes: StaticTuple[Box[Int32], 2] = "
+        "StaticTuple[Box[Int32], 2](Box[Int32](1, 2), Box[Int32](3, 4))"
         in generated_code
     )
-    assert "    return (boxes[int(index)].value + boxes[0].tag)" in generated_code
+    assert "    return (boxes[Int(index)].value + boxes[0].tag)" in generated_code
     assert "Box<int>" not in generated_code
 
 
 def test_generic_user_struct_arrays_and_ternaries_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
     generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_arrays_and_ternaries.mojo"
     source_path.write_text(generated_code)
@@ -12290,7 +12370,7 @@ def _generic_user_struct_match_context_ast():
 def test_generic_user_struct_match_contexts_emit_specialized_types():
     generated_code = generate_code(_generic_user_struct_match_context_ast())
 
-    assert "fn choosePair(mode: Int32) -> Pair[Int32]:" in generated_code
+    assert "def choosePair(mode: Int32) -> Pair[Int32]:" in generated_code
     assert (
         "    var __cgl_match_value_0: Pair[Int32] = "
         "Pair[Int32](Box[Int32](0, 0), Box[Int32](0, 0))" in generated_code
@@ -12304,10 +12384,10 @@ def test_generic_user_struct_match_contexts_emit_specialized_types():
         "Box[Int32](7, 8))" in generated_code
     )
     assert "    return __cgl_match_value_0" in generated_code
-    assert "fn readChosenPair(mode: Int32) -> Int32:" in generated_code
+    assert "def readChosenPair(mode: Int32) -> Int32:" in generated_code
     assert "    var selected: Pair[Int32] = __cgl_match_value_1" in generated_code
     assert "    return (selected.left.value + selected.right.tag)" in generated_code
-    assert "fn destructureConstructedPair() -> Int32:" in generated_code
+    assert "def destructureConstructedPair() -> Int32:" in generated_code
     assert (
         "    var __cgl_match_subject_0: Pair[Int32] = "
         "Pair[Int32](Box[Int32](10, 20), Box[Int32](30, 40))" in generated_code
@@ -12324,7 +12404,7 @@ def test_generic_user_struct_match_contexts_emit_specialized_types():
 def test_generic_user_struct_match_contexts_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
     generated_code = generate_code(_generic_user_struct_match_context_ast())
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_match_contexts.mojo"
     source_path.write_text(generated_code)
@@ -12344,8 +12424,6 @@ def _generic_user_struct_vector_matrix_payload_ast():
         T value;
         int tag;
     };
-    Holder<vec3> globalVec;
-    Holder<mat2> globalMat;
 
     Holder<vec3> makeVecHolder(vec3 value) {}
     Holder<mat2> makeMatHolder(mat2 value) {}
@@ -12395,19 +12473,22 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
     codegen = MojoCodeGen()
     generated_code = codegen.generate(_generic_user_struct_vector_matrix_payload_ast())
 
-    assert "struct Holder[T: Copyable]:" in generated_code
-    assert "struct CrossGLMatrixF32C2R2:" in generated_code
     assert (
-        "var globalVec = Holder[SIMD[DType.float32, 4]]("
-        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)" in generated_code
+        "struct Holder[T: TrivialRegisterPassable](TrivialRegisterPassable):"
+        in generated_code
     )
-    assert (
-        "var globalMat = Holder[CrossGLMatrixF32C2R2]("
+    assert "struct CrossGLMatrixF32C2R2(TrivialRegisterPassable):" in generated_code
+    assert codegen.zero_value_for_type("Holder<vec3>") == (
+        "Holder[SIMD[DType.float32, 4]]("
+        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)"
+    )
+    assert codegen.zero_value_for_type("Holder<mat2>") == (
+        "Holder[CrossGLMatrixF32C2R2]("
         "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
-        "SIMD[DType.float32, 2](0.0, 0.0)), 0)" in generated_code
+        "SIMD[DType.float32, 2](0.0, 0.0)), 0)"
     )
     assert (
-        "fn makeVecHolder(value: SIMD[DType.float32, 4]) -> "
+        "def makeVecHolder(value: SIMD[DType.float32, 4]) -> "
         "Holder[SIMD[DType.float32, 4]]:" in generated_code
     )
     assert (
@@ -12415,16 +12496,16 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
         "Holder[SIMD[DType.float32, 4]](value=value, tag=0)" in generated_code
     )
     assert (
-        "fn makeMatHolder(value: CrossGLMatrixF32C2R2) -> "
+        "def makeMatHolder(value: CrossGLMatrixF32C2R2) -> "
         "Holder[CrossGLMatrixF32C2R2]:" in generated_code
     )
     assert "return Holder[CrossGLMatrixF32C2R2](value, 9)" in generated_code
     assert (
-        "fn readVec(holder: Holder[SIMD[DType.float32, 4]]) -> "
+        "def readVec(holder: Holder[SIMD[DType.float32, 4]]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn readMat(holder: Holder[CrossGLMatrixF32C2R2]) -> "
+        "def readMat(holder: Holder[CrossGLMatrixF32C2R2]) -> "
         "CrossGLMatrixF32C2R2:" in generated_code
     )
     assert "return holder.value" in generated_code
@@ -12436,6 +12517,8 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
         "value": "mat2",
         "tag": "int",
     }
+    codegen.register_variable_type("globalVec", "Holder<vec3>")
+    codegen.register_variable_type("globalMat", "Holder<mat2>")
     assert codegen.expression_path_result_type("globalVec.value") == "vec3"
     assert codegen.expression_path_result_type("globalMat.value") == "mat2"
     assert "Holder<vec3>" not in generated_code
@@ -12447,7 +12530,7 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
 def test_generic_user_struct_vector_matrix_payloads_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
     generated_code = generate_code(_generic_user_struct_vector_matrix_payload_ast())
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_vector_matrix_payloads.mojo"
     source_path.write_text(generated_code)
@@ -12809,8 +12892,8 @@ def test_aggregate_target_shape_preserves_nested_explicit_constructors():
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
     assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
-    assert "var values = InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
-    assert "var transforms = InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+    assert "var values = StaticTuple[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "var transforms = StaticTuple[CrossGLMatrixF32C2R2, 1]" in generated_code
 
 
 @pytest.mark.parametrize(
@@ -12929,9 +13012,9 @@ def test_aggregate_target_shape_preserves_return_struct_field_constructors():
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
     assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
-    assert "struct AggregateBox:" in generated_code
-    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
-    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+    assert "struct AggregateBox(TrivialRegisterPassable):" in generated_code
+    assert "values=StaticTuple[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=StaticTuple[CrossGLMatrixF32C2R2, 1]" in generated_code
 
 
 @pytest.mark.parametrize(
@@ -13152,8 +13235,8 @@ def test_aggregate_target_shape_preserves_local_struct_alias_constructors():
 
     assert "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01" in generated_code
     assert "var box: AggregateBox = AggregateBox(" in generated_code
-    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
-    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+    assert "values=StaticTuple[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=StaticTuple[CrossGLMatrixF32C2R2, 1]" in generated_code
 
 
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
@@ -13205,10 +13288,10 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
 
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
-    assert "struct TextureBundle:" in generated_code
-    assert "struct BufferBundle:" in generated_code
-    assert "struct Result_TextureBundle_int:" in generated_code
-    assert "struct Result_BufferBundle_int:" in generated_code
+    assert "struct TextureBundle(TrivialRegisterPassable):" in generated_code
+    assert "struct BufferBundle(TrivialRegisterPassable):" in generated_code
+    assert "struct Result_TextureBundle_int(TrivialRegisterPassable):" in generated_code
+    assert "struct Result_BufferBundle_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: TextureBundle" in generated_code
     assert "var Ok_0: BufferBundle" in generated_code
     assert (
@@ -13310,16 +13393,16 @@ def test_struct_resource_field_buffer_access_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
-    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
-    assert "buffer_load(resources.values[int(slot)], index)" in generated_code
-    assert "buffer_store4(resources.rawBuffers[int(slot)], offset, data)" in (
+    assert "def buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "def buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "buffer_load(resources.values[Int(slot)], index)" in generated_code
+    assert "buffer_store4(resources.rawBuffers[Int(slot)], offset, data)" in (
         generated_code
     )
     assert ".Load(" not in generated_code
     assert ".Store4(" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "struct_resource_field_buffer_access.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -13358,40 +13441,40 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct ResourceSet:" in generated_code
-    assert "var inputValues: InlineArray[RWStructuredBuffer[Int32], 2]" in (
+    assert "struct ResourceSet(TrivialRegisterPassable):" in generated_code
+    assert "var inputValues: StaticTuple[RWStructuredBuffer[Int32], 2]" in (
         generated_code
     )
-    assert "var outputValues: InlineArray[RWStructuredBuffer[Int32], 2]" in (
+    assert "var outputValues: StaticTuple[RWStructuredBuffer[Int32], 2]" in (
         generated_code
     )
-    assert "var rawBuffers: InlineArray[RWByteAddressBuffer, 2]" in generated_code
-    assert "struct ResourceBundle:" in generated_code
+    assert "var rawBuffers: StaticTuple[RWByteAddressBuffer, 2]" in generated_code
+    assert "struct ResourceBundle(TrivialRegisterPassable):" in generated_code
     assert "var resources: ResourceSet" in generated_code
     assert "var bundle = ResourceBundle(ResourceSet(" in generated_code
-    assert "var bundles = InlineArray[ResourceBundle, 2]" in generated_code
+    assert "var bundles = StaticTuple[ResourceBundle, 2]" in generated_code
     assert (
-        "buffer_load(bundles[int(outer)].resources.inputValues[int(slot)], index)"
+        "buffer_load(bundles[Int(outer)].resources.inputValues[Int(slot)], index)"
         in generated_code
     )
     assert (
-        "buffer_store(bundle.resources.outputValues[int(slot)], index, value)"
+        "buffer_store(bundle.resources.outputValues[Int(slot)], index, value)"
         in generated_code
     )
     assert (
-        "buffer_store4(bundle.resources.rawBuffers[int(slot)], offset, data)"
+        "buffer_store4(bundle.resources.rawBuffers[Int(slot)], offset, data)"
         in generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWStructuredBuffer[Int32], "
+        "def buffer_store(buffer: RWStructuredBuffer[Int32], "
         "index: UInt32, value: Int32):" in generated_code
     )
     assert (
-        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "def buffer_store4(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
     )
     assert ".Load(" not in generated_code
@@ -13501,7 +13584,7 @@ def test_nested_struct_resource_array_containers_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_struct_resource_array_containers.mojo"
     source_path.write_text(generated_code)
@@ -13541,22 +13624,28 @@ def test_resource_struct_fields_default_initialize_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct ResourceSet:" in generated_code
-    assert "struct ResourceBundle:" in generated_code
+    assert "struct ResourceSet(ImplicitlyCopyable, Movable):" in generated_code
+    assert "struct ResourceBundle(ImplicitlyCopyable, Movable):" in generated_code
     assert "var bundle = ResourceBundle(" in generated_code
-    assert "InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
-    assert "InlineArray[Texture2D, 2](Texture2D(), Texture2D())" in generated_code
-    assert "InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    assert "Array[ResourceSet, 2](ResourceSet(" in generated_code
     assert (
-        "InlineArray[RWStructuredBuffer[Int32], 2]"
+        "Array[Texture2D, 2](Texture2D(), Texture2D(), __list_literal__=None)"
+        in generated_code
+    )
+    assert (
+        "Array[Image2D, 2](Image2D(), Image2D(), __list_literal__=None)"
+        in generated_code
+    )
+    assert (
+        "Array[RWStructuredBuffer[Int32], 2]"
         "(RWStructuredBuffer[Int32](), RWStructuredBuffer[Int32]())" in generated_code
     )
     assert (
-        "InlineArray[RWByteAddressBuffer, 2]"
+        "Array[RWByteAddressBuffer, 2]"
         "(RWByteAddressBuffer(), RWByteAddressBuffer())" in generated_code
     )
 
-    generated_code += "\nfn main():\n    var bundle = makeBundle()\n    _ = bundle\n"
+    generated_code += "\ndef main():\n    var bundle = makeBundle()\n    _ = bundle\n"
 
     source_path = tmp_path / "resource_struct_field_defaults.mojo"
     source_path.write_text(generated_code)
@@ -13611,28 +13700,31 @@ def test_resource_struct_arrays_default_initialize_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn chooseSet(sets: InlineArray[ResourceSet, 2], index: Int32)" in (
+    assert "def chooseSet(sets: Array[ResourceSet, 2], index: Int32)" in (
         generated_code
     )
-    assert "var locals = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert "var locals = Array[ResourceSet, 2](ResourceSet(" in generated_code
     assert (
-        "var locals = InlineArray[ResourceSet, 2](unsafe_uninitialized=True)"
-        not in generated_code
+        "var locals = Array[ResourceSet, 2](uninitialized=True)" not in generated_code
     )
     assert (
-        "textures=InlineArray[Texture2D, 2](Texture2D(), Texture2D())" in generated_code
+        "textures=Array[Texture2D, 2](Texture2D(), Texture2D(), __list_literal__=None)"
+        in generated_code
     )
-    assert "images=InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
     assert (
-        "InlineArray[RWStructuredBuffer[Int32], 2]"
+        "images=Array[Image2D, 2](Image2D(), Image2D(), __list_literal__=None)"
+        in generated_code
+    )
+    assert (
+        "Array[RWStructuredBuffer[Int32], 2]"
         "(RWStructuredBuffer[Int32](), RWStructuredBuffer[Int32]())" in generated_code
     )
     assert (
-        "InlineArray[RWByteAddressBuffer, 2]"
+        "Array[RWByteAddressBuffer, 2]"
         "(RWByteAddressBuffer(), RWByteAddressBuffer())" in generated_code
     )
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "resource_struct_array_defaults.mojo"
     source_path.write_text(generated_code)
@@ -13694,23 +13786,23 @@ def test_resource_struct_array_function_boundaries_compile_with_mojo(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
-        "InlineArray[ResourceSet, 2]:" in generated_code
+        "def cloneSets(sets: Array[ResourceSet, 2]) -> "
+        "Array[ResourceSet, 2]:" in generated_code
     )
     assert (
-        "fn replaceSets(owned sets: InlineArray[ResourceSet, 2], "
-        "replacement: ResourceSet, index: Int32) -> InlineArray[ResourceSet, 2]:"
+        "def replaceSets(var sets: Array[ResourceSet, 2], "
+        "replacement: ResourceSet, index: Int32) -> Array[ResourceSet, 2]:"
         in generated_code
     )
     assert (
-        "var changedSets: InlineArray[ResourceSet, 2] = "
+        "var changedSets: Array[ResourceSet, 2] = "
         "replaceSets(sets, replacement, index)" in generated_code
     )
-    assert "var sets = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
-    assert "unsafe_uninitialized=True" not in generated_code
+    assert "var sets = Array[ResourceSet, 2](ResourceSet(" in generated_code
+    assert "uninitialized=True" not in generated_code
 
     generated_code += (
-        "\nfn main():\n    var resourceSet = callBoundaries(1)\n    _ = resourceSet\n"
+        "\ndef main():\n    var resourceSet = callBoundaries(1)\n    _ = resourceSet\n"
     )
 
     source_path = tmp_path / "resource_struct_array_function_boundaries.mojo"
@@ -13783,48 +13875,48 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
-        "InlineArray[ResourceSet, 2]:" in generated_code
+        "def cloneSets(sets: Array[ResourceSet, 2]) -> "
+        "Array[ResourceSet, 2]:" in generated_code
     )
     assert (
-        "return sample_sampler(copied[0].textures[int(slot)], copied[0].state, uv)"
+        "return sample_sampler(copied[0].textures[Int(slot)], copied[0].state, uv)"
         in generated_code
     )
-    assert "return image_load(copied[0].inputs[int(slot)], pixel)" in generated_code
-    assert "image_store(copied[0].outputs[int(slot)], pixel, value)" in (generated_code)
-    assert "return buffer_load(copied[0].values[int(slot)], index)" in generated_code
-    assert "buffer_store(copied[0].values[int(slot)], index, value)" in generated_code
-    assert "return buffer_load(copied[0].rawBuffers[int(slot)], offset)" in (
+    assert "return image_load(copied[0].inputs[Int(slot)], pixel)" in generated_code
+    assert "image_store(copied[0].outputs[Int(slot)], pixel, value)" in (generated_code)
+    assert "return buffer_load(copied[0].values[Int(slot)], index)" in generated_code
+    assert "buffer_store(copied[0].values[Int(slot)], index, value)" in generated_code
+    assert "return buffer_load(copied[0].rawBuffers[Int(slot)], offset)" in (
         generated_code
     )
-    assert "buffer_store4(copied[0].rawBuffers[int(slot)], offset, data)" in (
+    assert "buffer_store4(copied[0].rawBuffers[Int(slot)], offset, data)" in (
         generated_code
     )
     assert (
-        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2])" in generated_code
     )
-    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+    assert "def image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
         in generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        "def buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "def buffer_store4(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
     )
-    assert "unsafe_uninitialized=True" not in generated_code
+    assert "uninitialized=True" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
     assert ".Store4(" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "resource_struct_array_member_operations.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -13956,61 +14048,61 @@ def test_resource_struct_array_branch_value_operations_compile_with_mojo(
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "return sample_sampler((left if useLeft else right).textures[int(slot)], "
+        "return sample_sampler((left if useLeft else right).textures[Int(slot)], "
         "(left if useLeft else right).state, uv)" in generated_code
     )
     assert (
-        "return image_load((left if useLeft else right)[0].inputs[int(slot)], pixel)"
+        "return image_load((left if useLeft else right)[0].inputs[Int(slot)], pixel)"
         in generated_code
     )
     assert (
-        "image_store((left if useLeft else right)[0].outputs[int(slot)], pixel, value)"
+        "image_store((left if useLeft else right)[0].outputs[Int(slot)], pixel, value)"
         in generated_code
     )
     assert (
-        "return buffer_load((left if useLeft else right).values[int(slot)], index)"
+        "return buffer_load((left if useLeft else right).values[Int(slot)], index)"
         in generated_code
     )
     assert (
-        "buffer_store((left if useLeft else right).values[int(slot)], index, value)"
+        "buffer_store((left if useLeft else right).values[Int(slot)], index, value)"
         in generated_code
     )
     assert (
-        "return buffer_load((left if useLeft else right).rawBuffers[int(slot)], offset)"
+        "return buffer_load((left if useLeft else right).rawBuffers[Int(slot)], offset)"
         in generated_code
     )
     assert (
-        "buffer_store4((left if useLeft else right).rawBuffers[int(slot)], "
+        "buffer_store4((left if useLeft else right).rawBuffers[Int(slot)], "
         "offset, data)" in generated_code
     )
-    assert "return image_load(__cgl_match_value_0[0].inputs[int(slot)], pixel)" in (
+    assert "return image_load(__cgl_match_value_0[0].inputs[Int(slot)], pixel)" in (
         generated_code
     )
-    assert "return buffer_load(__cgl_match_value_1.values[int(slot)], index)" in (
+    assert "return buffer_load(__cgl_match_value_1.values[Int(slot)], index)" in (
         generated_code
     )
     assert (
-        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "def sample_sampler(tex: Texture2D, sampler: Sampler, "
         "coord: SIMD[DType.float32, 2])" in generated_code
     )
-    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+    assert "def image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
         in generated_code
     )
     assert (
-        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "def buffer_store4(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
     )
-    assert "unsafe_uninitialized=True" not in generated_code
+    assert "uninitialized=True" not in generated_code
     assert "MatchNode" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
     assert ".Store4(" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "resource_struct_array_branch_values.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -14074,47 +14166,47 @@ def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholde
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct SampleSet:" in generated_code
-    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
-    assert "var states: InlineArray[Sampler, 2]" in generated_code
-    assert "var inputs: InlineArray[Image2D, 2]" in generated_code
-    assert "var outputs: InlineArray[Image2D, 2]" in generated_code
-    assert "struct SampleBundle:" in generated_code
+    assert "struct SampleSet(TrivialRegisterPassable):" in generated_code
+    assert "var textures: StaticTuple[Texture2D, 2]" in generated_code
+    assert "var states: StaticTuple[Sampler, 2]" in generated_code
+    assert "var inputs: StaticTuple[Image2D, 2]" in generated_code
+    assert "var outputs: StaticTuple[Image2D, 2]" in generated_code
+    assert "struct SampleBundle(TrivialRegisterPassable):" in generated_code
     assert "var resources: SampleSet" in generated_code
     assert "var bundle = SampleBundle(SampleSet(" in generated_code
-    assert "var bundles = InlineArray[SampleBundle, 2]" in generated_code
+    assert "var bundles = StaticTuple[SampleBundle, 2]" in generated_code
     assert (
-        "fn sampleSetParam(resources: SampleSet, slot: Int32, "
+        "def sampleSetParam(resources: SampleSet, slot: Int32, "
         "uv: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn sampleBundleParam(bundles: InlineArray[SampleBundle, 2], "
+        "def sampleBundleParam(bundles: StaticTuple[SampleBundle, 2], "
         "outer: UInt32, slot: Int32, uv: SIMD[DType.float32, 2]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "return sample(bundles[int(outer)].resources.textures[int(slot)], uv)"
+        "return sample(bundles[Int(outer)].resources.textures[Int(slot)], uv)"
         in generated_code
     )
-    assert "return image_load(bundle.resources.inputs[int(slot)], pixel)" in (
+    assert "return image_load(bundle.resources.inputs[Int(slot)], pixel)" in (
         generated_code
     )
-    assert "image_store(bundle.resources.outputs[int(slot)], pixel, value)" in (
-        generated_code
-    )
-    assert (
-        "return sample_sampler(resources.textures[int(slot)], "
-        "resources.states[int(slot)], uv)" in generated_code
-    )
-    assert "image_store(resources.outputs[int(slot)], pixel, value)" in generated_code
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
-    )
-    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+    assert "image_store(bundle.resources.outputs[Int(slot)], pixel, value)" in (
         generated_code
     )
     assert (
-        "fn image_store(image: Image2D, coord: SIMD[DType.int32, 2], "
+        "return sample_sampler(resources.textures[Int(slot)], "
+        "resources.states[Int(slot)], uv)" in generated_code
+    )
+    assert "image_store(resources.outputs[Int(slot)], pixel, value)" in generated_code
+    assert "def sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "def image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "def image_store(image: Image2D, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float32, 4]):" in generated_code
     )
     assert "sampler2D" not in generated_code
@@ -14249,7 +14341,7 @@ def test_nested_sampled_image_resource_array_containers_compile_with_mojo(tmp_pa
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_sampled_image_resource_array_containers.mojo"
     source_path.write_text(generated_code)
@@ -14326,78 +14418,78 @@ def test_nested_sampled_image_query_resource_array_containers_for_mojo_codegen()
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct QuerySet:" in generated_code
-    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
-    assert "var multisampled: InlineArray[Texture2DMS, 2]" in generated_code
-    assert "var images: InlineArray[Image2D, 2]" in generated_code
-    assert "var msImages: InlineArray[Image2DMS, 2]" in generated_code
-    assert "var msOutputs: InlineArray[Image2DMS, 2]" in generated_code
-    assert "var bundles = InlineArray[QueryBundle, 2]" in generated_code
+    assert "struct QuerySet(TrivialRegisterPassable):" in generated_code
+    assert "var textures: StaticTuple[Texture2D, 2]" in generated_code
+    assert "var multisampled: StaticTuple[Texture2DMS, 2]" in generated_code
+    assert "var images: StaticTuple[Image2D, 2]" in generated_code
+    assert "var msImages: StaticTuple[Image2DMS, 2]" in generated_code
+    assert "var msOutputs: StaticTuple[Image2DMS, 2]" in generated_code
+    assert "var bundles = StaticTuple[QueryBundle, 2]" in generated_code
     assert (
-        "fn paramImageSamples(bundles: InlineArray[QueryBundle, 2], "
+        "def paramImageSamples(bundles: StaticTuple[QueryBundle, 2], "
         "outer: UInt32, slot: Int32) -> Int32:" in generated_code
     )
     assert (
-        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
-    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
-    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
-    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "def image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
         "lod: Int32)" in generated_code
     )
     assert (
-        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "def image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
         "sample: Int32) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
         "sample: Int32, value: SIMD[DType.float32, 4]):" in generated_code
     )
-    assert "fn image_size(image: Texture2D)" not in generated_code
-    assert "fn image_size(image: Texture2DMS)" not in generated_code
-    assert "fn texture_size(tex: Image2D)" not in generated_code
-    assert "fn texture_size(tex: Image2DMS)" not in generated_code
+    assert "def image_size(image: Texture2D)" not in generated_code
+    assert "def image_size(image: Texture2DMS)" not in generated_code
+    assert "def texture_size(tex: Image2D)" not in generated_code
+    assert "def texture_size(tex: Image2DMS)" not in generated_code
     assert (
-        "return texture_size(bundles[int(outer)].resources.textures[int(slot)], 0)"
+        "return texture_size(bundles[Int(outer)].resources.textures[Int(slot)], 0)"
         in generated_code
     )
     assert (
-        "return texture_query_levels(bundle.resources.textures[int(slot)])"
+        "return texture_query_levels(bundle.resources.textures[Int(slot)])"
         in generated_code
     )
     assert (
-        "return texture_samples(bundle.resources.multisampled[int(slot)])"
+        "return texture_samples(bundle.resources.multisampled[Int(slot)])"
         in generated_code
     )
     assert (
-        "return image_size(bundles[int(outer)].resources.images[int(slot)])"
+        "return image_size(bundles[Int(outer)].resources.images[Int(slot)])"
         in generated_code
     )
     assert (
-        "return image_samples(bundle.resources.msImages[int(slot)])" in generated_code
+        "return image_samples(bundle.resources.msImages[Int(slot)])" in generated_code
     )
     assert (
         "return texel_fetch("
-        "bundle.resources.multisampled[int(slot)], pixel, sampleIndex)"
+        "bundle.resources.multisampled[Int(slot)], pixel, sampleIndex)"
         in generated_code
     )
     assert (
-        "return image_load(bundle.resources.msImages[int(slot)], pixel, sampleIndex)"
+        "return image_load(bundle.resources.msImages[Int(slot)], pixel, sampleIndex)"
         in generated_code
     )
     assert (
         "image_store("
-        "bundle.resources.msOutputs[int(slot)], pixel, sampleIndex, value)"
+        "bundle.resources.msOutputs[Int(slot)], pixel, sampleIndex, value)"
         in generated_code
     )
-    assert "return texture_size(resources.textures[int(slot)], 0)" in generated_code
+    assert "return texture_size(resources.textures[Int(slot)], 0)" in generated_code
     assert (
         "return image_samples("
-        "bundles[int(outer)].resources.msImages[int(slot)])" in generated_code
+        "bundles[Int(outer)].resources.msImages[Int(slot)])" in generated_code
     )
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
@@ -14663,7 +14755,7 @@ def test_nested_sampled_image_query_resource_array_containers_compile_with_mojo(
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_sampled_image_query_resource_array_containers.mojo"
     source_path.write_text(generated_code)
@@ -14718,45 +14810,46 @@ def test_nested_hlsl_member_resource_query_containers_for_mojo_codegen():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct MemberSet:" in generated_code
-    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
-    assert "var multisampled: InlineArray[Texture2DMS, 2]" in generated_code
-    assert "var images: InlineArray[Image2DFloat2, 2]" in generated_code
-    assert "var bundles = InlineArray[MemberBundle, 2]" in generated_code
-    assert "fn texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "struct MemberSet(TrivialRegisterPassable):" in generated_code
+    assert "var textures: StaticTuple[Texture2D, 2]" in generated_code
+    assert "var multisampled: StaticTuple[Texture2DMS, 2]" in generated_code
+    assert "var images: StaticTuple[Image2DFloat2, 2]" in generated_code
+    assert "var bundles = StaticTuple[MemberBundle, 2]" in generated_code
+    assert "def texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
         "lod: Int32)" in generated_code
     )
     assert (
-        "fn image_size(image: Image2DFloat2) -> SIMD[DType.int32, 2]:" in generated_code
+        "def image_size(image: Image2DFloat2) -> SIMD[DType.int32, 2]:"
+        in generated_code
     )
     assert (
-        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.float32, 2]:" in generated_code
     )
     assert (
-        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.float32, 2]):" in generated_code
     )
     assert (
-        "return texture_size(bundles[int(outer)].resources.textures[int(slot)])"
+        "return texture_size(bundles[Int(outer)].resources.textures[Int(slot)])"
         in generated_code
     )
     assert (
         "return texel_fetch("
-        "bundle.resources.multisampled[int(slot)], pixel, sampleIndex)"
+        "bundle.resources.multisampled[Int(slot)], pixel, sampleIndex)"
         in generated_code
     )
-    assert "return image_size(bundle.resources.images[int(slot)])" in generated_code
+    assert "return image_size(bundle.resources.images[Int(slot)])" in generated_code
     assert (
-        "return image_load(bundle.resources.images[int(slot)], pixel)" in generated_code
+        "return image_load(bundle.resources.images[Int(slot)], pixel)" in generated_code
     )
     assert (
-        "image_store(bundle.resources.images[int(slot)], pixel, value)"
+        "image_store(bundle.resources.images[Int(slot)], pixel, value)"
         in generated_code
     )
-    assert "return texture_size(resources.textures[int(slot)])" in generated_code
+    assert "return texture_size(resources.textures[Int(slot)])" in generated_code
     assert "Texture2D<float4>" not in generated_code
     assert "Texture2DMS<float4>" not in generated_code
     assert "RWTexture2D<float2>" not in generated_code
@@ -14904,7 +14997,7 @@ def test_nested_hlsl_member_resource_query_containers_compile_with_mojo(tmp_path
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "nested_hlsl_member_resource_query_containers.mojo"
     source_path.write_text(generated_code)
@@ -14956,24 +15049,25 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in (
+    assert "def texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in (
         generated_code
     )
     assert (
-        "fn texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
     ) in generated_code
     assert (
-        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+        "def texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
     )
-    assert "fn image_size(image: UImage2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def image_size(image: UImage2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert (
-        "fn image_size(image: Image3DFloat4) -> SIMD[DType.int32, 4]:" in generated_code
+        "def image_size(image: Image3DFloat4) -> SIMD[DType.int32, 4]:"
+        in generated_code
     )
-    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
-    assert "fn texture_query_levels(tex: Texture2DArray) -> Int32:" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "def texture_query_levels(tex: Texture2DArray) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert (
-        "fn buffer_dimensions("
+        "def buffer_dimensions("
         "buffer: StructuredBuffer[SIMD[DType.float32, 4]], "
         "dimensions: UInt32, stride: UInt32):"
     ) in generated_code
@@ -14983,21 +15077,21 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
     assert "levels = UInt32(texture_query_levels(colorMap))" in generated_code
     assert (
         "var __cgl_dimensions_1 = "
-        "texture_size(resources.textures[int(slot)], Int32(lod))"
+        "texture_size(resources.textures[Int(slot)], Int32(lod))"
     ) in generated_code
     assert "elements = UInt32(__cgl_dimensions_1[2])" in generated_code
     assert (
-        "levels = UInt32(texture_query_levels(resources.textures[int(slot)]))"
+        "levels = UInt32(texture_query_levels(resources.textures[Int(slot)]))"
         in generated_code
     )
     assert "samples = UInt32(texture_samples(multisampled))" in generated_code
     assert "var __cgl_dimensions_3 = image_size(counters)" in generated_code
-    assert "var __cgl_dimensions_4 = image_size(resources.volumes[int(slot)])" in (
+    assert "var __cgl_dimensions_4 = image_size(resources.volumes[Int(slot)])" in (
         generated_code
     )
     assert "depth = UInt32(__cgl_dimensions_4[2])" in generated_code
     assert (
-        "var __cgl_dimensions_5 = buffer_dimensions(resources.buffers[int(slot)])"
+        "var __cgl_dimensions_5 = buffer_dimensions(resources.buffers[Int(slot)])"
         in generated_code
     )
     assert "elements = UInt32(__cgl_dimensions_5[0])" in generated_code
@@ -15052,35 +15146,35 @@ def test_hlsl_get_dimensions_out_parameter_edge_variants_for_mojo_codegen():
         parse_code(tokenize_code(_hlsl_get_dimensions_edge_variant_source()))
     )
 
-    assert "fn texture_size(tex: Texture1D) -> Int32:" in generated_code
+    assert "def texture_size(tex: Texture1D) -> Int32:" in generated_code
     assert (
-        "fn texture_size(tex: Texture1DArray, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: Texture1DArray, lod: Int32) -> SIMD[DType.int32, 2]:"
     ) in generated_code
-    assert "fn texture_size(tex: TextureCube) -> SIMD[DType.int32, 2]:" in (
+    assert "def texture_size(tex: TextureCube) -> SIMD[DType.int32, 2]:" in (
         generated_code
     )
     assert (
-        "fn texture_size(tex: TextureCubeArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: TextureCubeArray, lod: Int32) -> SIMD[DType.int32, 4]:"
     ) in generated_code
     assert (
-        "fn texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
         in generated_code
     )
-    assert "fn texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
-    assert "fn image_size(image: UImage1D) -> Int32:" in generated_code
-    assert "fn image_size(image: UImage1DArray) -> SIMD[DType.int32, 2]:" in (
+    assert "def texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
+    assert "def image_size(image: UImage1D) -> Int32:" in generated_code
+    assert "def image_size(image: UImage1DArray) -> SIMD[DType.int32, 2]:" in (
         generated_code
     )
-    assert "fn image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in (
+    assert "def image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in (
         generated_code
     )
 
     assert (
-        "fn queryEdges(lod: UInt32, owned width: UInt32, "
-        "owned height: UInt32, owned elements: UInt32, "
-        "owned levels: UInt32, owned samples: UInt32) -> None:"
+        "def queryEdges(lod: UInt32, var width: UInt32, "
+        "var height: UInt32, var elements: UInt32, "
+        "var levels: UInt32, var samples: UInt32) -> None:"
     ) in generated_code
-    assert "owned lod" not in generated_code
+    assert "var lod" not in generated_code
     assert "var __cgl_dimensions_0 = texture_size(strip, Int32(lod))" in (
         generated_code
     )
@@ -15102,9 +15196,9 @@ def test_hlsl_get_dimensions_out_parameter_edge_variants_for_mojo_codegen():
     assert "var __cgl_dimensions_6 = image_size(rowArray)" in generated_code
     assert "var __cgl_dimensions_7 = image_size(atlas)" in generated_code
     assert (
-        "fn queryParameterTexture(tex: Texture1DArray, lod: UInt32, "
-        "owned width: UInt32, owned elements: UInt32, "
-        "owned levels: UInt32) -> None:"
+        "def queryParameterTexture(tex: Texture1DArray, lod: UInt32, "
+        "var width: UInt32, var elements: UInt32, "
+        "var levels: UInt32) -> None:"
     ) in generated_code
     assert "var __cgl_dimensions_8 = texture_size(tex, Int32(lod))" in (generated_code)
     assert ".GetDimensions(" not in generated_code
@@ -15115,7 +15209,7 @@ def test_hlsl_get_dimensions_out_parameter_edge_variants_compile_with_mojo(tmp_p
     generated_code = generate_code(
         parse_code(tokenize_code(_hlsl_get_dimensions_edge_variant_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_get_dimensions_edge_variants.mojo"
     source_path.write_text(generated_code)
@@ -15221,7 +15315,7 @@ def test_hlsl_get_dimensions_out_parameter_statements_compile_with_mojo(tmp_path
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "hlsl_get_dimensions_out_parameters.mojo"
     source_path.write_text(generated_code)
@@ -15268,10 +15362,10 @@ def test_glsl_buffer_block_metadata_comments_compile_with_mojo(tmp_path):
         "set=0 binding=5 binding_source=explicit layout=std430 access=writeonly"
         in generated_code
     )
-    assert "return particles.positions[int(index)]" in generated_code
-    assert "outputs.colors[int(index)] = value" in generated_code
+    assert "return particles.positions[Int(index)]" in generated_code
+    assert "outputs.colors[Int(index)] = value" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "glsl_buffer_block_metadata.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15295,7 +15389,8 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         "set=0 binding=3 binding_source=explicit layout=std430 access=readonly"
         in generated_code
     )
-    assert "var values = List[Float32]()" in generated_code
+    # A storage buffer's runtime-sized array is a pointer the kernel receives, not a module-scope List.
+    assert "var values" not in generated_code
 
     invalid_write = """
     layout(std430, binding = 2) readonly buffer ParticleBlock {
@@ -15306,7 +15401,14 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         particles.positions[index] = value;
     }
     """
-    with pytest.raises(ValueError, match="assignment.*readonly"):
+    # Mojo has no global variables and the storage block is not a kernel argument yet (#2338), so the block is
+    # refused before its access qualifier is checked.
+    with pytest.raises(
+        MojoRefusal,
+        match=re.escape(
+            "storage block declared outside a function (particles: ParticleBlock)"
+        ),
+    ):
         generate_code(parse_code(tokenize_code(invalid_write)))
 
     overlapping_binding = """
@@ -15319,7 +15421,12 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         float exposure;
     }
     """
-    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+    with pytest.raises(
+        MojoRefusal,
+        match=re.escape(
+            "storage block declared outside a function (particles: ParticleBlock)"
+        ),
+    ):
         generate_code(parse_code(tokenize_code(overlapping_binding)))
 
 
@@ -15357,11 +15464,11 @@ def test_explicit_glsl_buffer_block_and_direct_arrays_compile_with_mojo(tmp_path
         in generated_code
     )
     assert "var counters: List[UInt32]" in generated_code
-    assert "var values = List[Float32]()" in generated_code
-    assert "return explicitBlock.positions[int(index)]" in generated_code
-    assert "return values[int(index)]" in generated_code
+    assert "var values" not in generated_code
+    assert "return explicitBlock.positions[Int(index)]" in generated_code
+    assert "return values[Int(index)]" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "explicit_glsl_buffer_block_and_direct_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15403,19 +15510,19 @@ def test_glsl_buffer_block_runtime_arrays_and_atomics_compile_with_mojo(tmp_path
     )
     assert "var counters: List[UInt32]" in generated_code
     assert "var signedCounters: List[Int32]" in generated_code
-    assert "var __cgl_atomic_0: UInt32 = counters.counters[int(index)]" in (
+    assert "var __cgl_atomic_0: UInt32 = counters.counters[Int(index)]" in (
         generated_code
     )
-    assert "counters.counters[int(index)] = (__cgl_atomic_0 + value)" in (
+    assert "counters.counters[Int(index)] = (__cgl_atomic_0 + value)" in (
         generated_code
     )
     assert "if __cgl_atomic_1 == expected:" in generated_code
-    assert "counters.counters[int(index)] = replacement" in generated_code
-    assert "counters.signedCounters[int(index)] = max(__cgl_atomic_2, value)" in (
+    assert "counters.counters[Int(index)] = replacement" in generated_code
+    assert "counters.signedCounters[Int(index)] = max(__cgl_atomic_2, value)" in (
         generated_code
     )
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "glsl_buffer_block_runtime_arrays_and_atomics.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15521,31 +15628,31 @@ def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     assert "struct ConsumeStructuredBuffer[T: AnyType]:" in generated_code
     assert "var inputParticles: StructuredBuffer[Particle]" in generated_code
     assert "var outputParticles: RWStructuredBuffer[Particle]" in generated_code
-    assert "InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert "Array[RWStructuredBuffer[Int32], 2]" in generated_code
     assert (
-        "fn buffer_load(buffer: StructuredBuffer[Float32], "
+        "def buffer_load(buffer: StructuredBuffer[Float32], "
         "index: UInt32) -> Float32:" in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWStructuredBuffer[Particle], "
+        "def buffer_store(buffer: RWStructuredBuffer[Particle], "
         "index: UInt32, value: Particle):" in generated_code
     )
     assert (
-        "fn buffer_append(buffer: AppendStructuredBuffer[Int32], value: Int32):"
+        "def buffer_append(buffer: AppendStructuredBuffer[Int32], value: Int32):"
         in generated_code
     )
     assert (
-        "fn buffer_consume(buffer: ConsumeStructuredBuffer[Int32]) -> Int32:"
+        "def buffer_consume(buffer: ConsumeStructuredBuffer[Int32]) -> Int32:"
         in generated_code
     )
     assert (
-        "fn buffer_dimensions(buffer: StructuredBuffer[Float32], "
+        "def buffer_dimensions(buffer: StructuredBuffer[Float32], "
         "dimensions: UInt32):" in generated_code
     )
     assert "RWStructuredBuffer<" not in generated_code
     assert "StructuredBuffer<" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "structured_buffer_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15587,26 +15694,26 @@ def test_typed_buffer_vector_alias_placeholders_compile_with_mojo(tmp_path):
     assert "AppendStructuredBuffer[SIMD[DType.uint16, 4]]" in generated_code
     assert "ConsumeStructuredBuffer[SIMD[DType.uint16, 4]]" in generated_code
     assert (
-        "fn buffer_load(buffer: StructuredBuffer[SIMD[DType.float16, 4]], "
+        "def buffer_load(buffer: StructuredBuffer[SIMD[DType.float16, 4]], "
         "index: UInt32) -> SIMD[DType.float16, 4]:"
     ) in generated_code
     assert (
-        "fn buffer_store(buffer: RWStructuredBuffer[SIMD[DType.int16, 4]], "
+        "def buffer_store(buffer: RWStructuredBuffer[SIMD[DType.int16, 4]], "
         "index: UInt32, value: SIMD[DType.int16, 4]):"
     ) in generated_code
     assert (
-        "fn buffer_append(buffer: AppendStructuredBuffer[SIMD[DType.uint16, 4]], "
+        "def buffer_append(buffer: AppendStructuredBuffer[SIMD[DType.uint16, 4]], "
         "value: SIMD[DType.uint16, 4]):"
     ) in generated_code
     assert (
-        "fn buffer_consume(buffer: ConsumeStructuredBuffer[SIMD[DType.uint16, 4]]) "
+        "def buffer_consume(buffer: ConsumeStructuredBuffer[SIMD[DType.uint16, 4]]) "
         "-> SIMD[DType.uint16, 4]:"
     ) in generated_code
     assert "half3" not in generated_code
     assert "short4" not in generated_code
     assert "ushort3" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "typed_buffer_vector_alias_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15659,31 +15766,31 @@ def test_byte_address_buffer_placeholders_compile_with_mojo(tmp_path):
     assert (
         "var rawOutput: RWByteAddressBuffer = RWByteAddressBuffer()" in generated_code
     )
-    assert "InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert "Array[RWByteAddressBuffer, 2]" in generated_code
     assert (
-        "fn buffer_load(buffer: ByteAddressBuffer, index: UInt32) -> UInt32:"
+        "def buffer_load(buffer: ByteAddressBuffer, index: UInt32) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        "def buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
+        "def buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
         in generated_code
     )
     assert (
-        "fn buffer_dimensions(buffer: ByteAddressBuffer, dimensions: UInt32):"
+        "def buffer_dimensions(buffer: ByteAddressBuffer, dimensions: UInt32):"
         in generated_code
     )
-    assert "fn asfloat(value: UInt32) -> Float32:" in generated_code
-    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "def asfloat(value: UInt32) -> Float32:" in generated_code
+    assert "def asuint(value: Float32) -> UInt32:" in generated_code
     assert "return asfloat(buffer_load(input, offset))" in generated_code
     assert (
         "buffer_store(output, (offset + UInt32(4)), asuint(weight))" in generated_code
     )
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "byte_address_buffer_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15728,42 +15835,42 @@ def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo(tmp_path)
 
     assert "None(" not in generated_code
     assert (
-        "fn buffer_load2(buffer: RWByteAddressBuffer, "
+        "def buffer_load2(buffer: RWByteAddressBuffer, "
         "index: UInt32) -> SIMD[DType.uint32, 2]:" in generated_code
     )
     assert (
-        "fn buffer_load3(buffer: RWByteAddressBuffer, "
+        "def buffer_load3(buffer: RWByteAddressBuffer, "
         "index: UInt32) -> SIMD[DType.uint32, 4]:" in generated_code
     )
     assert (
-        "fn buffer_load4(buffer: RWByteAddressBuffer, "
+        "def buffer_load4(buffer: RWByteAddressBuffer, "
         "index: UInt32) -> SIMD[DType.uint32, 4]:" in generated_code
     )
     assert (
-        "fn buffer_store2(buffer: RWByteAddressBuffer, "
+        "def buffer_store2(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 2]):" in generated_code
     )
     assert (
-        "fn buffer_store3(buffer: RWByteAddressBuffer, "
+        "def buffer_store3(buffer: RWByteAddressBuffer, "
         "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
     )
     assert (
-        "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
+        "def asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
         in generated_code
     )
     assert (
-        "fn asfloat(value: SIMD[DType.uint32, 4]) -> SIMD[DType.float32, 4]:"
+        "def asfloat(value: SIMD[DType.uint32, 4]) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert (
-        "fn asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:"
+        "def asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:"
         in generated_code
     )
     assert (
-        "fn asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
+        "def asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
         in generated_code
     )
-    assert "fn asint(value: UInt32) -> Int32:" in generated_code
+    assert "def asint(value: UInt32) -> Int32:" in generated_code
     assert "return asfloat(buffer_load2(rawVectors, offset))" in generated_code
     assert "return asfloat(buffer_load3(rawVectors, offset))" in generated_code
     assert (
@@ -15771,7 +15878,7 @@ def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo(tmp_path)
         in generated_code
     )
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "byte_address_vector_methods.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -15804,13 +15911,13 @@ def test_reinterpret_helpers_use_mojo_bitcast_for_scalar_and_simd_values():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "from memory import bitcast" in generated_code
-    assert "fn asfloat(value: UInt32) -> Float32:" in generated_code
+    assert "from std.memory import bitcast" in generated_code
+    assert "def asfloat(value: UInt32) -> Float32:" in generated_code
     assert "return bitcast[DType.float32](value)" in generated_code
-    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "def asuint(value: Float32) -> UInt32:" in generated_code
     assert "return bitcast[DType.uint32](value)" in generated_code
     assert (
-        "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
+        "def asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
         in generated_code
     )
     assert "return bitcast[DType.float32, 2](value)" in generated_code
@@ -15837,20 +15944,20 @@ def test_glsl_bitcast_aliases_lower_to_mojo_reinterpret_helpers():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "from memory import bitcast" in generated_code
+    assert "from std.memory import bitcast" in generated_code
     assert "return asint(value)" in generated_code
     assert "return asuint(value)" in generated_code
     assert "return asfloat(bits)" in generated_code
-    assert "fn asint(value: SIMD[DType.float32, 2]) -> SIMD[DType.int32, 2]:" in (
+    assert "def asint(value: SIMD[DType.float32, 2]) -> SIMD[DType.int32, 2]:" in (
         generated_code
     )
-    assert "fn asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:" in (
+    assert "def asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:" in (
         generated_code
     )
-    assert "fn asfloat(value: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in (
+    assert "def asfloat(value: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in (
         generated_code
     )
-    assert "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:" in (
+    assert "def asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:" in (
         generated_code
     )
     assert "floatBitsToInt(" not in generated_code
@@ -15869,7 +15976,7 @@ def test_user_defined_glsl_bitcast_alias_names_are_not_lowered_for_mojo():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn floatBitsToInt(value: SIMD[DType.float32, 2]) -> Float32:" in (
+    assert "def floatBitsToInt(value: SIMD[DType.float32, 2]) -> Float32:" in (
         generated_code
     )
     assert "return floatBitsToInt(value)" in generated_code
@@ -15894,146 +16001,47 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_intrinsics_lower_to_mojo_subgroup_helpers():
-    code = """
-    shader ComputeWaveDiagnostics {
-        compute {
-            void main() {
-                uint lane = WaveGetLaneIndex();
-                uint count = WaveGetLaneCount();
-                bool first = WaveIsFirstLane();
-                uint sumValue = WaveActiveSum(lane);
-                bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
-                uvec4 ballot = WaveActiveBallot(anyLane);
-                uint broadcast = WaveReadLaneAt(sumValue, 0u);
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "uint lane = WaveGetLaneIndex();",
+        "uint count = WaveGetLaneCount();",
+        "bool first = WaveIsFirstLane();",
+        "uint sumValue = WaveActiveSum(1u);",
+        "bool anyLane = WaveActiveAnyTrue(true);",
+        "uvec4 ballot = WaveActiveBallot(true);",
+        "uint broadcast = WaveReadLaneAt(1u, 0u);",
+        "uint prefix = WavePrefixCountBits(true);",
+        "uvec4 match = WaveMatch(1u);",
+        "uint quad = QuadReadAcrossX(1u);",
+    ],
+)
+def test_wave_intrinsics_are_refused_by_mojo(statement):
+    # A one-lane stand-in (the lane's own value, lane 0 of a one-lane wave) is wrong on every GPU wave.
+    code = f"""
+    shader ComputeWave {{
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "# CrossGL wave/subgroup placeholders" in generated_code
-    assert "fn _crossgl_wave_get_lane_index() -> UInt32:" in generated_code
-    assert "fn _crossgl_wave_get_lane_count() -> UInt32:" in generated_code
-    assert "fn _crossgl_wave_is_first_lane() -> Bool:" in generated_code
-    assert "fn _crossgl_wave_active_sum(value: UInt32) -> UInt32:" in generated_code
-    assert (
-        "fn _crossgl_wave_active_any_true(predicate: Bool) -> Bool:" in generated_code
-    )
-    assert (
-        "fn _crossgl_wave_active_ballot(predicate: Bool) -> SIMD[DType.uint32, 4]:"
-        in generated_code
-    )
-    assert (
-        "fn _crossgl_wave_read_lane_at(value: UInt32, lane: UInt32) -> UInt32:"
-        in generated_code
-    )
-    assert "var lane: UInt32 = _crossgl_wave_get_lane_index()" in generated_code
-    assert "var count: UInt32 = _crossgl_wave_get_lane_count()" in generated_code
-    assert "var first: Bool = _crossgl_wave_is_first_lane()" in generated_code
-    assert "var sumValue: UInt32 = _crossgl_wave_active_sum(lane)" in generated_code
-    assert (
-        "var anyLane: Bool = _crossgl_wave_active_any_true((sumValue > 0))"
-        in generated_code
-    )
-    assert (
-        "var ballot: SIMD[DType.uint32, 4] = _crossgl_wave_active_ballot(anyLane)"
-        in generated_code
-    )
-    assert (
-        "var broadcast: UInt32 = _crossgl_wave_read_lane_at(sumValue, 0)"
-        in generated_code
-    )
-    assert "Unsupported Mojo wave intrinsic" not in generated_code
-    assert "WaveOpNode(" not in generated_code
+    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic .*no lowering"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_match_count_quad_and_multi_prefix_lower_to_mojo_helpers():
-    code = """
-    shader ComputeWave {
-        compute {
-            void main() {
-                uint lane = WaveGetLaneIndex();
-                bool equal = WaveActiveAllEqual(lane);
-                uint bitCount = WaveActiveCountBits(equal);
-                uint prefixCount = WavePrefixCountBits(equal);
-                uvec4 mask = WaveMatch(lane);
-                uint quadLane = QuadReadLaneAt(lane, 1u);
-                uint quadX = QuadReadAcrossX(lane);
-                uint quadY = QuadReadAcrossY(lane);
-                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
-                uint sum = WaveMultiPrefixSum(lane, mask);
-                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
-                uint count = WaveMultiPrefixCountBits(equal, mask);
-                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
-                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
-                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
-            }
-        }
-    }
-    """
+def test_cuda_warp_shuffle_is_refused_by_mojo():
+    codegen = MojoCodeGen()
+    args = [
+        LiteralNode(0xFFFFFFFF, PrimitiveType("uint")),
+        LiteralNode(1.0, PrimitiveType("float")),
+        LiteralNode(1, PrimitiveType("int")),
+    ]
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "_crossgl_wave_active_all_equal(lane)" in generated_code
-    assert "_crossgl_wave_active_count_bits(equal)" in generated_code
-    assert "_crossgl_wave_prefix_count_bits(equal)" in generated_code
-    assert "_crossgl_wave_match(lane)" in generated_code
-    assert "_crossgl_quad_read_lane_at(lane, 1)" in generated_code
-    assert "_crossgl_quad_read_across_x(lane)" in generated_code
-    assert "_crossgl_quad_read_across_y(lane)" in generated_code
-    assert "_crossgl_quad_read_across_diagonal(lane)" in generated_code
-    assert "_crossgl_wave_multi_prefix_sum(lane, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_product((lane + 1), mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_count_bits(equal, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_and(product, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_or(bitAnd, mask)" in generated_code
-    assert "_crossgl_wave_multi_prefix_bit_xor(bitOr, mask)" in generated_code
-    assert "fn _crossgl_wave_match(value: UInt32) -> SIMD[DType.uint32, 4]:" in (
-        generated_code
-    )
-    assert (
-        "fn _crossgl_wave_multi_prefix_sum(value: UInt32, "
-        "mask: SIMD[DType.uint32, 4]) -> UInt32:" in generated_code
-    )
-    assert "Unsupported Mojo wave intrinsic" not in generated_code
-
-
-def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
-    mojo = find_mojo_compiler()
-
-    code = """
-    uint waveHelpers(uint lane, bool active, uvec4 mask) {
-        uint sumValue = WaveActiveSum(lane);
-        bool anyLane = WaveActiveAnyTrue(active);
-        uvec4 matched = WaveMatch(sumValue);
-        uint multi = WaveMultiPrefixSum(sumValue, mask);
-        uint quad = QuadReadLaneAt(multi, 1u);
-        return WaveReadLaneAt(quad, 0u);
-    }
-    """
-
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-    assert "_crossgl_wave_active_sum(lane)" in generated_code
-    assert "_crossgl_wave_match(sumValue)" in generated_code
-    assert "_crossgl_wave_multi_prefix_sum(sumValue, mask)" in generated_code
-    assert "_crossgl_quad_read_lane_at(multi, 1)" in generated_code
-    assert "_crossgl_wave_read_lane_at(quad, 0)" in generated_code
-
-    package_dir = tmp_path / "mojo_wave_helpers_pkg"
-    package_dir.mkdir()
-    (package_dir / "__init__.mojo").write_text(generated_code)
-    output_path = tmp_path / "mojo_wave_helpers_pkg.mojopkg"
-    result = subprocess.run(
-        [mojo, "package", str(package_dir), "-o", str(output_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert output_path.exists()
+    with pytest.raises(MojoRefusal, match="__shfl_down_sync: .*no lowering"):
+        codegen.generate_cuda_shuffle_down_call(args)
 
 
 @pytest.mark.parametrize(
@@ -16068,7 +16076,7 @@ def test_ray_query_methods_lower_to_mojo_hooks():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "struct RayQuery" in generated_code
-    assert "fn ray_query_proceed" in generated_code
+    assert "def ray_query_proceed" in generated_code
     assert "var active: Bool = ray_query_proceed(query)" in generated_code
 
 
@@ -16121,20 +16129,13 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     assert "dispatch_mesh" in codegen.required_mesh_helpers
 
 
-def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():
+def test_direct_wave_ir_node_is_refused_by_mojo():
     codegen = MojoCodeGen()
 
-    generated_expr = codegen.generate_expression(
-        WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
-    )
-
-    assert generated_expr == "_crossgl_wave_active_sum(1)"
-    assert (
-        "_crossgl_wave_active_sum",
-        ("UInt32",),
-        "UInt32",
-        "WaveActiveSum",
-    ) in codegen.required_wave_helpers
+    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic WaveActiveSum"):
+        codegen.generate_expression(
+            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+        )
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
@@ -16372,7 +16373,7 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     assert "textureQueryLod" not in generated_code
     assert "textureCompare" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "advanced_texture_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -16791,17 +16792,17 @@ def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_pat
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn sample_sampler(tex: Texture2DShadow, sampler: Sampler, "
+        "def sample_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4]) -> Float32:" in generated_code
     )
     assert (
-        "fn sample_lod_sampler(tex: Texture2DShadow, sampler: Sampler, "
+        "def sample_lod_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4], lod: Float32) -> Float32:" in generated_code
     )
-    assert "fn sampleShadow(" in generated_code
+    assert "def sampleShadow(" in generated_code
     assert "-> Float32:" in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "shadow_sampler_texture_calls.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -16857,7 +16858,7 @@ def test_integer_image_atomic_placeholders_compile_with_mojo(tmp_path):
     assert "_crossgl_image_atomic_add_IImage2D" in generated_code
     assert "imageAtomic" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "integer_image_atomic_placeholders.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -16905,18 +16906,18 @@ def test_multisample_image_atomic_placeholders_preserve_sample_indices_for_mojo(
     assert "struct UImage2DMS:" in generated_code
     assert "struct IImage2DMSArray:" in generated_code
     assert (
-        "fn _crossgl_image_atomic_add_UImage2DMS_SIMD_DType_int32_2_Int32_UInt32"
+        "def _crossgl_image_atomic_add_UImage2DMS_SIMD_DType_int32_2_Int32_UInt32"
         "(arg0: UImage2DMS, arg1: SIMD[DType.int32, 2], arg2: Int32, "
         "arg3: UInt32) -> UInt32:" in generated_code
     )
     assert (
-        "fn _crossgl_image_atomic_comp_swap_UImage2DMS_SIMD_DType_int32_2_"
+        "def _crossgl_image_atomic_comp_swap_UImage2DMS_SIMD_DType_int32_2_"
         "Int32_UInt32_UInt32"
         "(arg0: UImage2DMS, arg1: SIMD[DType.int32, 2], arg2: Int32, "
         "arg3: UInt32, arg4: UInt32) -> UInt32:" in generated_code
     )
     assert (
-        "fn _crossgl_image_atomic_add_IImage2DMSArray_SIMD_DType_int32_4_"
+        "def _crossgl_image_atomic_add_IImage2DMSArray_SIMD_DType_int32_4_"
         "Int32_Int32"
         "(arg0: IImage2DMSArray, arg1: SIMD[DType.int32, 4], arg2: Int32, "
         "arg3: Int32) -> Int32:" in generated_code
@@ -16971,7 +16972,7 @@ def test_multisample_image_atomic_placeholders_compile_with_mojo(tmp_path):
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "multisample_image_atomic_placeholders.mojo"
     source_path.write_text(generated_code)
@@ -17113,7 +17114,7 @@ def test_image_atomic_member_aliases_emit_mojo_helpers_and_compile_with_mojo(
     assert "image.CompareExchange" not in generated_code
     assert "image.atomicCompareExchange" not in generated_code
 
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
     source_path = tmp_path / "image_atomic_member_aliases.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
@@ -17220,13 +17221,16 @@ def test_for_continue_emits_update_before_continue_in_mojo():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "if (i == 1):\n            i += 1\n            continue" in generated_code
     assert (
-        "if (j == 0):\n                j += 1\n                continue"
+        "if (i == 1):\n                i += 1\n                continue"
         in generated_code
     )
     assert (
-        "if (j == 0):\n                i += 1\n                continue"
+        "if (j == 0):\n                        j += 1\n                        continue"
+        in generated_code
+    )
+    assert (
+        "if (j == 0):\n                        i += 1\n                        continue"
         not in generated_code
     )
     assert "DoWhileNode" not in generated_code
@@ -17259,20 +17263,20 @@ def test_for_update_assignment_uses_expression_preludes_for_mojo_codegen():
     )
 
     assert "while (step < 2):" in generated_code
-    assert "if (step == 1):\n            var __cgl_match_value_0: Int32 = 0" in (
+    assert "if (step == 1):\n                var __cgl_match_value_0: Int32 = 0" in (
         generated_code
     )
     assert "__cgl_match_value_0 = 1" in generated_code
     assert "__cgl_match_value_0 = 2" in generated_code
-    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, step)" in (
+    assert "values = StaticTuple[Int32, 2](__cgl_match_value_0, step)" in (
         generated_code
     )
     assert (
-        "values = InlineArray[Int32, 2](__cgl_match_value_0, step)\n"
-        "            continue"
+        "values = StaticTuple[Int32, 2](__cgl_match_value_0, step)\n"
+        "                continue"
     ) in generated_code
     assert "var __cgl_match_value_1: Int32 = 0" in generated_code
-    assert "values = InlineArray[Int32, 2](__cgl_match_value_1, step)" in (
+    assert "values = StaticTuple[Int32, 2](__cgl_match_value_1, step)" in (
         generated_code
     )
     assert "values = match mode" not in generated_code
@@ -17286,7 +17290,7 @@ def test_for_update_assignment_contexts_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_for_update_assignment_prelude_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(updateArrayLoop(0))
 """
 
@@ -17371,7 +17375,7 @@ def test_expression_statement_assignment_wrapper_uses_mojo_statement_preludes():
     assert "var __cgl_match_value_0: Int32 = 0" in generated_code
     assert "__cgl_match_value_0 = 1" in generated_code
     assert "__cgl_match_value_0 = 2" in generated_code
-    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, 3)" in generated_code
+    assert "values = StaticTuple[Int32, 2](__cgl_match_value_0, 3)" in generated_code
     assert "ExpressionStatementNode" not in generated_code
     assert "MatchNode" not in generated_code
 
@@ -17381,7 +17385,7 @@ def test_expression_statement_assignment_wrapper_compile_smoke_with_mojo(tmp_pat
 
     generated_code = generate_code(_expression_statement_assignment_wrapper_ast())
     generated_code += """
-fn main():
+def main():
     print(wrappedAssign(0))
 """
 
@@ -17490,8 +17494,8 @@ def test_for_in_statement_lowers_to_mojo_ranges_and_scopes_loop_contexts():
     assert "total += j" in generated_code
     assert "total += k" in generated_code
     assert "total += inner" in generated_code
-    assert "if (inner == 1):\n                continue" in generated_code
-    assert "outer += 1\n                continue" not in generated_code
+    assert "if (inner == 1):\n                    continue" in generated_code
+    assert "outer += 1\n                    continue" not in generated_code
     assert "ForInNode" not in generated_code
     assert "RangeNode" not in generated_code
 
@@ -17539,9 +17543,9 @@ def test_while_statement_lowers_to_mojo_while_and_scopes_loop_contexts():
     assert "while (value < 4):" in generated_code
     assert "while (j < 2):" in generated_code
     assert "if (value == 2):\n            continue" in generated_code
-    assert "if (j == 1):\n                continue" in generated_code
+    assert "if (j == 1):\n                    continue" in generated_code
     assert (
-        "if (j == 1):\n                i += 1\n                continue"
+        "if (j == 1):\n                    i += 1\n                    continue"
         not in generated_code
     )
     assert "__cgl_do_break_0 = True" not in generated_code
@@ -17592,9 +17596,9 @@ def test_loop_statement_lowers_to_mojo_while_true_and_scopes_loop_contexts():
     assert "while True:" in generated_code
     assert "value += 1" in generated_code
     assert "if (value == 2):\n            continue" in generated_code
-    assert "if (i == 1):\n                continue" in generated_code
+    assert "if (i == 1):\n                    continue" in generated_code
     assert (
-        "if (i == 1):\n                i += 1\n                continue"
+        "if (i == 1):\n                    i += 1\n                    continue"
         not in generated_code
     )
     assert "__cgl_do_break_0 = True" not in generated_code
@@ -17692,19 +17696,19 @@ def test_increment_and_decrement_expressions_emit_mojo_preludes():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn prefixReturn(owned x: Int32) -> Int32:\n"
+        "def prefixReturn(var x: Int32) -> Int32:\n"
         "    x += 1\n"
         "    var __cgl_increment_0: Int32 = x\n"
         "    return __cgl_increment_0\n"
     ) in generated_code
     assert (
-        "fn postfixReturn(owned x: Int32) -> Int32:\n"
+        "def postfixReturn(var x: Int32) -> Int32:\n"
         "    var __cgl_increment_1: Int32 = x\n"
         "    x += 1\n"
         "    return __cgl_increment_1\n"
     ) in generated_code
     assert (
-        "fn mixedReturn(owned x: Int32) -> Int32:\n"
+        "def mixedReturn(var x: Int32) -> Int32:\n"
         "    x += 1\n"
         "    var __cgl_increment_2: Int32 = x\n"
         "    var __cgl_increment_3: Int32 = x\n"
@@ -17751,7 +17755,7 @@ def test_increment_and_decrement_expressions_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     print(prefixReturn(1))
     print(postfixReturn(1))
     print(mixedReturn(1))
@@ -17843,11 +17847,37 @@ def test_bool_string_and_char_literals_emit_mojo_syntax():
     assert "var disabled: Bool = False" in generated_code
     assert "var inverted: Bool = (not disabled)" in generated_code
     assert 'var label: String = "debug"' in generated_code
-    assert 'var marker: String = "x"' in generated_code
+    # CrossGL char is a signed 8-bit integer, so 'x' is its code, not text.
+    assert "var marker: Int8 = Int8(120)" in generated_code
     assert "if (enabled and (not disabled)):" in generated_code
     assert "!disabled" not in generated_code
     assert 'label = "active"' in generated_code
-    assert 'marker = "y"' in generated_code
+    assert "marker = Int8(121)" in generated_code
+
+
+def test_mojo_char_and_short_operands_promote_to_int():
+    code = """
+    shader NarrowArithmetic {
+        int addChars(char a, char b) { return a + b; }
+        int shortProduct(short a, short b) { return a * b; }
+        bool exceeds(char a, char b, int limit) { return a + b > limit; }
+        char newline() { return '\\n'; }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "String" not in generated_code
+    assert "def addChars(a: Int8, b: Int8) -> Int32:" in generated_code
+    # C17 6.3.1.1: char and short operands are converted to int, so 100 + 100 is 200, not Int8's -56.
+    assert "return (Int32(a) + Int32(b))" in generated_code
+    assert "return (Int32(a) * Int32(b))" in generated_code
+    assert "return ((Int32(a) + Int32(b)) > limit)" in generated_code
+    assert "return Int8(10)" in generated_code
+
+
+def test_mojo_refuses_a_char_literal_without_a_single_byte_value():
+    with pytest.raises(MojoRefusal, match="signed 8-bit integer"):
+        MojoCodeGen().format_literal("\u00e9", "char")
 
 
 def test_inferred_let_declarations_do_not_emit_none_type():
@@ -18214,14 +18244,20 @@ def test_compute_builtin_identifiers_lower_to_mojo_gpu_index_aliases():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "var matrix_size: Int32 = 0" in generated_code
-    assert (
-        "fn compute_main(global_idx_uint: SIMD[DType.uint32, 4], "
-        "thread_idx_uint: SIMD[DType.uint32, 4], "
-        "block_idx_uint: SIMD[DType.uint32, 4], "
-        "grid_dim_uint: SIMD[DType.uint32, 4], "
-        "block_dim_uint: SIMD[DType.uint32, 4]) -> None:"
-    ) in generated_code
+    # The uniform is a kernel argument, and each GPU index alias is a local read from Mojo's index values.
+    assert "def compute_main(matrix_size: Int32) -> None:" in generated_code
+    for alias, source in (
+        ("global_idx_uint", "global_idx"),
+        ("thread_idx_uint", "thread_idx"),
+        ("block_idx_uint", "block_idx"),
+        ("grid_dim_uint", "grid_dim"),
+        ("block_dim_uint", "block_dim"),
+    ):
+        assert (
+            f"    var {alias} = SIMD[DType.uint32, 4](UInt32({source}.x), "
+            f"UInt32({source}.y), UInt32({source}.z), UInt32(0))"
+        ) in generated_code
+    assert "var matrix_size" not in generated_code
     assert "var local_x: Int32 = Int32(thread_idx_uint[0])" in generated_code
     assert "var global_x: Int32 = Int32(global_idx_uint[0])" in generated_code
     assert "var group_count: Int32 = Int32(grid_dim_uint[0])" in generated_code
@@ -18249,8 +18285,11 @@ def test_pointer_type_nodes_emit_mojo_pointer_types_without_ast_repr():
     pointer_type = PointerType(PrimitiveType("float"))
 
     assert codegen.convert_type_node_to_string(pointer_type) == "float*"
-    assert codegen.map_type(pointer_type) == "UnsafePointer[Float32]"
-    assert codegen.zero_value_for_type(pointer_type) == "UnsafePointer[Float32]()"
+    assert codegen.map_type(pointer_type) == "UnsafePointer[Float32, MutAnyOrigin]"
+    assert (
+        codegen.zero_value_for_type(pointer_type)
+        == "UnsafePointer[Float32, MutAnyOrigin]()"
+    )
 
     code = """
     buffer float* values;
@@ -18261,13 +18300,13 @@ def test_pointer_type_nodes_emit_mojo_pointer_types_without_ast_repr():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "var values: UnsafePointer[Float32] = UnsafePointer[Float32]()" in (
-        generated_code
-    )
-    assert "fn readValue(source: UnsafePointer[Float32], index: Int32) -> Float32:" in (
-        generated_code
-    )
-    assert "return (source[int(index)] + values[int(index)])" in generated_code
+    # Mojo has no global variables: the module's buffer is an extra argument of the function that reads it.
+    assert "var values" not in generated_code
+    assert (
+        "def readValue(source: UnsafePointer[Float32, MutAnyOrigin], index: Int32, "
+        "values: UnsafePointer[Float32, MutAnyOrigin]) -> Float32:"
+    ) in generated_code
+    assert "return (source[Int(index)] + values[Int(index)])" in generated_code
     assert "PointerType(" not in generated_code
     assert "PrimitiveType(" not in generated_code
 
@@ -18301,7 +18340,7 @@ def test_mojo_gpu_pointer_generics_restore_square_bracket_signatures():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn passthrough(output: UnsafePointer[Int64, MutAnyOrigin]) "
+        "def passthrough(output: UnsafePointer[Int64, MutAnyOrigin]) "
         "-> UnsafePointer[Int64, MutAnyOrigin]:" in generated_code
     )
     assert "UnsafePointer<" not in generated_code
@@ -18927,48 +18966,53 @@ def test_lambda_call_materializes_local_mojo_functions_for_typed_parameters():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:" in generated_code
+    assert "def _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:" in generated_code
     assert "return (acc + x)" in generated_code
     assert "var folded = fold(values, 0, _crossgl_lambda_0)" in generated_code
     assert (
-        "fn _crossgl_lambda_1(color: SIMD[DType.float32, 4]) -> "
+        "def _crossgl_lambda_1(color: SIMD[DType.float32, 4]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert "var mapped = map(colors, _crossgl_lambda_1)" in generated_code
     assert (
-        "fn _crossgl_lambda_2(color: SIMD[DType.float32, 4]) -> "
+        "def _crossgl_lambda_2(color: SIMD[DType.float32, 4]) -> "
         "SIMD[DType.float32, 4]:" in generated_code
     )
     assert "var genericVector = map(colors, _crossgl_lambda_2)" in generated_code
-    assert "fn _crossgl_lambda_3() -> Bool:" in generated_code
+    assert "def _crossgl_lambda_3() -> Bool:" in generated_code
     assert "return True" in generated_code
     assert "var always = _crossgl_lambda_3" in generated_code
     assert "lambda(" not in generated_code
 
 
-def test_lambda_call_preserves_unsupported_mojo_lambda_shapes():
-    code = """
-    shader LambdaFallbackShader {
-        compute {
-            void main() {
-                let mapped = map(values, lambda(x, (x + 1)));
-                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
-                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
-                let qualified = map(values, lambda(const int value, value));
-            }
-        }
-    }
+@pytest.mark.parametrize(
+    "lambda_expression",
+    [
+        "lambda(x, (x + 1))",
+        "lambda(Result<i32, i32> value, { return value; })",
+        "lambda((i32, i32) pair, { return pair; })",
+        "lambda(const int value, value)",
+    ],
+)
+def test_lambda_call_refuses_unmaterializable_mojo_lambda_shapes(lambda_expression):
+    code = f"""
+    shader LambdaFallbackShader {{
+        compute {{
+            void main() {{
+                let mapped = map(values, {lambda_expression});
+            }}
+        }}
+    }}
     """
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(ast)
 
-    assert "lambda(x, (x + 1))" in generated_code
-    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
-    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
-    assert "lambda(const int value, value)" in generated_code
-    assert "_crossgl_lambda_" not in generated_code
+    assert "lambda whose parameter list or body cannot be materialized" in str(
+        refused.value
+    )
 
 
 def test_lambda_call_materializes_before_mojo_assignment_statement():
@@ -18987,7 +19031,7 @@ def test_lambda_call_materializes_before_mojo_assignment_statement():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    helper = "fn _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:"
+    helper = "def _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:"
     assignment = "folded = fold(values, 0, _crossgl_lambda_0)"
     assert helper in generated_code
     assert assignment in generated_code
@@ -19074,11 +19118,11 @@ def test_lerp_alias_result_type_feeds_nested_vector_builtin_lowering():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], "
+        "def lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], "
         "t: Float32) -> SIMD[DType.float32, 4]:"
     ) in generated_code
     assert (
-        "fn _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "def _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:"
     ) in generated_code
     assert (
@@ -19106,7 +19150,7 @@ def test_user_defined_lerp_return_type_is_not_treated_as_builtin_alias():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn lerp(value: Float32, threshold: Float32, unused: Float32) -> Bool:"
+        "def lerp(value: Float32, threshold: Float32, unused: Float32) -> Bool:"
         in generated_code
     )
     assert (
@@ -19135,19 +19179,19 @@ def test_mod_builtin_lowers_to_crossgl_floor_semantics_helpers():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn _crossgl_mod_f32(a: Float32, b: Float32) -> Float32:" in generated_code
-    assert "fn _crossgl_mod_f64(a: Float64, b: Float64) -> Float64:" in generated_code
+    assert "def _crossgl_mod_f32(a: Float32, b: Float32) -> Float32:" in generated_code
+    assert "def _crossgl_mod_f64(a: Float64, b: Float64) -> Float64:" in generated_code
     assert "return a - floor(a / b) * b" in generated_code
     assert (
-        "fn _crossgl_mod_f32_3_4_vs(a: SIMD[DType.float32, 4], b: Float32) "
+        "def _crossgl_mod_f32_3_4_vs(a: SIMD[DType.float32, 4], b: Float32) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn _crossgl_mod_f32_3_4_sv(a: Float32, b: SIMD[DType.float32, 4]) "
+        "def _crossgl_mod_f32_3_4_sv(a: Float32, b: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn _crossgl_mod_f64_2_2_vv("
+        "def _crossgl_mod_f64_2_2_vv("
         "a: SIMD[DType.float64, 2], b: SIMD[DType.float64, 2]) "
         "-> SIMD[DType.float64, 2]:" in generated_code
     )
@@ -19185,7 +19229,7 @@ def test_user_defined_mod_function_is_not_lowered_to_crossgl_mod_helper():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn mod(value: Float32, period: Float32) -> Float32:" in generated_code
+    assert "def mod(value: Float32, period: Float32) -> Float32:" in generated_code
     assert "var scalar: Float32 = mod((-5.0), 2.0)" in generated_code
     assert "_crossgl_mod_" not in generated_code
 
@@ -19213,7 +19257,7 @@ def test_mod_builtin_floor_semantics_helpers_compile_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     print(wrapScalar(Float32(-5.0), Float32(2.0)))
     print(wrapVectorScalar(SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0), Float32(2.0)))
     print(wrapScalarVector(Float32(2.0), SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0)))
@@ -19250,15 +19294,15 @@ def test_vector_min_max_builtins_emit_mojo_simd_overloads():
     )
 
     assert (
-        "fn max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) "
+        "def max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn max(a: SIMD[DType.float32, 4], b: Float32) "
+        "def max(a: SIMD[DType.float32, 4], b: Float32) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn min(a: Float32, b: SIMD[DType.float32, 4]) "
+        "def min(a: Float32, b: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert "var ceiling: SIMD[DType.float32, 4] = max(" in generated_code
@@ -19278,7 +19322,7 @@ def test_vector_min_max_builtins_compile_with_mojo(tmp_path):
     generated_code = generate_code(
         parse_code(tokenize_code(_vector_min_max_builtin_source()))
     )
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "vector_min_max_builtins.mojo"
     source_path.write_text(generated_code)
@@ -19307,13 +19351,13 @@ def test_vector_clamp_builtin_emits_vector_bound_overloads():
     )
 
     assert (
-        "fn clamp(value: SIMD[DType.float32, 4], "
+        "def clamp(value: SIMD[DType.float32, 4], "
         "min_value: SIMD[DType.float32, 4], "
         "max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert (
-        "fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, "
+        "def clamp(value: SIMD[DType.float32, 4], min_value: Float32, "
         "max_value: Float32) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
@@ -19330,7 +19374,7 @@ def test_vector_clamp_vector_bounds_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_vector_clamp_builtin_source()))
     )
     generated_code += """
-fn main():
+def main():
     var color = SIMD[DType.float32, 4]((-1.0), 0.5, 3.0, 0.0)
     var floorValue = SIMD[DType.float32, 4](0.0, 0.25, 0.0, 0.0)
     var ceilingValue = SIMD[DType.float32, 4](1.0, 0.75, 2.0, 0.0)
@@ -19365,9 +19409,9 @@ def test_round_even_builtin_lowers_to_mojo_helper():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn round_even(x: Float32) -> Float32:" in generated_code
+    assert "def round_even(x: Float32) -> Float32:" in generated_code
     assert (
-        "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
+        "def round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert "var scalarEven: Float32 = round_even(value)" in generated_code
@@ -19419,9 +19463,9 @@ def test_inverse_sqrt_aliases_feed_mojo_reinterpret_helpers():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "def asuint(value: Float32) -> UInt32:" in generated_code
     assert (
-        "fn asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
+        "def asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
         in generated_code
     )
     assert "var scalarR: UInt32 = asuint(rsqrt(x))" in generated_code
@@ -19449,7 +19493,7 @@ def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn inverseSqrt(value: Float32) -> Float32:" in generated_code
+    assert "def inverseSqrt(value: Float32) -> Float32:" in generated_code
     assert "var scalarValue: Float32 = inverseSqrt(4.0)" in generated_code
     assert "var scalarValue: Float32 = rsqrt(4.0)" not in generated_code
 
@@ -19536,8 +19580,8 @@ def test_user_defined_angle_conversion_functions_are_not_lowered():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn radians(value: Float32) -> Float32:" in generated_code
-    assert "fn degrees(value: Float32) -> Float32:" in generated_code
+    assert "def radians(value: Float32) -> Float32:" in generated_code
+    assert "def degrees(value: Float32) -> Float32:" in generated_code
     assert "var scalarRadians: Float32 = radians(180.0)" in generated_code
     assert "var scalarDegrees: Float32 = degrees(3.14159265)" in generated_code
     assert "0.017453292519943295" not in generated_code
@@ -19563,7 +19607,7 @@ def test_user_defined_mix_function_is_not_lowered_to_lerp():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn mix(x: Float32, y: Float32, t: Float32) -> Float32:" in generated_code
+    assert "def mix(x: Float32, y: Float32, t: Float32) -> Float32:" in generated_code
     assert "var adjusted: Float32 = mix(0.0, 1.0, 0.25)" in generated_code
     assert "var adjusted: Float32 = lerp(0.0, 1.0, 0.25)" not in generated_code
 
@@ -19634,7 +19678,7 @@ def test_bool_vector_mix_and_ternary_lower_to_mojo_lane_select():
     generated_code = generate_code(ast)
 
     assert (
-        "fn _crossgl_select_f32_3_4(mask: SIMD[DType.bool, 4], "
+        "def _crossgl_select_f32_3_4(mask: SIMD[DType.bool, 4], "
         "true_value: SIMD[DType.float32, 4], "
         "false_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
         in generated_code
@@ -19678,7 +19722,7 @@ def test_fract_scalar_builtin_lowers_to_helper():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
+    assert "def _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
     assert "return x - floor(x)" in generated_code
     assert "var x: Float32 = _crossgl_fract_f32(1.25)" in generated_code
     assert "fract(" not in generated_code
@@ -19699,13 +19743,13 @@ def test_frac_scalar_builtin_alias_lowers_to_fract_helper():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
+    assert "def _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
     assert "return x - floor(x)" in generated_code
     assert "var x: Float32 = _crossgl_fract_f32(1.25)" in generated_code
     assert "frac(" not in generated_code
 
 
-def test_saturate_integer_input_is_left_unmapped():
+def test_saturate_integer_input_clamps_to_zero_and_one():
     code = """
     shader main {
         compute {
@@ -19721,8 +19765,9 @@ def test_saturate_integer_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: Int32 = saturate(n)" in generated_code
+    assert "var x: Int32 = (n).clamp(0, 1)" in generated_code
     assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
@@ -19741,7 +19786,7 @@ def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
     generated_code = generate_code(ast)
 
     assert (
-        "fn _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "def _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:"
     ) in generated_code
     assert (
@@ -19773,7 +19818,7 @@ def test_saturate_half3_builtin_lowers_componentwise_and_preserves_padding():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn _crossgl_saturate_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "def _crossgl_saturate_f16_3_4(v: SIMD[DType.float16, 4]) "
         "-> SIMD[DType.float16, 4]:"
     ) in generated_code
     assert (
@@ -19803,7 +19848,7 @@ def test_saturate_hlsl_float_matrix_builtin_lowers_componentwise():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn _crossgl_saturate_f32_c3_r2(m: CrossGLMatrixF32C3R2) "
+        "def _crossgl_saturate_f32_c3_r2(m: CrossGLMatrixF32C3R2) "
         "-> CrossGLMatrixF32C3R2:"
     ) in generated_code
     assert (
@@ -19839,7 +19884,7 @@ def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn _crossgl_saturate_f16_c2_r3(m: CrossGLMatrixF16C2R3) "
+        "def _crossgl_saturate_f16_c2_r3(m: CrossGLMatrixF16C2R3) "
         "-> CrossGLMatrixF16C2R3:"
     ) in generated_code
     assert (
@@ -19859,7 +19904,7 @@ def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding
     assert "saturate(" not in generated_code
 
 
-def test_saturate_integer_matrix_input_is_left_unmapped():
+def test_saturate_integer_matrix_input_is_refused():
     code = """
     shader main {
         compute {
@@ -19871,11 +19916,10 @@ def test_saturate_integer_matrix_input_is_left_unmapped():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(code)))
 
-    assert "var x: CrossGLMatrixI32C2R2 = saturate(n)" in generated_code
-    assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate of an integer matrix" in str(refused.value)
 
 
 def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
@@ -19890,7 +19934,7 @@ def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     var value = clampMatrix()
     print(value.c0)
     print(value.c1)
@@ -19911,7 +19955,7 @@ fn main():
     assert "[1.0, 0.0]" in result.stdout
 
 
-def test_saturate_integer_vector_input_is_left_unmapped():
+def test_saturate_integer_vector_input_clamps_each_component():
     code = """
     shader main {
         compute {
@@ -19927,9 +19971,9 @@ def test_saturate_integer_vector_input_is_left_unmapped():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var x: SIMD[DType.int32, 2] = saturate(n)" in generated_code
+    assert "var x: SIMD[DType.int32, 2] = (n).clamp(0, 1)" in generated_code
     assert "_crossgl_saturate" not in generated_code
-    assert "clamp(n, 0.0, 1.0)" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
@@ -19948,7 +19992,7 @@ def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
     generated_code = generate_code(ast)
 
     assert (
-        "fn _crossgl_fract_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "def _crossgl_fract_f32_3_4(v: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:"
     ) in generated_code
     assert (
@@ -19979,7 +20023,7 @@ def test_frac_half3_builtin_alias_lowers_componentwise_and_preserves_padding():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn _crossgl_fract_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "def _crossgl_fract_f16_3_4(v: SIMD[DType.float16, 4]) "
         "-> SIMD[DType.float16, 4]:"
     ) in generated_code
     assert (
@@ -20013,19 +20057,19 @@ def test_step_and_smoothstep_vector_helpers_cover_shader_threshold_patterns():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn step(edge: Float32, x: SIMD[DType.float32, 4]) "
+        "def step(edge: Float32, x: SIMD[DType.float32, 4]) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn step(edge: SIMD[DType.float32, 4], x: Float32) "
+        "def step(edge: SIMD[DType.float32, 4], x: Float32) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn smoothstep(edge0: Float32, edge1: Float32, "
+        "def smoothstep(edge0: Float32, edge1: Float32, "
         "x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert (
-        "fn smoothstep(edge0: SIMD[DType.float32, 4], "
+        "def smoothstep(edge0: SIMD[DType.float32, 4], "
         "edge1: SIMD[DType.float32, 4], x: Float32) "
         "-> SIMD[DType.float32, 4]:" in generated_code
     )
@@ -20365,10 +20409,10 @@ def test_double_vector_and_matrix_types_emit_mojo_names():
         "var mask: SIMD[DType.bool, 2] = SIMD[DType.bool, 2](True, False)"
     ) in generated_code
     assert "var flags: SIMD[DType.bool, 4]" in generated_code
-    assert "struct CrossGLMatrixF32C2R2:" in generated_code
-    assert "struct CrossGLMatrixF32C3R4:" in generated_code
-    assert "struct CrossGLMatrixF64C2R2:" in generated_code
-    assert "struct CrossGLMatrixF64C4R3:" in generated_code
+    assert "struct CrossGLMatrixF32C2R2(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF32C3R4(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF64C2R2(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF64C4R3(TrivialRegisterPassable):" in generated_code
     assert (
         "var transform: CrossGLMatrixF32C2R2 = "
         "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](1.0, 0.0), "
@@ -20415,11 +20459,11 @@ def test_hlsl_style_matrix_aliases_emit_mojo_matrix_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "struct CrossGLMatrixF32C2R3:" in generated_code
-    assert "struct CrossGLMatrixF32C2R4:" in generated_code
-    assert "struct CrossGLMatrixF64C4R2:" in generated_code
-    assert "struct CrossGLMatrixF16C2R3:" in generated_code
-    assert "struct CrossGLMatrixF16C3R2:" in generated_code
+    assert "struct CrossGLMatrixF32C2R3(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF32C2R4(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF64C4R2(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF16C2R3(TrivialRegisterPassable):" in generated_code
+    assert "struct CrossGLMatrixF16C3R2(TrivialRegisterPassable):" in generated_code
     assert "var hlslFloat: CrossGLMatrixF32C2R3" in generated_code
     assert "var simdFloat: CrossGLMatrixF32C2R4" in generated_code
     assert "var precise: CrossGLMatrixF64C4R2" in generated_code
@@ -20483,7 +20527,7 @@ def test_hlsl_style_matrix_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(makeFloat().c0)
     print(makeFloat().c1)
     print(makeDouble().c3)
@@ -20545,7 +20589,7 @@ def test_matrix_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(makeMat2().c0)
     print(makeMat2().c1)
     print(makeDMat2().c1)
@@ -20610,8 +20654,8 @@ def test_vector_fed_matrix_constructors_use_helpers_and_index_fields():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_matrix_f32_c2_r2" in generated_code
-    assert "fn _crossgl_construct_matrix_f32_c3_r3" in generated_code
+    assert "def _crossgl_construct_matrix_f32_c2_r2" in generated_code
+    assert "def _crossgl_construct_matrix_f32_c3_r3" in generated_code
     assert "var v1_cast = v1.cast[DType.float32]()" in generated_code
     assert (
         "return _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vi322_01("
@@ -20666,7 +20710,7 @@ def test_vector_fed_matrix_constructors_and_indexing_compile_with_mojo(tmp_path)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(fromPairs().c0)
     print(fromPairs().c1)
     print(fromColumns().c2)
@@ -20727,9 +20771,9 @@ def test_mixed_vector_scalar_matrix_constructors_use_helpers():
     generated_code = generate_code(ast)
 
     assert (
-        "fn _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_si32_sf64" in generated_code
+        "def _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_si32_sf64" in generated_code
     )
-    assert "fn _crossgl_construct_matrix_f32_c2_r2_2_vi322_01_s_si32" in generated_code
+    assert "def _crossgl_construct_matrix_f32_c2_r2_2_vi322_01_s_si32" in generated_code
     assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
     assert (
         "return _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_si32_sf64("
@@ -20780,7 +20824,7 @@ def test_mixed_vector_scalar_matrix_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(fromUvAndScalars().c0)
     print(fromUvAndScalars().c1)
     print(fromIndexAndScalars().c0)
@@ -20819,14 +20863,14 @@ def test_dynamic_matrix_indexing_emits_getitem_and_vector_index_casts():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn __getitem__(self, index: Int32)" in generated_code
+    assert "def __getitem__(self, index: Int32)" in generated_code
     assert (
-        "fn __setitem__(inout self, index: Int32, value: SIMD[DType.float32, 2])"
+        "def __setitem__(mut self, index: Int32, value: SIMD[DType.float32, 2])"
     ) in generated_code
     assert "var current: SIMD[DType.float32, 2] = value[column]" in generated_code
     assert "value[column] = SIMD[DType.float32, 2]" in generated_code
     assert "value.c0[1] = 9.0" in generated_code
-    assert "var selected: Float32 = value[column][int(row)]" in generated_code
+    assert "var selected: Float32 = value[column][Int(row)]" in generated_code
 
 
 def test_dynamic_matrix_indexing_and_assignment_compile_with_mojo(tmp_path):
@@ -20848,7 +20892,7 @@ def test_dynamic_matrix_indexing_and_assignment_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     var matrix = mutateLocal(1, 0)
     print(matrix.c0)
     print(matrix.c1)
@@ -20951,7 +20995,7 @@ def test_generic_min_precision_vector_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(makeF16(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
     print(makeI16(SIMD[DType.int16, 2](4, 5), Int16(6), Int16(7)))
     print(makeU16(SIMD[DType.uint16, 2](8, 9), UInt16(10)))
@@ -21006,9 +21050,9 @@ def test_generic_scalar_alias_vector_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn makeHalf(pair: SIMD[DType.float16, 2], z: Float16)" in generated_code
-    assert "fn makeInt16(pair: SIMD[DType.int16, 2], z: Int16)" in generated_code
-    assert "fn makeUInt16(pair: SIMD[DType.uint16, 2], z: UInt16" in generated_code
+    assert "def makeHalf(pair: SIMD[DType.float16, 2], z: Float16)" in generated_code
+    assert "def makeInt16(pair: SIMD[DType.int16, 2], z: Int16)" in generated_code
+    assert "def makeUInt16(pair: SIMD[DType.uint16, 2], z: UInt16" in generated_code
     assert "return SIMD[DType.float16, 4](pair[0], pair[1], z, 0.0)" in generated_code
     assert "return SIMD[DType.int16, 4](pair[0], pair[1], z, 0)" in generated_code
     assert "return SIMD[DType.uint16, 4](pair[0], pair[1], z, 0)" in generated_code
@@ -21023,7 +21067,7 @@ def test_generic_scalar_alias_vector_constructors_compile_with_mojo(tmp_path):
         assert raw_generic not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(makeHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
     print(makeMinFloat(SIMD[DType.float16, 2](4.0, 5.0), Float16(6.0), Float16(7.0)))
     print(makeInt16(SIMD[DType.int16, 2](8, 9), Int16(10)))
@@ -21077,7 +21121,7 @@ def test_nested_generic_scalar_alias_vector_constructors_compile_with_mojo(tmp_p
     assert "SIMD[DType.uint16, 4](SIMD[DType.uint16" not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(packHalf(Float16(4.0)))
     print(packInt16(Int16(7)))
     print(packUInt16(UInt16(8)))
@@ -21166,7 +21210,7 @@ def test_simd_and_packed_precision_vector_aliases_compile_with_mojo(tmp_path):
         assert raw_alias not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(buildSimdHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
     print(buildSimdDouble(SIMD[DType.float64, 2](4.0, 5.0), 6.0))
     print(buildPackedShort(SIMD[DType.int16, 2](7, 8), Int16(9)))
@@ -21208,13 +21252,13 @@ def test_simd_precision_matrix_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn makeSimdHalfMatrix() -> CrossGLMatrixF16C2R2:" in generated_code
-    assert "fn makeSimdDoubleMatrix() -> CrossGLMatrixF64C2R3:" in generated_code
+    assert "def makeSimdHalfMatrix() -> CrossGLMatrixF16C2R2:" in generated_code
+    assert "def makeSimdDoubleMatrix() -> CrossGLMatrixF64C2R3:" in generated_code
     assert "simd_half2x2(" not in generated_code
     assert "simd_double3x2(" not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(makeSimdHalfMatrix().c1)
     print(makeSimdDoubleMatrix().c0)
     print(makeSimdDoubleMatrix().c1)
@@ -21268,12 +21312,12 @@ def test_integer_matrix_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn makeIntMatrix() -> CrossGLMatrixI32C2R2:" in generated_code
-    assert "fn makeUIntMatrix() -> CrossGLMatrixU32C3R2:" in generated_code
-    assert "fn makeShortMatrix() -> CrossGLMatrixI16C2R3:" in generated_code
-    assert "fn makeMinSignedMatrix() -> CrossGLMatrixI16C2R2:" in generated_code
-    assert "fn makeUShortMatrix() -> CrossGLMatrixU16C2R2:" in generated_code
-    assert "fn makeMinUnsignedMatrix() -> CrossGLMatrixU16C2R3:" in generated_code
+    assert "def makeIntMatrix() -> CrossGLMatrixI32C2R2:" in generated_code
+    assert "def makeUIntMatrix() -> CrossGLMatrixU32C3R2:" in generated_code
+    assert "def makeShortMatrix() -> CrossGLMatrixI16C2R3:" in generated_code
+    assert "def makeMinSignedMatrix() -> CrossGLMatrixI16C2R2:" in generated_code
+    assert "def makeUShortMatrix() -> CrossGLMatrixU16C2R2:" in generated_code
+    assert "def makeMinUnsignedMatrix() -> CrossGLMatrixU16C2R3:" in generated_code
     for raw_alias in (
         "int2x2(",
         "uint2x3(",
@@ -21285,7 +21329,7 @@ def test_integer_matrix_aliases_compile_with_mojo(tmp_path):
         assert raw_alias not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(makeIntMatrix().c1)
     print(makeUIntMatrix().c2)
     print(makeShortMatrix().c1)
@@ -21351,16 +21395,16 @@ def test_integer_matrix_aliases_in_aggregates_compile_with_mojo(tmp_path):
     generated_code = generate_code(ast)
 
     assert "var signedMatrix: CrossGLMatrixI32C2R2" in generated_code
-    assert "var signedArray: InlineArray[CrossGLMatrixI16C2R3, 2]" in generated_code
+    assert "var signedArray: Array[CrossGLMatrixI16C2R3, 2]" in generated_code
     assert "var unsignedMatrix: CrossGLMatrixU16C2R3" in generated_code
     assert "var smallSigned: CrossGLMatrixI16C2R2" in generated_code
-    assert "var smallUnsigned: InlineArray[CrossGLMatrixU16C2R2, 2]" in generated_code
-    assert "packed.signedArray[int(index)]" in generated_code
-    assert "value[int(column)] = SIMD[DType.int16, 4](23, 24, 25, 0)" in generated_code
-    assert "packed.signedArray[int(arrayIndex)].c1[int(row)]" in generated_code
+    assert "var smallUnsigned: Array[CrossGLMatrixU16C2R2, 2]" in generated_code
+    assert "packed.signedArray[Int(index)]" in generated_code
+    assert "value[Int(column)] = SIMD[DType.int16, 4](23, 24, 25, 0)" in generated_code
+    assert "packed.signedArray[Int(arrayIndex)].c1[Int(row)]" in generated_code
 
     generated_code += """
-fn main():
+def main():
     var packed = buildPacked(Int16(1))
     print(packed.signedMatrix.c1)
     print(packed.signedArray[0].c1)
@@ -21553,7 +21597,7 @@ def test_hlsl_style_vector_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(makeColor(SIMD[DType.float32, 2](1.0, 2.0), 3.0, 4.0))
     print(makePackedFloat(SIMD[DType.float32, 2](5.0, 6.0), 7.0, 8.0))
     print(makeSimdFloat(SIMD[DType.float32, 2](9.0, 10.0), 11.0))
@@ -21661,7 +21705,7 @@ def test_hlsl_style_integer_vector_aliases_emit_mojo_simd_names():
     assert "var minSigned: SIMD[DType.int16, 4]" in generated_code
     assert "var min12Signed: SIMD[DType.int16, 2]" in generated_code
     assert "var minUnsigned: SIMD[DType.uint16, 4]" in generated_code
-    assert "fn passSmall(value: Int16) -> Int16:" in generated_code
+    assert "def passSmall(value: Int16) -> Int16:" in generated_code
     assert "return Int16(value)" in generated_code
     assert "return SIMD[DType.int32, 4](pair[0], pair[1], z, 0)" in generated_code
     assert "return SIMD[DType.uint32, 4](pair[0], pair[1], z, 0)" in generated_code
@@ -21735,7 +21779,7 @@ def test_hlsl_style_integer_vector_aliases_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(makePackedInt(SIMD[DType.int32, 2](1, 2), 3))
     print(makeSimdUint(SIMD[DType.uint32, 2](4, 5), UInt32(6), UInt32(7)))
     print(makeMin16(SIMD[DType.int16, 2](8, 9), Int16(10)))
@@ -21812,13 +21856,13 @@ def test_min_precision_integer_mod_and_indices_compile_with_mojo(tmp_path):
 
     assert "return (a % b)" in generated_code
     assert "fmod(a, b)" not in generated_code
-    assert "fn signedI32Mod(a: Int32, b: Int32) -> Int32:" in generated_code
-    assert "fn unsignedU32Mod(a: UInt32, b: UInt32) -> UInt32:" in generated_code
-    assert "return values[int(index)]" in generated_code
+    assert "def signedI32Mod(a: Int32, b: Int32) -> Int32:" in generated_code
+    assert "def unsignedU32Mod(a: UInt32, b: UInt32) -> UInt32:" in generated_code
+    assert "return values[Int(index)]" in generated_code
     assert "return values[index]" not in generated_code
 
     generated_code += """
-fn main():
+def main():
     print(signedMod(Int16(7), Int16(3)))
     print(unsignedMod(UInt16(8), UInt16(3)))
     print(signedI32Mod(Int32(9), Int32(4)))
@@ -21873,15 +21917,15 @@ def test_three_component_vectors_emit_power_of_two_simd_storage():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn buildColor() -> SIMD[DType.float32, 4]:" in generated_code
+    assert "def buildColor() -> SIMD[DType.float32, 4]:" in generated_code
     assert "return SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
-    assert "fn buildPrecise() -> SIMD[DType.float64, 4]:" in generated_code
+    assert "def buildPrecise() -> SIMD[DType.float64, 4]:" in generated_code
     assert "return SIMD[DType.float64, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
-    assert "fn buildIndex() -> SIMD[DType.int32, 4]:" in generated_code
+    assert "def buildIndex() -> SIMD[DType.int32, 4]:" in generated_code
     assert "return SIMD[DType.int32, 4](1, 2, 3, 0)" in generated_code
-    assert "fn buildMask() -> SIMD[DType.uint32, 4]:" in generated_code
+    assert "def buildMask() -> SIMD[DType.uint32, 4]:" in generated_code
     assert "return SIMD[DType.uint32, 4](1, 2, 3, 0)" in generated_code
-    assert "fn buildFlags() -> SIMD[DType.bool, 4]:" in generated_code
+    assert "def buildFlags() -> SIMD[DType.bool, 4]:" in generated_code
     assert "return SIMD[DType.bool, 4](True, False, True, False)" in generated_code
     assert ", 3]" not in generated_code
 
@@ -21907,7 +21951,7 @@ def test_three_component_vector_codegen_compiles_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     var color = buildColor()
     var index = buildIndex()
     var flags = buildFlags()
@@ -21996,7 +22040,7 @@ def test_swizzles_and_composite_vector_constructors_compile_with_mojo(tmp_path):
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
-    generated_code += "\nfn main():\n    pass\n"
+    generated_code += "\ndef main():\n    pass\n"
 
     source_path = tmp_path / "swizzles_and_composites.mojo"
     source_path.write_text(generated_code)
@@ -22069,8 +22113,8 @@ def test_later_function_call_swizzles_use_precollected_return_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_swizzle_i32_4_xy" in generated_code
-    assert "fn _crossgl_swizzle_f64_4_xy" in generated_code
+    assert "def _crossgl_swizzle_i32_4_xy" in generated_code
+    assert "def _crossgl_swizzle_f64_4_xy" in generated_code
     assert "return _crossgl_swizzle_i32_4_xy(laterIndex())" in generated_code
     assert "return _crossgl_swizzle_f64_4_xy(laterPrecise())" in generated_code
     assert "laterIndex()[0]" not in generated_code
@@ -22110,9 +22154,9 @@ def test_duplicate_sensitive_splats_and_swizzles_use_helpers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_vec3_splat_f32" in generated_code
-    assert "fn _crossgl_swizzle_i32_4_xy" in generated_code
-    assert "fn _crossgl_swizzle_f64_4_rgb" in generated_code
+    assert "def _crossgl_vec3_splat_f32" in generated_code
+    assert "def _crossgl_swizzle_i32_4_xy" in generated_code
+    assert "def _crossgl_swizzle_f64_4_rgb" in generated_code
     assert "return _crossgl_vec3_splat_f32(expensive())" in generated_code
     assert "return _crossgl_swizzle_i32_4_xy(laterIndex())" in generated_code
     assert "return _crossgl_swizzle_f64_4_rgb(laterPrecise())" in generated_code
@@ -22154,7 +22198,7 @@ def test_scalar_vec3_splats_and_later_function_swizzles_compile_with_mojo(tmp_pa
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(tint())
     print(useLaterIndex())
     print(useLaterPrecise())
@@ -22202,9 +22246,9 @@ def test_duplicate_sensitive_composite_constructors_use_helpers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_f32_4_vf322_01_s_s" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf324_012_s" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf324_012" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_s_s" in generated_code
+    assert "def _crossgl_construct_f32_4_vf324_012_s" in generated_code
+    assert "def _crossgl_construct_f32_4_vf324_012" in generated_code
     assert (
         "return _crossgl_construct_f32_4_vf322_01_s_s(makeUv(), z, w)" in generated_code
     )
@@ -22246,7 +22290,7 @@ def test_duplicate_sensitive_composite_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(fromUv(0.5, 1.0))
     print(fromRgb(1.0))
     print(narrowColor())
@@ -22310,9 +22354,9 @@ def test_duplicate_sensitive_image_constructors_emit_single_evaluation_helpers()
     atomic_one = f"{atomic_helper}(counters, coord(), 1)"
     atomic_two = f"{atomic_helper}(counters, coord(), 2)"
 
-    assert f"fn {vector_helper}" in generated_code
-    assert f"fn {matrix_helper}" in generated_code
-    assert f"fn {diagonal_helper}" in generated_code
+    assert f"def {vector_helper}" in generated_code
+    assert f"def {matrix_helper}" in generated_code
+    assert f"def {diagonal_helper}" in generated_code
     assert (
         f"return {vector_helper}(image_load(colors, coord()), pixel())"
         in generated_code
@@ -22335,7 +22379,7 @@ def test_duplicate_sensitive_image_constructors_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_duplicate_sensitive_image_constructor_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(packImageVec())
     print(packImageMatrix().c0)
     print(splatAtomic())
@@ -22483,7 +22527,7 @@ def test_duplicate_sensitive_buffer_constructors_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_duplicate_sensitive_buffer_constructor_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(packLoad())
     print(packConsume())
     print(packReinterpret())
@@ -22629,15 +22673,15 @@ def test_aggregate_buffer_reinterpret_targets_preserve_contexts_for_mojo_codegen
         parse_code(tokenize_code(_aggregate_buffer_reinterpret_target_source()))
     )
 
-    array_type = "InlineArray[SIMD[DType.float32, 2], 2]"
-    assert "fn chooseBuffer(useRaw: Bool) -> SIMD[DType.float32, 2]:" in (
+    array_type = "StaticTuple[SIMD[DType.float32, 2], 2]"
+    assert "def chooseBuffer(useRaw: Bool) -> SIMD[DType.float32, 2]:" in (
         generated_code
     )
     assert (
         "return (asfloat(buffer_load2(raw, index())) if useRaw else "
         "buffer_load(pairs, index()))"
     ) in generated_code
-    assert f"fn collectBufferValues(mode: Int32, useRaw: Bool) -> {array_type}:" in (
+    assert f"def collectBufferValues(mode: Int32, useRaw: Bool) -> {array_type}:" in (
         generated_code
     )
     assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
@@ -22672,7 +22716,7 @@ def test_aggregate_buffer_reinterpret_targets_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_aggregate_buffer_reinterpret_target_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(chooseBuffer(True))
     print(collectBufferValues(0, False)[0])
     print(makeBufferBox(0, True).value)
@@ -22836,7 +22880,7 @@ def test_function_style_struct_constructors_preserve_assignment_target_contexts(
         parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
     )
 
-    assert "fn useBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
+    assert "def useBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
     assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
     assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
         generated_code
@@ -22877,7 +22921,7 @@ def test_function_style_struct_assignment_contexts_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
     )
     generated_code += """
-fn main():
+def main():
     useBoxes(0, True)
 """
 
@@ -23067,7 +23111,7 @@ def test_braced_struct_constructors_preserve_assignment_target_contexts():
         parse_code(tokenize_code(_braced_struct_assignment_target_source()))
     )
 
-    assert "fn useBracedBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
+    assert "def useBracedBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
     assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
     assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
         generated_code
@@ -23112,7 +23156,7 @@ def test_braced_struct_assignment_contexts_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_braced_struct_assignment_target_source()))
     )
     generated_code += """
-fn main():
+def main():
     useBracedBoxes(0, True)
 """
 
@@ -23288,8 +23332,8 @@ def test_constructor_helper_match_and_ternary_operands_emit_single_preludes():
 
     vector_helper = "_crossgl_construct_f32_4_vf322_01_vi322_01"
     matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vi322_01"
-    assert f"fn {vector_helper}" in generated_code
-    assert f"fn {matrix_helper}" in generated_code
+    assert f"def {vector_helper}" in generated_code
+    assert f"def {matrix_helper}" in generated_code
     assert (
         f"return {vector_helper}((makeAltUv() if useAlt else makeUv()), "
         "makeIndexPair())"
@@ -23327,7 +23371,7 @@ def test_constructor_helper_match_and_ternary_operands_compile_with_mojo(tmp_pat
         parse_code(tokenize_code(_constructor_helper_match_and_ternary_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(packTernaryVec(False))
     print(packTernaryVec(True))
     print(packTernaryMatrix(False).c0)
@@ -23414,9 +23458,9 @@ def test_constructor_helper_resource_query_branches_preserve_target_shapes():
     scalar_helper = "_crossgl_construct_f32_4_vi322_01_si32_s"
     vector_helper = "_crossgl_construct_f32_4_vi322_01_vi322_01"
     matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vi322_01_vi322_01"
-    assert f"fn {scalar_helper}" in generated_code
-    assert f"fn {vector_helper}" in generated_code
-    assert f"fn {matrix_helper}" in generated_code
+    assert f"def {scalar_helper}" in generated_code
+    assert f"def {vector_helper}" in generated_code
+    assert f"def {matrix_helper}" in generated_code
     assert (
         f"return {scalar_helper}(makeIndexPair(), "
         "(texture_size(tex, 1) if highMip else texture_size(tex, 0)), "
@@ -23486,7 +23530,7 @@ def test_constructor_helper_resource_query_branches_compile_with_mojo(tmp_path):
         parse_code(tokenize_code(_constructor_helper_resource_query_branch_source()))
     )
     generated_code += """
-fn main():
+def main():
     print(packScalarTernaryResource(False, Texture1D()))
     print(packScalarTernaryResource(True, Texture1D()))
     print(packScalarMatchResource(0, Texture1D()))
@@ -23543,9 +23587,9 @@ def test_duplicate_sensitive_bool_vector_helpers_use_bool_dtype():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_vec3_splat_bool(s: Bool)" in generated_code
-    assert "fn _crossgl_swizzle_bool_4_xy" in generated_code
-    assert "fn _crossgl_construct_bool_4_vbool4_012_s" in generated_code
+    assert "def _crossgl_vec3_splat_bool(s: Bool)" in generated_code
+    assert "def _crossgl_swizzle_bool_4_xy" in generated_code
+    assert "def _crossgl_construct_bool_4_vbool4_012_s" in generated_code
     assert "return _crossgl_vec3_splat_bool(flag())" in generated_code
     assert "return _crossgl_swizzle_bool_4_xy(makeFlags())" in generated_code
     assert (
@@ -23594,7 +23638,7 @@ def test_duplicate_sensitive_bool_vector_helpers_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(boolSplat())
     print(flagPair())
     print(packFlags(False))
@@ -23673,12 +23717,12 @@ def test_duplicate_sensitive_integer_vector_helpers_use_typed_dtypes():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_vec3_splat_i32(s: Int32)" in generated_code
-    assert "fn _crossgl_vec3_splat_u32(s: UInt32)" in generated_code
-    assert "fn _crossgl_swizzle_i32_4_xy" in generated_code
-    assert "fn _crossgl_swizzle_u32_4_xy" in generated_code
-    assert "fn _crossgl_construct_i32_4_vi324_012_s" in generated_code
-    assert "fn _crossgl_construct_u32_4_vu324_012_s" in generated_code
+    assert "def _crossgl_vec3_splat_i32(s: Int32)" in generated_code
+    assert "def _crossgl_vec3_splat_u32(s: UInt32)" in generated_code
+    assert "def _crossgl_swizzle_i32_4_xy" in generated_code
+    assert "def _crossgl_swizzle_u32_4_xy" in generated_code
+    assert "def _crossgl_construct_i32_4_vi324_012_s" in generated_code
+    assert "def _crossgl_construct_u32_4_vu324_012_s" in generated_code
     assert "return _crossgl_vec3_splat_i32(pickIndex())" in generated_code
     assert "return _crossgl_vec3_splat_u32(pickMask())" in generated_code
     assert "return _crossgl_swizzle_i32_4_xy(makeIndex())" in generated_code
@@ -23754,7 +23798,7 @@ def test_duplicate_sensitive_integer_vector_helpers_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(indexSplat())
     print(maskSplat())
     print(indexPair())
@@ -23844,11 +23888,11 @@ def test_mixed_dtype_vector_constructors_cast_and_preserve_single_eval():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_f32_4_vi324_012" in generated_code
-    assert "fn _crossgl_construct_i32_4_vf324_012" in generated_code
-    assert "fn _crossgl_construct_f32_4_vi324_012_si32" in generated_code
-    assert "fn _crossgl_construct_i32_4_vu324_012_s" in generated_code
-    assert "fn _crossgl_construct_u32_4_vi324_012_s" in generated_code
+    assert "def _crossgl_construct_f32_4_vi324_012" in generated_code
+    assert "def _crossgl_construct_i32_4_vf324_012" in generated_code
+    assert "def _crossgl_construct_f32_4_vi324_012_si32" in generated_code
+    assert "def _crossgl_construct_i32_4_vu324_012_s" in generated_code
+    assert "def _crossgl_construct_u32_4_vi324_012_s" in generated_code
     assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
     assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
     assert "var v0_cast = v0.cast[DType.uint32]()" in generated_code
@@ -23948,7 +23992,7 @@ def test_mixed_dtype_vector_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(fromIndex())
     print(fromWeight())
     print(packFromIndex(9.0))
@@ -24088,7 +24132,7 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
     )
     assert "return SIMD[DType.bool, 2](fill=nextBool())" in generated_code
     assert "return SIMD[DType.bool, 4](fill=nextBool())" in generated_code
-    assert "fn _crossgl_vec3_splat" not in generated_code
+    assert "def _crossgl_vec3_splat" not in generated_code
 
 
 def test_underfilled_vector_constructors_zero_fill_missing_mojo_lanes():
@@ -24133,7 +24177,7 @@ def test_underfilled_vector_constructors_zero_fill_missing_mojo_lanes():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "return SIMD[DType.float32, 4](1.0, 2.0, 0.0, 0.0)" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf322_01_s_s" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_s_s" in generated_code
     assert (
         "return _crossgl_construct_f32_4_vf322_01_s_s(makeUv(), 0.0, 0.0)"
         in generated_code
@@ -24190,7 +24234,7 @@ def test_underfilled_vector_constructors_compile_with_mojo(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     print(fromScalars())
     print(fromVec3Scalars())
     print(fromVec2Call())
@@ -24288,7 +24332,7 @@ def test_scalar_vec2_vec4_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(splatVec2Float())
     print(splatVec4Float())
     print(splatVec2Int())
@@ -24416,15 +24460,15 @@ def test_nested_composite_vector_constructors_use_helpers_and_casts():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_f32_4_vf322_01_vf322_01" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf322_01_si32_sf64" in generated_code
-    assert "fn _crossgl_construct_f32_4_vi322_01_s_si32" in generated_code
-    assert "fn _crossgl_construct_i32_4_vu322_01_sf32_s" in generated_code
-    assert "fn _crossgl_construct_f64_4_vf322_01_s_si32" in generated_code
-    assert "fn _crossgl_construct_bool_4_vbool2_01_s_s" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf322_01_vi322_01" in generated_code
-    assert "fn _crossgl_construct_i32_4_vu322_01_vi322_01" in generated_code
-    assert "fn _crossgl_construct_f64_4_vf642_01_vf322_01" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_vf322_01" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_si32_sf64" in generated_code
+    assert "def _crossgl_construct_f32_4_vi322_01_s_si32" in generated_code
+    assert "def _crossgl_construct_i32_4_vu322_01_sf32_s" in generated_code
+    assert "def _crossgl_construct_f64_4_vf322_01_s_si32" in generated_code
+    assert "def _crossgl_construct_bool_4_vbool2_01_s_s" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_vi322_01" in generated_code
+    assert "def _crossgl_construct_i32_4_vu322_01_vi322_01" in generated_code
+    assert "def _crossgl_construct_f64_4_vf642_01_vf322_01" in generated_code
     assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
     assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
     assert "var v1_cast = v1.cast[DType.float64]()" in generated_code
@@ -24551,7 +24595,7 @@ def test_nested_composite_vector_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(packTwoNestedVec2())
     print(packNestedVec2Scalars())
     print(packMixedIvec2())
@@ -24643,12 +24687,12 @@ def test_truncating_vector_constructors_use_helpers_and_pad_hidden_lane():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_f32_2_vf324_01" in generated_code
-    assert "fn _crossgl_construct_f32_2_vi324_01" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf324_012" in generated_code
-    assert "fn _crossgl_construct_i32_4_vu324_012" in generated_code
-    assert "fn _crossgl_construct_bool_4_vbool4_012" in generated_code
-    assert "fn _crossgl_construct_f32_4_vf322_01_vf322_0" in generated_code
+    assert "def _crossgl_construct_f32_2_vf324_01" in generated_code
+    assert "def _crossgl_construct_f32_2_vi324_01" in generated_code
+    assert "def _crossgl_construct_f32_4_vf324_012" in generated_code
+    assert "def _crossgl_construct_i32_4_vu324_012" in generated_code
+    assert "def _crossgl_construct_bool_4_vbool4_012" in generated_code
+    assert "def _crossgl_construct_f32_4_vf322_01_vf322_0" in generated_code
     assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
     assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
     assert "return _crossgl_construct_f32_2_vf324_01(makeColor())" in generated_code
@@ -24730,7 +24774,7 @@ def test_truncating_vector_constructors_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(narrowColor())
     print(narrowColor3())
     print(narrowIndexToFloat())
@@ -24824,13 +24868,13 @@ def test_min_precision_truncating_vector_constructors_use_helpers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_construct_f16_2_vf164_01" in generated_code
-    assert "fn _crossgl_construct_f16_4_vf164_012" in generated_code
-    assert "fn _crossgl_construct_i16_2_vi164_01" in generated_code
-    assert "fn _crossgl_construct_i16_4_vi164_012" in generated_code
-    assert "fn _crossgl_construct_u16_2_vu164_01" in generated_code
-    assert "fn _crossgl_construct_u16_4_vu164_012" in generated_code
-    assert "fn _crossgl_construct_f16_4_vf162_01_vf162_0" in generated_code
+    assert "def _crossgl_construct_f16_2_vf164_01" in generated_code
+    assert "def _crossgl_construct_f16_4_vf164_012" in generated_code
+    assert "def _crossgl_construct_i16_2_vi164_01" in generated_code
+    assert "def _crossgl_construct_i16_4_vi164_012" in generated_code
+    assert "def _crossgl_construct_u16_2_vu164_01" in generated_code
+    assert "def _crossgl_construct_u16_4_vu164_012" in generated_code
+    assert "def _crossgl_construct_f16_4_vf162_01_vf162_0" in generated_code
     assert "return _crossgl_construct_f16_2_vf164_01(makeHalf4())" in generated_code
     assert (
         "return _crossgl_construct_f16_4_vf164_012(makeMinFloat4())" in generated_code
@@ -24919,7 +24963,7 @@ def test_min_precision_truncating_vector_constructors_compile_with_mojo(tmp_path
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(narrowHalf())
     print(narrowMinFloat())
     print(narrowShort())
@@ -24978,11 +25022,11 @@ def test_vec3_arithmetic_helpers_preserve_hidden_lane():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "fn _crossgl_vec3_add_f32_vs" in generated_code
-    assert "fn _crossgl_vec3_add_f32_vv" in generated_code
-    assert "fn _crossgl_vec3_sub_f32_sv" in generated_code
-    assert "fn _crossgl_vec3_div_f32_vs" in generated_code
-    assert "fn _crossgl_vec3_add_i32_vs" in generated_code
+    assert "def _crossgl_vec3_add_f32_vs" in generated_code
+    assert "def _crossgl_vec3_add_f32_vv" in generated_code
+    assert "def _crossgl_vec3_sub_f32_sv" in generated_code
+    assert "def _crossgl_vec3_div_f32_vs" in generated_code
+    assert "def _crossgl_vec3_add_i32_vs" in generated_code
     assert "return _crossgl_vec3_add_f32_vs(color, bloom)" in generated_code
     assert (
         "return _crossgl_vec3_add_f32_vv(color, "
@@ -25030,7 +25074,7 @@ def test_vec3_arithmetic_helpers_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     var color = SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)
     print(addScalar(color, 0.25))
     print(addSplat(color, 0.25))
@@ -25091,18 +25135,15 @@ def test_generic_vector_composite_types_emit_mojo_names():
     assert "var mask: SIMD[DType.uint32, 4]" in generated_code
     assert "var flags: SIMD[DType.bool, 2]" in generated_code
     assert (
-        "fn passthrough(value: SIMD[DType.float64, 2], "
+        "def passthrough(value: SIMD[DType.float64, 2], "
         "index: SIMD[DType.int32, 4], mask: SIMD[DType.uint32, 4], "
         "flags: SIMD[DType.bool, 2]) -> SIMD[DType.float64, 2]:"
     ) in generated_code
     assert (
-        "var localValues = InlineArray[SIMD[DType.float64, 2], 2]"
-        "(unsafe_uninitialized=True)"
+        "var localValues = StaticTuple[SIMD[DType.float64, 2], 2]" "()"
     ) in generated_code
-    assert (
-        "var values = InlineArray[SIMD[DType.float64, 2], 2](unsafe_uninitialized=True)"
-    ) in generated_code
-    assert "StaticTuple" not in generated_code
+    assert ("var values = StaticTuple[SIMD[DType.float64, 2], 2]()") in generated_code
+    assert "Array[" not in generated_code
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
 
@@ -25133,17 +25174,13 @@ def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var transforms: InlineArray[CrossGLMatrixF32C2R2, 2]" in generated_code
-    assert "var samples: InlineArray[SIMD[DType.float32, 2], 2]" in generated_code
-    assert (
-        "var values = InlineArray[SIMD[DType.float32, 2], 2](unsafe_uninitialized=True)"
-    ) in generated_code
-    assert (
-        "var values = InlineArray[CrossGLMatrixF32C2R2, 2](unsafe_uninitialized=True)"
-    ) in generated_code
-    assert "values[int(index)] = value" in generated_code
-    assert "return values[int(index)]" in generated_code
-    assert "StaticTuple" not in generated_code
+    assert "var transforms: StaticTuple[CrossGLMatrixF32C2R2, 2]" in generated_code
+    assert "var samples: StaticTuple[SIMD[DType.float32, 2], 2]" in generated_code
+    assert ("var values = StaticTuple[SIMD[DType.float32, 2], 2]()") in generated_code
+    assert ("var values = StaticTuple[CrossGLMatrixF32C2R2, 2]()") in generated_code
+    assert "values[Int(index)] = value" in generated_code
+    assert "return values[Int(index)]" in generated_code
+    assert "Array[" not in generated_code
     assert "DynamicVector" not in generated_code
 
 
@@ -25163,10 +25200,9 @@ def test_symbolic_fixed_size_arrays_emit_inlinearray_without_ast_repr():
     generated_code = generate_code(ast)
 
     assert (
-        "var tile = InlineArray[InlineArray[Float32, TILE_SIZE], TILE_SIZE]"
-        "(unsafe_uninitialized=True)"
+        "var tile = StaticTuple[StaticTuple[Float32, TILE_SIZE], TILE_SIZE]" "()"
     ) in generated_code
-    assert "tile[int(y)][int(x)] = 1.0" in generated_code
+    assert "tile[Int(y)][Int(x)] = 1.0" in generated_code
     assert "IdentifierNode(" not in generated_code
     assert "var tile = List" not in generated_code
 
@@ -25204,7 +25240,7 @@ def test_fixed_size_arrays_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(scalarArray(1))
     print(vectorArray(SIMD[DType.float32, 2](8.0, 9.0), 1))
     print(matrixArray(1).c1)
@@ -25260,7 +25296,7 @@ def test_struct_array_fields_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     var packed = makePacked()
     print(readSample(packed, 1))
     print(readColumn(packed, 1))
@@ -25308,10 +25344,12 @@ def test_local_struct_array_fields_default_initialize_with_mojo(tmp_path):
 
     assert "var packed: Packed" not in generated_code
     assert "var packed = Packed(" in generated_code
-    assert "InlineArray[Float32, 4](0.0, 0.0, 0.0, 0.0)" in generated_code
+    assert (
+        "Array[Float32, 4](0.0, 0.0, 0.0, 0.0, __list_literal__=None)" in generated_code
+    )
 
     generated_code += """
-fn main():
+def main():
     var packed = buildPacked(1)
     print(packed.weights[0])
     print(packed.weights[1])
@@ -25381,13 +25419,13 @@ def test_nested_struct_arrays_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "var entries: InlineArray[Inner, 2]" in generated_code
+    assert "var entries: Array[Inner, 2]" in generated_code
     assert "var inner = Inner(" in generated_code
     assert "var outer = Outer(" in generated_code
-    assert "outer.entries[int(index)].weights[1] = 15.0" in generated_code
+    assert "outer.entries[Int(index)].weights[1] = 15.0" in generated_code
 
     generated_code += """
-fn main():
+def main():
     var outer = buildOuter(1)
     print(readOuter(outer, 1))
     print(readNestedWeight(outer, 1))
@@ -25413,7 +25451,7 @@ fn main():
 
 def test_array_literals_emit_inlinearray_and_zero_padding():
     code = """
-    float globalWeights[4] = {1.0, 2.0};
+    const float globalWeights[4] = {1.0, 2.0};
 
     float pickScalar(int index) {
         float values[4] = {1.0, 2.0};
@@ -25440,19 +25478,19 @@ def test_array_literals_emit_inlinearray_and_zero_padding():
     generated_code = generate_code(ast)
 
     assert (
-        "var globalWeights: InlineArray[Float32, 4] = "
-        "InlineArray[Float32, 4](1.0, 2.0, 0.0, 0.0)"
+        "comptime globalWeights = StaticTuple[Float32, 4](1.0, 2.0, 0.0, 0.0)"
+        in generated_code
+    )
+    assert (
+        "var values: StaticTuple[Float32, 4] = "
+        "StaticTuple[Float32, 4](1.0, 2.0, 0.0, 0.0)"
     ) in generated_code
     assert (
-        "var values: InlineArray[Float32, 4] = "
-        "InlineArray[Float32, 4](1.0, 2.0, 0.0, 0.0)"
-    ) in generated_code
-    assert (
-        "InlineArray[SIMD[DType.float32, 2], 2]("
+        "StaticTuple[SIMD[DType.float32, 2], 2]("
         "SIMD[DType.float32, 2](1.0, 2.0), "
         "SIMD[DType.float32, 2](3.0, 4.0))"
     ) in generated_code
-    assert "return InlineArray[Float32, 4](1.0, 2.0, 3.0, 4.0)" in generated_code
+    assert "return StaticTuple[Float32, 4](1.0, 2.0, 3.0, 4.0)" in generated_code
     assert (
         "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
         "SIMD[DType.float32, 2](0.0, 0.0))"
@@ -25494,7 +25532,7 @@ def test_array_literals_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
+def main():
     print(pickGlobal(3))
     print(pickScalar(1))
     print(pickScalar(3))
@@ -25552,19 +25590,19 @@ def test_mutated_parameters_emit_owned_only_when_needed():
     generated_code = generate_code(ast)
 
     assert (
-        "fn writeArray(owned values: InlineArray[Float32, 4], index: Int32)"
+        "def writeArray(var values: StaticTuple[Float32, 4], index: Int32)"
         in generated_code
     )
     assert (
-        "fn writeMatrix(owned value: CrossGLMatrixF32C2R2, column: Int32)"
+        "def writeMatrix(var value: CrossGLMatrixF32C2R2, column: Int32)"
         in generated_code
     )
-    assert "fn bumpScalar(owned value: Float32)" in generated_code
-    assert "fn tweakVector(owned value: SIMD[DType.float32, 2])" in generated_code
+    assert "def bumpScalar(var value: Float32)" in generated_code
+    assert "def tweakVector(var value: SIMD[DType.float32, 2])" in generated_code
     assert (
-        "fn readArray(values: InlineArray[Float32, 4], index: Int32)" in generated_code
+        "def readArray(values: StaticTuple[Float32, 4], index: Int32)" in generated_code
     )
-    assert "fn readArray(owned values" not in generated_code
+    assert "def readArray(var values" not in generated_code
 
 
 def test_mutated_array_matrix_vector_parameters_compile_with_mojo(tmp_path):
@@ -25596,8 +25634,8 @@ def test_mutated_array_matrix_vector_parameters_compile_with_mojo(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
     generated_code += """
-fn main():
-    var values = InlineArray[Float32, 4](unsafe_uninitialized=True)
+def main():
+    var values = Array[Float32, 4](uninitialized=True)
     values[0] = 1.0
     values[1] = 2.0
     print(writeArray(values, 1))
@@ -25799,13 +25837,12 @@ def test_mojo_compute_shader_synchronization_barriers():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "_crossgl_workgroup_barrier()" in generated_code
-    assert "_crossgl_memory_barrier()" in generated_code
-    assert "fn _crossgl_workgroup_barrier():" in generated_code
-    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert generated_code.count("\n    barrier()\n") == 2
+    assert "\n    threadfence()\n" in generated_code
+    assert "from max.gpu.intrinsics import threadfence" in generated_code
+    assert "def barrier" not in generated_code
     assert "# CrossGL shader stage: compute" in generated_code
     assert "@compute_shader" not in generated_code
-    assert "\n    barrier()" not in generated_code
     assert "memoryBarrier()" not in generated_code
     assert "workgroupBarrier()" not in generated_code
 
@@ -25882,11 +25919,11 @@ def test_mojo_multisample_storage_image_load_store_in_compute():
         in generated_code
     )
     assert (
-        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32)"
+        "def image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32)"
         in generated_code
     )
     assert (
-        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32"
+        "def image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32"
         in generated_code
     )
 
@@ -25948,7 +25985,7 @@ def test_mojo_image_atomic_uint_constructor_value_infers_unsigned_type():
 
     assert "struct UImage2D:" in generated_code
     assert (
-        "fn _crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
+        "def _crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
         "(arg0: UImage2D, arg1: SIMD[DType.int32, 2], arg2: UInt32)"
         " -> UInt32:" in generated_code
     )
@@ -25995,20 +26032,22 @@ def test_mojo_explicit_scalar_image_format_atomics_remain_scalar():
     assert "struct IImage2DInt4:" in generated_code
     assert "struct UImage2DUInt4:" in generated_code
     assert (
-        "fn _crossgl_image_atomic_add_IImage2DInt4_SIMD_DType_int32_2_Int32"
+        "def _crossgl_image_atomic_add_IImage2DInt4_SIMD_DType_int32_2_Int32"
         "(arg0: IImage2DInt4, arg1: SIMD[DType.int32, 2], arg2: Int32)"
         " -> Int32:" in generated_code
     )
     assert (
-        "fn _crossgl_image_atomic_add_UImage2DUInt4_SIMD_DType_int32_2_UInt32"
+        "def _crossgl_image_atomic_add_UImage2DUInt4_SIMD_DType_int32_2_UInt32"
         "(arg0: UImage2DUInt4, arg1: SIMD[DType.int32, 2], arg2: UInt32)"
         " -> UInt32:" in generated_code
     )
     assert "var signedOld: Int32 = _crossgl_image_atomic_add_IImage2DInt4" in (
         generated_code
     )
-    assert "var unsignedOld: UInt32 = _crossgl_image_atomic_add_UImage2DUInt4" in (
-        generated_code
+    assert (
+        "var unsignedOld: UInt32 = UInt32(_crossgl_image_atomic_add_UImage2DUInt4" in (
+            generated_code
+        )
     )
     assert "imageAtomicAdd" not in generated_code
     assert "imageAtomicExchange" not in generated_code
@@ -26053,19 +26092,19 @@ def test_mojo_storage_image_load_store_operations():
     assert "image_load(volumeImage, voxel)" in generated_code
     assert "image_store(volumeImage, voxel, volumeColor)" in generated_code
     assert (
-        "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 4]:"
+        "def image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert (
-        "fn image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
+        "def image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
         in generated_code
     )
     assert (
-        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        "def image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn image_load(image: Image3D, coord: SIMD[DType.int32, 4]) -> SIMD[DType.float32, 4]:"
+        "def image_load(image: Image3D, coord: SIMD[DType.int32, 4]) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert "imageLoad" not in generated_code
@@ -26132,11 +26171,11 @@ def test_mojo_multisample_texture_operations():
     assert "texel_fetch(tex, pixelLayer, sampleIdx)" in generated_code
     assert "texture_samples(tex)" in generated_code
     assert "texture_size(tex)" in generated_code
-    assert "fn texel_fetch(tex: Texture2DMS" in generated_code
-    assert "fn texel_fetch(tex: Texture2DMSArray" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def texel_fetch(tex: Texture2DMS" in generated_code
+    assert "def texel_fetch(tex: Texture2DMSArray" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert (
-        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+        "def texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
     )
     assert "texelFetch" not in generated_code
     assert "textureSamples" not in generated_code
@@ -26177,24 +26216,24 @@ def test_mojo_texel_fetch_operations():
     assert "texel_fetch(tex, pixel, lod)" in generated_code
     assert "texel_fetch_offset(tex, pixel, lod, offset)" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
+        "def texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
     assert (
-        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
         "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
     )
-    assert "fn texel_fetch(tex: Texture1D, coord: Int32, lod: Int32)" in generated_code
+    assert "def texel_fetch(tex: Texture1D, coord: Int32, lod: Int32)" in generated_code
     assert (
-        "fn texel_fetch_offset(tex: Texture1D, coord: Int32, lod: Int32, "
+        "def texel_fetch_offset(tex: Texture1D, coord: Int32, lod: Int32, "
         "offset: Int32)" in generated_code
     )
     assert (
-        "fn texel_fetch(tex: Texture2DArray, coord: SIMD[DType.int32, 4], lod: Int32)"
+        "def texel_fetch(tex: Texture2DArray, coord: SIMD[DType.int32, 4], lod: Int32)"
         in generated_code
     )
     assert (
-        "fn texel_fetch_offset(tex: Texture2DArray, coord: SIMD[DType.int32, 4], "
+        "def texel_fetch_offset(tex: Texture2DArray, coord: SIMD[DType.int32, 4], "
         "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
     )
     assert "struct Texture2D:" in generated_code
@@ -26235,24 +26274,24 @@ def test_mojo_texture_query_operations():
 
     assert "texture_size(tex, lod)" in generated_code
     assert "texture_query_levels(tex)" in generated_code
-    assert "fn texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
+    assert "def texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
     assert (
-        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
     assert (
-        "fn texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
         in generated_code
     )
     assert (
-        "fn texture_size(tex: Texture3D, lod: Int32) -> SIMD[DType.int32, 4]:"
+        "def texture_size(tex: Texture3D, lod: Int32) -> SIMD[DType.int32, 4]:"
         in generated_code
     )
     assert (
-        "fn texture_size(tex: TextureCube, lod: Int32) -> SIMD[DType.int32, 2]:"
+        "def texture_size(tex: TextureCube, lod: Int32) -> SIMD[DType.int32, 2]:"
         in generated_code
     )
-    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
     assert "textureSize" not in generated_code
     assert "textureQueryLevels" not in generated_code
 
@@ -26276,10 +26315,11 @@ def test_mojo_image_size_query_for_storage_images():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "image_size(image)" in generated_code
-    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
-    assert "fn image_size(image: IImage3D) -> SIMD[DType.int32, 4]:" in generated_code
+    assert "def image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "def image_size(image: IImage3D) -> SIMD[DType.int32, 4]:" in generated_code
     assert (
-        "fn image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in generated_code
+        "def image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:"
+        in generated_code
     )
     assert "imageSize" not in generated_code
 
@@ -26299,8 +26339,8 @@ def test_mojo_image_samples_query_for_multisample_images():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "image_samples(image)" in generated_code
-    assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
-    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: UImage2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert "imageSamples" not in generated_code
 
 
@@ -26364,7 +26404,7 @@ def test_mojo_texture_and_image_query_helpers_compile_with_mojo(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
-fn main():
+def main():
     print(getStripWidth(Texture1D(), 0))
     print(getMapSize(Texture2D(), 0))
     print(getLayerSize(Texture2DArray(), 0))
@@ -26407,8 +26447,8 @@ def test_mojo_imports():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "from math import *" in generated_code
-        assert "from gpu import *" in generated_code
+        assert "from std.math import *" in generated_code
+        assert "from max.gpu import *" in generated_code
         assert "from simd import *" not in generated_code
         print(generated_code)
     except SyntaxError:
@@ -26427,9 +26467,9 @@ def test_barrier_emits_mojo_sync_primitive():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "_crossgl_workgroup_barrier()" in generated_code
-    assert "fn _crossgl_workgroup_barrier():" in generated_code
-    assert "barrier()" not in generated_code.replace("_crossgl_workgroup_barrier()", "")
+    assert "\n    barrier()\n" in generated_code
+    assert "def barrier" not in generated_code
+    assert "from max.gpu import *" in generated_code
 
 
 def test_memory_barrier_emits_mojo_memory_barrier():
@@ -26444,8 +26484,8 @@ def test_memory_barrier_emits_mojo_memory_barrier():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "_crossgl_memory_barrier()" in generated_code
-    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "\n    threadfence()\n" in generated_code
+    assert "from max.gpu.intrinsics import threadfence" in generated_code
     assert "memoryBarrier()" not in generated_code
 
 
@@ -26461,8 +26501,7 @@ def test_workgroup_barrier_emits_threadgroup_sync():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "_crossgl_workgroup_barrier()" in generated_code
-    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "\n    barrier()\n" in generated_code
     assert "workgroupBarrier()" not in generated_code
 
 
@@ -26477,7 +26516,7 @@ def test_texture_size_emits_dimension_query():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "texture_size(tex, lod)" in generated_code
-    assert "fn texture_size(" in generated_code
+    assert "def texture_size(" in generated_code
     assert "-> SIMD[DType.int32, 2]:" in generated_code
     assert "textureSize" not in generated_code
 
@@ -26493,7 +26532,7 @@ def test_texture_query_levels_emits_level_count_query():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "texture_query_levels(tex)" in generated_code
-    assert "fn texture_query_levels(" in generated_code
+    assert "def texture_query_levels(" in generated_code
     assert "-> Int32:" in generated_code
     assert "textureQueryLevels" not in generated_code
 
@@ -26509,7 +26548,7 @@ def test_texel_fetch_emits_direct_texel_read():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "texel_fetch(tex, coord, lod)" in generated_code
-    assert "fn texel_fetch(" in generated_code
+    assert "def texel_fetch(" in generated_code
     assert "SIMD[DType.int32, 2]" in generated_code
     assert "texelFetch" not in generated_code
 
@@ -26542,15 +26581,15 @@ def test_mojo_storage_image_load_on_1d_and_array_types():
     assert "image_load(signedRows, coord1dArr)" in generated_code
     assert "image_load(counterLayers, coordArr)" in generated_code
     assert (
-        "fn image_load(image: Image1D, coord: Int32) -> SIMD[DType.float32, 4]:"
+        "def image_load(image: Image1D, coord: Int32) -> SIMD[DType.float32, 4]:"
         in generated_code
     )
     assert (
-        "fn image_load(image: IImage1DArray, coord: SIMD[DType.int32, 2]) -> Int32:"
+        "def image_load(image: IImage1DArray, coord: SIMD[DType.int32, 2]) -> Int32:"
         in generated_code
     )
     assert (
-        "fn image_load(image: UImage2DArray, coord: SIMD[DType.int32, 4]) -> UInt32:"
+        "def image_load(image: UImage2DArray, coord: SIMD[DType.int32, 4]) -> UInt32:"
         in generated_code
     )
     assert "imageLoad" not in generated_code
@@ -26587,15 +26626,15 @@ def test_mojo_storage_image_store_on_various_formats():
     assert "image_store(signedImage, pixel, signedVal)" in generated_code
     assert "image_store(volumeCounters, voxel, counter)" in generated_code
     assert (
-        "fn image_store(image: Image1D, coord: Int32, value: SIMD[DType.float32, 4]):"
+        "def image_store(image: Image1D, coord: Int32, value: SIMD[DType.float32, 4]):"
         in generated_code
     )
     assert (
-        "fn image_store(image: IImage2D, coord: SIMD[DType.int32, 2], value: Int32):"
+        "def image_store(image: IImage2D, coord: SIMD[DType.int32, 2], value: Int32):"
         in generated_code
     )
     assert (
-        "fn image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
+        "def image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
         in generated_code
     )
     assert "imageStore" not in generated_code
@@ -26625,19 +26664,19 @@ def test_mojo_explicit_scalar_storage_image_formats_use_vector_contexts():
     assert "var labels: IImage2DInt4 = IImage2DInt4()" in generated_code
     assert "var counters: UImage2DUInt4 = UImage2DUInt4()" in generated_code
     assert (
-        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.int32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: IImage2DInt4, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: IImage2DInt4, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.int32, 4]):" in generated_code
     )
     assert (
-        "fn image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
+        "def image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
         "SIMD[DType.uint32, 4]:" in generated_code
     )
     assert (
-        "fn image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
+        "def image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
         "value: SIMD[DType.uint32, 4]):" in generated_code
     )
     assert "var label: SIMD[DType.int32, 4] = image_load(labels, pixel)" in (
@@ -26747,11 +26786,11 @@ def test_mojo_storage_image_combined_load_store_and_atomics():
     assert "_crossgl_image_atomic_max_UImage2D" in generated_code
     assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
     assert (
-        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        "def image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
         in generated_code
     )
     assert (
-        "fn image_store(image: UImage2D, coord: SIMD[DType.int32, 2], value: UInt32):"
+        "def image_store(image: UImage2D, coord: SIMD[DType.int32, 2], value: UInt32):"
         in generated_code
     )
     assert "imageLoad" not in generated_code
@@ -26860,7 +26899,7 @@ def test_multisample_texture_fetch_with_sample_index_for_mojo_codegen():
     assert "struct Texture2DMS:" in generated_code
     assert "texel_fetch(msTexture, pixel, sampleIdx)" in generated_code
     assert (
-        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
         "lod: Int32) -> SIMD[DType.float32, 4]:" in generated_code
     )
     assert "texelFetch" not in generated_code
@@ -26877,7 +26916,7 @@ def test_multisample_texture_samples_query_for_mojo_codegen():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "texture_samples(msTexture)" in generated_code
-    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert "textureSamples" not in generated_code
 
 
@@ -26892,7 +26931,7 @@ def test_multisample_image_samples_query_for_mojo_codegen():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "image_samples(msImage)" in generated_code
-    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert "imageSamples" not in generated_code
 
 
@@ -27002,7 +27041,7 @@ def test_mojo_readonly_qualifier_on_storage_images():
 
     assert "access=readonly" in generated_code
     assert "image_load(inputImage, pixel)" in generated_code
-    assert "image_load(inputImages[int(slot)], pixel)" in generated_code
+    assert "image_load(inputImages[Int(slot)], pixel)" in generated_code
 
     invalid_write = """
     readonly image2D inputImage;
@@ -27031,7 +27070,7 @@ def test_mojo_writeonly_qualifier_on_storage_images():
 
     assert "access=writeonly" in generated_code
     assert "image_store(outputImage, pixel, color)" in generated_code
-    assert "image_store(outputImages[int(slot)], pixel, color)" in generated_code
+    assert "image_store(outputImages[Int(slot)], pixel, color)" in generated_code
 
     invalid_read = """
     writeonly image2D outputImage;
@@ -27089,7 +27128,9 @@ def test_cbuffer_produces_mojo_struct_with_value_decorator():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct Transforms:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct Transforms(TrivialRegisterPassable):" in generated_code
+    )
     assert "var world: CrossGLMatrixF32C4R4" in generated_code
     assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
     assert "var cameraPos: SIMD[DType.float32, 4]" in generated_code
@@ -27111,10 +27152,14 @@ def test_multiple_cbuffers_in_one_shader():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct PerFrame:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct PerFrame(TrivialRegisterPassable):" in generated_code
+    )
     assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
     assert "var time: Float32" in generated_code
-    assert "@value\nstruct PerObject:" in generated_code
+    assert (
+        "@fieldwise_init\nstruct PerObject(TrivialRegisterPassable):" in generated_code
+    )
     assert "var world: CrossGLMatrixF32C4R4" in generated_code
     assert "var color: SIMD[DType.float32, 4]" in generated_code
     assert "# CrossGL resource metadata: name=PerFrame kind=cbuffer" in generated_code
@@ -27131,11 +27176,13 @@ def test_cbuffer_with_array_members():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "@value\nstruct LightData:" in generated_code
     assert (
-        "var lightPositions: InlineArray[SIMD[DType.float32, 4], 8]" in generated_code
+        "@fieldwise_init\nstruct LightData(TrivialRegisterPassable):" in generated_code
     )
-    assert "var intensities: InlineArray[Float32, 8]" in generated_code
+    assert (
+        "var lightPositions: StaticTuple[SIMD[DType.float32, 4], 8]" in generated_code
+    )
+    assert "var intensities: StaticTuple[Float32, 8]" in generated_code
     assert "var activeLightCount: Int32" in generated_code
     assert "# CrossGL resource metadata: name=LightData kind=cbuffer" in generated_code
 
@@ -27158,7 +27205,7 @@ def test_texture2d_sampler2d_resource_declarations_produce_mojo_types():
     assert "var normalMap: Texture2D" in generated_code
     assert "var envMap: TextureCube" in generated_code
     assert "sample(diffuseMap, uv)" in generated_code
-    assert "fn sample(tex: Texture2D" in generated_code
+    assert "def sample(tex: Texture2D" in generated_code
 
 
 def test_vector_helper_overload_uses_wider_binary_result_for_mojo():
@@ -27180,7 +27227,7 @@ def test_vector_helper_overload_uses_wider_binary_result_for_mojo():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn shade(light: SIMD[DType.float32, 4], texel: SIMD[DType.float32, 4])"
+        "def shade(light: SIMD[DType.float32, 4], texel: SIMD[DType.float32, 4])"
         in generated_code
     )
     assert "return linearToSrgb((light * texel))" in generated_code
@@ -27204,7 +27251,7 @@ def test_vector_helper_overload_selects_vec4_after_scalar_multiply_for_mojo():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn shade(light: Float32, texel: SIMD[DType.float32, 4])" in generated_code
+    assert "def shade(light: Float32, texel: SIMD[DType.float32, 4])" in generated_code
     assert "return linearToSrgb((light * texel))" in generated_code
 
 
@@ -27332,7 +27379,7 @@ def test_mojo_keyword_like_bindings_escape_in_declarations_calls_and_members():
     assert "var type_: Float32" in generated_code
     assert "var match_: SIMD[DType.float32, 4]" in generated_code
     assert (
-        "fn match_(type_: Float32, match_: SIMD[DType.float32, 4]) -> Float32:"
+        "def match_(type_: Float32, match_: SIMD[DType.float32, 4]) -> Float32:"
         in generated_code
     )
     assert "var while_: Float32 = (type_ + match_[0])" in generated_code
@@ -27341,7 +27388,7 @@ def test_mojo_keyword_like_bindings_escape_in_declarations_calls_and_members():
         "return (match_(input.type_, SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)) "
         "+ input.match_[0])"
     ) in generated_code
-    assert "fn match(" not in generated_code
+    assert "def match(" not in generated_code
     assert "var while:" not in generated_code
     assert "input.match.x" not in generated_code
 
@@ -27360,11 +27407,11 @@ def test_mojo_assert_keyword_bindings_escape_in_declarations_and_calls():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn assert_(value: Float32) -> Float32:" in generated_code
+    assert "def assert_(value: Float32) -> Float32:" in generated_code
     assert "var assert_: Float32 = value" in generated_code
     assert "return assert_" in generated_code
     assert "return assert_(input)" in generated_code
-    assert "fn assert(" not in generated_code
+    assert "def assert(" not in generated_code
     assert "var assert:" not in generated_code
     assert "return assert(input)" not in generated_code
 
@@ -27384,11 +27431,11 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "comptime comptime_ = 2" in generated_code
-    assert "fn comptime_(var_: Int32) -> Int32:" in generated_code
+    assert "def comptime_(var_: Int32) -> Int32:" in generated_code
     assert "var ref_: Int32 = (var_ + comptime_)" in generated_code
     assert "return ref_" in generated_code
     assert "comptime comptime = 2" not in generated_code
-    assert "fn comptime(" not in generated_code
+    assert "def comptime(" not in generated_code
     assert "var ref:" not in generated_code
 
 
@@ -27450,10 +27497,10 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
             "ternary condition",
         ),
         (
-            "shader P { float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
+            "shader P { const float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
             "vec3",
             "float",
-            "global declaration g",
+            "constant g",
         ),
         (
             "shader P { float f(vec4 v) { float s = v; return s; } }",

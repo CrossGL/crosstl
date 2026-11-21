@@ -41,6 +41,7 @@ from crosstl.translator.codegen.SPIRV_codegen import (
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.cooperative_matrix_parsing import parse_keeping_untyped_cooperative_matrices
 
 
 def spirv_narrowed_image_read(spv_code, component_type_id, operands=""):
@@ -696,7 +697,7 @@ def assert_cooperative_matrix_multiply_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == feature
@@ -712,7 +713,7 @@ def assert_cooperative_matrix_element_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == feature
@@ -727,7 +728,7 @@ def assert_cooperative_matrix_role_specialization_rejected(
     generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
     with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+        generator.generate(parse_keeping_untyped_cooperative_matrices(profile_source))
 
     assert message in str(exc_info.value)
     assert exc_info.value.feature == (

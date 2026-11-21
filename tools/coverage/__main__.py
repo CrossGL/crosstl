@@ -5,11 +5,16 @@ rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publish
 ``issues`` reconciles the tracking and bug issues with a report, and ``compare`` shows how a pull request's report
 differs from the published one. ``tools`` lists the reference tool of every language and whether it is installed, so
 you can tell before a local run which rows it will report as untested.
+
+``run --pairs REPORT`` measures the translation matrix (:mod:`.pairs`) instead of rows: the cells that the rows of
+``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
+rows.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 import sys
 from pathlib import Path
@@ -21,6 +26,7 @@ from . import (
     github,
     issues,
     lowering,
+    pairs,
     publish,
     report,
     runner,
@@ -43,6 +49,13 @@ def _parser() -> argparse.ArgumentParser:
         "--backend", action="append", choices=LANGUAGES, help="repeatable; default: all"
     )
     run.add_argument("--direction", choices=DIRECTIONS, help="default: both")
+    run.add_argument(
+        "--pairs",
+        type=Path,
+        metavar="REPORT",
+        help="measure the translation matrix cells into each --backend instead of rows; REPORT, a merged report of "
+        "every row, defines the cells",
+    )
     run.add_argument(
         "--feature",
         action="append",
@@ -81,7 +94,8 @@ def _parser() -> argparse.ArgumentParser:
     merging.add_argument("--output", type=Path, default=Path("coverage.json"))
     publishing = commands.add_parser(
         "publish",
-        help="write coverage.json, coverage.svg, COVERAGE.md, history.csv and trend.svg for the coverage branch",
+        help="write coverage.json, its features/ files, coverage.svg, COVERAGE.md, history.csv and trend.svg for the "
+        "coverage branch",
     )
     publishing.add_argument("report", type=Path)
     publishing.add_argument("--output-dir", type=Path, required=True)
@@ -107,7 +121,11 @@ def _parser() -> argparse.ArgumentParser:
         "compare",
         help="print, as Markdown, how a report differs from the published one",
     )
-    comparing.add_argument("published", type=Path)
+    comparing.add_argument(
+        "published",
+        type=Path,
+        help="the coverage branch's coverage.json, with its features directory beside it",
+    )
     comparing.add_argument("report", type=Path)
     comparing.add_argument(
         "--repository",
@@ -134,7 +152,57 @@ def _lowering_gaps(language: str) -> list[str]:
     return [tool for tool in tools if not validators.command(tool)]
 
 
+def _run_pairs(args: argparse.Namespace) -> int:
+    """``run --pairs``: measure the cells of the translation matrix into each requested backend."""
+    if args.direction:
+        print("error: --pairs measures cells, which have no direction", file=sys.stderr)
+        return 2
+    try:
+        rows = report.load(args.pairs)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"error: cannot read {args.pairs}: {error}", file=sys.stderr)
+        return 2
+    targets = [t for t in args.backend or LANGUAGES if t in runner.OUTPUT_BACKENDS]
+    missing = [
+        f"{target} ({validators.TOOLS[target]})"
+        for target in targets
+        if not validators.available(target)
+    ]
+    if args.strict and missing:
+        print("error: missing tools for " + "; ".join(missing), file=sys.stderr)
+        return 2
+    catalog = functools.cache(
+        lambda language: features.load(language, offline=args.offline)
+    )
+    measured = pairs.plan(rows["backends"], targets, catalog, args.feature or ())
+    results = runner.run(measured.jobs, args.jobs or None, keep=args.keep)
+    results += measured.results
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} translations on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results)
+        if args.strict and idle:
+            print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
+            return 2
+    data = report.build(
+        results, targets, [], execute=args.execute, cells=measured.cells
+    )
+    report.write(data, args.output)
+    print(report.summary(data))
+    if args.feature:
+        for result in results:
+            detail = f": {result.detail}" if result.detail else ""
+            print(
+                f"{result.feature.language} to {result.into} {result.feature.name} {result.outcome}{detail}"
+            )
+    print(f"wrote {args.output}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.pairs:
+        return _run_pairs(args)
     languages = args.backend or LANGUAGES
     directions = [args.direction] if args.direction else list(DIRECTIONS)
     missing = [
@@ -146,10 +214,22 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
     ]
-    # SPIR-V input probes are lowered from GLSL, and from HLSL for the constructs GLSL cannot spell.
+    # Slang functions SPIR-V lacks compile for HLSL or CUDA, which DXC or nvcc then checks.
+    if "slang" in languages:
+        missing += [
+            f"slang for {target} ({tool})"
+            for target, tool in validators.SLANG_SOURCE_TARGETS.items()
+            if not validators.command(tool)
+        ]
+    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
+    if "hlsl" in languages and not validators.available(
+        "hlsl", validators.HLSL_PREVIEW
+    ):
+        missing.append("hlsl for shader model 6.10 (dxc-preview)")
+    # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
         gap
-        for source in ("glsl", spirv_input.FALLBACK)
+        for source in ("glsl", *spirv_input.FALLBACKS)
         for gap in _lowering_gaps(source)
     )
     if "spirv" in languages and "input" in directions and gaps:
@@ -180,7 +260,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
-    data = report.build(results, languages, directions)
+    data = report.build(results, languages, directions, execute=args.execute)
     report.write(data, args.output)
     print(report.summary(data))
     if args.feature:
@@ -212,7 +292,12 @@ def _publish(args: argparse.Namespace) -> int:
     if args.history and args.history.is_file():
         previous = args.history.read_text(encoding="utf-8")
     data = report.load(args.report)
-    for path in publish.write_site(data, args.output_dir, previous, args.repository):
+    try:
+        paths = publish.write_site(data, args.output_dir, previous, args.repository)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for path in paths:
         print(f"wrote {path}")
     return 0
 

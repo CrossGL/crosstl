@@ -15,6 +15,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCooperativeMatrixError,
     OpenGLSoftwareSubgroupError,
 )
+from tests.cooperative_matrix_parsing import keeping_untyped_cooperative_matrices
 from tests.test_translator.test_directx_cooperative_matrix import (
     MATRIX,
     _project_request,
@@ -118,11 +119,11 @@ def test_matrix_checks_transitive_helper_control_flow(tmp_path):
     ],
 )
 def test_matrix_rejects_invalid_operands(arguments, reason):
+    # The parser refuses an operand without a contract; the generator checks the tree it is given as well.
+    with keeping_untyped_cooperative_matrices():
+        tree = parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});"))
     with pytest.raises(OpenGLCooperativeMatrixError) as error:
-        _codegen().generate_stage(
-            parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});")),
-            "compute",
-        )
+        _codegen().generate_stage(tree, "compute")
     assert error.value.reason == reason
 
 
@@ -173,9 +174,14 @@ def test_matrix_retains_explicit_policy_and_stage_contracts():
             parse(_source().replace("compute {", "fragment {")), "fragment"
         )
     assert error.value.reason == "entry-point-contract-invalid"
+    # A WaveSize equal to the software subgroup width holds by construction; any other width conflicts.
+    assert _codegen().generate_stage(
+        parse(_source().replace("@numthreads", "@WaveSize(32) @numthreads")),
+        "compute",
+    ) == _codegen().generate_stage(parse(_source()), "compute")
     with pytest.raises(OpenGLSoftwareSubgroupError) as error:
         _codegen().generate_stage(
-            parse(_source().replace("@numthreads", "@WaveSize(32) @numthreads")),
+            parse(_source().replace("@numthreads", "@WaveSize(16) @numthreads")),
             "compute",
         )
     assert error.value.reason == "hardware-contract-conflict"

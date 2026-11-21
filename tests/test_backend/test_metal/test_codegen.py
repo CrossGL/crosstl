@@ -60,6 +60,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.glsl_stage_entries import OpenGLRepeatedStageEntryError
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
     UnsupportedMetalFeatureError,
@@ -552,7 +553,8 @@ def test_codegen_preserves_hex_float_literals_from_msl_cxx_base():
     generated = convert(code)
 
     assert "float tiny = 0x1.0p-14f;" in generated
-    assert "float16 one = 0x1p+0h;" in generated
+    # A half literal becomes a float16 conversion of the same value, as decimal half literals do.
+    assert "float16 one = float16(0x1p+0);" in generated
     assert "float separated = 0x10.8p+2f;" in generated
     assert parse_crossgl(generated) is not None
 
@@ -4176,9 +4178,11 @@ def test_translate_metal_constant_buffer_member_access_qualifies_glsl_uniform_bl
         assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
+def test_codegen_mlx_multi_entry_opengl_keeps_each_entry_bindings():
     # Reduced from MLX-generated multi-entry Metal kernels where unrelated entry
-    # parameters reuse names and Metal buffer indices across kernels.
+    # parameters reuse names and Metal buffer indices across kernels. A GLSL unit
+    # holds one compute entry, so each kernel is its own artifact and keeps its
+    # own Metal buffer indices as bindings instead of sharing one binding space.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -4209,21 +4213,34 @@ def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
     }
     """
     crossgl = convert(code)
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-
-    buffer_bindings = [
-        int(binding)
-        for binding in re.findall(r"layout\(std430, binding = (\d+)\)", glsl)
+    with pytest.raises(OpenGLRepeatedStageEntryError) as refusal:
+        GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert [name for _stage, name in refusal.value.stage_entries] == [
+        "scaled_dot_product_attention",
+        "quantized",
+        "fence",
     ]
-    assert len(buffer_bindings) == len(set(buffer_bindings))
-    assert {0, 1, 2, 4, 8, 9, 11, 13}.issubset(buffer_bindings)
 
-    assert "layout(std430, binding = 3) buffer timestampBuffer" in glsl
-    assert "layout(std430, binding = 5) readonly buffer w_qBuffer" in glsl
-    assert "scaled_dot_product_attention_bmask[0]" not in glsl
-    assert "quantized_bmask[0]" in glsl
-    assert "quantized_out_[tid]" in glsl
-    assert "quantized_x_shape[0]" in glsl
+    expected = {
+        "scaled_dot_product_attention": [
+            (1, "out_Buffer"),
+            (11, "bmaskBuffer"),
+            (8, "x_shapeBuffer"),
+        ],
+        "quantized": [
+            (2, "out_Buffer"),
+            (13, "bmaskBuffer"),
+            (0, "input_Buffer"),
+            (4, "raders_b_qBuffer"),
+            (9, "x_shapeBuffer"),
+        ],
+        "fence": [(0, "timestampBuffer"), (4, "w_qBuffer")],
+    }
+    for entry, bindings in expected.items():
+        glsl = GLSLCodeGen().generate_entry(parse_crossgl(crossgl), entry)
+        found = re.findall(r"layout\(std430, binding = (\d+)\)[^\n]*buffer (\w+)", glsl)
+        assert [(int(binding), name) for binding, name in found] == bindings
+        assert glsl.count("void main()") == 1
 
 
 def test_codegen_pointer_return_buffer_selector_reparses_from_compiler_fixture():
@@ -5698,7 +5715,7 @@ def test_codegen_fragment_output_attributes_canonicalize_high_mrt_and_depth_mode
     result = convert(code)
 
     assert "vec4 color @gl_FragColor7;" in result
-    assert "float depth @gl_FragDepth;" in result
+    assert f"float depth @gl_FragDepth @depth_{depth_mode};" in result
     assert "@color(7" not in result
     assert f"@depth({depth_mode})" not in result
     assert parse_crossgl(result) is not None
@@ -6407,9 +6424,11 @@ def test_codegen_mlx_steel_const_function_constants_from_fft():
     # Repo: https://github.com/ml-explore/mlx
     # Commit: e9e20fa69184bd38cc0ca12bd9a854c059e59588
     # Path: mlx/backend/metal/kernels/fft.h
+    # STEEL_CONST is defined in mlx/backend/metal/kernels/steel/defines.h at the
+    # same commit.
     code = """
     #include <metal_common>
-    #include "mlx/backend/metal/kernels/steel/defines.h"
+    #define STEEL_CONST static constant constexpr const
     using namespace metal;
 
     STEEL_CONST bool inv_ [[function_constant(0)]];
@@ -6422,7 +6441,7 @@ def test_codegen_mlx_steel_const_function_constants_from_fft():
         return value * float(elems_per_thread_);
     }
     """
-    crossgl = convert(code)
+    crossgl = convert(MetalPreprocessor().preprocess(code))
 
     assert "constant bool inv_ @function_constant(0);" in crossgl
     assert "constant int elems_per_thread_ @function_constant(2);" in crossgl
@@ -6893,8 +6912,9 @@ def test_codegen_local_enum_declaration_from_metal_function_body():
     assert "enum Mode {" in crossgl
     assert "ModeA = 0" in crossgl
     assert "ModeB = 1" in crossgl
-    assert "Mode mode = ModeA;" in crossgl
-    assert "return mode == ModeA ? color : vec4(0.0);" in crossgl
+    # The block-scope enum moves to module scope, and its enumerators are written E::A as for any unscoped enum.
+    assert "Mode mode = Mode::ModeA;" in crossgl
+    assert "return mode == Mode::ModeA ? color : vec4(0.0);" in crossgl
     assert "Unhandled statement type: EnumNode" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
@@ -7138,9 +7158,7 @@ def test_codegen_preserves_function_local_uint8_array_layout(tmp_path):
     canonical = "MetalLocal_copy_bytes_vec_w"
     assert f"@metal_alignas(1)\n    struct {canonical}" in crossgl
     assert "uint8[12] wi;" in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     metal = MetalCodeGen().generate(strict_ast)
     normalized = normalize(metal)
     assert f"struct alignas(1) {canonical}" in normalized
@@ -7199,9 +7217,7 @@ def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
         f"(*(const device {canonical}*)input);" in crossgl
     )
     assert "const device WordBlock" not in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -7663,9 +7679,7 @@ def test_codegen_parses_materialized_owner_alias_pointer_casts():
     assert "return (const thread float*)self.values;" in crossgl
     assert "return (thread int*)self.values;" in crossgl
     assert "return (const thread int*)self.values;" in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -7699,9 +7713,7 @@ def test_codegen_parses_materialized_struct_alias_template_vectors():
     assert "vec4 BaseFrag__make__float(float value)" in crossgl
     assert "vec4 result;" in crossgl
     assert "dtype_frag_t" not in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -13370,7 +13382,8 @@ def test_codegen_component_updates_accept_enum_and_ptrdiff_contracts():
 
     assert f"uint {helper}(inout uvec4 value, uint lane, int64 right)" in normalized
     assert f"uint {helper}(inout uvec4 value, uint lane, uint right)" in normalized
-    assert f"{helper}(values, lane, LocalStep);" in normalized
+    # The block-scope enum moves to module scope, so its enumerator is written LocalDelta::LocalStep.
+    assert f"{helper}(values, lane, LocalDelta::LocalStep);" in normalized
     assert f"{helper}(values, lane, delta);" in normalized
     # Unscoped enumerators are written as CrossGL's scoped E::A.
     assert (

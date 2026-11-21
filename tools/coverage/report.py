@@ -2,24 +2,31 @@
 
 In memory every backend lists its features as dictionaries. ``coverage.json`` stores them as rows instead: a backend's
 ``columns`` names the fields of each row, and its ``details`` lists each diagnostic once, so the ``detail`` field
-holds an index into it. That keeps the published file under a megabyte. :func:`load` and :func:`dumps` convert
-between the two forms.
+holds an index into it. :func:`loads` and :func:`dumps` convert between the two forms.
+
+The coverage branch splits the report further, so that no published file reaches a megabyte (ADR 0003):
+:func:`site` leaves each backend's score and counts in ``coverage.json`` and moves its rows to the file named by its
+``file`` field, ``features/<language>-<direction>.json``. :func:`load` reads either layout.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import re
 import subprocess
 from pathlib import Path
 
-from . import ir, lowering, upstream, validators
+from . import execution, ir, lowering, upstream, validators
 from .features import metal
-from .model import DIRECTIONS, OUTCOMES, Result, Score
+from .model import DIRECTIONS, OUTCOMES, PAIR, Result, Score
 
-SCHEMA = 2
+# 3: the coverage branch stores each backend's feature rows in its own file.
+SCHEMA = 3
 # The fields of a feature row in the order coverage.json stores them; any other field follows in sorted order.
 COLUMNS = ("name", "category", "group", "outcome", "detail")
+# The only names a ``file`` field may hold, so that loading a report never reads outside its directory.
+FEATURE_FILE = re.compile(r"features/[a-z0-9]+-[a-z]+\.json")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
@@ -63,8 +70,81 @@ def _sources(languages: list[str]) -> dict[str, dict[str, str]]:
     return dict(sorted(sources.items()))
 
 
-def build(results: list[Result], languages: list[str], directions: list[str]) -> dict:
-    """Group ``results`` by language and direction and score each group."""
+def _execution(executes: bool, group: list[Result], execute: bool) -> dict:
+    """What a row or a cell records about running its probes.
+
+    ``executes`` says whether the conformance harness can run the row's language, or the cell's probes and
+    translations (:func:`.execution.runs_pair`), at all; a row without a runtime is compile-only. ``executed`` counts
+    the probes that ran, 0 included, once ``execute`` asked for them to run, and ``runtime`` names the runtimes they
+    ran on.
+    """
+    runtimes = sorted({r.runtime for r in group if r.runtime})
+    executed = sum(1 for r in group if r.runtime)
+    return {
+        "executes": executes,
+        **({"executed": executed} if executed or (execute and executes) else {}),
+        **({"runtime": ", ".join(runtimes)} if runtimes else {}),
+    }
+
+
+def _score(group: list[Result]) -> dict:
+    score = Score()
+    for item in group:
+        score.add(item.outcome)
+    return {
+        "score": None if score.percent is None else round(score.percent, 1),
+        "counts": score.counts,
+    }
+
+
+def _pairs(
+    results: list[Result], cells: list[tuple[str, str]], execute: bool
+) -> list[dict]:
+    """The translation matrix cells ``cells`` as ``results`` measured them, in ``(source, target)`` order, each scored
+    as a row is; a cell without a result is listed with no score."""
+    grouped: dict[tuple[str, str], list[Result]] = {cell: [] for cell in cells}
+    for result in results:
+        if result.direction == PAIR:
+            grouped.setdefault((result.feature.language, result.into), []).append(
+                result
+            )
+    measured = []
+    for (source, target), group in sorted(grouped.items()):
+        group.sort(key=lambda r: r.feature.key)
+        measured.append(
+            {
+                "source": source,
+                "target": target,
+                "validator": validators.TOOLS[target],
+                **_execution(execution.runs_pair(source, target), group, execute),
+                **_score(group),
+                "features": [
+                    {
+                        "name": r.feature.name,
+                        "category": r.feature.category,
+                        "outcome": r.outcome,
+                        **({"detail": r.detail} if r.detail else {}),
+                    }
+                    for r in group
+                ],
+            }
+        )
+    return measured
+
+
+def build(
+    results: list[Result],
+    languages: list[str],
+    directions: list[str],
+    execute: bool = False,
+    cells: list[tuple[str, str]] | None = None,
+) -> dict:
+    """Group ``results`` by language and direction and score each group.
+
+    ``execute`` says that the executable probes of ``results`` were run, so a row records how many of them ran even
+    when none did. With ``cells``, the report's ``pairs`` lists those cells of the translation matrix
+    (:mod:`.pairs`), scored from the results of the pair direction.
+    """
     backends = []
     for language in languages:
         for direction in directions:
@@ -88,26 +168,14 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
             )
             if not group:
                 continue
-            score = Score()
-            for item in group:
-                score.add(item.outcome)
-            executed = [r.runtime for r in group if r.runtime]
             backends.append(
                 {
                     "language": language,
                     "direction": direction,
                     "offered": True,
                     "validator": validators.TOOLS[language],
-                    **(
-                        {
-                            "runtime": ", ".join(sorted(set(executed))),
-                            "executed": len(executed),
-                        }
-                        if executed
-                        else {}
-                    ),
-                    "score": None if score.percent is None else round(score.percent, 1),
-                    "counts": score.counts,
+                    **_execution(execution.runs(language), group, execute),
+                    **_score(group),
                     "features": [
                         {
                             "name": r.feature.name,
@@ -136,6 +204,8 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
         # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
         # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
+        # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
+        | ({"dxc-preview"} if "hlsl" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(lowering.SPIRV_COMPILERS) else set())
         # SPIR-V input probes are glslang's output, and DXC's for the constructs GLSL cannot spell.
         | (
@@ -154,14 +224,15 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
         "sources": _sources(languages),
         "validators": {tool: validators.version(tool) or None for tool in tools},
         "backends": backends,
+        **({} if cells is None else {"pairs": _pairs(results, cells, execute)}),
     }
 
 
 def merge(reports: list[dict]) -> dict:
     """One report from reports of separate runners, such as a Linux and a macOS job, with the IR row rebuilt.
 
-    The runners must have measured the same commit; a language and direction measured twice is an error, because the
-    merged score would depend on which runner came last.
+    The runners must have measured the same commit; a language and direction, or a translation matrix cell, measured
+    twice is an error, because the merged score would depend on which runner came last.
     """
     if not reports:
         raise ValueError("no reports to merge")
@@ -201,6 +272,18 @@ def merge(reports: list[dict]) -> dict:
         for tool in tools
     }
     merged["backends"] = backends
+    merged.pop("pairs", None)
+    cells: dict[tuple[str, str], dict] = {}
+    for report in reports:
+        for cell in report.get("pairs", []):
+            key = (cell["source"], cell["target"])
+            if key in cells:
+                raise ValueError(
+                    f"{key[0]} to {key[1]} is measured by more than one report"
+                )
+            cells[key] = cell
+    if any("pairs" in r for r in reports):
+        merged["pairs"] = [cells[key] for key in sorted(cells)]
     return merged
 
 
@@ -229,24 +312,88 @@ def _features(backend: dict) -> dict:
     return {**rest, "features": features}
 
 
+def _json(data: dict) -> str:
+    return json.dumps(data, separators=(",", ":"), sort_keys=True) + "\n"
+
+
 def dumps(report: dict) -> str:
     """``report`` as the text of ``coverage.json``, with its features stored as rows."""
     stored = {
         **report,
         "backends": [_rows(b) if "features" in b else b for b in report["backends"]],
+        **({"pairs": [_rows(c) for c in report["pairs"]]} if "pairs" in report else {}),
     }
-    return json.dumps(stored, separators=(",", ":"), sort_keys=True) + "\n"
+    return _json(stored)
+
+
+def site(report: dict) -> dict[str, str]:
+    """``report`` as the files of the coverage branch, by path: ``coverage.json`` without any feature rows, and one
+    ``features/<language>-<direction>.json`` with the rows of each backend that has features.
+    """
+    files = {}
+    backends = []
+    for backend in report["backends"]:
+        if "features" not in backend:
+            backends.append(backend)
+            continue
+        name = f"features/{backend['language']}-{backend['direction']}.json"
+        if not FEATURE_FILE.fullmatch(name):
+            raise ValueError(f"{name!r} is not the name of a feature file")
+        stored = _rows(backend)
+        files[name] = _json(
+            {
+                key: stored[key]
+                for key in ("language", "direction", "columns", "details", "features")
+            }
+        )
+        rest = {k: v for k, v in backend.items() if k != "features"}
+        backends.append({**rest, "file": name})
+    return {"coverage.json": _json({**report, "backends": backends}), **files}
+
+
+def _linked(backend: dict, directory: Path) -> dict:
+    """``backend`` with the rows of the feature file it names, read from ``directory``."""
+    name = backend["file"]
+    if not isinstance(name, str) or not FEATURE_FILE.fullmatch(name):
+        raise ValueError(f"{name!r} is not the name of a feature file")
+    base = directory.resolve()
+    path = (base / name).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError(f"{name} leads outside {directory}")
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    owner = (stored.get("language"), stored.get("direction"))
+    if owner != (backend.get("language"), backend.get("direction")):
+        raise ValueError(f"{name} holds the features of {owner[0]} {owner[1]}")
+    rest = {k: v for k, v in backend.items() if k != "file"}
+    return {**rest, **{k: stored[k] for k in ("columns", "details", "features")}}
+
+
+def _expanded(data: dict) -> dict:
+    backends = [
+        _features(b) if isinstance(b, dict) and "columns" in b else b
+        for b in data["backends"]
+    ]
+    cells = [_features(c) if "columns" in c else c for c in data.get("pairs", [])]
+    return {
+        **data,
+        "backends": backends,
+        **({"pairs": cells} if "pairs" in data else {}),
+    }
 
 
 def loads(text: str) -> dict:
     """The report in ``text``, with each backend's features as dictionaries again."""
-    data = json.loads(text)
-    backends = [_features(b) if "columns" in b else b for b in data["backends"]]
-    return {**data, "backends": backends}
+    return _expanded(json.loads(text))
 
 
 def load(path: Path) -> dict:
-    return loads(path.read_text(encoding="utf-8"))
+    """The report in ``path``, reading the feature file each backend names, if any, from the same directory."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    backends = [
+        _linked(b, path.parent) if isinstance(b, dict) and "file" in b else b
+        for b in data["backends"]
+    ]
+    return _expanded({**data, "backends": backends})
 
 
 def write(report: dict, path: Path) -> None:
@@ -271,5 +418,12 @@ def summary(report: dict) -> str:
         lines.append(
             f"{label:<16}{score:>7}  "
             + "  ".join(f"{backend['counts'][o]:>9}" for o in OUTCOMES)
+        )
+    for cell in report.get("pairs", []):
+        label = f"{cell['source']} to {cell['target']}"
+        score = "n/a" if cell["score"] is None else f"{cell['score']:.1f}%"
+        lines.append(
+            f"{label:<16}{score:>7}  "
+            + "  ".join(f"{cell['counts'][o]:>9}" for o in OUTCOMES)
         )
     return "\n".join(lines)

@@ -12,6 +12,7 @@ from .model import (
     coop_element,
     descriptor_reading,
     slang_literal,
+    struct_reading,
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
@@ -21,12 +22,15 @@ class HLSL(Dialect):
     language = "hlsl"
     suffix = ".hlsl"
     rows_first = True
-    entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
+    # ``{lanes}`` is the workgroup size (:meth:`.Dialect.kernel`).
+    entry_attributes: tuple[str, ...] = ("[numthreads({lanes}, 1, 1)]",)
     fragment_attributes: tuple[str, ...] = ()
     # The validators compile with 16-bit types enabled, so ``half`` is a 16-bit float (HLSL shader model 6.2).
     wide_integers = True
     narrow_scalars = True
     packed_bytes = True
+    # printf's format, the one string an intrinsic takes.
+    string = "string"
     _SCALARS = {
         "int64": "int64_t",
         "uint64": "uint64_t",
@@ -76,7 +80,7 @@ class HLSL(Dialect):
         params = ", ".join(["uint3 id : SV_DispatchThreadID", *parts.get("params", ())])
         lines = [
             *self._globals(buffers, parts),
-            *self.entry_attributes,
+            *(a.format(lanes=parts.get("lanes", 1)) for a in self.entry_attributes),
             f"void main({params}) {{",
             "    uint i = id.x;",
         ]
@@ -231,6 +235,9 @@ class HLSL(Dialect):
         "GroupNodeOutputRecords": "GetGroupNodeOutputRecords",
     }
 
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        return struct_reading(opaque) or super().reading(opaque)
+
     def holding(self, opaque: str) -> str:
         if opaque == HIT_OBJECT:
             return OBJECTS[HIT_OBJECT].spelling
@@ -272,7 +279,7 @@ class Slang(HLSL):
     language = "slang"
     suffix = ".slang"
     string = "String"
-    entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
+    entry_attributes = ('[shader("compute")]', "[numthreads({lanes}, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
     stage_attributes = {
         "geometry": ('[shader("geometry")]',),

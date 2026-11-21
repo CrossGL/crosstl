@@ -6,7 +6,12 @@ import re
 
 import pytest
 
-from crosstl.backend.import_refusals import DirectXImportRefused, MetalImportRefused
+from crosstl.backend.import_refusals import (
+    CudaImportRefused,
+    DirectXImportRefused,
+    HipImportRefused,
+    MetalImportRefused,
+)
 from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.codegen.glsl_refusals import (
     OpenGLLoweringRefused,
@@ -26,6 +31,8 @@ CUDA_REFUSAL_CODE = "project.translate.cuda-lowering-unsupported"
 HIP_REFUSAL_CODE = "project.translate.hip-lowering-unsupported"
 DIRECTX_IMPORT_REFUSAL_CODE = "project.translate.directx-import-unsupported"
 METAL_IMPORT_REFUSAL_CODE = "project.translate.metal-import-unsupported"
+CUDA_IMPORT_REFUSAL_CODE = "project.translate.cuda-import-unsupported"
+HIP_IMPORT_REFUSAL_CODE = "project.translate.hip-import-unsupported"
 # A loss marker an emitter wrote into its partial output: ``/* unsupported <reason> */``.
 LOSS_MARKER = re.compile(r"/\*\s*unsupported\s+(.*?)\s*\*/", re.S)
 
@@ -111,6 +118,22 @@ def refused_metal_import(generate, *args, **kwargs):
 
 def metal_import_partial_output(generate, *args, **kwargs):
     return partial_output(MetalImportRefused, generate, *args, **kwargs)
+
+
+def refused_cuda_import(generate, *args, **kwargs):
+    return refused(CudaImportRefused, generate, *args, **kwargs)
+
+
+def cuda_import_partial_output(generate, *args, **kwargs):
+    return partial_output(CudaImportRefused, generate, *args, **kwargs)
+
+
+def refused_hip_import(generate, *args, **kwargs):
+    return refused(HipImportRefused, generate, *args, **kwargs)
+
+
+def hip_import_partial_output(generate, *args, **kwargs):
+    return partial_output(HipImportRefused, generate, *args, **kwargs)
 
 
 def _marking_refusal(self, reason, placeholder=""):

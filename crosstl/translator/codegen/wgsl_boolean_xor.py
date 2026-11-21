@@ -13,6 +13,7 @@ is refused where it cannot, such as a ``for`` update.
 from __future__ import annotations
 
 from ..ast import ASTNode, BinaryOpNode, FunctionCallNode, UnaryOpNode
+from ..refusals import WGSLRefusal
 
 __all__ = [
     "wgsl_boolean_xor",
@@ -85,7 +86,7 @@ def wgsl_boolean_xor_assignment(codegen, node):
     if not _applies(codegen, node):
         return None
     if _calls_function(node.target):
-        raise ValueError(
+        raise WGSLRefusal(
             "WGSL target cannot lower a boolean ^= whose target calls a function "
             "outside a statement: WGSL has no ^ on bool, and t = (t != v) would "
             "evaluate the target twice"

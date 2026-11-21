@@ -7,6 +7,8 @@ components of storage-image texels, recognize storage textures whose format
 the runtime chooses, and map sampled HLSL texture types.
 """
 
+from crosstl.translator.refusals import DirectXSourceRefusal
+
 from ..common_ast import (
     ArrayAccessNode,
     BinaryOpNode,
@@ -175,7 +177,7 @@ class HLSLTexelAccessMixin:
         if count == 1 and component in {"x", "r"}:
             return None
         if not self.expression_is_side_effect_free(access.index):
-            raise ValueError(
+            raise DirectXSourceRefusal(
                 "DirectX partial storage image store needs a side-effect-free "
                 f"texel coordinate: {self.generate_expression(access.index, is_main)}"
             )
