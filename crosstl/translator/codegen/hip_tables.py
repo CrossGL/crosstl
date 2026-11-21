@@ -271,6 +271,10 @@ HIP_TYPE_MAP = {
     "usamplerCubeArray": "hipTextureObject_t",
     "usampler2DMS": "hipTextureObject_t",
     "usampler2DMSArray": "hipTextureObject_t",
+    # A texel buffer is a texture object bound to linear memory (hipResourceTypeLinear).
+    "samplerBuffer": "hipTextureObject_t",
+    "isamplerBuffer": "hipTextureObject_t",
+    "usamplerBuffer": "hipTextureObject_t",
     "image1D": "hipSurfaceObject_t",
     "image1DArray": "hipSurfaceObject_t",
     "image2D": "hipSurfaceObject_t",
