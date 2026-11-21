@@ -427,8 +427,10 @@ class CudaExpressionMixin:
     def parse_template_declaration(self):
         self.eat("TEMPLATE")
         if self.current_token[0] == "LESS_THAN":
-            self.parse_template_suffix()
+            header = self.parse_template_suffix()
             self.skip_leading_requires_clause()
+            # The function that starts here takes the header (``take_template_header``).
+            self.pending_template_header = (header, self.current_index)
             return
 
         self.collect_balanced_tokens_until("SEMICOLON")
