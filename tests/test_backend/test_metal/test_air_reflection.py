@@ -256,3 +256,104 @@ def test_the_check_is_skipped_without_air_for_either_source(monkeypatch, compile
     sources = dict(zip(("native", "translated"), compiled))
     monkeypatch.setattr(validators, "air", lambda source: sources[source])
     assert reflection.round_trip_difference("native", "translated") == ""
+
+
+def _output(monkeypatch, stage: str, moved: str):
+    """Run the coverage runner's Metal output check of a ``stage`` probe with every tool accepting everything and
+    the reflection check reporting ``moved``."""
+    from tools.coverage import probes, runner, validators
+    from tools.coverage.model import VOID, Feature, Signature
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(
+        runner, "_validated", lambda *args, **kwargs: validators.Verdict(True)
+    )
+    monkeypatch.setattr(
+        runner, "_native_rejection", lambda feature, language: (feature, "")
+    )
+    monkeypatch.setattr(runner, "parse_crossgl", lambda source: None)
+    monkeypatch.setattr(runner, "_runs", lambda feature, language: False)
+    monkeypatch.setattr(runner, "translate", lambda *args: "fragment float4 f();")
+    monkeypatch.setattr(
+        runner.decorations, "lost", lambda feature, language, translated: ""
+    )
+    checked = []
+
+    def build(feature, dialect):
+        checked.append(dialect)
+        return type("Probe", (), {"source": f"{dialect} probe", "suffix": ".cgl"})()
+
+    monkeypatch.setattr(probes, "build", build)
+    differences = []
+
+    def difference(native, written):
+        differences.append((native, written))
+        return moved
+
+    monkeypatch.setattr(reflection, "round_trip_difference", difference)
+    feature = Feature("metal", "stage", stage, Signature(VOID, ()), stage=stage)
+    return runner.run_output(feature, "metal"), checked, differences
+
+
+def test_a_graphics_translation_with_another_interface_than_the_native_probe_is_wrong(
+    monkeypatch,
+):
+    moved = "the host interface changes: the fragment entry's results lacks render_target(1) float4"
+    result, _, differences = _output(monkeypatch, "fragment", moved)
+    assert (result.outcome, result.detail) == (
+        "wrong",
+        "the host interface differs from the native Metal probe's: the fragment entry's results lacks "
+        "render_target(1) float4",
+    )
+    assert differences == [("metal probe", "fragment float4 f();")]
+
+
+def test_a_graphics_translation_with_the_native_interface_is_supported(monkeypatch):
+    result, _, differences = _output(monkeypatch, "vertex", "")
+    assert result.outcome == "supported"
+    assert len(differences) == 1
+
+
+def test_a_compute_probe_is_compared_by_running_it_not_by_its_interface(monkeypatch):
+    # The harness binds each compute probe's own resources and compares the words it writes.
+    result, checked, differences = _output(monkeypatch, "compute", "changes")
+    assert result.outcome == "supported"
+    assert differences == [] and "metal" not in checked
+
+
+@pytest.mark.skipif(not _METAL, reason="the Metal compiler is not installed")
+def test_metal_output_of_every_graphics_probe_keeps_the_native_interface():
+    from tools.coverage import features, probes, runner
+
+    checked = 0
+    for feature in features.load("metal", offline=True):
+        if feature.stage == "compute" or feature.name not in {
+            "fragment",
+            "vertex",
+            "multiple-render-targets",
+            "mesh",
+            "intersection",
+        }:
+            continue
+        probe = probes.build(feature, "crossgl")
+        translated = runner.translate(probe.source, probe.suffix, "metal", "cgl")
+        assert reflection.output_difference(feature, translated) == "", feature.name
+        checked += 1
+    assert checked == 5
+
+
+@pytest.mark.skipif(not _METAL, reason="the Metal compiler is not installed")
+def test_a_render_target_moved_by_the_translation_is_reported():
+    from tools.coverage import features, probes
+
+    (feature,) = [
+        f
+        for f in features.load("metal", offline=True)
+        if f.name == "multiple-render-targets"
+    ]
+    native = probes.build(feature, "metal").source
+    moved = native.replace("[[color(1)]]", "[[color(2)]]")
+    assert moved != native
+    found = reflection.output_difference(feature, moved)
+    assert found.startswith("the host interface differs from the native Metal probe's:")
+    assert "render_target" in found
