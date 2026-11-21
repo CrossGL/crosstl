@@ -34,7 +34,9 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_subscripts import matrix_column_type
 from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
 from .float_remainder_assignment import float_remainder_assignment
@@ -579,6 +581,13 @@ class HipCodeGen(
             declaration = f"{' '.join(qualifiers)} {declaration}"
 
         if initial_value is not None:
+            array_initializer = generate_cpp_array_initializer(
+                self, initial_value, var_type
+            )
+            if array_initializer is not None:
+                if array_initializer.strip():
+                    declaration += f" = {array_initializer}"
+                return declaration
             declaration += f" = {self.visit(initial_value)}"
 
         return declaration
@@ -763,7 +772,13 @@ class HipCodeGen(
         return None
 
     def array_access_element_type(self, type_name):
-        """Return the element type for HIP arrays and structured buffers."""
+        """Return the element type for HIP arrays and structured buffers.
+
+        A matrix subscript yields its column vector.
+        """
+        column_type = matrix_column_type(type_name)
+        if column_type is not None:
+            return column_type
         array_element_type = super().array_access_element_type(type_name)
         if array_element_type is not None:
             return array_element_type

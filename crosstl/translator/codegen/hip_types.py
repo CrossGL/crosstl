@@ -5,6 +5,7 @@ from ..matrix_shape import matrix_type_spelling
 from .array_utils import prepend_array_dimension
 from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_wide_integer_vectors import wide_integer_vector_type
+from .cuda_subscripts import matrix_shape
 from .enum_utils import generic_enum_specialized_type_name
 from .generic_struct_utils import generic_struct_specialized_type_name
 from .resource_arrays import format_array_declarator
@@ -141,7 +142,16 @@ class HipTypeMixin:
             return wide_vector_type
         indirect_info = self.hip_pointer_or_reference_type_info(type_str)
         if indirect_info is not None:
-            pointee_type = wide_integer_vector_type(indirect_info["pointee_type"])
+            # A vector or matrix pointee is a CrossGL type too: ``buffer mat4* m`` points to the generated
+            # ``float4x4``, and ``buffer bvec2* b`` to ``uchar2``.
+            pointee = indirect_info["pointee_type"]
+            pointee_type = wide_integer_vector_type(pointee)
+            if pointee_type is None and (
+                matrix_shape(pointee) is not None
+                or self.vector_type_info(pointee) is not None
+                or self.native_vector_component_type(pointee) is not None
+            ):
+                pointee_type = self.map_type(pointee)
             if pointee_type is not None:
                 prefix = "const " if indirect_info["readonly"] else ""
                 suffix = "*" if indirect_info["kind"] == "pointer" else "&"

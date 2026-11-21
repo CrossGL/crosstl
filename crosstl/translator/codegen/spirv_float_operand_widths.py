@@ -13,7 +13,6 @@ already converts to the vectors' component type, and GLSL.std.450 Refract types 
 
 from __future__ import annotations
 
-
 from .spirv_values import SpirvId
 
 __all__ = ["WIDENED_FLOAT_BUILTINS", "widen_float_operands"]
