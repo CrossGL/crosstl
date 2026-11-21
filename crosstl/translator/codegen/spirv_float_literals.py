@@ -11,8 +11,6 @@ constant of that value (``OpConstant %double 0.1``) instead of an ``OpFConvert``
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..ast import FLOAT_LITERAL_SUFFIX
 from .spirv_values import SpirvId
 
@@ -48,6 +46,6 @@ def signed_float_literal_value(op: str, operand: SpirvId, result: SpirvId) -> Sp
     return _carrying(result, -literal_value if op == "-" else literal_value)
 
 
-def exact_float_literal_value(value) -> Optional[float]:
+def exact_float_literal_value(value) -> float | None:
     """The exact value of an unsuffixed floating literal ``value`` was lowered from, or None."""
     return getattr(value, "exact_float_literal", None)
