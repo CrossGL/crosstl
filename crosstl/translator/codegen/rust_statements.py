@@ -570,6 +570,12 @@ class RustStatementMixin:
         inferred_type = self.expression_result_type(initial_value)
         if inferred_type is not None:
             return inferred_type
+        if isinstance(initial_value, ArrayLiteralNode):
+            # An initializer list is never a float: refuse rather than declare the binding with a wrong type.
+            self.refuse_lowering(
+                f"local '{getattr(node, 'name', '')}': the element type of its untyped initializer list "
+                "cannot be inferred"
+            )
         return "float"
 
     def statement_body_terminates_inner_loop(self, body):

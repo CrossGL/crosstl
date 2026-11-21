@@ -6,6 +6,7 @@ from ...thread_hierarchy import global_invocation_axis
 from ..bit_intrinsics import format_bit_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ..function_templates import generic_call_name
 from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
 
@@ -98,6 +99,9 @@ class CudaImportIntrinsicMixin:
                 or self.rename_keyword_record_names(args[0])
             ]
         args_str = ", ".join(args)
+        device_heap_call = self.format_device_heap_call(raw_name, args)
+        if device_heap_call is not None:
+            return device_heap_call
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
             return make_unique
@@ -111,6 +115,11 @@ class CudaImportIntrinsicMixin:
             if integer_intrinsic is not None:
                 return integer_intrinsic
 
+        generic_call = generic_call_name(
+            raw_name, self.function_templates, self.convert_cuda_type_to_crossgl
+        )
+        if generic_call is not None:
+            return f"{generic_call}({args_str})"
         if self.is_user_defined_function(raw_name):
             # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (
@@ -187,6 +196,34 @@ class CudaImportIntrinsicMixin:
         ):
             func_name = self.convert_cuda_function_name_to_crossgl(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_device_heap_call(self, function_name, args):
+        """Refuse ``malloc``/``free`` in device code, like ``delete`` (#4684).
+
+        CrossGL has no device heap, so a device-side heap call has no faithful
+        form. Host code keeps the ordinary call; a user-defined ``malloc`` or
+        ``free`` is not a heap call either.
+        """
+        if not self.in_device_code or not isinstance(function_name, str):
+            return None
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name not in {
+            "malloc",
+            "free",
+            "std::malloc",
+            "std::free",
+        }:
+            return None
+        if self.is_user_defined_function(
+            function_name
+        ) or self.is_user_defined_function(normalized_name):
+            return None
+        return self.refuse_import(
+            f"CUDA {normalized_name}({', '.join(args)}): CrossGL has no device heap",
+            "0",
+        )
 
     def format_cuda_time_function_call(self, function_name, args):
         if not isinstance(function_name, str):

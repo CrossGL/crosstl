@@ -485,7 +485,7 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     assert "@group(0) @binding(0) var<storage, read_write> global: f32;" in crossgl
     assert (
         "@group(0) @binding(1) var<storage, read_write> global_array: "
-        "array<f32, device_array_size>;" in crossgl
+        "array<f32, 16>;" in crossgl
     )
     assert "var tid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "in_[tid] + global" in crossgl
@@ -878,14 +878,11 @@ def test_external_rocm_convolution_std_array_template_extent_codegen_reparse():
     assert host_filter.vtype == "const std::array<float, 5*5>"
     assert set(host_filter.qualifiers) == {"constexpr"}
     assert (
-        "var convolution_filter_5x5: array<f32, hip_array_extent_5_mul_5> = "
+        "var convolution_filter_5x5: array<f32, 25> = "
         "{1.0f, 3.0f, 0.0f, (-2.0f), (-0.0f)};"
     ) in crossgl
     assert "ptr<std::array" not in crossgl
-    assert (
-        "@group(0) @binding(0) var<uniform> d_mask: "
-        "array<f32, hip_array_extent_5_mul_5>;"
-    ) in crossgl
+    assert ("@group(0) @binding(0) var<uniform> d_mask: " "array<f32, 25>;") in crossgl
     assert "fn convolution(" in crossgl
 
 
@@ -1422,8 +1419,8 @@ def test_external_hip_tests_user_function_template_call_codegen_reparse():
 
     _, crossgl = assert_crossgl_reparses(source)
 
-    assert "TestCore(params);" in crossgl
-    assert "TestCore<TestType" not in crossgl
+    # The call keeps its template arguments for the generic function it names.
+    assert "TestCore<TestType, operation, false, memory_scope>(params);" in crossgl
 
 
 def test_external_hip_tests_user_function_template_reference_codegen_reparse():

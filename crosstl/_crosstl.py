@@ -393,7 +393,7 @@ def _target_program(
         if source_spec.name == "hip" and normalized_backend == "directx":
             cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
         program = cgl_ast
-    apply_rule_carrying(program, source_spec.name, normalized_backend)
+    apply_rule_carrying(program, source_spec.name, normalized_backend, entry_point)
     lower_default_arguments(program)
     target.program = program
     return target

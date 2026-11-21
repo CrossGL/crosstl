@@ -8,7 +8,7 @@ you can tell before a local run which rows it will report as untested.
 
 ``run --pairs REPORT`` measures the translation matrix (:mod:`.pairs`) instead of rows: the cells that the rows of
 ``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
-rows.
+rows. ``publish --previous`` keeps the previously published matrix when the report has none.
 """
 
 from __future__ import annotations
@@ -114,6 +114,11 @@ def _parser() -> argparse.ArgumentParser:
     publishing.add_argument(
         "--history", type=Path, help="the previously published history.csv, if any"
     )
+    publishing.add_argument(
+        "--previous",
+        type=Path,
+        help="the previously published coverage.json, if any, whose translation matrix a report without one keeps",
+    )
     publishing.add_argument("--repository", default="CrossGL/crosstl")
     reconciling = commands.add_parser(
         "issues", help="reconcile the coverage tracking and bug issues with a report"
@@ -193,6 +198,11 @@ def _run_pairs(args: argparse.Namespace) -> int:
         results, used = execution.run(results)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} translations on {', '.join(used) or 'no runtime'}")
+        unlowered = execution.unlowered(results)
+        if unlowered:
+            print(
+                f"compile-only here, a compiler that lowers an end to SPIR-V is missing: {', '.join(unlowered)}"
+            )
         idle = execution.idle(results)
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
@@ -306,7 +316,9 @@ def _run(args: argparse.Namespace) -> int:
 
 def _merge(args: argparse.Namespace) -> int:
     try:
-        data = report.merge([report.load(path) for path in args.reports])
+        data = pairs.reconcile(
+            report.merge([report.load(path) for path in args.reports])
+        )
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -321,6 +333,12 @@ def _publish(args: argparse.Namespace) -> int:
     if args.history and args.history.is_file():
         previous = args.history.read_text(encoding="utf-8")
     data = report.load(args.report)
+    if args.previous and args.previous.is_file():
+        try:
+            data = pairs.reconcile(data, report.load(args.previous))
+        except (OSError, ValueError, KeyError) as error:
+            # Losing the carried matrix for one run is better than not publishing the rows.
+            print(f"warning: cannot read {args.previous}: {error}", file=sys.stderr)
     try:
         paths = publish.write_site(data, args.output_dir, previous, args.repository)
     except ValueError as error:

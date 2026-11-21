@@ -4,12 +4,9 @@ import re
 
 from ...CUDA.bit_intrinsics import format_bit_intrinsic
 from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ...CUDA.function_templates import generic_call_name
 from ...CUDA.pointer_math_import import format_pointer_output_call
-from ..HipAst import (
-    FunctionCallNode,
-    MemberAccessNode,
-    UnaryOpNode,
-)
+from ..HipAst import FunctionCallNode, MemberAccessNode, UnaryOpNode
 
 
 class HipIntrinsicMixin:
@@ -69,6 +66,10 @@ class HipIntrinsicMixin:
         if bit_intrinsic is not None:
             return bit_intrinsic
 
+        device_heap_call = self.format_device_heap_call(func_name, args)
+        if device_heap_call is not None:
+            return device_heap_call
+
         make_unique = self.format_make_unique_call(func_name, args)
         if make_unique is not None:
             return make_unique
@@ -85,6 +86,13 @@ class HipIntrinsicMixin:
         if hip_intrinsic is not None:
             return hip_intrinsic
 
+        generic_call = generic_call_name(
+            func_name,
+            self.function_templates,
+            self.convert_hip_type_to_crossgl,
+        )
+        if generic_call is not None:
+            return f"{generic_call}({args_str})"
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"
@@ -137,6 +145,34 @@ class HipIntrinsicMixin:
         ):
             crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_device_heap_call(self, function_name, args):
+        """Refuse ``malloc``/``free`` in device code, like ``delete`` (#4684).
+
+        CrossGL has no device heap, so a device-side heap call has no faithful
+        form. Host code keeps the ordinary call; a user-defined ``malloc`` or
+        ``free`` is not a heap call either.
+        """
+        if not self.in_device_code or not isinstance(function_name, str):
+            return None
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name not in {
+            "malloc",
+            "free",
+            "std::malloc",
+            "std::free",
+        }:
+            return None
+        if self.is_user_defined_function(
+            function_name
+        ) or self.is_user_defined_function(normalized_name):
+            return None
+        return self.refuse_import(
+            f"HIP {normalized_name}({', '.join(args)}): CrossGL has no device heap",
+            "0",
+        )
 
     def format_concrete_alias_constructor_call(self, func_name, args_str):
         """Write ``real(x)`` through an erased alias as a call of the aliased type.

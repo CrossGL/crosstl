@@ -116,13 +116,18 @@ class CrossGL(Dialect):
         return f"input.{name}"
 
     def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        # The stage inputs and the colour are those of every native fragment probe, so that the translation has
+        # the host interface of the native probe: no input but the feature's and a constant colour.
+        inputs = parts.get("inputs", ())
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
+        if inputs:
+            lines += [
+                "    struct FragmentInput {",
+                *(f"        {kind} {name};" for kind, name in inputs),
+                "    }",
+            ]
         lines += [
-            "    struct FragmentInput {",
-            "        vec2 uv;",
-            *(f"        {kind} {name};" for kind, name in parts.get("inputs", ())),
-            "    }",
             "    struct FragmentOutput {",
             "        vec4 color;",
             "    }",
@@ -131,13 +136,13 @@ class CrossGL(Dialect):
         lines += self._buffers(buffers, parts.get("layouts", {}))
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
-            "        FragmentOutput main(FragmentInput input) {",
+            f"        FragmentOutput main({'FragmentInput input' if inputs else ''}) {{",
             "            FragmentOutput output;",
             "            uint i = 0u;",
         ]
         lines += [f"            {line}" for line in body]
         lines += [
-            "            output.color = vec4(input.uv, 0.0, 1.0);",
+            "            output.color = vec4(0.0);",
             "            return output;",
             "        }",
             "    }",

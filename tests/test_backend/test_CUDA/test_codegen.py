@@ -315,8 +315,7 @@ class TestCudaCodeGen:
         assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
         assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
         assert (
-            "@group(0) @binding(2) var<uniform> c_Kernel: "
-            "array<f32, cuda_array_extent_2_mul_8_plus_1>;"
+            "@group(0) @binding(2) var<uniform> c_Kernel: " "array<f32, 17>;"
         ) in result
         assert (
             "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
@@ -594,9 +593,7 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
-        assert (
-            "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
-        )
+        assert "var<workgroup> s_Data: array<u32, 512>;" in result
         expected_pos = "var pos: u32 = gl_GlobalInvocationID.x;"
         assert expected_pos in result
         assert "for (var offset: u32 = 1; (offset < size); offset <<= 1)" in result
@@ -8396,6 +8393,71 @@ class TestCudaCodeGen:
         assert "CUDA delete q: CrossGL has no device heap" in message
         assert "delete" not in result
 
+    def test_device_new_malloc_free_are_refused(self):
+        # Device-side heap allocation has no CrossGL form, so it is refused
+        # with the same typed diagnostic as `delete` (#4684) instead of
+        # being written as calls CrossGL does not define.
+        code = """
+        struct P { float x; __device__ P(float v) : x(v) {} };
+        __global__ void k(float* o) {
+            P* p = new P(o[0]);
+            float* a = new float(o[0]);
+            float* b = new float[4];
+            float* c = (float*)malloc(16);
+            free(c);
+            auto q = std::make_unique<float>(o[0]);
+            o[0] = p->x + a[0] + b[0] + *q;
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "CUDA new P(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new f32(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new[] f32(4): CrossGL has no device heap" in message
+        assert "CUDA malloc(16): CrossGL has no device heap" in message
+        assert "CUDA free(c): CrossGL has no device heap" in message
+        assert (
+            "CUDA std::make_unique<float>(o[0]): CrossGL has no device heap" in message
+        )
+
+    def test_device_new_is_refused_through_translate(self, tmp_path):
+        # The import refusal fires before any target runs, so `--backend cgl`
+        # fails closed instead of emitting `new<P>(...)` (#4684).
+        source = tmp_path / "new.cu"
+        source.write_text(
+            "struct P { float x; __device__ P(float v) : x(v) {} };\n"
+            "__global__ void k(float* o) {\n"
+            "    P* p = new P(o[0]);\n"
+            "    o[1] = p->x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("cgl", "metal"):
+            with pytest.raises(CudaImportRefused) as refusal:
+                translate(str(source), backend=backend)
+            assert refusal.value.code == CudaImportRefused.code
+            assert "CUDA new P(o[0]): CrossGL has no device heap" in str(refusal.value)
+
+    def test_user_defined_device_malloc_and_free_are_not_refused(self):
+        # A program's own __device__ malloc and free are ordinary calls, not
+        # device heap calls, so they translate (#4684).
+        code = """
+        __device__ float free(float v) { return v * 2.0f; }
+        __device__ float malloc(float v) { return v + 1.0f; }
+        __global__ void k(float* o) {
+            o[0] = free(o[0]) + malloc(o[1]);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "f32 free(f32 v) {" in result
+        assert "f32 malloc(f32 v) {" in result
+        assert "o[0] = (free(o[0]) + malloc(o[1]));" in result
+
     def test_unique_ptr_host_allocation_conversion(self):
         code = """
         void host(int n) {
@@ -10433,3 +10495,47 @@ class TestCudaCodeGen:
         assert "struct SharedMemory {" in result
         assert "// Kernel: use_shared" in result
         assert "fn use_shared(" in result
+
+    def test_elaborated_struct_array_types(self):
+        code = """
+        struct Pair {
+            float a;
+            int b;
+        };
+        struct Holder {
+            struct Pair ps[2];
+        };
+        __global__ void probe(float* outp) {
+            struct Pair local[2];
+            local[0].a = 1.0f;
+            local[1].b = 2;
+            struct Holder h;
+            h.ps[1].a = 3.0f;
+            struct Pair* ptrs[2];
+            ptrs[0] = &local[0];
+            outp[0] = local[0].a + (float)local[1].b + h.ps[1].a + ptrs[0]->a;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "array<Pair, 2> ps;" in result
+        assert "var local: array<Pair, 2>;" in result
+        assert "Pair_2" not in result
+        assert "var ptrs: array<ptr<Pair>, 2>;" in result
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[2]") == "array<Pair, 2>"
+        )
+        assert (
+            codegen.convert_cuda_type_to_crossgl("const struct Pair[2]")
+            == "array<Pair, 2>"
+        )
+        assert codegen.convert_cuda_type_to_crossgl("class Pair[2]") == "array<Pair, 2>"
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[N]") == "array<Pair, N>"
+        )

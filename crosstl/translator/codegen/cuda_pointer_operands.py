@@ -10,7 +10,9 @@ operand that already is an address or a pointer is passed unchanged.
 
 HIP declares neither family in the ROCm releases CrossTL validates against. A cache hint changes only where the
 stored value is cached, never the value a later load observes, so a HIP store with a cache hint is the plain store
-``slot = value``. HIP has no warp match function, and ``__match_all_sync`` is refused there.
+``slot = value``. HIP declares no warp match function either; HIP output computes ``__match_all_sync`` over a
+32-lane segment of the wavefront (:mod:`.hip_cuda_warps`) and passes its helper the same operand address
+(:func:`pointer_operand_arguments`).
 
 An operand that is neither an address, a pointer nor an assignable value, a ``bool`` store (no CUDA overload takes
 ``bool*``) and a call with the wrong number of operands are refused.
@@ -24,6 +26,7 @@ __all__ = [
     "POINTER_OPERAND_FUNCTIONS",
     "cuda_pointer_operand_call",
     "hip_pointer_operand_call",
+    "pointer_operand_arguments",
 ]
 
 # Function -> (operand count, index of the operand CUDA takes by pointer).
@@ -74,26 +77,30 @@ def _check(codegen, func_name, raw_args, refusal, target):
     return index
 
 
-def cuda_pointer_operand_call(codegen, func_name, raw_args, args, refusal):
-    """The CUDA call for ``func_name``, or None when it is not one of :data:`POINTER_OPERAND_FUNCTIONS`."""
-    if func_name not in POINTER_OPERAND_FUNCTIONS:
-        return None
-    index = _check(codegen, func_name, raw_args, refusal, "CUDA")
+def pointer_operand_arguments(codegen, func_name, raw_args, args, refusal, target):
+    """The operands of a call of ``func_name``, with the address of the operand CUDA takes by pointer."""
+    index = _check(codegen, func_name, raw_args, refusal, target)
     kind, text = _operand(codegen, func_name, raw_args[index], args[index], refusal)
     operands = list(args)
     if kind == "value":
         operands[index] = f"&({text})"
+    return operands
+
+
+def cuda_pointer_operand_call(codegen, func_name, raw_args, args, refusal):
+    """The CUDA call for ``func_name``, or None when it is not one of :data:`POINTER_OPERAND_FUNCTIONS`."""
+    if func_name not in POINTER_OPERAND_FUNCTIONS:
+        return None
+    operands = pointer_operand_arguments(
+        codegen, func_name, raw_args, args, refusal, "CUDA"
+    )
     return f"{func_name}({', '.join(operands)})"
 
 
 def hip_pointer_operand_call(codegen, func_name, raw_args, args, refusal):
     """The HIP spelling of ``func_name``, or None when it is not one of :data:`POINTER_OPERAND_FUNCTIONS`."""
-    if func_name not in POINTER_OPERAND_FUNCTIONS:
-        return None
     if func_name not in _STORES:
-        raise refusal(
-            f"HIP has no warp match function, so {func_name} has no HIP spelling"
-        )
+        return None
     index = _check(codegen, func_name, raw_args, refusal, "HIP")
     kind, text = _operand(codegen, func_name, raw_args[index], args[index], refusal)
     raw = raw_args[index]

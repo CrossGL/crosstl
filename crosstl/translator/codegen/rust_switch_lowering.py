@@ -5,7 +5,8 @@ body after them, a body that does not end in a jump falls through into the next 
 body, outside a nested loop, leaves the switch. A Rust ``match`` arm runs one block and cannot be the target of
 ``break``. The lowering therefore builds one arm per body with :func:`.wgsl_switch_clauses` (every label that leads
 to the body, plus the bodies it falls into) and wraps the ``match`` in a labeled block, so a ``break`` that leaves the
-switch becomes ``break 'label`` (The Rust Reference, "Labeled block expressions").
+switch becomes ``break 'label`` (The Rust Reference, "Labeled block expressions"). A ``match`` tries its arms in
+order, so the default arm is written last, wherever the switch puts the ``default`` label.
 
 Case values are written as ``match`` patterns only when every one is an integer literal. Any other selector, such as a
 constant name, would be read by Rust as a new binding that matches everything, so those switches compare the value
@@ -80,7 +81,11 @@ class RustSwitchLoweringMixin:
             code = f"{indent_str}{label}: {{\n"
             if use_match:
                 code += f"{inner_str}match {subject} {{\n"
-                for clause in clauses:
+                # Rust tries the arms in order, so the default arm, ``_``, goes last wherever the switch
+                # declares its label; each clause already holds the bodies it falls into.
+                ordered = [c for c in clauses if not c.is_default]
+                ordered += [c for c in clauses if c.is_default]
+                for clause in ordered:
                     if clause.is_default:
                         pattern = "_"
                     else:

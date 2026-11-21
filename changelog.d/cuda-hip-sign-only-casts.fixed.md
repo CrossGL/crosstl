@@ -1,0 +1,1 @@
+CUDA and HIP input read a cast to a lone `unsigned` or `signed`, such as `(unsigned)x`, `(const unsigned)x`, the functional cast `unsigned(x)` and `(unsigned *)p`, as a cast to `u32` or `i32` instead of stopping with a syntax error.

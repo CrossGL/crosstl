@@ -37,6 +37,10 @@ from .wgsl_integer_operands import (
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode
 from .wgsl_must_use import wgsl_call_statement
+from .wgsl_pointer_locals import (
+    generate_pointer_local,
+    is_pointer_local_declaration,
+)
 from .wgsl_switch_clauses import (
     is_discard_statement,
     wgsl_switch_clauses,
@@ -95,6 +99,7 @@ class WGSLStatementMixin:
                 f"{self.type_name_string(var_type)}{initializer};"
             )
             self.register_local_identifier(stmt.name)
+            self.register_local_mutability(stmt.name, mutable_keyword == "var")
             self.register_value_type(stmt.name, var_type)
             self.register_resource_aliases(
                 stmt.name, var_type, initializer=stmt.initial_value
@@ -161,7 +166,15 @@ class WGSLStatementMixin:
         lines = [f"{pad}{{"]
         self.push_identifier_scope()
         try:
-            for stmt in statements:
+            for index, stmt in enumerate(statements):
+                if is_pointer_local_declaration(stmt):
+                    # A pointer local is checked against the rest of its scope.
+                    lines.append(
+                        generate_pointer_local(
+                            self, stmt, indent + 1, statements[index + 1 :]
+                        )
+                    )
+                    continue
                 lines.append(self.generate_statement(stmt, indent + 1))
         finally:
             self.pop_identifier_scope()
