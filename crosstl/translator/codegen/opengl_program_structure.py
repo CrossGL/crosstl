@@ -409,6 +409,17 @@ class OpenGLProgramStructureMixin:
                 subgroup_width=width,
                 reason="target-width-unsupported",
             )
+        if self.software_subgroup_width is not None:
+            # Software subgroups have exactly software_subgroup_width lanes and never read
+            # gl_SubgroupSize, so an equal WaveSize holds without a hardware guard.
+            if width != self.software_subgroup_width:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup width conflicts with the source "
+                    "WaveSize contract",
+                    reason="hardware-contract-conflict",
+                    source_location=getattr(attributes[0], "source_location", None),
+                )
+            return None
         return width
 
     def glsl_stage_exact_subgroup_width(self, ast, target_stage=None):
