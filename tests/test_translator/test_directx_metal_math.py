@@ -236,7 +236,9 @@ def test_directx_metal_math_beside_target_named_helper_keeps_the_intrinsic(
     generated = HLSLCodeGen().generate(ast)
     assert f"float {target}_fn({parameters})" in generated
     assert f"{target}_fn({arguments})" in generated
-    assert f"results[0] = ({target}({arguments}) + {target}_fn({arguments}));" in generated
+    assert (
+        f"results[0] = ({target}({arguments}) + {target}_fn({arguments}));" in generated
+    )
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 

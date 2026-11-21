@@ -106,7 +106,9 @@ def test_half_double_rounding_is_rejected(body):
 @pytest.mark.parametrize("name", ["asuint", "asfloat16"])
 def test_half_shadowed_intrinsics_are_rejected(name):
     with pytest.raises(DirectXContextualConversionError) as error:
-        HLSLCodeGen().generate(_shader("half value = output[0];", f"float {name} = 1.0;"))
+        HLSLCodeGen().generate(
+            _shader("half value = output[0];", f"float {name} = 1.0;")
+        )
     assert error.value.reason == "half-target-intrinsic-shadowed"
 
 

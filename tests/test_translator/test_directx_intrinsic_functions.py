@@ -145,8 +145,7 @@ def test_signatures_dxc_sent_to_the_intrinsic_reach_the_helper(tmp_path):
 
 
 def test_generic_primary_named_like_an_intrinsic_keeps_its_specializations():
-    generated = _hlsl(
-        """
+    generated = _hlsl("""
         shader S {
             generic<T> T clip(T x) { return x; }
             vec4 clip_v(vec4 x) @explicit_specialization(clip, vec4) { return max(x, vec4(0.0)); }
@@ -157,8 +156,7 @@ def test_generic_primary_named_like_an_intrinsic_keeps_its_specializations():
                 }
             }
         }
-        """
-    )
+        """)
     assert generated.count("clip_v(") >= 3
     assert "clip<" not in generated and "clip_fn" not in generated
 
@@ -184,8 +182,7 @@ def _calls(node, seen=None):
 
 def test_renamed_functions_take_their_calls_in_module_scope_initializers():
     # A constant's initializer kept frac(1.5) after the helper was renamed, and so read the intrinsic.
-    program = crosstl.translator.parse(
-        """
+    program = crosstl.translator.parse("""
         shader S {
             float frac(float x) { return x + 0.25; }
             const float folded = frac(1.5);
@@ -194,8 +191,7 @@ def test_renamed_functions_take_their_calls_in_module_scope_initializers():
                 void main() {}
             }
         }
-        """
-    )
+        """)
     assert rename_functions(program, {"frac"}, by_arity=True) == {"frac": "frac_fn"}
     assert sorted(call_name(call) for call in _calls(program)) == ["frac_fn"] * 2
 
