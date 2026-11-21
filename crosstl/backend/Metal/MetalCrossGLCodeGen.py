@@ -102,11 +102,11 @@ from .external_functions import refuse_external_function_calls
 from .function_constants import import_function_constant_defaults
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
-from .post_tessellation_import import MetalPostTessellationImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
 from .namespace_scope_variables import resolve_namespace_scope_variables
+from .post_tessellation_import import MetalPostTessellationImport
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
     refuse_sparse_color_reference,
