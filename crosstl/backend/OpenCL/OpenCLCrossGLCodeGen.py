@@ -2014,14 +2014,62 @@ class OpenCLToCrossGLConverter(
                 return f"{base}.{component}"
         return format_work_item_query(self, func_name, args)
 
+    # The OpenCL C integer scalar types a dimension cast may name. A cast
+    # to any other type keeps the current behaviour.
+    OPENCL_INTEGER_CAST_TYPES = frozenset(
+        {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "size_t",
+            "signed char",
+            "unsigned char",
+            "signed short",
+            "unsigned short",
+            "signed int",
+            "unsigned int",
+            "signed long",
+            "unsigned long",
+            "signed long long",
+            "unsigned long long",
+        }
+    )
+
     def opencl_dimension_component(self, arg):
-        if isinstance(arg, int):
-            value = arg
-        elif isinstance(arg, str) and arg.isdigit():
-            value = int(arg)
-        else:
+        value = self.opencl_constant_dimension(arg)
+        if value is None:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def opencl_constant_dimension(self, arg):
+        """The constant dimension an argument spells, or ``None``.
+
+        A plain ``0``, ``1`` or ``2`` maps to ``.x``, ``.y`` or ``.z``; so
+        does the same value with an integer suffix (``1u``, ``2U``, ``1ul``)
+        or behind an integer cast (``(uint)1``, ``(unsigned int)2``).
+        Anything else -- a runtime value, a float cast, a dimension of 3 or
+        more -- returns ``None`` so the caller keeps its current behaviour.
+        """
+        if isinstance(arg, bool):
+            return None
+        if isinstance(arg, int):
+            return arg
+        if isinstance(arg, str):
+            digits = arg.rstrip("uUlL")
+            if digits.isdigit():
+                return int(digits)
+            return None
+        if isinstance(arg, CastNode):
+            target = " ".join(str(arg.target_type).split()).lower()
+            if target in self.OPENCL_INTEGER_CAST_TYPES:
+                return self.opencl_constant_dimension(arg.expression)
+            return None
+        return None
 
     def format_crossgl_array_extent(self, size):
         return format_opencl_array_extent(size, super().format_crossgl_array_extent)
