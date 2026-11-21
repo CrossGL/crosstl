@@ -29,6 +29,7 @@ from .builtin_result_types import (
     inferred_value_type,
 )
 from .enum_utils import sanitize_type_name
+from .glsl_builtin_functions import GLSL_BUILTIN_FUNCTION_NAMES
 from .glsl_narrow_integer_literals import widened_integer_literal
 from .opengl_values import (
     OpenGLPrivatePointerParameterError,
@@ -1052,6 +1053,7 @@ class OpenGLLocalIdentifierMixin:
         return (
             not name
             or name in self.GLSL_RESERVED_IDENTIFIERS
+            or name in GLSL_BUILTIN_FUNCTION_NAMES
             or name in extra_reserved
             or name.startswith(self.GLSL_RESERVED_IDENTIFIER_PREFIXES)
             or "__" in name
@@ -1078,7 +1080,11 @@ class OpenGLLocalIdentifierMixin:
         ) or candidate.startswith(self.GLSL_RESERVED_IDENTIFIER_PREFIXES):
             candidate = f"crossgl_{candidate.lstrip('_')}"
             candidate = re.sub(r"_+", "_", candidate)
-        if candidate in self.GLSL_RESERVED_IDENTIFIERS or candidate in extra_reserved:
+        if (
+            candidate in self.GLSL_RESERVED_IDENTIFIERS
+            or candidate in GLSL_BUILTIN_FUNCTION_NAMES
+            or candidate in extra_reserved
+        ):
             candidate = f"{candidate}_"
         return candidate
 

@@ -14175,8 +14175,9 @@ def test_opengl_fixed_array_mutation_cache_isolated_by_exact_overload(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "void step(float values[1])" in generated
-    assert "void step(inout int values[1])" in generated
+    # A user function named like the built-in step() is renamed in GLSL output.
+    assert "void step_(float values[1])" in generated
+    assert "void step_(inout int values[1])" in generated
     assert "void wrapper(float values[1])" in generated
     assert "void wrapper(inout float values[1])" not in generated
     assert "wrapper(total);" in generated
@@ -20597,8 +20598,9 @@ def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
     assert "complex64_t product = crossgl_complex64_mul(left, right);" in generated
     assert "complex64_t quotient = crossgl_complex64_div(left, right);" in generated
     assert "complex64_t negated = crossgl_complex64_negate(left);" in generated
-    assert "bool equal = crossgl_complex64_equal(left, right);" in generated
-    assert "bool notEqual = crossgl_complex64_not_equal(left, right);" in generated
+    # GLSL output renames locals named like the built-ins equal() and notEqual().
+    assert "bool equal_ = crossgl_complex64_equal(left, right);" in generated
+    assert "bool notEqual_ = crossgl_complex64_not_equal(left, right);" in generated
     assert (
         "complex64_t promoted = crossgl_complex64_add("
         "complex64_t(float(2.0), 0.0), left);" in generated
@@ -43931,7 +43933,7 @@ def test_opengl_user_overload_result_width_precedes_builtin(tmp_path):
     }
     """
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
-    assert "vec4 result = vec4(sin(value), sin(value));" in generated
+    assert "vec4 result = vec4(sin_(value), sin_(value));" in generated
     assert_glsl_compute_validates_if_available(generated, tmp_path, "user_builtin")
 
 
@@ -44980,7 +44982,7 @@ def _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path):
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "if (((int(exp) & 1) != 0))" in generated_code
+    assert "if (((int(exp_) & 1) != 0))" in generated_code
     assert "int cgl_bool_compound_lhs = int(result);" in generated_code
     assert "int cgl_bool_compound_rhs = int(base);" in generated_code
     assert (
@@ -44988,9 +44990,9 @@ def _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path):
         in generated_code
     )
     assert re.search(
-        r"int (cgl_bool_compound_lhs_\d+) = int\(exp\);\n"
+        r"int (cgl_bool_compound_lhs_\d+) = int\(exp_\);\n"
         r"\s+int (cgl_bool_compound_rhs_\d+) = 1;\n"
-        r"\s+exp = \(\(\1 >> \2\) != 0\);",
+        r"\s+exp_ = \(\(\1 >> \2\) != 0\);",
         generated_code,
     )
     assert re.search(
@@ -45607,15 +45609,15 @@ def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
     normalized = re.sub(r"\s+", " ", generated_code)
 
     assert (
-        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 8);"
+        "return bitfieldExtract(int((uint(start) + (index * uint(step_)))), 0, 8);"
         in normalized
     )
     assert (
-        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 16);"
+        "return bitfieldExtract(int((uint(start) + (index * uint(step_)))), 0, 16);"
         in normalized
     )
-    assert "return int((uint(start) + (index * uint(step))));" in normalized
-    assert "return (start + (int64_t(index) * step));" in normalized
+    assert "return int((uint(start) + (index * uint(step_))));" in normalized
+    assert "return (start + (int64_t(index) * step_));" in normalized
     assert "return (value + float(offset));" in normalized
     assert "double(value)" not in normalized
     assert "double(offset)" not in normalized
@@ -49325,8 +49327,9 @@ def test_opengl_boolean_min_max_respect_user_defined_functions():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "bool min(bool left, bool right)" in generated
-    assert "return min(left, right);" in generated
+    # The user min() keeps its calls under the name GLSL output gives it (min_).
+    assert "bool min_(bool left, bool right)" in generated
+    assert "return min_(left, right);" in generated
     assert "return ((left) && (right));" not in generated
 
 
