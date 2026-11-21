@@ -265,6 +265,45 @@ def test_publish_keeps_the_previous_matrix_for_a_report_without_one(tmp_path):
     assert "pairs" not in report.load(site / "coverage.json")
 
 
+def test_publish_puts_a_measured_matrix_in_place_of_the_one_newer_rows_carry(
+    tmp_path,
+):
+    # A push published rows for commit e, newer than the nightly run's commit c, with a matrix from commit a.
+    newer = {**_published(), "commit": "e" * 40, "date": "2026-11-21T03:00:00Z"}
+    newer["matrix"] = {"commit": "a" * 40, "date": "2026-11-20T01:00:00Z"}
+    _write(tmp_path / "previous" / "coverage.json", newer)
+    (tmp_path / "nightly.json").write_text(report.dumps(_measured()))
+    site = tmp_path / "site"
+    arguments = ["publish", str(tmp_path / "previous" / "coverage.json")]
+    arguments += ["--matrix", str(tmp_path / "nightly.json"), "--output-dir", str(site)]
+    assert cli.main(arguments) == 0
+    published = report.load(site / "coverage.json")
+    # The rows and their commit are the newer ones; the matrix is the nightly run's, scored against those rows.
+    assert (published["commit"], published["date"]) == (newer["commit"], newer["date"])
+    assert (
+        published["backends"]
+        == report.load(tmp_path / "previous" / "coverage.json")["backends"]
+    )
+    assert published["matrix"] == {"commit": "c" * 40, "date": "2026-11-21T01:53:00Z"}
+    rows = {k: v for k, v in newer.items() if k not in ("pairs", "matrix")}
+    assert published["pairs"] == pairs.reconcile(rows, _measured())["pairs"]
+    # The newer publication carried an opencl-to-glsl cell the nightly run did not measure; it is gone.
+    assert [(c["source"], c["target"]) for c in published["pairs"]] == [
+        ("hlsl", "glsl")
+    ]
+    assert (site / "pairs" / "hlsl-to-glsl.md").is_file()
+
+
+def test_publish_refuses_a_matrix_report_without_a_matrix(tmp_path, capsys):
+    rows = {k: v for k, v in _measured().items() if k != "pairs"}
+    (tmp_path / "rows.json").write_text(report.dumps(rows))
+    arguments = ["publish", str(tmp_path / "rows.json"), "--output-dir", str(tmp_path)]
+    assert cli.main([*arguments, "--matrix", str(tmp_path / "rows.json")]) == 2
+    assert "has no translation matrix" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main([*arguments, "--matrix", "a.json", "--previous", "b.json"])
+
+
 def test_merge_reconciles_the_cells_with_the_rows(tmp_path):
     rows = {k: v for k, v in _measured().items() if k != "pairs"}
     cells = {**_measured(), "backends": []}
@@ -323,3 +362,33 @@ def test_publishing_keeps_the_previous_matrix_and_adds_the_cell_pages():
     assert '--previous "$RUNNER_TEMP/previous/coverage.json"' in run
     assert 'git archive FETCH_HEAD | tar -x -C "$RUNNER_TEMP/previous"' in run
     assert "if [ -d pairs ]; then git add pairs; fi" in run
+
+
+def test_a_late_nightly_run_publishes_its_matrix_with_the_newer_rows():
+    jobs = _workflow()["jobs"]
+    steps = {s.get("name"): s for s in jobs["publish"]["steps"]}
+    read = steps["Read the published coverage"]["run"]
+    # Behind a newer publication, a run that measured the matrix publishes it if the carried matrix is older.
+    assert "publish=matrix" in read and "publish=false" in read
+    assert '"pairs" in json.load(open("coverage.json"))' in read
+    assert "compare/$carried...$GITHUB_SHA" in read
+    build = steps["Build the published files"]
+    assert build["if"] == "steps.published.outputs.publish != 'false'"
+    assert (
+        'publish "$RUNNER_TEMP/previous/coverage.json" --matrix coverage.json'
+        in build["run"]
+    )
+    assert steps["Replace the coverage branch"]["if"] == build["if"]
+    kept = steps["Keep the published report"]
+    assert kept["if"] == build["if"]
+    assert kept["with"]["name"] == "coverage-published"
+    assert kept["with"]["retention-days"] <= 14
+    # The issues reconcile what was published, so pair issues follow the matrix the coverage branch carries.
+    assert "needs.publish.outputs.published != 'false'" in jobs["issues"]["if"]
+    issues = jobs["issues"]["steps"]
+    (download,) = (s for s in issues if "download-artifact" in str(s.get("uses", "")))
+    assert download["with"] == {"name": "coverage-published", "path": "published"}
+    assert any(
+        "tools.coverage issues published/coverage.json" in str(s.get("run", ""))
+        for s in issues
+    )
