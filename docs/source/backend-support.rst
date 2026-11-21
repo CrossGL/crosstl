@@ -15,7 +15,9 @@ the language's reference compiler or validator checks the result. Compute
 probes also run, on the GPU or on Mesa's software drivers, where the
 translation must compute what the native probe computes: Metal, GLSL and
 SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
-reference compilers produce. A subgroup operation's probes run as one
+reference compilers produce. HLSL probes also run as HLSL on Direct3D 12
+WARP on a Windows runner, and a probe that computes something else there is
+wrong too. A subgroup operation's probes run as one
 workgroup of 64 invocations, with every third one inactive, so a translation
 that reads only its own invocation, or every invocation, computes something
 else. A translation must also keep the built-ins and decorations, such as

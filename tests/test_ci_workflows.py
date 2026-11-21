@@ -495,7 +495,8 @@ def test_upstream_source_caches_fall_back_to_an_older_cache():
         prefix = key.split("${{ hashFiles(")[0]
         assert cache.get("restore-keys") == prefix, (name, key)
         keys.append(key)
-    assert len(keys) == 3
+    # Linux, the compute matrix, Rust and Direct3D 12.
+    assert len(keys) == 4
 
 
 def _local_action_text(name):

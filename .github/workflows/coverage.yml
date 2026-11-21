@@ -7,9 +7,10 @@ name: Coverage
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
 # and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
-# rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. Every
-# run goes through Core's conformance harness (tools/coverage/execution.py). The report job merges the reports and adds
-# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
+# rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. The
+# Windows job runs the HLSL compute probes as HLSL on Direct3D 12 WARP; its report carries only those execution
+# verdicts, which the merge adds to the HLSL rows the Linux job measures. Every run goes through Core's conformance
+# harness (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
 # coverage.json (each row's score, with its features in features/<language>-<direction>.json so that no file reaches
 # 1 MB), coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from
 # it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
@@ -19,7 +20,8 @@ name: Coverage
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
 # CUDA/HIP/Mojo and Rust jobs only when they change the coverage engine or that backend's translator; the job summary
-# names the rows a run left out. Pushes to main and the nightly run measure everything.
+# names the rows a run left out. Pull requests run the Windows job on the same terms, and the merge queue never runs
+# it (tools/coverage/legs.py). Pushes to main and the nightly run measure everything.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -61,6 +63,7 @@ jobs:
       metal: ${{ steps.plan.outputs.metal }}
       compute: ${{ steps.plan.outputs.compute }}
       rust: ${{ steps.plan.outputs.rust }}
+      d3d12: ${{ steps.plan.outputs.d3d12 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -73,14 +76,16 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          legs=(metal compute rust)
+          legs=(metal compute rust d3d12)
           if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
             for leg in "${legs[@]}"; do echo "$leg=true" >> "$GITHUB_OUTPUT"; done
             exit 0
           fi
+          queue=()
+          if [ "$EVENT" = merge_group ]; then queue=(--merge-group); fi
           # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
           # base, so this lists exactly the files the change touches. tools/coverage/legs.py says which legs they reach.
-          git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs | tee -a "$GITHUB_OUTPUT"
+          git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs "${queue[@]}" | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang, OpenCL C)
@@ -425,9 +430,59 @@ jobs:
           path: coverage-metal.json
           retention-days: 14
 
+  d3d12:
+    name: Coverage (HLSL on Direct3D 12 WARP)
+    needs: plan
+    if: needs.plan.outputs.d3d12 == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      # Probes and their translations are written as UTF-8 whatever the code page.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # compushady finds the WARP adapter; the harness builds its D3D12 buffer-view worker with the image's MSVC.
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . numpy==2.5.4 compushady==0.17.5
+
+      - name: Install pinned DXC and WARP
+        uses: ./.github/actions/install-windows-d3d12
+
+      - name: Restore upstream feature sources
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/coverage-cache
+          key: coverage-upstream-d3d12-${{ hashFiles('tools/coverage/upstream.py') }}
+          restore-keys: coverage-upstream-d3d12-
+
+      # The report holds only execution verdicts (--execution-only): the Linux job's HLSL rows keep their static
+      # verdicts, and the merge adds which probes ran on WARP and which of them diverged there.
+      - name: Run the HLSL probes on WARP
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+        run: >-
+          python -m tools.coverage run --strict --execute --execution-only --runtimes d3d12-warp --jobs 4
+          --backend hlsl --output coverage-d3d12.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-d3d12
+          path: coverage-d3d12.json
+          retention-days: 14
+
   report:
     name: Coverage report
-    needs: [plan, linux, compute, rust, metal]
+    needs: [plan, linux, compute, rust, metal, d3d12]
     # Every leg ran or was planned out; a leg is skipped only on pull requests and in the merge queue.
     if: >-
       always() && needs.plan.result == 'success' && needs.linux.result == 'success'
@@ -628,7 +683,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, compute, rust, metal, report, publish, issues]
+    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

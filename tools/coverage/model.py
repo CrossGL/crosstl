@@ -316,6 +316,9 @@ class Result:
     sources: tuple[str, str] = field(default=(), compare=False, repr=False)
     # The runtime :mod:`.execution` ran both on, when it did.
     runtime: str = ""
+    # Why :mod:`.execution` did not run a supported compute probe on the runtime it selected, starting with
+    # ``on <runtime>``; empty when the probe ran, or when no runtime was there to run it.
+    unrun: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

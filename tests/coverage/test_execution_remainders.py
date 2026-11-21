@@ -103,7 +103,10 @@ def _harness(monkeypatch, native_spirv: str, translated_words):
     monkeypatch.setattr(
         harness,
         "select_runtimes",
-        lambda spec, targets: {t: [(runtime, Provided())] for t in targets},
+        # As the harness does, a target gets only the runtimes that run its language.
+        lambda spec, targets: {
+            t: [(runtime, Provided())] if t == runtime.target else [] for t in targets
+        },
     )
 
     def run_suite(cases, targets, *args, **kwargs):

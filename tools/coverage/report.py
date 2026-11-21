@@ -7,6 +7,13 @@ holds an index into it. :func:`loads` and :func:`dumps` convert between the two 
 The coverage branch splits the report further, so that no published file reaches a megabyte (ADR 0003):
 :func:`site` leaves each backend's score and counts in ``coverage.json`` and moves its rows to the file named by its
 ``file`` field, ``features/<language>-<direction>.json``. :func:`load` reads either layout.
+
+A feature that ran on a runtime names it in its ``runtime`` field, and a row counts its probes per runtime in
+``executions``. A supported compute probe that a runtime did not run, or ran without a verdict, lists the reasons in
+``unrun``, each starting with ``on <runtime>``. A report written with ``--execution-only`` (``"execution_only": true``) measures rows that another
+report measures in full, only to run their probes on another runtime, as the Windows job runs the HLSL probes on
+Direct3D 12 WARP. :func:`merge` keeps the full report's verdicts and adds the execution verdicts of such a report to
+them (:func:`_with_executions`).
 """
 
 from __future__ import annotations
@@ -15,6 +22,7 @@ import datetime
 import json
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from . import execution, ir, lowering, upstream, validators
@@ -77,13 +85,14 @@ def _execution(language: str, group: list[Result], execute: bool) -> dict:
     compile-only. ``executed`` counts the probes that ran, 0 included, once ``execute`` asked for them to run, and
     ``runtime`` names the runtimes they ran on.
     """
-    runtimes = sorted({r.runtime for r in group if r.runtime})
-    executed = sum(1 for r in group if r.runtime)
+    runtimes = Counter(r.runtime for r in group if r.runtime)
+    executed = sum(runtimes.values())
     executes = execution.runs(language)
     return {
         "executes": executes,
         **({"executed": executed} if executed or (execute and executes) else {}),
-        **({"runtime": ", ".join(runtimes)} if runtimes else {}),
+        **({"runtime": ", ".join(sorted(runtimes))} if runtimes else {}),
+        **({"executions": dict(sorted(runtimes.items()))} if runtimes else {}),
     }
 
 
@@ -92,11 +101,12 @@ def build(
     languages: list[str],
     directions: list[str],
     execute: bool = False,
+    execution_only: bool = False,
 ) -> dict:
     """Group ``results`` by language and direction and score each group.
 
     ``execute`` says that the executable probes of ``results`` were run, so a row records how many of them ran even
-    when none did.
+    when none did. ``execution_only`` marks the report as one :func:`merge` reads only for its execution verdicts.
     """
     backends = []
     for language in languages:
@@ -140,6 +150,8 @@ def build(
                             "group": r.feature.group,
                             "outcome": r.outcome,
                             **({"detail": r.detail} if r.detail else {}),
+                            **({"runtime": r.runtime} if r.runtime else {}),
+                            **({"unrun": [r.unrun]} if r.unrun else {}),
                             **({"semantic": r.semantic} if r.semantic else {}),
                             **({"expressed": r.expressed} if r.expressed else {}),
                             **(
@@ -179,6 +191,49 @@ def build(
         "sources": _sources(languages),
         "validators": {tool: validators.version(tool) or None for tool in tools},
         "backends": backends,
+        **({"execution_only": True} if execution_only else {}),
+    }
+
+
+def _runtimes(feature: dict) -> set[str]:
+    """The runtimes a feature's probes ran on."""
+    return {name.strip() for name in feature.get("runtime", "").split(",")} - {""}
+
+
+def _with_executions(row: dict, extra: dict) -> dict:
+    """``row`` with the execution verdicts of ``extra``, an execution-only report's measurement of the same row.
+
+    ``row`` keeps its static verdicts, so a probe ``extra`` judges differently without running it keeps its outcome.
+    A probe that ran for ``extra`` records that runtime too, unless ``row`` found it refused, wrong without running it,
+    or untested; one ``row`` found supported becomes wrong, with ``extra``'s diagnostic, when it diverged there. One
+    ``row`` found supported that ``extra``'s runtime did not run adds ``extra``'s reasons to its ``unrun``.
+    """
+    measured = {(f["category"], f["name"]): f for f in extra["features"]}
+    features = []
+    for feature in row["features"]:
+        other = measured.get((feature["category"], feature["name"]), {})
+        if _runtimes(other) and (
+            feature["outcome"] == "supported" or _runtimes(feature)
+        ):
+            runtimes = ", ".join(sorted(_runtimes(feature) | _runtimes(other)))
+            feature = {**feature, "runtime": runtimes}
+            if feature["outcome"] == "supported" and other["outcome"] == "wrong":
+                feature.update(outcome="wrong", detail=other["detail"])
+        elif other.get("unrun") and feature["outcome"] == "supported":
+            feature = {**feature, "unrun": [*feature.get("unrun", []), *other["unrun"]]}
+        features.append(feature)
+    score = Score()
+    for feature in features:
+        score.add(feature["outcome"])
+    counted = Counter(name for f in features for name in _runtimes(f))
+    return {
+        **row,
+        "executed": sum(1 for f in features if _runtimes(f)),
+        "runtime": ", ".join(sorted(counted)),
+        "executions": dict(sorted(counted.items())),
+        "score": None if score.percent is None else round(score.percent, 1),
+        "counts": score.counts,
+        "features": features,
     }
 
 
@@ -186,7 +241,8 @@ def merge(reports: list[dict]) -> dict:
     """One report from reports of separate runners, such as a Linux and a macOS job, with the IR row rebuilt.
 
     The runners must have measured the same commit; a language and direction measured twice is an error, because the
-    merged score would depend on which runner came last.
+    merged score would depend on which runner came last. An execution-only report only adds its execution verdicts to
+    the rows another report measures (:func:`_with_executions`).
     """
     if not reports:
         raise ValueError("no reports to merge")
@@ -195,8 +251,11 @@ def merge(reports: list[dict]) -> dict:
         raise ValueError(
             f"reports come from different commits: {', '.join(sorted(commits))}"
         )
+    full = [r for r in reports if not r.get("execution_only")]
+    if not full:
+        raise ValueError("every report is execution-only")
     rows: dict[tuple[str, str], dict] = {}
-    for report in reports:
+    for report in full:
         for backend in report["backends"]:
             key = (backend["language"], backend["direction"])
             if backend["language"] == ir.LANGUAGE:
@@ -207,21 +266,35 @@ def merge(reports: list[dict]) -> dict:
                 )
             if key not in rows or backend["offered"]:
                 rows[key] = backend
+    for report in reports:
+        if not report.get("execution_only"):
+            continue
+        for backend in report["backends"]:
+            key = (backend["language"], backend["direction"])
+            if backend["language"] == ir.LANGUAGE or not backend["offered"]:
+                continue
+            if key not in rows or not rows[key]["offered"]:
+                raise ValueError(
+                    f"{key[0]} {key[1]} has execution verdicts but no report measures it"
+                )
+            rows[key] = _with_executions(rows[key], backend)
     backends = [
         rows[key] for key in sorted(rows, key=lambda k: (k[0], DIRECTIONS.index(k[1])))
     ]
     expressiveness = ir.build(backends)
     if expressiveness:
         backends.append(expressiveness)
-    merged = dict(reports[0])
+    merged = dict(full[0])
     merged["date"] = max(r["date"] for r in reports)
     merged["sources"] = dict(
         sorted({k: v for r in reports for k, v in r["sources"].items()}.items())
     )
     tools = sorted({tool for r in reports for tool in r["validators"]})
+    # A full report names the tool version its verdicts come from.
+    ordered = full + [r for r in reports if r.get("execution_only")]
     merged["validators"] = {
         tool: next(
-            (r["validators"][tool] for r in reports if r["validators"].get(tool)), None
+            (r["validators"][tool] for r in ordered if r["validators"].get(tool)), None
         )
         for tool in tools
     }
