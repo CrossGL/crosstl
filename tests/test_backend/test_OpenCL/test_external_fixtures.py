@@ -641,7 +641,7 @@ def test_external_arrayfire_magma_opencl_api_typedefs_codegen_reparse():
     assert "typedef vec2<f64> magmaDoubleComplex;" in crossgl
     assert "typedef vec2<f32> magmaFloatComplex;" in crossgl
     assert "typedef u64 magma_ptr;" in crossgl
-    assert "typedef u32 magma_type_t;" in crossgl
+    assert "typedef magma_uplo_t magma_type_t;" in crossgl
     assert "struct cpu_blas_gemv_func_float" in crossgl
     assert "cl_command_queue" not in crossgl
 
