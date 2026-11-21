@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 57,
-        "endOffset": 1938,
+        "endLine": 60,
+        "endOffset": 2048,
         "file": "crosstl-out/metal/lighting.fs.metal",
-        "length": 1938,
+        "length": 2048,
         "line": 1,
         "offset": 0
       },

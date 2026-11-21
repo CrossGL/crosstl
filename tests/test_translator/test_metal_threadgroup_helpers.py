@@ -218,9 +218,11 @@ def test_helper_local_of_the_same_name_that_does_not_reach_the_storage(tmp_path)
     assert "int poke(int k, threadgroup int (&tile)[4])" in code
 
 
-def test_helper_that_shadows_forwarded_storage_is_refused(tmp_path):
-    with pytest.raises(Exception, match="declares its own 'tile'"):
-        _translate(tmp_path, SHADOWED)
+def test_helper_that_shadows_forwarded_storage_renames_its_local(tmp_path):
+    code = _translate(tmp_path, SHADOWED)
+    assert "int outer(int k, threadgroup int (&tile)[4])" in code
+    assert "int tile_ = 3;" in code
+    assert "return poke(k, tile) + tile_;" in code
 
 
 def test_copy_after_an_effectful_argument_inside_an_expression_is_refused(tmp_path):
@@ -248,8 +250,9 @@ def _metal_compiler():
         (PROGRAM_SCOPE, "hlsl"),
         (ATOMIC, "hlsl"),
         (UNRELATED_LOCAL, "cgl"),
+        (SHADOWED, "cgl"),
     ],
-    ids=["stage-block", "program-scope", "atomic", "unrelated-local"],
+    ids=["stage-block", "program-scope", "atomic", "unrelated-local", "shadowed"],
 )
 def test_forwarded_storage_compiles(tmp_path, source, language):
     code = _translate(tmp_path, source, language)

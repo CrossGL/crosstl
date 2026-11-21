@@ -9,6 +9,8 @@ from .c_family_operands import (
     postfix_operand,
     prefix_unary_operand,
 )
+from .cuda_builtin_components import compute_builtin_subscript
+from .cuda_subscripts import vector_matrix_subscript, visit_as_reference
 from .enum_utils import generate_enum_constructor_expression
 from .generic_struct_utils import generate_struct_constructor_expression
 from .hip_refusals import HipLoweringRefused
@@ -38,7 +40,7 @@ class HipExpressionMixin:
         if result_info is None:
             return None
 
-        object_expr = self.visit(object_node)
+        object_expr = visit_as_reference(self, object_node)
         value_expr = self.visit(value_node)
         temp_name = self.next_hip_temp_variable("swizzle_value")
         value_info = self.swizzle_result_vector_info(
@@ -297,6 +299,9 @@ class HipExpressionMixin:
         builtin_component = self.hip_compute_builtin_index_component(node)
         if builtin_component is not None:
             return builtin_component
+        subscript = vector_matrix_subscript(self, node, HipLoweringRefused, "HIP")
+        if subscript is not None:
+            return subscript
         array = self.visit(node.array)
         self.subscript_index_depth += 1
         try:
@@ -312,9 +317,10 @@ class HipExpressionMixin:
         ``uint3`` has no subscript operator, so the ``make_uint3(...)[0]`` the
         generic path would emit does not compile. A user symbol with a
         built-in name shadows the built-in and keeps the generic subscript. A
-        non-constant or out-of-range subscript, a subscript of the scalar
-        local-invocation index, or a write to a built-in component has no
-        faithful HIP lowering and is refused instead.
+        runtime subscript reads its component through a helper
+        (:mod:`.cuda_builtin_components`). An out-of-range constant subscript,
+        a subscript of the scalar local-invocation index, or a write to a
+        built-in component is refused.
         """
         array_node = getattr(node, "array_expr", getattr(node, "array", None))
         if not isinstance(array_node, IdentifierNode):
@@ -333,23 +339,15 @@ class HipExpressionMixin:
                 [f"cannot assign to a component of compute built-in '{name}' in HIP"]
             )
         index_node = getattr(node, "index_expr", getattr(node, "index", None))
-        index = self.literal_int_value(index_node)
-        if index is None or index not in (0, 1, 2):
-            raise HipLoweringRefused(
-                [
-                    (
-                        f"cannot subscript compute built-in '{name}' with a "
-                        "non-constant index in HIP; use .x, .y or .z"
-                    )
-                ]
-            )
-        component = "xyz"[index]
-        expression = self.hip_compute_builtin_expression(role, component)
-        if expression is None:
-            raise HipLoweringRefused(
-                [f"compute built-in '{name}' has no '.{component}' component in HIP"]
-            )
-        return expression
+        return compute_builtin_subscript(
+            self,
+            name,
+            role,
+            index_node,
+            self.hip_compute_builtin_expression,
+            HipLoweringRefused,
+            "HIP",
+        )
 
     def visit_ArrayLiteralNode(self, node: ArrayLiteralNode) -> str:
         elements = ", ".join(self.visit(element) for element in node.elements)

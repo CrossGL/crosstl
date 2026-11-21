@@ -27,10 +27,16 @@ from .generic_function_utils import (
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .spirv_builtin_overloads import separate_builtin_overloads
-from .spirv_compute_derivative_groups import emit_compute_derivative_group
+from .spirv_compute_derivative_groups import (
+    declared_derivative_group,
+    emit_compute_derivative_group,
+    emit_declared_derivative_group,
+)
+from .spirv_conservative_depth import depth_layout_execution_modes
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_entry_interfaces import complete_entry_point_interfaces
 from .spirv_entry_workgroup_sizes import emit_entry_local_size_id
+from .spirv_fragment_interlock import fragment_interlock_execution_mode
 from .spirv_geometry_streams import (
     geometry_output_streams,
     stream_decorations,
@@ -83,6 +89,9 @@ class SpirvModuleAssemblyMixin:
             entry_function = getattr(stage, "entry_point", None)
             if requests_early_fragment_tests(entry_function, stage):
                 self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
+            interlock_mode = fragment_interlock_execution_mode(self, function_id.id)
+            if interlock_mode is not None:
+                self.emit(f"OpExecutionMode %{function_id.id} {interlock_mode}")
             # A stage-level output variable is created before its entry function, so the interface, not the
             # function being generated when the built-in was registered, says which outputs the entry writes.
             interface_builtins = {
@@ -95,6 +104,15 @@ class SpirvModuleAssemblyMixin:
                 or "FragDepth" in interface_builtins
             ):
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
+            for mode in depth_layout_execution_modes(
+                self,
+                (
+                    variable
+                    for variable in interface_variables
+                    if variable.type.storage_class == "Output"
+                ),
+            ):
+                self.emit(f"OpExecutionMode %{function_id.id} {mode}")
             if (
                 function_id.id in self.fragment_stencil_ref_replacing_function_ids
                 or "FragStencilRefEXT" in interface_builtins
@@ -105,12 +123,18 @@ class SpirvModuleAssemblyMixin:
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
-            if not emit_entry_local_size_id(self, function_id, stage):
-                declare_specialized_workgroup_size(self, stage)
+            declared_group = declared_derivative_group(self, stage)
+            declared = declared_group is not None
+            size = None
+            if not emit_entry_local_size_id(self, function_id, stage, declared):
+                specialized = declare_specialized_workgroup_size(self, stage, declared)
                 x, y, z = self.compute_local_size(stage)
                 self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
-                if self.requires_compute_derivatives:
+                size = None if specialized else (x, y, z)
+                if not declared and self.requires_compute_derivatives:
                     emit_compute_derivative_group(self, function_id, (x, y, z))
+            if declared:
+                emit_declared_derivative_group(self, function_id, declared_group, size)
             if execution_model in {"MeshEXT", "TaskEXT"}:
                 self.require_capability("MeshShadingEXT")
                 self.require_extension("SPV_EXT_mesh_shader")

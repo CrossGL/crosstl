@@ -7,6 +7,10 @@ from .calls import RustCallMixin
 from .closures import RustClosureMixin
 from .control_flow import RustControlFlowMixin
 from .declarations import RustDeclarationMixin
+from .default_values import RustDefaultValueMixin
+from .enums import RustEnumMixin
+from .exact_methods import RustExactMethodMixin
+from .execution_modes import RustExecutionModeMixin
 from .expression_results import RustExpressionResultMixin
 from .expressions import RustExpressionMixin
 from .import_tables import (
@@ -24,6 +28,8 @@ from .import_tables import (
 )
 from .loop_control import RustLoopControlMixin
 from .match_lowering import RustMatchMixin
+from .operator_spelling import RustOperatorSpellingMixin
+from .reference_locals import RustReferenceLocalMixin
 from .RustAst import *
 from .RustLexer import *
 from .RustParser import *
@@ -34,9 +40,15 @@ from .value_types import RustValueTypeMixin
 
 class RustToCrossGLConverter(
     RustValueTypeMixin,
+    RustDefaultValueMixin,
+    RustOperatorSpellingMixin,
+    RustEnumMixin,
+    RustExecutionModeMixin,
     RustDeclarationMixin,
     RustExpressionResultMixin,
     RustTryOperatorMixin,
+    RustExactMethodMixin,
+    RustReferenceLocalMixin,
     RustCallMixin,
     RustControlFlowMixin,
     RustMatchMixin,
@@ -423,6 +435,8 @@ class RustToCrossGLConverter(
             self.register_type_alias(alias)
 
         self.register_associated_consts(ast)
+
+        code += self.generate_unit_enums(ast)
 
         for alias in getattr(ast, "type_aliases", []):
             alias_code = self.generate_type_alias(alias)

@@ -63,6 +63,18 @@ repos:
       - id: pyupgrade
         args: [--py38-plus]
 
+  # pyupgrade can leave typing imports unused; autoflake removes them before isort and black lay out what is left,
+  # so one pass of the hooks leaves nothing for a second pass to change.
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.4.0
+    hooks:
+      - id: autoflake
+        args:
+          - --in-place
+          - --remove-all-unused-imports
+          - --remove-unused-variables
+          - --ignore-init-module-imports
+
   - repo: https://github.com/PyCQA/isort
     rev: 9.0.2
     hooks:
@@ -78,16 +90,6 @@ repos:
         args:
           - --preview
           - --target-version=py38
-
-  - repo: https://github.com/PyCQA/autoflake
-    rev: v2.4.0
-    hooks:
-      - id: autoflake
-        args:
-          - --in-place
-          - --remove-all-unused-imports
-          - --remove-unused-variables
-          - --ignore-init-module-imports
 
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12

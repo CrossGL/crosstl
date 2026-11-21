@@ -840,7 +840,21 @@ class Parser(
             return self.parse_function()
 
         if self.is_variable_declaration():
-            return self.parse_variable_declaration()
+            is_plain_module_var = (
+                self.current_token[0] == "VAR" and self.peek()[0] != "LESS_THAN"
+            )
+            declaration = self.parse_variable_declaration()
+            if is_plain_module_var:
+                variables = (
+                    declaration if isinstance(declaration, list) else [declaration]
+                )
+                for variable in variables:
+                    if isinstance(variable, VariableNode) and "private" not in {
+                        str(qualifier).lower()
+                        for qualifier in getattr(variable, "qualifiers", []) or []
+                    }:
+                        variable.qualifiers.append("private")
+            return declaration
 
         # is_function_declaration can fail on some edge-case type tokens; try anyway.
         if self.is_type_token():

@@ -1184,7 +1184,7 @@ def test_codegen_gles_precision_qualified_sampler_roundtrip():
     assert "vec2 coord @location(0) @highp;" in crossgl
     assert "vec4 col @lowp = texture(texSampler, input.coord);" in crossgl
 
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen(target_profile="gles").generate(parse_crossgl(crossgl))
     assert "precision lowp sampler2D;" in glsl
     assert "layout(binding = 0) uniform highp sampler2D texSampler;" in glsl
     assert "layout(location = 0) in highp vec2 coord;" in glsl
@@ -1602,10 +1602,10 @@ def test_codegen_double_float_suffix_literals_from_glslang_numeral_reparse():
     assert "double gf4 = .4e1;" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "double gf1 = double(1.0);" in glsl
-    assert "double gf2 = double(2.0);" in glsl
-    assert "double gf3 = double(3.0);" in glsl
-    assert "double gf4 = double(4.0);" in glsl
+    assert "double gf1 = 1.0lf;" in glsl
+    assert "double gf2 = 2.0lf;" in glsl
+    assert "double gf3 = 3.0lf;" in glsl
+    assert "double gf4 = 4.0lf;" in glsl
     assert "outValue = (((gf1 + gf2) + gf3) + gf4);" in glsl
     assert "fragColor = outValue;" in glsl
 
@@ -1660,12 +1660,20 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
     # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
-    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit. A Vulkan
+    # compilation (which defines VULKAN) keeps the separate texture and sampler at their source bindings.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
-    assert "texture(g_tTex1, 0.1)" in glsl
-    assert "g_sSamp1" not in glsl
-    assert "texture1D" not in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 1) uniform texture1D g_tTex1;\n#else\n"
+        "layout(binding = 1) uniform sampler1D g_tTex1;\n#endif\n"
+    ) in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 0) uniform sampler g_sSamp1;\n#endif\n" in glsl
+    )
+    assert (
+        "texture(CROSSGL_SAMPLED(sampler1D(g_tTex1, g_sSamp1), g_tTex1), 0.1)" in glsl
+    )
+    assert "#else\n#define CROSSGL_SAMPLED(vulkan, opengl) opengl\n#endif\n" in glsl
     validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -1785,7 +1793,7 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     assert "texture(sExt, vec2(0.2))" in crossgl
     assert "texture(highExt, vec2(0.2))" in crossgl
 
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen(target_profile="gles").generate(parse_crossgl(crossgl))
     assert "uniform __samplerExternal2DY2YEXT sExt;" in glsl
     assert "uniform highp __samplerExternal2DY2YEXT highExt;" in glsl
     assert "texture(sExt, vec2(0.2))" in glsl
@@ -1814,7 +1822,7 @@ def test_codegen_external_oes_sampler_roundtrips_to_glsl():
     assert "cbuffer Uniforms" not in crossgl
     assert "texture(cameraTexture, input.vTexCoord)" in crossgl
 
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen(target_profile="gles").generate(parse_crossgl(crossgl))
     assert "#extension GL_OES_EGL_image_external_essl3 : require" in glsl
     assert "uniform samplerExternalOES cameraTexture;" in glsl
     assert "texture(cameraTexture, vTexCoord)" in glsl
@@ -2232,7 +2240,7 @@ def test_codegen_resource_array_functions_keep_array_receivers():
     assert "imageStore(images[index], ivec2(1, 2), (c + r))" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 0) uniform sampler2D textures[2];" in glsl
+    assert "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D textures[2];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D images[2];" in glsl
 
 

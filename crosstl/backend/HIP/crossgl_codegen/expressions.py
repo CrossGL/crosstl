@@ -91,7 +91,7 @@ class HipExpressionMixin:
         expression = f"{crossgl_func}({args_str})"
         if scope == "system":
             return self.refuse_import(
-                f"HIP {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
+                f"{self.IMPORT_REFUSAL_TYPE.label} {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
                 "atomic for the host and peer devices",
                 expression,
             )
@@ -115,6 +115,11 @@ class HipExpressionMixin:
         target_type, is_array = self.unwrap_array_template_type(template_args[0])
         target_type = self.convert_hip_type_to_crossgl(target_type)
         args_str = ", ".join(args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"HIP {function_name}({args_str}): CrossGL has no device heap",
+                "0",
+            )
         if is_array:
             return f"new_array<{target_type}>({args_str})"
         return f"new<{target_type}>({args_str})"
@@ -133,7 +138,9 @@ class HipExpressionMixin:
     def visit_DeleteNode(self, node):
         target = self.visit(node.expression)
         form = "delete[]" if node.is_array else "delete"
-        self.refuse_import(f"HIP {form} {target}: CrossGL has no device heap")
+        self.refuse_import(
+            f"{self.IMPORT_REFUSAL_TYPE.label} {form} {target}: CrossGL has no device heap"
+        )
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
@@ -349,7 +356,7 @@ class HipExpressionMixin:
     def visit_HipAsmNode(self, node):
         volatility = " volatile" if node.is_volatile else ""
         self.refuse_import(
-            f"HIP inline asm{volatility}({node.template}): CrossGL has no inline assembly"
+            f"{self.IMPORT_REFUSAL_TYPE.label} inline asm{volatility}({node.template}): CrossGL has no inline assembly"
         )
 
     def format_hip_asm_operands(self, operands):

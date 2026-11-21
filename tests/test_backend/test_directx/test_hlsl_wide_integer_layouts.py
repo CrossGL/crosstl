@@ -40,8 +40,8 @@ WIDE_INTEGER_BUFFERS = """
 def test_metal_structured_buffers_accept_64_bit_integer_scalars(tmp_path):
     metal = generate_metal(WIDE_INTEGER_BUFFERS)
 
-    assert "device long* signedValues [[buffer(0)]]" in metal
-    assert "device ulong* unsignedValues [[buffer(1)]]" in metal
+    assert "device int64_t* signedValues [[buffer(0)]]" in metal
+    assert "device uint64_t* unsignedValues [[buffer(1)]]" in metal
     assert "device long2* pairs [[buffer(2)]]" in metal
     assert "device Wide* items [[buffer(3)]]" in metal
     compile_metal_with_layout(
@@ -56,6 +56,6 @@ def test_metal_struct_members_place_64_bit_integers_at_hlsl_offsets():
     metal = generate_metal(WIDE_INTEGER_BUFFERS)
 
     assert (
-        "struct Wide {\n    uint Tag;\n    char _pad1[4];\n    long Value;\n"
+        "struct Wide {\n    uint Tag;\n    char _pad1[4];\n    int64_t Value;\n"
         "    packed_ulong2 Pair;\n" in metal
     )

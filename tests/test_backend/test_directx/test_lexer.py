@@ -63,7 +63,8 @@ def test_keywords_and_types_tokenization():
         return float4(input.position, 1.0);
     }
     """
-    tokens = tokenize_code(code)
+    # With native 16-bit types ``half`` keeps its spelling; without them it is ``float`` (test_half_width.py).
+    tokens = HLSLLexer(code, enable_16bit_types=True).tokenize()
     values = token_values(tokens)
 
     expected = [

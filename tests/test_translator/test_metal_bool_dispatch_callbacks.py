@@ -206,6 +206,63 @@ def _expected():
     return result
 
 
+# Each SIMD-group of one threadgroup takes its own value of the flag, and the
+# callback synchronizes: its barriers and the simd_sum must stay outside the
+# dispatch branch for targets that emulate the SIMD-group.
+SYNC_KERNEL = (
+    """#include <metal_stdlib>
+using namespace metal;
+"""
+    + HELPER
+    + """
+kernel void dispatch_reduce(device const float* src [[buffer(0)]],
+                            device float* dst [[buffer(1)]],
+                            device const uint* sizes [[buffer(2)]],
+                            uint lid [[thread_index_in_threadgroup]],
+                            uint sg [[simdgroup_index_in_threadgroup]],
+                            uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float tile[64];
+  const uint n = sizes[0];
+  dispatch_bool(sg * 32u + 32u <= n, [&](auto kFull) {
+    for (int i = 0; i < 2; ++i) {
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      tile[lid] = src[lid] + float(i);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      float v;
+      if constexpr (kFull.value) {
+        v = tile[lid ^ 1u];
+      } else {
+        v = lid < n ? tile[lid ^ 1u] : 0.0f;
+      }
+      float s = simd_sum(v);
+      if (lane == 0u) {
+        dst[sg * 2u + uint(i)] = s;
+      }
+    }
+  });
+}
+"""
+)
+
+SYNC_THREADS = 64
+SYNC_ELEMENTS = 40
+
+
+def _sync_expected():
+    """``dst[2 * sg + i]``: the SIMD-group's sum of ``src[lid ^ 1] + i`` over ``lid < n`` or all lanes."""
+    result = []
+    for group in range(SYNC_THREADS // 32):
+        full = group * 32 + 32 <= SYNC_ELEMENTS
+        lanes = [
+            lid
+            for lid in range(group * 32, group * 32 + 32)
+            if full or lid < SYNC_ELEMENTS
+        ]
+        for i in range(2):
+            result.append(sum(float((lid ^ 1) + 1) + i for lid in lanes))
+    return result
+
+
 def _expand(source, **options):
     preprocessor = MetalPreprocessor(**options)
     preprocessor._configure_integral_constant_contracts(source)
@@ -382,6 +439,89 @@ def test_bare_library_tags_stay_unchanged():
     assert _expand(source) == source
 
 
+def test_synchronizing_callbacks_read_condition_uses_from_a_runtime_flag():
+    source = _call(
+        "[&](auto k) { threadgroup_barrier(mem_flags::mem_threadgroup);"
+        " if constexpr (k.value) { use(); } else if (!k.value || d) { other(); }"
+        " while (k.value && d) { d = next(); } }"
+    )
+    expanded = _compact(_expand(source).replace(HELPER, ""))
+    assert expanded == _compact(
+        "void run(bool c, bool d) { { const bool k_value = static_cast<bool>((c));"
+        " threadgroup_barrier(mem_flags::mem_threadgroup);"
+        " if (k_value) { use(); } else if (!k_value || d) { other(); }"
+        " while (k_value && d) { d = next(); } } }"
+    )
+
+
+def test_nested_synchronizing_callbacks_share_one_body():
+    source = _call(
+        "[&](auto k) { dispatch_bool(d, [&](auto j) { float s = simd_sum(1.0f);"
+        " if constexpr (k.value && j.value) { use(s); } }); }"
+    )
+    expanded = _compact(_expand(source).replace(HELPER, ""))
+    assert expanded.count("simd_sum") == 1 and "constexpr" not in expanded
+    assert "const bool k_value = static_cast<bool>((c));" in expanded
+    assert "const bool j_value = static_cast<bool>((d));" in expanded
+    assert "if (k_value && j_value) { use(s); }" in expanded
+
+
+def test_runtime_flags_avoid_the_names_of_the_body():
+    source = _call(
+        "[&](auto k) { int k_value = 1; simdgroup_barrier(mem_flags::mem_none);"
+        " if (k.value) { use(k_value); } }"
+    )
+    expanded = _compact(_expand(source).replace(HELPER, ""))
+    assert "const bool k_value_1 = static_cast<bool>((c));" in expanded
+    assert "if (k_value_1) { use(k_value); }" in expanded
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        # A template argument needs the constant.
+        "[&](auto k) { threadgroup_barrier(mem_flags::mem_threadgroup); use<k.value>(); }",
+        # So do a constant initializer and a value outside a condition.
+        "[&](auto k) { threadgroup_barrier(mem_flags::mem_threadgroup);"
+        " constexpr bool b = k.value; use(b); }",
+        "[&](auto k) { threadgroup_barrier(mem_flags::mem_threadgroup); use(k.value ? 1 : 2); }",
+        # A nested lambda may not capture a local flag.
+        "[&](auto k) { threadgroup_barrier(mem_flags::mem_threadgroup);"
+        " auto f = []() { if (k.value) { use(); } }; f(); }",
+    ],
+    ids=["template-argument", "constant-initializer", "ternary", "nested-lambda"],
+)
+def test_synchronizing_callbacks_with_other_uses_keep_both_instantiations(callback):
+    expanded = _compact(_expand(_call(callback)).replace(HELPER, ""))
+    assert "auto k" not in expanded and "_value =" not in expanded
+    assert expanded.count("threadgroup_barrier") == 2
+
+
+def test_callbacks_without_synchronization_keep_both_instantiations():
+    source = _call("[&](auto k) { if constexpr (k.value) { use(); } }")
+    expanded = _compact(_expand(source).replace(HELPER, ""))
+    assert expanded == _compact(
+        "void run(bool c, bool d) { { if ((c)) { if constexpr (true) { use(); } }"
+        " else { if constexpr (false) { use(); } } } }"
+    )
+
+
+def test_sync_expected_values_cover_both_flags():
+    expected = _sync_expected()
+    # The full SIMD-group sums 32 lanes, the partial one the 8 lanes below n.
+    assert expected == [528.0, 560.0, 292.0, 300.0]
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_synchronizing_dispatch_translates_with_uniform_barriers(tmp_path, target):
+    _, request, _ = _sync_request(tmp_path, target)
+    generated = request.artifact_path.read_text()
+    # One body reads the flag; without it DirectX and OpenGL refuse the
+    # barriers and the emulated simd_sum under the per-SIMD-group branch.
+    assert "dispatch_bool" not in generated and "kFull_value" in generated
+    _compile(generated, target, tmp_path)
+
+
 @pytest.mark.parametrize(
     "source", [LIBRARY_TAG_KERNEL, KERNEL], ids=["library", "source"]
 )
@@ -421,6 +561,32 @@ def _request(root, target):
     return source, request, _bound_values(descriptor, outputs)
 
 
+def _sync_request(root, target):
+    source, descriptor, package = _package(
+        root, target, "float", (SYNC_THREADS, 1, 1), source=SYNC_KERNEL
+    )
+    inputs = {
+        "src": {
+            "dtype": "float32",
+            "shape": [SYNC_THREADS],
+            "values": [float(i + 1) for i in range(SYNC_THREADS)],
+        },
+        "dst": {"dtype": "float32", "shape": [4], "values": [GUARD] * 4},
+        "sizes": {"dtype": "uint32", "shape": [1], "values": [SYNC_ELEMENTS]},
+    }
+    outputs = {"dst": {"dtype": "float32", "shape": [4], "values": _sync_expected()}}
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        _bound_values(descriptor, outputs),
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [SYNC_THREADS, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, _bound_values(descriptor, outputs)
+
+
 def test_expected_values_cover_every_instantiation():
     expected = _expected()
     assert expected[10:] == [GUARD, GUARD]
@@ -453,6 +619,20 @@ def test_dispatch_matches_the_source_kernel_natively(tmp_path):
         tmp_path,
         original_source=source,
         original_entry="dispatch_tail",
+    )
+
+
+def test_synchronizing_dispatch_matches_the_source_kernel_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required Boolean dispatch execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source, request, expected = _sync_request(tmp_path, target)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="dispatch_reduce",
     )
 
 

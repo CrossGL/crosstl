@@ -326,6 +326,25 @@ class MetalBuiltinTableMixin:
         "simd_prefix_inclusive_sum": "WavePrefixInclusiveSum",
         "simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
         "quad_sum": "QuadActiveSum",
+        # Quad-group functions (MSL 4.1, section 6.10.3). A quad-group is four consecutive SIMD lanes, the quads
+        # of a CrossGL stage without a derivative group, so the other reductions are clustered reductions of four
+        # lanes and the lane reads are QuadReadLaneAt. quad_shuffle_xor and the shifts and rotations read a lane
+        # computed from the caller's (..quad_lane_moves).
+        "quad_all": "QuadAll",
+        "quad_any": "QuadAny",
+        "quad_product": "WaveClusteredProduct",
+        "quad_min": "WaveClusteredMin",
+        "quad_max": "WaveClusteredMax",
+        "quad_and": "WaveClusteredBitAnd",
+        "quad_or": "WaveClusteredBitOr",
+        "quad_xor": "WaveClusteredBitXor",
+        "quad_broadcast": "QuadReadLaneAt",
+        "quad_shuffle": "QuadReadLaneAt",
+        "quad_shuffle_xor": "QuadReadLaneAt",
+        "quad_shuffle_up": "QuadReadLaneAt",
+        "quad_shuffle_down": "QuadReadLaneAt",
+        "quad_shuffle_rotate_up": "QuadReadLaneAt",
+        "quad_shuffle_rotate_down": "QuadReadLaneAt",
         # Low-level __metal_simd_* builtins used by bf16_math.h's bfloat16
         # simd wrappers (e.g. simd_max(bfloat16_t) -> __metal_simd_max(float)).
         # They mirror the simd_* intrinsics above and lower to the same canonical
@@ -360,13 +379,22 @@ class MetalBuiltinTableMixin:
         "simd_shuffle_up": (1,),
         "simd_shuffle_xor": (1,),
         "simd_shuffle_and_fill_up": (2, 3),
+        "quad_broadcast": (1,),
+        "quad_shuffle": (1,),
+        "quad_shuffle_xor": (1,),
+        "quad_shuffle_up": (1,),
+        "quad_shuffle_down": (1,),
+        "quad_shuffle_rotate_up": (1,),
+        "quad_shuffle_rotate_down": (1,),
     }
 
     # Metal device/threadgroup atomics -> canonical CrossGL atomic intrinsics.
     # Each Metal call carries a trailing memory_order argument that the CrossGL
     # intrinsics (and the DirectX/GLSL/SPIR-V backends) do not take; it is dropped
     # during lowering. Only the read-modify-write operations with a direct CrossGL
-    # counterpart are mapped here.
+    # counterpart are mapped here. Metal's 64-bit atomic_max_explicit and
+    # atomic_min_explicit (atomic_ulong only) return nothing, so their CrossGL
+    # atomicMax and atomicMin results are never used.
     metal_atomic_intrinsics = {
         "atomic_fetch_add_explicit": "atomicAdd",
         "atomic_fetch_min_explicit": "atomicMin",
@@ -375,6 +403,8 @@ class MetalBuiltinTableMixin:
         "atomic_fetch_or_explicit": "atomicOr",
         "atomic_fetch_xor_explicit": "atomicXor",
         "atomic_exchange_explicit": "atomicExchange",
+        "atomic_max_explicit": "atomicMax",
+        "atomic_min_explicit": "atomicMin",
     }
 
     metal_atomic_fence_memory_flags = frozenset(

@@ -216,6 +216,7 @@ class SpirvTypeConstantMixin:
         self.tessellation_patch_constant_input_variables = {}
         self.fragment_depth_replacing_function_ids = set()
         self.fragment_stencil_ref_replacing_function_ids = set()
+        self.fragment_depth_layouts = {}
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}

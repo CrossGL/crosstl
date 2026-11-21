@@ -14,6 +14,11 @@ from .enum_utils import (
 from .generic_struct_utils import (
     named_struct_constructor_arguments,
 )
+from .slang_cull_distance import (
+    slang_cull_distance_argument,
+    slang_is_scalar_cull_distance_member,
+)
+from .slang_value_resizes import slang_resize_constructor
 
 HIT_TRIANGLE_VERTEX_POSITIONS = "gl_HitTriangleVertexPositionsEXT"
 
@@ -83,6 +88,8 @@ class SlangExpressionNodeMixin:
         if member_info is not None:
             return member_info["global_name"]
         obj = postfix_operand(self.generate_expression_without_expected(node.object))
+        if slang_is_scalar_cull_distance_member(self, object_type, node.member):
+            return f"{obj}.{node.member}[0]"
         return f"{obj}.{node.member}"
 
     def generate_slang_constructor_expression(
@@ -100,10 +107,18 @@ class SlangExpressionNodeMixin:
                 constructor_type, node, fields
             )
             args = ", ".join(
-                self.generate_expression_with_expected(arg, field_type)
-                for arg, field_type in arguments
+                slang_cull_distance_argument(
+                    self,
+                    constructor_type,
+                    field_name,
+                    self.generate_expression_with_expected(arg, field_type),
+                )
+                for (arg, field_type), (field_name, _) in zip(arguments, fields)
             )
             return f"{self.convert_type(constructor_type)}({args})"
+        resize = slang_resize_constructor(self, constructor_type, node.arguments)
+        if resize is not None:
+            return resize
         matrix_constructor = self.hlsl_matrix_orientation.constructor(
             constructor_type,
             node.arguments,
@@ -126,7 +141,10 @@ class SlangExpressionNodeMixin:
             # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
             return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
         operand = self.generate_expression(node.operand)
-        if isinstance(node.operand, BinaryOpNode):
+        if self.slang_promotes_unary(node):
+            # C promotes a narrow scalar operand to int (``slang_integer_promotion``).
+            operand = f"int({operand})"
+        elif isinstance(node.operand, BinaryOpNode):
             operand = f"({operand})"
         if getattr(node, "is_postfix", False):
             return f"{postfix_operand(operand)}{node.op}"

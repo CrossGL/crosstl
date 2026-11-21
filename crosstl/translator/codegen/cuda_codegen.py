@@ -33,8 +33,13 @@ from .cuda_expression_types import CudaExpressionTypeMixin
 from .cuda_expressions import CudaExpressionMixin
 from .cuda_function_calls import CudaFunctionCallMixin
 from .cuda_function_parts import CudaFunctionPartsMixin
-from .cuda_function_prototypes import late_called_functions, prototype_of
+from .cuda_function_prototypes import (
+    emission_order,
+    late_called_functions,
+    prototype_of,
+)
 from .cuda_gather import CudaGatherMixin
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
@@ -60,6 +65,7 @@ from .cuda_tables import (
     CUDA_WAVE_UINT_RESULT_OPS,
     CUDA_WAVE_UVEC4_RESULT_OPS,
 )
+from .cuda_texel_buffers import CudaTexelBufferMixin
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
 from .cuda_unions import NativeUnions
@@ -140,6 +146,7 @@ class CudaCodeGen(
     CudaResourceAccessMixin,
     CudaVectorTypeMixin,
     CudaTextureMixin,
+    CudaTexelBufferMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -658,7 +665,11 @@ class CudaCodeGen(
     def emit_late_function_prototypes(self, functions):
         """Declare each function of ``functions`` that an earlier one calls (:mod:`.cuda_function_prototypes`)."""
         late = late_called_functions(
-            func for func in functions if not generic_function_parameters(func)
+            *emission_order(
+                functions,
+                generic_function_parameters,
+                lambda func: generic_function_emission_list(self, func),
+            )
         )
         for func in late:
             self.visit(prototype_of(func))
@@ -890,6 +901,13 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
+                array_initializer = generate_cpp_array_initializer(
+                    self, initial_value, var_type
+                )
+                if array_initializer is not None:
+                    if array_initializer.strip():
+                        declaration += f" = {array_initializer}"
+                    return declaration
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
 
@@ -1250,6 +1268,10 @@ class CudaCodeGen(
             "usamplerCubeArray": "cudaTextureObject_t",
             "usampler2DMS": "cudaTextureObject_t",
             "usampler2DMSArray": "cudaTextureObject_t",
+            # A texel buffer is a texture object bound to linear memory (cudaResourceTypeLinear).
+            "samplerBuffer": "cudaTextureObject_t",
+            "isamplerBuffer": "cudaTextureObject_t",
+            "usamplerBuffer": "cudaTextureObject_t",
             "image1D": "cudaSurfaceObject_t",
             "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
@@ -1542,6 +1564,10 @@ class CudaCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         handled = self.cuda_texture_query_call(func_name, raw_args, args)
         if handled is not UNHANDLED:
             return handled

@@ -148,12 +148,14 @@ HLSL_ABS = Feature("hlsl", "function", "abs", ABS, crossgl="abs")
 
 def test_a_pair_translates_the_native_probe_straight_to_the_target(checked):
     result = pairs.run_pair(GLSL_ABS, "glsl", "hlsl", HLSL_ABS)
-    assert (result.outcome, result.direction, result.validator) == (
+    assert (result.outcome, result.direction, result.validator, result.into) == (
         "supported",
         "pair",
         validators.TOOLS["hlsl"],
+        "hlsl",
     )
-    assert checked == [("hlsl", "compute", "", "")]
+    # The target's compiler checks its own probe of the partner, then the translation.
+    assert checked == [("hlsl", "compute", "main", ""), ("hlsl", "compute", "", "")]
 
 
 @pytest.mark.skipif(not validators.available("glsl"), reason="glslang is not installed")
@@ -176,10 +178,22 @@ def test_a_pair_is_one_crosstl_call_from_the_source_backend(monkeypatch, checked
     assert calls == [(".comp", "directx", "opengl")]
 
 
+def test_a_webgl_probe_of_a_compute_feature_is_checked_as_a_fragment_shader(
+    monkeypatch, checked
+):
+    # GLSL ES 3.00 has no compute stage, so the WebGL probe and its translation are fragment shaders.
+    monkeypatch.setattr(runner, "translate", lambda *args: "void main() {}")
+    webgl = Feature("webgl", "function", "abs", ABS, crossgl="abs")
+    result = pairs.run_pair(webgl, "webgl", "glsl", GLSL_ABS)
+    assert result.outcome == "supported"
+    assert result.sources == ()
+    assert checked == [("glsl", "compute", "main", ""), ("glsl", "fragment", "", "")]
+
+
 def test_the_partner_sets_the_compiler_target(checked):
     vulkan = Feature("glsl", "function", "abs", ABS, crossgl="abs", target="vulkan")
     pairs.run_pair(HLSL_ABS, "hlsl", "glsl", vulkan)
-    assert checked == [("glsl", "compute", "", "vulkan")]
+    assert [call[3] for call in checked] == ["vulkan", "vulkan"]
 
 
 @pytest.mark.parametrize(
@@ -205,18 +219,33 @@ def test_a_missing_target_tool_leaves_a_translation_untested(monkeypatch):
     assert result.validator == ""
 
 
+def _rejecting(translation: bool):
+    """A validator that rejects the translation, which is checked without an entry point, or the native probe."""
+
+    def validate(language, source, stage="compute", entry="", target=""):
+        rejected = (entry == "") == translation
+        return validators.Verdict(not rejected, "error: bad" if rejected else "")
+
+    return validate
+
+
 def test_a_rejected_translation_is_wrong(monkeypatch):
     monkeypatch.setattr(validators, "available", lambda language, target="": True)
-    monkeypatch.setattr(
-        validators,
-        "validate",
-        lambda language, source, stage="compute", entry="", target="": validators.Verdict(
-            False, "error: bad"
-        ),
-    )
+    monkeypatch.setattr(validators, "validate", _rejecting(translation=True))
     result = pairs.run_pair(GLSL_ABS, "glsl", "hlsl", HLSL_ABS)
     assert result.outcome == "wrong"
     assert "bad" in result.detail
+
+
+def test_a_feature_the_target_rejects_in_its_own_probe_is_untested(monkeypatch):
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(validators, "validate", _rejecting(translation=False))
+    monkeypatch.setattr(
+        runner, "translate", lambda *args: pytest.fail("translated a lacking feature")
+    )
+    result = pairs.run_pair(GLSL_ABS, "glsl", "hlsl", HLSL_ABS)
+    assert result.outcome == "untested"
+    assert result.detail == "the target's own probe is rejected: error: bad"
 
 
 def test_a_placeholder_in_the_translation_is_wrong(monkeypatch, checked):
@@ -247,4 +276,8 @@ def test_a_kept_pair_writes_its_probe_and_translation(checked, tmp_path):
         for path in tmp_path.rglob("*")
         if path.is_file()
     )
-    assert kept == ["glsl-to-hlsl/abs/probe.comp", "glsl-to-hlsl/abs/translated.hlsl"]
+    assert kept == [
+        "glsl-to-hlsl/abs/partner.hlsl",
+        "glsl-to-hlsl/abs/probe.comp",
+        "glsl-to-hlsl/abs/translated.hlsl",
+    ]

@@ -394,14 +394,44 @@ def data_references(text, index):
     """Return the MLX files that a data or configuration file names.
 
     Data files are read by code, which opens the files they name in full, so
-    only a word that ends in the extension of a demo file counts.
+    only a word that ends in the extension of a demo file counts. In a JSON
+    document only the keys and values without whitespace count: a value with
+    whitespace is prose, such as an exclusion reason that names the test
+    covering the excluded entries, and code does not open it as a path.
     """
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return _named_files(text, index)
+    found = set()
+    for value in _json_strings(document):
+        if _SPACE.search(value) is None:
+            found |= _named_files(value, index)
+    return found
+
+
+def _named_files(text, index):
     found = set()
     for token in set(_PATH_WORD.findall(text)):
         extension = token.rsplit(".", 1)[-1] if "." in token else ""
         if extension in index.extensions:
             found |= index.lookup(token)
     return found
+
+
+def _json_strings(value):
+    """Yield every key and string value of a parsed JSON document."""
+    stack = [value]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield key
+                stack.append(item)
+        elif isinstance(value, list):
+            stack.extend(value)
 
 
 def _loaded_with(path, index):

@@ -52,6 +52,38 @@ IMAGE = """shader Probe {
 }
 """
 
+# Metal import writes ``[[raster_order_group(N)]]`` on a fragment argument as an ordered entry parameter.
+ENTRY_BUFFER = """shader Probe {
+    struct FragmentIn {
+        vec4 coord @gl_Position;
+        vec2 uv;
+    }
+    fragment {
+        @ stage_entry
+        vec4 probe(FragmentIn in_, RWStructuredBuffer<vec4> accum @buffer(0) @rasterizer_ordered) {
+            uint k = uint(in_.coord.y) * 64u + uint(in_.coord.x);
+            buffer_store(accum, k, buffer_load(accum, k) + vec4(in_.uv, 0.0, 1.0));
+            return vec4(in_.uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+ENTRY_IMAGE = """shader Probe {
+    struct FragmentIn {
+        vec4 coord @gl_Position;
+    }
+    fragment {
+        @ stage_entry
+        vec4 probe(FragmentIn in_, image2D accum @rgba32f @rasterizer_ordered) {
+            ivec2 p = ivec2(in_.coord.xy);
+            imageStore(accum, p, imageLoad(accum, p) + vec4(1.0));
+            return imageLoad(accum, p);
+        }
+    }
+}
+"""
+
 HLSL = """RasterizerOrderedBuffer<float4> accum : register(u1);
 RasterizerOrderedTexture2D<float4> img : register(u2);
 float4 main(float4 pos : SV_Position) : SV_Target
@@ -92,10 +124,10 @@ void main() {
 """
 
 
-def _translate(tmp_path, name, source):
+def _translate(tmp_path, name, source, backend="opengl"):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend="opengl", format_output=False)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _glslang(tmp_path, code):
@@ -126,7 +158,11 @@ def _assert_critical_section(glsl):
     assert glsl.count("endInvocationInterlockARB()") == 1
 
 
-@pytest.mark.parametrize("source", [BUFFER, IMAGE], ids=["buffer", "image"])
+@pytest.mark.parametrize(
+    "source",
+    [BUFFER, IMAGE, ENTRY_BUFFER, ENTRY_IMAGE],
+    ids=["buffer", "image", "entry-buffer", "entry-image"],
+)
 def test_rasterizer_ordered_resource_opens_a_critical_section(tmp_path, source):
     glsl = _translate(tmp_path, "probe.cgl", source)
     _assert_critical_section(glsl)
@@ -163,8 +199,24 @@ def test_declared_interlock_mode_and_calls_are_kept(tmp_path):
 
 
 def test_glsl_es_has_no_interlock(tmp_path):
+    with pytest.raises(
+        OpenGLLoweringRefused,
+        match="GLSL ES has no form of the extension GL_ARB_fragment_shader_interlock",
+    ):
+        _translate(tmp_path, "probe.frag", GLSL_ES, backend="gles")
+    without_extension = GLSL_ES.replace(
+        "#extension GL_ARB_fragment_shader_interlock : require\n", ""
+    )
     with pytest.raises(OpenGLLoweringRefused, match="does not exist in GLSL ES"):
-        _translate(tmp_path, "probe.frag", GLSL_ES)
+        _translate(tmp_path, "probe.frag", without_extension, backend="gles")
+
+
+def test_glsl_es_source_interlock_gives_desktop_glsl(tmp_path):
+    # The opengl target writes desktop GLSL, which has the extension, from the GLSL ES source.
+    code = _translate(tmp_path, "probe.frag", GLSL_ES)
+    assert code.startswith("#version 450 core\n")
+    assert "#extension GL_ARB_fragment_shader_interlock : require" in code
+    _glslang(tmp_path, code)
 
 
 def test_interlock_layout_needs_glsl_450():
@@ -176,7 +228,8 @@ def test_interlock_layout_needs_glsl_450():
     assert features["a fragment shader interlock layout"] == 450
 
 
-def test_stage_without_ordered_resources_is_unchanged(tmp_path):
-    source = BUFFER.replace(" @rasterizer_ordered", "")
+@pytest.mark.parametrize("source", [BUFFER, ENTRY_BUFFER], ids=["global", "entry"])
+def test_stage_without_ordered_resources_is_unchanged(tmp_path, source):
+    source = source.replace(" @rasterizer_ordered", "")
     glsl = _translate(tmp_path, "probe.cgl", source)
     assert not re.search(r"[Ii]nterlock", glsl)

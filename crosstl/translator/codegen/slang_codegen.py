@@ -93,7 +93,9 @@ from .sampler_pairs import canonicalize_separate_textures
 from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
+from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
+from .slang_cull_distance import slang_cull_distance_member_type
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
     slang_member_modifier_prefix,
@@ -107,12 +109,18 @@ from .slang_expression_parts import SlangExpressionPartsMixin
 from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
 from .slang_glsl_buffer_access import SlangGlslBufferAccessMixin
+from .slang_glsl_ray_interfaces import lower_slang_glsl_ray_interfaces
 from .slang_image_resources import SlangImageResourcesMixin
+from .slang_integer_promotion import (
+    SlangIntegerPromotionMixin,
+    source_promotes_narrow_scalars,
+)
 from .slang_mesh_outputs import SlangMeshOutputsMixin
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_program_symbols import SlangProgramSymbolsMixin
+from .slang_rasterizer_order import slang_rasterizer_ordered_type
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -176,6 +184,7 @@ class SlangCodeGen(
     SlangCallExpressionMixin,
     SlangExpressionNodeMixin,
     SlangFunctionPartsMixin,
+    SlangIntegerPromotionMixin,
 ):
     """Emit Slang shader source from the shared CrossGL AST."""
 
@@ -348,7 +357,8 @@ class SlangCodeGen(
         self._generating = False
         self.semantic_map = {
             "gl_Position": "SV_Position",
-            "gl_PointSize": "PSIZE",
+            # PSIZE is a user varying for slangc's SPIR-V and GLSL targets; SV_PointSize is the built-in.
+            "gl_PointSize": "SV_PointSize",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
             "gl_VertexID": "SV_VertexID",
@@ -416,6 +426,8 @@ class SlangCodeGen(
             "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
             # GLSL's non-uniform resource index is Slang's NonUniformResourceIndex.
             "nonuniformEXT": "NonUniformResourceIndex",
+            # HLSL 6.9's MaybeReorderThread is Slang's ReorderThread; Slang declares the HLSL name for HLSL only.
+            "MaybeReorderThread": "ReorderThread",
         }
 
     def indent(self):
@@ -431,10 +443,12 @@ class SlangCodeGen(
         if self._generating:
             return self.generate_program(ast)
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
+        self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
+        lower_slang_glsl_ray_interfaces(ast, self)
         try:
             return self.refusals.run(self.generate_checked_program, ast)
         finally:
@@ -841,6 +855,9 @@ class SlangCodeGen(
         return result
 
     def semantic_from_node(self, node, skip_stage_attributes=False):
+        depth_semantic = slang_conservative_depth_semantic(node)
+        if depth_semantic is not None:
+            return depth_semantic
         semantic = getattr(node, "semantic", None)
         if semantic:
             if skip_stage_attributes and self.slang_shader_stage_marker_name(semantic):
@@ -918,7 +935,8 @@ class SlangCodeGen(
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         constant = bool(qualifiers & {"const", "constant"})
-        if not (constant or "static" in qualifiers) or qualifiers & {
+        private = bool(qualifiers & {"private", "static", "thread"})
+        if not (constant or private) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",
@@ -943,7 +961,9 @@ class SlangCodeGen(
                 return ""
             declaration = self.slang_resource_memory_qualifier_prefix(
                 direct_buffer_type, node
-            ) + format_c_style_array_declaration(direct_buffer_type, node.name)
+            ) + format_c_style_array_declaration(
+                slang_rasterizer_ordered_type(self, direct_buffer_type, node), node.name
+            )
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, direct_buffer_type, auto_assign=True
             )
@@ -970,7 +990,8 @@ class SlangCodeGen(
             if self.skip_duplicate_slang_global_variable(node, storage_buffer_type):
                 return ""
             declaration = format_c_style_array_declaration(
-                storage_buffer_type, node.name
+                slang_rasterizer_ordered_type(self, storage_buffer_type, node),
+                node.name,
             )
             declaration = (
                 self.slang_resource_memory_qualifier_prefix(storage_buffer_type, node)
@@ -1074,6 +1095,7 @@ class SlangCodeGen(
                 f"struct member semantic '{node.name}.{member.name}'",
             )
             semantic_str = self.semantic_suffix(semantic)
+            member_type = slang_cull_distance_member_type(self, member, member_type)
             declaration = (
                 struct_member_location_prefix(
                     self, node, member, default_member_semantics
@@ -1172,7 +1194,7 @@ class SlangCodeGen(
             )
             self.validate_slang_geometry_stage(node, shader_type, effective_param_list)
             self.validate_slang_stage_parameter_semantics(
-                shader_type, effective_param_list, stage_role=stage_role
+                shader_type, effective_param_list, stage_role=stage_role, function=node
             )
             self.validate_slang_stage_body_builtins(
                 body_statements,
@@ -1288,6 +1310,8 @@ class SlangCodeGen(
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_result_type(expr)
         if isinstance(expr, UnaryOpNode):
+            if self.slang_promotes_unary(expr):
+                return "int"
             operand_type = self.expression_result_type(expr.operand)
             if expr.op == "&" and operand_type is not None:
                 operand_type = (
@@ -1551,9 +1575,14 @@ class SlangCodeGen(
     def generate_binary_expression(self, node):
         left = self.generate_expression(node.left)
         right = self.generate_expression(node.right)
-        if self.binary_child_needs_parentheses(node.op, node.left):
+        promoted = self.slang_promoted_operands(node) or (False, False)
+        if promoted[0]:
+            left = f"int({left})"
+        elif self.binary_child_needs_parentheses(node.op, node.left):
             left = f"({left})"
-        if self.binary_child_needs_parentheses(node.op, node.right, True):
+        if promoted[1]:
+            right = f"int({right})"
+        elif self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
         if node.op == "*" and self.binary_requires_slang_mul(
             self.expression_result_type(node.left),
@@ -1674,7 +1703,11 @@ class SlangCodeGen(
                     node.operation, target_reason
                 )
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        # Each operand has its own type (a lane index is uint whatever the value is), so the
+        # expression the wave op result is assigned to does not type its operands.
+        args = ", ".join(
+            self.generate_expression_without_expected(arg) for arg in node.arguments
+        )
         call = f"{node.operation}({args})"
         return f"{conversion}({call})" if conversion else call
 

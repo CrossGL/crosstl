@@ -507,6 +507,37 @@ class DirectXWaveIntrinsicMixin:
             return actual_component == expected_component
         return True
 
+    def hlsl_wave_operand_expected_type(self, operation, index, argument):
+        """The type context in which one wave intrinsic operand is generated.
+
+        Only the value operand of a value-preserving intrinsic shares the
+        call's result context. Lane indices are ``uint``, partition masks are
+        ``uint4``, and the operands of ballots, bit counts, votes and matches
+        keep their own type, so a ``WaveGetLaneIndex()`` inside the lane index
+        of a ``float4`` ``WaveReadLaneAt`` is checked against ``uint``.
+        """
+        if index == 0 and operation in self.HLSL_WAVE_VALUE_RESULT_INTRINSICS:
+            return self.current_expression_expected_type
+        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return "uint"
+        if index == 1 and operation.startswith("WaveMultiPrefix"):
+            return "uint4"
+        return self.expression_result_type(argument)
+
+    def generate_hlsl_wave_operands(self, operation, args):
+        rendered = []
+        for index, argument in enumerate(args):
+            if index == 0 and operation in self.HLSL_WAVE_VALUE_RESULT_INTRINSICS:
+                rendered.append(self.generate_expression(argument))
+                continue
+            rendered.append(
+                self.generate_expression_with_expected(
+                    argument,
+                    self.hlsl_wave_operand_expected_type(operation, index, argument),
+                )
+            )
+        return ", ".join(rendered)
+
     def validate_hlsl_wave_intrinsic_result_context(self, operation, args):
         expected_type = self.type_name_string(self.current_expression_expected_type)
         if not expected_type or expected_type == "void":

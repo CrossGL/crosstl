@@ -655,10 +655,12 @@ WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven
 to fourteen days of artifact retention.
 
-Every pull request, merge-queue group and push to `main` starts the workflow,
-and it ends in one `ComputeSharp validation result` check that fails when any
-job fails or is cancelled. Its `ComputeSharp validation plan` job
-(`ci_plan.py`) diffs the event from its merge base and skips the port's jobs
+Every pull request and push to `main` starts the workflow, and it ends in one
+`ComputeSharp validation result` check that fails when any job fails or is
+cancelled. The check is not required, so the merge queue does not run the
+workflow; the push to `main` tests the commit that landed. Its
+`ComputeSharp validation plan` job (`ci_plan.py`) diffs the event from its
+merge base and skips the port's jobs
 unless this directory, the workflow, the packaging files or the CrossTL code
 that the HLSL translation imports changed: the top-level `crosstl/*.py`
 modules, `crosstl/backend/**` and `crosstl/translator/**`.
