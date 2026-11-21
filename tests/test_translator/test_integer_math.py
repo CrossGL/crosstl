@@ -56,7 +56,8 @@ int64_t wide = gcd(int64_t(a), int64_t(b)) + lcm(int64_t(a), int64_t(b)) + comb(
 uint u = gcd(uint(a), 6u) + lcm(uint(a), uint(b)) + comb(uint(a), 3u) + perm(uint(a), 2u) + factorial(uint(b));
 ivec3 v = gcd(ivec3(a, b, 7), 4);
 int16_t s = lcm(int16_t(a), int16_t(b));
-outp[i] = int(wide) + int(u) + v.x + int(s) + comb(a, b) + perm(a);
+u8vec2 c = gcd(u8vec2(uint8_t(a), uint8_t(b)), u8vec2(uint8_t(12)));
+outp[i] = int(wide) + int(u) + v.x + int(s) + int(c.y) + comb(a, b) + perm(a);
 """
 
 

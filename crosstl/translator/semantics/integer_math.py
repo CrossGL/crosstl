@@ -83,6 +83,12 @@ _NARROW_NAMES = {
     ("i", 16): "int16_t",
     ("u", 16): "uint16_t",
 }
+_NARROW_VECTOR_PREFIXES = {
+    ("i", 8): "i8vec",
+    ("u", 8): "u8vec",
+    ("i", 16): "i16vec",
+    ("u", 16): "u16vec",
+}
 
 
 class IntegerMathError(TranslationDiagnostic):
@@ -313,7 +319,8 @@ def _type_spelling(value):
     key = (value.kind, value.bits)
     if value.lanes == 1:
         return _SCALAR_NAMES.get(key) or _NARROW_NAMES[key]
-    return f"{_VECTOR_PREFIXES[key]}{value.lanes}"
+    prefix = _VECTOR_PREFIXES.get(key) or _NARROW_VECTOR_PREFIXES[key]
+    return f"{prefix}{value.lanes}"
 
 
 class _Calls(ScopedWalker):
@@ -325,6 +332,18 @@ class _Calls(ScopedWalker):
         self.user_names = user_names
         self.needed = []
         self.count = 0
+
+    def _operand_type(self, argument):
+        """The inferred type of ``argument``; a narrow integer vector constructor or variable is read here."""
+        value = self.scope.infer(argument)
+        if value is not None:
+            return value
+        if isinstance(argument, A.FunctionCallNode):
+            return _narrow_vector_type(call_name(argument))
+        if isinstance(argument, A.IdentifierNode):
+            declared = self.scope.lookup(argument.name)
+            return _narrow_vector_type(getattr(declared, "name", declared))
+        return None
 
     def visit(self, node):
         if not isinstance(node, A.FunctionCallNode):
@@ -338,7 +357,7 @@ class _Calls(ScopedWalker):
                 f"{name} takes {' or '.join(map(str, FUNCTIONS[name]))} operands, not {len(arguments)}",
                 target=self.target,
             )
-        types = [self.scope.infer(argument) for argument in arguments]
+        types = [self._operand_type(argument) for argument in arguments]
         common = types[0]
         for value in types[1:]:
             common = arithmetic_result(common, value)
@@ -386,6 +405,17 @@ class _Calls(ScopedWalker):
             replacement = call(_type_spelling(common), [clone(node)])
             replacement.annotations["cgl_rule_type"] = common
             _replace(node, replacement)
+
+
+_NARROW_VECTOR = re.compile(r"([iu])(8|16)vec([234])")
+
+
+def _narrow_vector_type(name):
+    """The type of a CrossGL 8- or 16-bit integer vector spelling (``i16vec2``), which :mod:`.hub_types` lacks."""
+    match = _NARROW_VECTOR.fullmatch(str(name or ""))
+    if match is None:
+        return None
+    return HubType(match.group(1), int(match.group(2)), int(match.group(3)))
 
 
 def _converted(argument, value, computed):

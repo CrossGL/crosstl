@@ -273,7 +273,8 @@ def combinatorics_reference(inputs):
         out += [wide, wide >> 32, product, product >> 32, binomial, binomial >> 32]
         out += [arranged, arranged >> 32, math.factorial(ua & 7)]
         out += [_comb(ua & 31, (ub & 31) - 2), math.gcd(a, 12), math.gcd(b, 18)]
-        out += [math.gcd(_signed16(a >> 17), _signed16(b >> 17))]
+        narrow = math.gcd(_signed16(a >> 17), _signed16(b >> 17))
+        out += [narrow | math.gcd(ua & 0xFF, 12) << 16 | math.gcd(ub & 0xFF, 18) << 24]
     return np.array([value & _MASK for value in out], np.uint32)
 
 

@@ -2426,7 +2426,7 @@ CASES = [
     Case(
         "x_integer_combinatorics",
         "integer",
-        "gcd, lcm, factorial, comb and perm of 16-, 32- and 64-bit integers, scalar and vector",
+        "gcd, lcm, factorial, comb and perm of 8-, 16-, 32- and 64-bit integers, scalar and vector",
         "CrossGL integer combinatorics: exact greatest common divisors, least common multiples, factorials, "
         "binomial coefficients and permutation counts wherever the result fits the type",
         integer_cases.combinatorics_inputs(),
