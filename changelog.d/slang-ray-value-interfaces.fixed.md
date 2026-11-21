@@ -1,0 +1,1 @@
+Slang output accepts a ray payload, hit attribute or callable data of a scalar, vector, matrix or array type, such as the `int` attribute of `ReportHit(t, kind, attribute)`, which it used to refuse. Slang wraps such a value in a structure itself when it compiles for Direct3D.
