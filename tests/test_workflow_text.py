@@ -81,3 +81,55 @@ def test_reads_every_repository_workflow():
     texts = wt.workflow_texts()
     assert "coverage.yml" in texts
     assert all(wt.workflow_job_names(text) for text in texts.values())
+
+
+ANCHORED = textwrap.dedent("""\
+    jobs:
+      build:
+        steps:
+          - &step-check-out
+            name: Check out
+            uses: actions/checkout@v6
+            with:
+              persist-credentials: false
+
+          - name: Test
+            run: pytest
+      result:
+        steps:
+          - *step-check-out
+          - name: Report
+            run: echo done
+      nested:
+        steps:
+            - *step-check-out
+    """)
+
+
+def test_anchored_steps_are_read_wherever_an_alias_reuses_them():
+    import yaml
+
+    expanded = wt.expand_item_aliases(ANCHORED)
+    assert yaml.safe_load(expanded) == yaml.safe_load(ANCHORED)
+    assert "&step" not in expanded and "*step" not in expanded
+    step = wt.workflow_job_step_section(ANCHORED, "result", "Check out")
+    assert step.splitlines() == [
+        "      - name: Check out",
+        "        uses: actions/checkout@v6",
+        "        with:",
+        "          persist-credentials: false",
+    ]
+    assert wt.workflow_job_step_after(ANCHORED, "result", "Report", "Check out")
+    # The blank line after the anchored item belongs to what follows it.
+    assert "false\n\n      - name: Test" in wt.workflow_job_text(ANCHORED, "build")
+    nested = wt.workflow_job_text(ANCHORED, "nested").splitlines()
+    assert nested[1:3] == [
+        "        - name: Check out",
+        "          uses: actions/checkout@v6",
+    ]
+
+
+def test_text_without_item_aliases_is_returned_unchanged():
+    assert wt.expand_item_aliases(WORKFLOW) is WORKFLOW
+    unknown = "steps:\n  - *step-missing\n"
+    assert wt.expand_item_aliases(unknown) == unknown

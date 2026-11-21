@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx import ci_legs
+from demos.integrations.mlx import ci_conditions, ci_legs
 from demos.integrations.mlx.ci_legs import (
     EVERY_LEG,
     HEAVY,
@@ -233,10 +233,13 @@ def test_every_real_heavy_job_is_planned_and_keeps_its_steps():
     legs = workflow_legs(workflow)
     for name, job in workflow["jobs"].items():
         planned = [leg for leg in legs if ci_legs.job_of(leg) == name]
-        condition = str(job.get("if", "")).strip()
-        if condition != HEAVY and ci_legs.LEGS_OUTPUT not in condition:
+        if ci_conditions.JOBS_OUTPUT not in str(job.get("if", "")):
+            assert str(job.get("if", "")).strip() != HEAVY, name
             assert not planned, name
             continue
+        # The plan names a job in ``jobs`` by its key, so the job must ask
+        # for exactly that key.
+        assert job["if"] == ci_conditions.job_condition(name), name
         assert planned, name
         matrix = (job.get("strategy") or {}).get("matrix") or {}
         if "group" not in matrix:
@@ -258,3 +261,135 @@ def test_every_real_heavy_job_is_planned_and_keeps_its_steps():
         for leg in planned:
             # Each group runs a step of its own, so it is not the whole job.
             assert any("matrix." in str(s.get("if", "")) for s in legs[leg]["steps"])
+
+
+@pytest.mark.parametrize(
+    "join",
+    [
+        'root / "contracts" / name',
+        'root / "contracts" / f"{name}.json"',
+        'os.path.join(root, "contracts", name)',
+        'Path(root).joinpath("contracts", name)',
+        'Path(__file__).parents[2] / "contracts" / name',
+        "CONTRACTS / name",
+    ],
+)
+def test_a_join_of_an_mlx_folder_with_an_open_name_reads_every_file_below(join):
+    # Leg A builds a contract path from a name only its caller knows; leg B
+    # spells the contract it reads. A change to that contract must select
+    # both, although B's spelling already reaches it.
+    tree = {
+        "tests/kernels/test_any.py": (
+            "import os\nfrom pathlib import Path\n"
+            'CONTRACTS = Path(__file__).parents[2] / "contracts"\n'
+            f"def load(root, name):\n    return {join}\n"
+        ),
+        "tests/kernels/test_sort.py": (
+            'PATH = "demos/integrations/mlx/contracts/sort.dispatch.json"\n'
+        ),
+        "contracts/sort.dispatch.json": "{}",
+        "contracts/scan.dispatch.json": "{}",
+        "fixtures/other.json": "{}",
+    }
+    workflow = f"""
+jobs:
+  any:
+    if: {HEAVY}
+    steps:
+      - run: python -m pytest {MLX}/tests/kernels/test_any.py
+  sort:
+    if: {HEAVY}
+    steps:
+      - run: python -m pytest {MLX}/tests/kernels/test_sort.py
+"""
+    closure = Closure(PathIndex(tree), tree.get)
+    assert closure.of({"tests/kernels/test_any.py"}) == {
+        "tests/kernels/test_any.py",
+        "contracts/sort.dispatch.json",
+        "contracts/scan.dispatch.json",
+    }
+    legs = _legs(workflow)
+    assert affected_legs(legs, ["contracts/sort.dispatch.json"], closure) == {
+        "any",
+        "sort",
+    }
+
+
+def test_a_join_whose_template_names_its_files_reads_only_them():
+    tree = {
+        "tests/test_family.py": (
+            "def contract(root, family):\n"
+            '    return root / "contracts" / '
+            'f"{family}.current-tree.translation.json"\n'
+        ),
+        "contracts/sort.current-tree.translation.json": "{}",
+        "contracts/sort.dispatch.json": "{}",
+    }
+    closure = Closure(PathIndex(tree), tree.get)
+    assert closure.of({"tests/test_family.py"}) == {
+        "tests/test_family.py",
+        "contracts/sort.current-tree.translation.json",
+    }
+
+
+def test_a_join_outside_the_demo_reads_nothing_below_it():
+    tree = {
+        "tests/test_upstream.py": (
+            "def source(mlx_root, name):\n"
+            '    return mlx_root / "mlx/backend/metal/kernels" / name\n'
+        ),
+        "contracts/sort.dispatch.json": "{}",
+    }
+    closure = Closure(PathIndex(tree), tree.get)
+    assert closure.of({"tests/test_upstream.py"}) == {"tests/test_upstream.py"}
+
+
+def test_selected_jobs_add_the_heavy_jobs_they_need():
+    workflow = yaml.safe_load(f"""
+jobs:
+  ci-plan:
+    steps:
+      - run: echo plan
+  sources:
+    needs: ci-plan
+    if: {ci_conditions.job_condition("sources")}
+    steps:
+      - run: echo sources
+  roundtrip:
+    needs: [ci-plan, sources]
+    if: {ci_conditions.job_condition("roundtrip")}
+    steps:
+      - run: echo roundtrip
+  parity:
+    needs: ci-plan
+    if: {ci_conditions.job_condition("parity")}
+    strategy:
+      matrix:
+        group: [sort, scan]
+    steps:
+      - if: matrix.group == 'sort'
+        run: echo sort
+      - if: matrix.group == 'scan'
+        run: echo scan
+""")
+    assert sorted(workflow_legs(workflow)) == [
+        "parity[scan]",
+        "parity[sort]",
+        "roundtrip",
+        "sources",
+    ]
+    assert ci_legs.selected_jobs(workflow, ["roundtrip"]) == ["roundtrip", "sources"]
+    assert ci_legs.selected_jobs(workflow, ["parity[scan]"]) == ["parity"]
+    assert ci_legs.selected_jobs(workflow, ["sources"]) == ["sources"]
+    assert ci_legs.selected_jobs(workflow, []) == []
+
+
+def test_every_real_heavy_job_that_another_needs_is_heavy_itself():
+    # A job is skipped when a job it needs is skipped, so every job a heavy job
+    # needs is ci-plan or a heavy job that ``selected_jobs`` selects with it.
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    heavy = {ci_legs.job_of(leg) for leg in workflow_legs(workflow)}
+    for name in heavy:
+        needs = workflow["jobs"][name].get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        assert set(needs) <= heavy | {"ci-plan"}, name

@@ -1,5 +1,7 @@
 """Expression result types of the CUDA generator and canonical resource type names."""
 
+from .cuda_subscripts import matrix_column_type
+from .cuda_texel_buffers import TEXEL_BUFFER_QUERY_SPEC, sampled_texel_buffer_type
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 
@@ -17,6 +19,13 @@ class CudaExpressionTypeMixin:
         if edge_info is not None:
             return edge_type
         return self.step_scalar_type(raw_args)
+
+    def array_access_element_type(self, type_name):
+        """Return the element type of one subscript; a matrix subscript yields its column vector."""
+        column_type = matrix_column_type(type_name)
+        if column_type is not None:
+            return column_type
+        return super().array_access_element_type(type_name)
 
     def struct_member_lookup_type(self, type_name):
         """Return the struct key after CUDA pointer/reference wrappers."""
@@ -231,6 +240,13 @@ class CudaExpressionTypeMixin:
     def dimension_query_spec(self, type_name):
         """Return CUDA resource query metadata for supported image shapes."""
         type_name = self.resource_base_type(type_name)
+        if sampled_texel_buffer_type(type_name) is not None:
+            return dict(TEXEL_BUFFER_QUERY_SPEC)
+        if isinstance(type_name, str) and type_name.startswith(
+            ("isampler", "usampler")
+        ):
+            # An integer texture has the dimensions of the float texture of its shape.
+            type_name = self.sampled_texture_shape_type(type_name)
         spec = ResourceQueryMixin.dimension_query_spec(self, type_name)
         if spec is not None:
             return spec

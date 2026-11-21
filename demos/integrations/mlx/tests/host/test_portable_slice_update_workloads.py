@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import yaml
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import slice_update_workloads as workloads
 from demos.integrations.mlx.portable_host import verify_slice_updates as proof
 
@@ -225,9 +226,8 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
     )
     job = workflow["jobs"]["slice-update-host"]
     assert job["needs"] == ["ci-plan", "integer64-host"]
-    assert (
-        "continue-on-error" not in job
-        and job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert "continue-on-error" not in job and job["if"] == job_condition(
+        "slice-update-host"
     )
     assert {
         (item["target"], item["os"]) for item in job["strategy"]["matrix"]["include"]

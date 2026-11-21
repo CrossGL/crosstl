@@ -1313,6 +1313,7 @@ class OpenGLProgramStructureMixin:
         reset_builtin_spellings(self)
         while True:
             reset_glsl_call_helpers(self)
+            self.float_atomic_storage.restart()
             code = self._generate_program_attempt(ast, target_stage, early_exits)
             shadowed = called_builtin_spellings(self, code)
             if shadowed:

@@ -228,6 +228,9 @@ class HipInitializerMixin:
             return saw_integral_sign
 
         token = self.tokens[index]
+        if saw_integral_sign and token.type in {"STAR", "AMPERSAND"}:
+            # `(unsigned *)p`: the sign keyword alone names int.
+            return True
         if token.type in self.ELABORATED_TYPE_TOKENS:
             return True
         if self.is_decltype_type_start_at_pos(index):

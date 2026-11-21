@@ -105,7 +105,9 @@ def _constants(found, expected, what):
 
 def _metal(text, group, constants, input_count):
     entry = _single(ENTRY_PATTERNS["metal"], text)
-    storage, blocks, kinds = [], [], set()
+    from . import metal_textures
+
+    storage, blocks, textures = [], [], []
     for parameter in _split_parameters(_parameter_list(text, entry.end())):
         resource = re.search(
             r"\[\[\s*(buffer|texture|sampler)\s*\(\s*(\d+)\s*\)\s*\]\]", parameter
@@ -114,13 +116,17 @@ def _metal(text, group, constants, input_count):
             continue
         kind, slot = resource.group(1), int(resource.group(2))
         if kind != "buffer":
-            kinds.add(kind)
+            # The host binds textures and samplers as :mod:`.metal_textures` describes.
+            textures.append(metal_textures.declaration(parameter))
         elif re.match(r"(?:const\s+)?constant\b[^&*]*&", parameter):
             blocks.append({"slot": slot, "kind": "uniform"})
+        elif (
+            encoded := metal_textures.argument_buffer(parameter, slot, text)
+        ) is not None:
+            # An argument buffer of textures and samplers, which the host fills with their resource IDs.
+            textures.append(encoded)
         else:
             storage.append(slot)
-    if kinds:
-        raise InterfaceChanged(f"Unexpected Metal resource kinds: {sorted(kinds)}")
     block = _constants(blocks, constants, "Metal constant buffers")
     if block is not None and block["slot"] in range(input_count + 1):
         raise InterfaceChanged(
@@ -131,6 +137,7 @@ def _metal(text, group, constants, input_count):
         "group": group,
         "bindings": _slots(storage, "Metal buffer", input_count),
         "constants": block,
+        **metal_textures.resources(textures),
     }
 
 

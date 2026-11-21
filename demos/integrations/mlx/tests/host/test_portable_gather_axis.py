@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import gather_axis_layout as layout
 from demos.integrations.mlx.portable_host import gather_axis_workloads as workloads
 from demos.integrations.mlx.portable_host import (
@@ -207,7 +208,7 @@ def test_axis_gather_ci_requires_native_unchanged_upstream_test():
         "opengl",
     }
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+        job["if"] == job_condition("slice-update-host")
         and "continue-on-error" not in job
     )
     steps = {step.get("name"): step for step in job["steps"]}

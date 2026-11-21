@@ -438,8 +438,10 @@ def test_glsl_clang_trailing_zero_builtin_rejects_unsupported_profiles(
     }}
     """
 
+    # A GLSL ES #version line asks for the gles target; opengl writes desktop GLSL.
+    profile = "gles" if preprocessor.endswith(" es") else None
     with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
-        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+        GLSLCodeGen(target_profile=profile).generate(crosstl.translator.parse(shader))
 
     diagnostic = exc_info.value
     assert diagnostic.reason == "unsupported-profile"
@@ -16825,7 +16827,8 @@ shader PreciseProfile {{
     ],
 )
 def test_glsl_precise_output_selects_a_profile_with_the_qualifier(version, expected):
-    generated_code = GLSLCodeGen().generate(
+    profile = "gles" if version.endswith(" es") else None
+    generated_code = GLSLCodeGen(target_profile=profile).generate(
         crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version=version))
     )
 
@@ -16843,7 +16846,7 @@ def test_glsl_profile_is_unchanged_without_precise_output():
 
 def test_glsl_es_profile_without_precise_is_rejected():
     with pytest.raises(OpenGLPreciseQualifierError) as exc_info:
-        GLSLCodeGen().generate(
+        GLSLCodeGen(target_profile="gles").generate(
             crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
         )
 
@@ -21318,9 +21321,9 @@ def test_glsl_hlsl_double_aliases_map_to_glsl_names():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "dmat2 makePrecise(dvec2 uv, dmat2 input_)" in generated_code
-    assert "dvec2 p = dvec2(1.0, 2.0);" in generated_code
-    assert "dmat3x4 jacobian = dmat3x4(1.0);" in generated_code
-    assert "dmat2 m = dmat2(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "dvec2 p = dvec2(1.0lf, 2.0lf);" in generated_code
+    assert "dmat3x4 jacobian = dmat3x4(1.0lf);" in generated_code
+    assert "dmat2 m = dmat2(1.0lf, 0.0lf, 0.0lf, 1.0lf);" in generated_code
     assert "return (input_ * m);" in generated_code
     assert "double2" not in generated_code
     assert "double2x2" not in generated_code
@@ -43748,8 +43751,9 @@ def test_opengl_int64_rejects_profiles_without_required_capability(
     }}
     """
 
+    profile = "gles" if preprocessor.endswith(" es") else None
     with pytest.raises(ValueError, match=message):
-        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+        GLSLCodeGen(target_profile=profile).generate(crosstl.translator.parse(shader))
 
 
 def test_opengl_int64_upgrades_legacy_desktop_profile_to_extension_minimum():

@@ -23,6 +23,16 @@ class WGSLFunctionMixin:
     """Function members of ``WGSLCodeGen``."""
 
     def generate_function(self, func):
+        # A helper only one stage's entry points reach is written in that stage's context (wgsl_helper_stages).
+        previous_stage_name = self._current_stage_name
+        if previous_stage_name is None:
+            self._current_stage_name = self._helper_stage_names.get(id(func))
+        try:
+            return self.generate_function_in_stage(func)
+        finally:
+            self._current_stage_name = previous_stage_name
+
+    def generate_function_in_stage(self, func):
         self.validate_helper_function_references(func)
         previous_function_return_type = self._current_function_return_type
         self._current_function_return_type = getattr(func, "return_type", None)
@@ -191,6 +201,9 @@ class WGSLFunctionMixin:
                 f"{self.texture_sampler_name(parameter_name)}: "
                 f"{self.companion_sampler_type(node.param_type)}"
             )
+        multisampled_texture_type = self.multisampled_texture_type(node.param_type)
+        if multisampled_texture_type is not None:
+            return f"{prefix}{parameter_name}: {multisampled_texture_type}"
         if self.is_sampler_type(node.param_type):
             return f"{prefix}{parameter_name}: {self.sampler_type(node.param_type)}"
         if self.is_buffer_pointer_type(node.param_type, node.qualifiers):
@@ -288,10 +301,11 @@ class WGSLFunctionMixin:
             )
 
         barrier_calls = self.function_barrier_call_names(function)
-        if barrier_calls:
+        if barrier_calls and self._current_stage_name != "compute":
             raise WGSLRefusal(
                 "WGSL target does not support barrier() inside helper function "
-                f"{function.name} yet; keep barriers directly in compute entry points"
+                f"{function.name}, which is not reached only from compute entry "
+                "points; WGSL rejects a barrier a vertex or fragment entry point reaches"
             )
 
     def direct_workgroup_size_references(self, function):

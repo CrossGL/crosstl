@@ -106,6 +106,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_VULKAN_RESOURCE_FORMS = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
+    GLSL_ES_OUTPUT = True
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError

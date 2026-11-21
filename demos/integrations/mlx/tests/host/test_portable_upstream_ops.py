@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     trace_records,
     upstream_module_groups,
@@ -998,8 +999,9 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["upstream-ops-host"]
-    # The plan names the groups that run (ci_plan.QUEUE_UPSTREAM_GROUPS).
-    assert job["if"] == "contains(needs.ci-plan.outputs.legs, 'upstream-ops-host[')"
+    # The plan's jobs output names the job when its groups run: the nightly
+    # run, a dispatch and a ci:full pull request (ci_plan.is_upstream_leg).
+    assert job["if"] == job_condition("upstream-ops-host")
     assert "upstream-ops-host" in workflow["jobs"]["result"]["needs"]
     matrix = job["strategy"]["matrix"]
     assert {row["target"] for row in matrix["include"]} == {

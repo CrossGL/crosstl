@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import matmul_dispatch as dispatch
 from demos.integrations.mlx.portable_host import matmul_layout as layout
 from demos.integrations.mlx.portable_host import matmul_packages, prepare, runtime
@@ -870,7 +871,7 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
     assert {
         item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
     } == {"metal": "macos-26", "directx": "windows-2025", "opengl": "ubuntu-24.04"}
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["if"] == job_condition("quantized-host")
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert "continue-on-error" not in job
     assert "quantized-host" in workflow["jobs"]["result"]["needs"]

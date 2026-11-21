@@ -124,14 +124,17 @@ def changed_paths(base, head):
 
 
 def _without_plan_job(text):
-    """Return the workflow's lines outside its top-level ``ci-plan`` job."""
-    kept, in_plan = [], False
-    for line in text.splitlines():
-        if re.fullmatch(r"(  )?[A-Za-z0-9_-]+:\s*", line):
-            in_plan = line.rstrip() == "  ci-plan:"
-        if not in_plan:
-            kept.append(line)
-    return kept
+    """Return the parsed workflow without its top-level ``ci-plan`` job.
+
+    The text is parsed first, so a step that the plan job anchors and another
+    job reuses through a YAML alias still belongs to that other job. A
+    comment-only edit changes nothing here.
+    """
+    workflow = yaml.safe_load(text)
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if isinstance(jobs, dict):
+        jobs.pop("ci-plan", None)
+    return workflow
 
 
 def _merge_base(base, head):
@@ -168,7 +171,11 @@ def classify_workflow_change(base, head, paths):
     before, after = _file_at(merge_base, WORKFLOW), _file_at(head, WORKFLOW)
     if before is None or after is None:
         return paths
-    if _without_plan_job(before) != _without_plan_job(after):
+    try:
+        confined = _without_plan_job(before) == _without_plan_job(after)
+    except yaml.YAMLError:
+        return paths
+    if not confined:
         return paths
     return tuple(PLAN_JOB if path == WORKFLOW else path for path in paths)
 
@@ -221,19 +228,29 @@ def main(argv=None):
                 file=sys.stderr,
             )
         legs = [leg for leg in legs if not is_upstream_leg(leg)]
+    jobs = plan_jobs(args.workflow, legs)
     if args.output is not None:
         with args.output.open("a", encoding="utf-8") as output:
             output.writelines(
                 f"{name}={str(value).lower()}\n" for name, value in plan.items()
             )
             output.write(f"legs={json.dumps(legs)}\n")
-    print(json.dumps({**plan, "legs": len(legs)}, sort_keys=True))
+            output.write(f"jobs={json.dumps(jobs)}\n")
+    print(json.dumps({**plan, "legs": len(legs), "jobs": jobs}, sort_keys=True))
     return 0
 
 
 def is_upstream_leg(leg):
     """Return whether ``leg`` is one group of the upstream op job (``ci_legs``)."""
     return leg.startswith(f"{UPSTREAM_JOB}[")
+
+
+def plan_jobs(workflow, legs):
+    """Return the heavy jobs that run the selected legs, sorted (``ci_legs``)."""
+    if not legs:
+        return []
+    after = yaml.safe_load(Path(workflow).read_text(encoding="utf-8"))
+    return ci_legs.selected_jobs(after, legs)
 
 
 def plan_legs(workflow, change=None):

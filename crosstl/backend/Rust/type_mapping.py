@@ -957,7 +957,15 @@ class RustTypeMappingMixin:
 
         element_type, size = self.split_rust_array_generic_inner(inner)
         normalized_element = self.normalize_lifetime_generic_argument(element_type)
+        nested_element = self.normalize_rust_array_generic_argument(element_type)
+        if nested_element is not None:
+            normalized_element = nested_element
         suffix = f"[{size.strip()}]" if size is not None and size.strip() else "[]"
+        # The outer dimension comes first: ``[[f32; 3]; 2]`` is ``f32[2][3]``.
+        array_parts = self.split_array_type(normalized_element)
+        if array_parts is not None:
+            base_type, inner_suffix = array_parts
+            return f"{base_type}{suffix}{inner_suffix}"
         return f"{normalized_element}{suffix}"
 
     def split_rust_array_generic_inner(self, inner):

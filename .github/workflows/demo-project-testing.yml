@@ -1,4 +1,7 @@
 name: Project Demo Testing
+# GitHub starts no workflow file over 512,000 bytes, so a step repeated
+# verbatim is written once as an anchor (`- &step-name`) and reused as an alias
+# (`- *step-name`). Editing an anchored step changes every alias of it.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # Generated-artifact pins (demos/integrations/mlx/tests/pins.py) are enforced on
@@ -52,12 +55,16 @@ jobs:
       smoke: ${{ steps.plan.outputs.smoke }}
       # The heavy jobs and parity groups a change can affect (JSON list).
       legs: ${{ steps.plan.outputs.legs }}
+      # The heavy jobs that run the selected legs (JSON list); each heavy
+      # job runs only when this list names it.
+      jobs: ${{ steps.plan.outputs.jobs }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v7
+      - &step-actions-setup-python-v7
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: python -m pip install "PyYAML>=6,<7"
@@ -89,12 +96,11 @@ jobs:
       EGL_PLATFORM: surfaceless
       PYOPENGL_PLATFORM: egl
     steps:
-      - uses: actions/checkout@v7
+      - &step-actions-checkout-v7
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-setup-python-v7
       - name: Install system packages
         uses: ./.github/actions/apt-install
         with:
@@ -172,10 +178,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
+      - *step-actions-checkout-v7
+      - &step-actions-setup-python-v7-2
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -285,7 +290,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'opengl')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -295,12 +300,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Install system packages
         uses: ./.github/actions/apt-install
         with:
@@ -452,7 +453,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -462,13 +463,12 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 80
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-actions-checkout-v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - name: Install CrossTL and test dependencies
+      - &step-install-crosstl-and-test-dependencies
+        name: Install CrossTL and test dependencies
         run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
@@ -592,7 +592,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-float
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal-float')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -603,9 +603,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-actions-checkout-v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -616,8 +614,7 @@ jobs:
           python tools/ensure_metal_toolchain.py
           xcodebuild -version | tee .mlx-float-metal/xcode-version.txt
           xcrun --sdk macosx metal --version | tee .mlx-float-metal/metal-version.txt
-      - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
+      - *step-install-crosstl-and-test-dependencies
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream
@@ -656,7 +653,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'directx')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -669,12 +666,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize DirectX execution evidence
         run: |
           mkdir -p .mlx-gather-directx
@@ -799,7 +792,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-host
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -810,14 +803,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 185
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-actions-checkout-v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
+      - *step-install-crosstl-and-test-dependencies
       - name: Prepare Metal host toolchain
         timeout-minutes: 10
         run: |
@@ -1108,7 +1098,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-native-metal-reference
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'native-metal-reference')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1120,7 +1110,8 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Checkout CrossTL
+      - &step-checkout-crosstl
+        name: Checkout CrossTL
         uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -1192,7 +1183,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx-dispatch-sequence
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'directx-dispatch-sequence')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1204,10 +1195,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v7
@@ -1281,7 +1269,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl-dispatch-sequence
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'opengl-dispatch-sequence')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1293,10 +1281,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v7
@@ -1345,7 +1330,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-portable-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'portable-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -1374,17 +1359,14 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize execution evidence
         run: |
           mkdir -p .mlx-portable-host
           python --version > .mlx-portable-host/python-version.txt
-      - name: Install Linux build and graphics dependencies
+      - &step-install-linux-build-and-graphics-dependencies
+        name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
         uses: ./.github/actions/apt-install
         with:
@@ -2537,7 +2519,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-small-row-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'small-row-reductions')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2564,25 +2546,18 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize small-row evidence
         run: mkdir -p .mlx-portable-small-rows
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-small-rows/dependencies.log
-      - name: Install OpenGL runtime dependencies
+      - &step-install-moderngl-and-pyopengl
+        name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
       - name: Verify macOS Metal toolchain
@@ -2597,7 +2572,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
+      - &step-select-same-run-host-packages
+        name: Select same-run host packages
         uses: actions/github-script@v9
         id: host-artifact
         env:
@@ -2768,7 +2744,7 @@ jobs:
       group: ${{ github.workflow }}-${{ github.ref }}-upstream-ops-host-${{ strategy.job-index }}
       cancel-in-progress: false
     # Nightly, dispatch and ci:full only: a queue group or a push runs no group (ci_plan.QUEUE_EVENTS).
-    if: contains(needs.ci-plan.outputs.legs, 'upstream-ops-host[')
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'upstream-ops-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2838,16 +2814,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7-2
       - name: Initialize upstream op evidence
         run: mkdir -p .mlx-portable-upstream-ops
-      - name: Install Linux build and graphics dependencies
+      - &step-install-linux-build-and-graphics-dependencies-2
+        name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -2857,9 +2829,7 @@ jobs:
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-upstream-ops/dependencies.log
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Install the pinned PyTorch CPU reference
         # The torch groups compare the translated kernels with PyTorch on the
         # CPU; every other group runs without it.
@@ -2881,22 +2851,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-host-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -3057,7 +3012,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-half-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'half-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3084,19 +3039,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize half evidence
         run: mkdir -p .mlx-portable-half
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3105,9 +3052,7 @@ jobs:
       - name: Validate half host contracts
         if: runner.os == 'Linux'
         run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_extrema_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -3120,22 +3065,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-host-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -3328,7 +3258,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-quantized-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'quantized-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3355,21 +3285,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7-2
       - name: Initialize quantized evidence
         run: mkdir -p .mlx-portable-quantized
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
-      - name: Install CrossTL and MLX build dependencies
+      - *step-install-linux-build-and-graphics-dependencies-2
+      - &step-install-crosstl-and-mlx-build-dependencies
+        name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
@@ -3387,10 +3309,9 @@ jobs:
             demos/integrations/mlx/tests/host/test_portable_gather_mm.py \
             demos/integrations/mlx/tests/host/test_portable_segmented_mm.py \
             demos/integrations/mlx/tests/host/test_portable_block_masked_mm.py
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
-      - name: Verify macOS Metal toolchain
+      - *step-install-moderngl-and-pyopengl
+      - &step-verify-macos-metal-toolchain
+        name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
         run: |
@@ -3402,23 +3323,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v8
+      - *step-select-same-run-host-packages
+      - &step-actions-download-artifact-v8
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-quantized/base
@@ -3435,7 +3342,8 @@ jobs:
           git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-upstream checkout --detach FETCH_HEAD
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
-      - name: Build adapted upstream MLX
+      - &step-build-adapted-upstream-mlx
+        name: Build adapted upstream MLX
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized host build" -- \
@@ -3650,7 +3558,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-quantized-upstream-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'quantized-upstream-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3679,25 +3587,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7-2
       - name: Initialize quantized evidence
         run: mkdir -p .mlx-portable-quantized
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
-      - name: Install CrossTL and MLX build dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
-            2>&1 | tee .mlx-portable-quantized/dependencies.log
+      - *step-install-linux-build-and-graphics-dependencies-2
+      - *step-install-crosstl-and-mlx-build-dependencies
       - name: Validate quantized host contracts
         if: runner.os == 'Linux'
         run: |
@@ -3711,43 +3606,14 @@ jobs:
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qvm.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_qmv_small_non_multiples.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_qmm_vjp.py
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
-      - name: Verify macOS Metal toolchain
-        if: runner.os == 'macOS'
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version | tee .mlx-portable-quantized/metal-version.txt
-          xcrun --sdk macosx swiftc --version | tee .mlx-portable-quantized/swift-version.txt
+      - *step-install-moderngl-and-pyopengl
+      - *step-verify-macos-metal-toolchain
       - name: Install pinned DirectX tools
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.host-artifact.outputs.id }}
-          path: .mlx-portable-quantized/base
-          merge-multiple: true
-          skip-decompress: true
+      - *step-select-same-run-host-packages
+      - *step-actions-download-artifact-v8
       - name: Unpack same-run host package
         run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-quantized/base
       - name: Prepare pinned MLX
@@ -3759,11 +3625,7 @@ jobs:
           git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-upstream checkout --detach FETCH_HEAD
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
-      - name: Build adapted upstream MLX
-        run: |
-          set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized host build" -- \
-            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-quantized/build.log
+      - *step-build-adapted-upstream-mlx
       - name: Run the unchanged upstream test through translated kernels
         env:
           EGL_PLATFORM: surfaceless
@@ -3790,7 +3652,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-integer64-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'integer64-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3817,27 +3679,17 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize integer64 evidence
         run: mkdir -p .mlx-portable-integer64
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-integer64/dependencies.log
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -3850,22 +3702,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-host-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -3958,7 +3795,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-slice-update-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'slice-update-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3985,27 +3822,17 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize slice update evidence
         run: mkdir -p .mlx-portable-slice-update
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-slice-update/dependencies.log
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -4018,7 +3845,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run integer64 packages
+      - &step-select-same-run-integer64-packages
+        name: Select same-run integer64 packages
         uses: actions/github-script@v9
         id: host-artifact
         env:
@@ -4129,7 +3957,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-conv-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'conv-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4156,19 +3984,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize convolution evidence
         run: mkdir -p .mlx-portable-conv
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies-2
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -4177,9 +3997,7 @@ jobs:
       - name: Validate convolution host contracts
         if: runner.os == 'Linux'
         run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_conv.py
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -4192,22 +4010,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-host-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -4264,7 +4067,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-scatter-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'scatter-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4312,30 +4115,20 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize general scatter evidence
         run: mkdir -p .mlx-portable-scatter
       - name: Select float scatter Metal toolchain
         if: runner.os == 'macOS' && matrix.profile == 'float32'
         run: echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-scatter/dependencies.log
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -4348,22 +4141,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run integer64 packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-integer64-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-integer64-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -4425,7 +4203,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-row-packages-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'row-packages')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4447,12 +4225,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize row translation evidence
         run: mkdir -p .mlx-row-shard
       - name: Install translation dependencies
@@ -4488,7 +4262,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'reductions')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4557,27 +4331,17 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-actions-checkout-v7
+      - *step-actions-setup-python-v7
       - name: Initialize reduction evidence
         run: mkdir -p .mlx-portable-reductions
-      - name: Install Linux build and graphics dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - *step-install-linux-build-and-graphics-dependencies
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-reductions/dependencies.log
-      - name: Install OpenGL runtime dependencies
-        if: runner.os == 'Linux'
-        run: python -m pip install moderngl PyOpenGL
+      - *step-install-moderngl-and-pyopengl
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -4590,22 +4354,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./demos/integrations/mlx/install_directx_tools.ps1
-      - name: Select same-run host packages
-        uses: actions/github-script@v9
-        id: host-artifact
-        env:
-          MLX_TARGET: ${{ matrix.target }}
-        with:
-          script: |
-            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
-            });
-            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
-              && /^\d+$/.test(item.name.slice(prefix.length)));
-            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
-            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
-            core.setOutput("id", candidates[0].id);
+      - *step-select-same-run-host-packages
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
@@ -4727,7 +4476,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX Metal project porting (${{ matrix.os }})
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-metal-porting')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -4736,12 +4485,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
+      - &step-setup-python
+        name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -4751,7 +4498,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7" numpy==2.2.6
 
-      - name: Install macOS Metal Toolchain
+      - &step-install-macos-metal-toolchain
+        name: Install macOS Metal Toolchain
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -4765,7 +4513,8 @@ jobs:
       - name: Validate native dispatch limits
         run: python -m pytest -q -n auto tests/test_translator/test_native_dispatch_limits.py
 
-      - name: Install Linux SPIR-V tools
+      - &step-install-linux-spir-v-tools
+        name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
         uses: ./.github/actions/apt-install
         with:
@@ -4784,7 +4533,8 @@ jobs:
           python -m pytest -q -n auto tests/test_translator/test_project_translation.py \
             -k "translate_project_reports_unrepresentable_atomic_fence_contract"
 
-      - name: Install Windows DirectX Shader Compiler
+      - &step-install-windows-directx-shader-compiler
+        name: Install Windows DirectX Shader Compiler
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -4838,7 +4588,8 @@ jobs:
         if: runner.os == 'Windows'
         run: python -m pip install -e ".[directx-runtime]" pytest-xdist
 
-      - name: Install pinned Windows WARP runtime
+      - &step-install-pinned-windows-warp-runtime
+        name: Install pinned Windows WARP runtime
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -6962,7 +6713,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-native-parity')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -7013,111 +6764,31 @@ jobs:
           - {group: reduce-11, family: reduce, shard: 11}
 
     steps: &mlx-current-parity-steps
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7" numpy==2.2.6
 
-      - name: Install macOS Metal Toolchain
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version
+      - *step-install-macos-metal-toolchain
 
-      - name: Install Linux SPIR-V tools
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
+      - *step-install-linux-spir-v-tools
 
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
         run: |
           python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist vulkan==1.3.275.1
 
-      - name: Install Windows DirectX Shader Compiler
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ProgressPreference = "SilentlyContinue"
-          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
-          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
-              break
-            } catch {
-              if ($attempt -eq 5) {
-                throw
-              }
-              Write-Warning "DXC download failed on attempt $attempt; retrying."
-              Start-Sleep -Seconds (10 * $attempt)
-            }
-          }
-          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
-          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
-            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
-            Select-Object -First 1
-          if ($null -eq $dxc) {
-            throw "dxc.exe not found in release archive."
-          }
-          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - *step-install-windows-directx-shader-compiler
 
       - name: Install Windows Direct3D runtime dependencies
         if: runner.os == 'Windows'
         run: python -m pip install -e ".[directx-runtime]" pytest-xdist
 
-      - name: Install pinned Windows WARP runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ProgressPreference = "SilentlyContinue"
-          $warpVersion = "1.0.21"
-          $warpSha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
-          $archive = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion.zip"
-          $warpRoot = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion"
-          $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$warpVersion/microsoft.direct3d.warp.$warpVersion.nupkg"
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri $warpUri -OutFile $archive
-              break
-            } catch {
-              if ($attempt -eq 5) {
-                throw
-              }
-              Write-Warning "WARP download failed on attempt $attempt; retrying."
-              Start-Sleep -Seconds (10 * $attempt)
-            }
-          }
-          $archiveSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($archiveSha256 -ne $warpSha256) {
-            throw "WARP archive checksum mismatch: expected $warpSha256, got $archiveSha256."
-          }
-          Expand-Archive -Path $archive -DestinationPath $warpRoot -Force
-          $warp = Join-Path $warpRoot "build\native\bin\x64\d3d10warp.dll"
-          if (-not (Test-Path -Path $warp -PathType Leaf)) {
-            throw "d3d10warp.dll not found in WARP package."
-          }
-          $pythonWarp = Join-Path $env:pythonLocation "d3d10warp.dll"
-          Copy-Item -Path $warp -Destination $pythonWarp -Force
-          Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
-          Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
-          # WARP JIT-compiles shaders for the host CPU; record it beside each result.
-          $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
-          Write-Host "Runner CPU: $($cpu.Name.Trim()) ($($cpu.NumberOfLogicalProcessors) logical processors)"
+      - *step-install-pinned-windows-warp-runtime
 
       - name: Checkout current MLX kernel tree
         shell: bash
@@ -8314,7 +7985,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-quantized-parity')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -8393,7 +8064,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-gemm-parity')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -8472,7 +8143,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary Metal sources (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-metal-sources')
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -8481,17 +8152,12 @@ jobs:
         shard_index: [0, 1, 2, 3, 4]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
+      - &step-install-crosstl
+        name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
@@ -8548,22 +8214,17 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete unary Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-metal-roundtrip')
     needs: [ci-plan, mlx-unary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 75
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install macOS Metal Toolchain
+      - &step-install-macos-metal-toolchain-2
+        name: Install macOS Metal Toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -8609,7 +8270,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary OpenGL translation (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-complete-opengl-translation')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -8618,22 +8279,18 @@ jobs:
         shard_index: [0, 1, 2, 3, 4]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install system packages
+      - &step-install-system-packages
+        name: Install system packages
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
 
-      - name: Install CrossTL and OpenGL SPIR-V validators
+      - &step-install-crosstl-and-opengl-spir-v-validators
+        name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
@@ -8689,7 +8346,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary DirectX translation (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-complete-directx-translation')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8698,22 +8355,14 @@ jobs:
         shard_index: [0, 1, 2, 3, 4]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
-      - name: Install pinned DirectX Shader Compiler
+      - &step-install-pinned-directx-shader-compiler
+        name: Install pinned DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
         with:
           pinned: "true"
@@ -8765,7 +8414,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-metal-sources')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8774,20 +8423,11 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
       - name: Checkout current MLX binary corpus
         shell: bash
@@ -8841,27 +8481,16 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete binary Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-complete-metal-roundtrip')
     needs: [ci-plan, mlx-binary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install macOS Metal Toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version
+      - *step-install-macos-metal-toolchain-2
 
       - name: Download all binary Metal source shards
         uses: actions/download-artifact@v8
@@ -8902,7 +8531,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-metal-sources')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8911,20 +8540,11 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
       - name: Checkout current MLX copy corpus
         shell: bash
@@ -8978,27 +8598,16 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete copy Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-complete-metal-roundtrip')
     needs: [ci-plan, mlx-copy-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install macOS Metal Toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version
+      - *step-install-macos-metal-toolchain-2
 
       - name: Download all copy Metal source shards
         uses: actions/download-artifact@v8
@@ -9039,7 +8648,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-metal-sources')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9048,20 +8657,11 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
       - name: Checkout current MLX reduce corpus
         shell: bash
@@ -9115,27 +8715,16 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete reduce Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-complete-metal-roundtrip')
     needs: [ci-plan, mlx-reduce-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install macOS Metal Toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version
+      - *step-install-macos-metal-toolchain-2
 
       - name: Download all reduce Metal source shards
         uses: actions/download-artifact@v8
@@ -9176,7 +8765,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete quantized Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-quantized-metal-sources')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9185,20 +8774,11 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
       - name: Checkout current MLX quantized corpus
         shell: bash
@@ -9254,27 +8834,16 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
     name: MLX complete quantized Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-quantized-complete-metal-roundtrip')
     needs: [ci-plan, mlx-quantized-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install macOS Metal Toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ensure_metal_toolchain.py
-          xcrun --sdk macosx metal --version
+      - *step-install-macos-metal-toolchain-2
 
       - name: Checkout original quantized kernels
         shell: bash
@@ -9337,33 +8906,17 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX quantized wide OpenGL translation
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-quantized-wide-opengl')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install system packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: glslang-tools spirv-tools
+      - *step-install-system-packages
 
-      - name: Install CrossTL and OpenGL SPIR-V validators
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
-          glslangValidator --version
-          spirv-val --version
+      - *step-install-crosstl-and-opengl-spir-v-validators
 
       - name: Checkout current MLX quantized corpus
         shell: bash
@@ -9409,7 +8962,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-complete-opengl-translation')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9418,29 +8971,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install system packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: glslang-tools spirv-tools
+      - *step-install-system-packages
 
-      - name: Install CrossTL and OpenGL SPIR-V validators
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
-          glslangValidator --version
-          spirv-val --version
+      - *step-install-crosstl-and-opengl-spir-v-validators
 
       - name: Checkout current MLX reduce corpus
         shell: bash
@@ -9489,7 +9026,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-complete-opengl-translation')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9498,29 +9035,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install system packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: glslang-tools spirv-tools
+      - *step-install-system-packages
 
-      - name: Install CrossTL and OpenGL SPIR-V validators
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
-          glslangValidator --version
-          spirv-val --version
+      - *step-install-crosstl-and-opengl-spir-v-validators
 
       - name: Checkout current MLX copy corpus
         shell: bash
@@ -9569,7 +9090,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-complete-directx-translation')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9578,25 +9099,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
-      - name: Install pinned DirectX Shader Compiler
-        uses: ./.github/actions/install-linux-dxc
-        with:
-          pinned: "true"
+      - *step-install-pinned-directx-shader-compiler
 
       - name: Checkout current MLX copy corpus
         shell: bash
@@ -9645,7 +9154,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-complete-directx-translation')
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -9654,25 +9163,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
-      - name: Install pinned DirectX Shader Compiler
-        uses: ./.github/actions/install-linux-dxc
-        with:
-          pinned: "true"
+      - *step-install-pinned-directx-shader-compiler
 
       - name: Checkout current MLX reduce corpus
         shell: bash
@@ -9721,7 +9218,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-complete-opengl-translation')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -9730,29 +9227,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install system packages
-        uses: ./.github/actions/apt-install
-        with:
-          packages: glslang-tools spirv-tools
+      - *step-install-system-packages
 
-      - name: Install CrossTL and OpenGL SPIR-V validators
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
-          glslangValidator --version
-          spirv-val --version
+      - *step-install-crosstl-and-opengl-spir-v-validators
 
       - name: Checkout current MLX binary corpus
         shell: bash
@@ -9801,7 +9282,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
+    if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-complete-directx-translation')
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -9810,25 +9291,13 @@ jobs:
         shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+      - *step-install-crosstl
 
-      - name: Install pinned DirectX Shader Compiler
-        uses: ./.github/actions/install-linux-dxc
-        with:
-          pinned: "true"
+      - *step-install-pinned-directx-shader-compiler
 
       - name: Checkout current MLX binary corpus
         shell: bash
@@ -9882,15 +9351,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout CrossTL
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *step-checkout-crosstl
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - *step-setup-python
 
       - name: Install CrossTL
         run: |
