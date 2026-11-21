@@ -17303,6 +17303,24 @@ class TestHipCodeGen:
             assert refusal.value.code == HipImportRefused.code
             assert "HIP new P(o[0]): CrossGL has no device heap" in str(refusal.value)
 
+    def test_user_defined_device_malloc_and_free_are_not_refused(self):
+        # A program's own __device__ malloc and free are ordinary calls, not
+        # device heap calls, so they translate (#4684).
+        code = """
+        __device__ float free(float v) { return v * 2.0f; }
+        __device__ float malloc(float v) { return v + 1.0f; }
+        __global__ void k(float* o) {
+            o[0] = free(o[0]) + malloc(o[1]);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "f32 free(f32 v) {" in result
+        assert "f32 malloc(f32 v) {" in result
+        assert "o[0] = (free(o[0]) + malloc(o[1]));" in result
+
     def test_public_rocprim_placement_new_conversion_reparse(self):
         # Upstream: ROCm/rocPRIM
         # Commit: 6dbfc3bb464a3f159b6a649e1d862c171bca32dc
