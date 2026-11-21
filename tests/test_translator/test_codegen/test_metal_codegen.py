@@ -3783,8 +3783,9 @@ def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts(
     )
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
     assert (
-        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
-        in (generated_code)
+        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);" in (
+            generated_code
+        )
     )
     assert "uint4 helper = helperMatch(value, crossglWaveLaneCount);" in generated_code
     assert "wave intrinsic: WaveMatch" not in generated_code
@@ -31815,8 +31816,9 @@ def test_metal_struct_member_resource_array_alias_texture_ops_preserve_metadata(
     assert "texture2d<float> texAlias = pack.textures[layer];" in generated_code
     assert "sampler sampAlias = pack.texturesSampler[layer];" in generated_code
     assert (
-        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);"
-        in (generated_code)
+        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);" in (
+            generated_code
+        )
     )
     assert (
         "int2 dims = int2(texAlias.get_width(uint(1)), "
