@@ -2364,8 +2364,12 @@ class HLSLParser:
         for param in params:
             if str(getattr(param, "semantic", "")).upper() == "SV_DISPATCHTHREADID":
                 return "compute"
-        if any(getattr(param, "semantic", None) for param in params) and (
-            discards_pixels(body)
+        # A depth-only pass reads its inputs and writes nothing; an entry with an ``out`` parameter takes its
+        # stage from what it writes (apply_struct_parameter_stage_qualifiers).
+        if (
+            any(getattr(param, "semantic", None) for param in params)
+            and not any(self.parameter_has_output_qualifier(param) for param in params)
+            and discards_pixels(body)
         ):
             return "fragment"
         return None

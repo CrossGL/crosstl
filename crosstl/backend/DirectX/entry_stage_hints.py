@@ -21,6 +21,8 @@ decide when the function could be that stage's entry point at all:
 
 A function with a semantic on a parameter that discards its pixel (``discard`` or ``clip``) is a pixel entry point
 even when it returns nothing: DXC accepts both only in pixel shaders, and a depth-only pass writes no render target.
+The rule applies only when no parameter is ``out`` or ``inout``; an entry that writes outputs takes its stage from
+them.
 
 A function that fails these checks keeps the stage its attributes and
 semantics give it, which for an ordinary helper is none.

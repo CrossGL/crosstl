@@ -61,6 +61,29 @@ def test_a_helper_without_a_stage_interface_keeps_no_stage():
     parse_crossgl(output)
 
 
+def test_an_entry_with_out_parameters_takes_its_stage_from_them():
+    # vkd3d's clip-distance sample: main writes SV_POSITION through an out structure, so it is no pixel
+    # entry even though it calls clip (DXC rejects it as either stage; the stage follows its outputs).
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_POSITION;
+            float clip : SV_CLIPDISTANCE;
+        };
+
+        void main(float4 position : POSITION, out VertexOut outputVertex)
+        {
+            outputVertex.position = position;
+            outputVertex.clip = position.y;
+            clip(outputVertex.clip - 0.5f);
+        }
+        """)
+
+    output = generate_crossgl(code)
+
+    assert "fragment {" not in output
+    assert "float clip @ gl_ClipDistance;" in output
+
+
 @pytest.mark.parametrize(
     ("backend", "spelling"),
     [
