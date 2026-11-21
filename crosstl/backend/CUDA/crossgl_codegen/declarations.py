@@ -2,7 +2,7 @@
 
 from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
-from ..array_extents import integral_constant_declaration_value
+from ..array_extents import declare_enumerators, integral_constant_declaration_value
 from ..CudaAst import (
     CastNode,
     DesignatedInitializerNode,
@@ -147,6 +147,8 @@ class CudaImportDeclarationMixin:
         self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
+        # An enumerator is a constant an array extent can name (``float s[TILE * 2]``).
+        declare_enumerators(self.integer_constants, node)
         members = getattr(node, "members", None) or getattr(node, "variants", [])
         for member in members:
             if isinstance(member, tuple):

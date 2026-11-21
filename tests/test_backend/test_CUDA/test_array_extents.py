@@ -4,7 +4,8 @@
 ``array<array<f32, cuda_array_extent_32_plus_1>, 32>`` and ``float t[N]`` as ``array<f32, N>``, which the CrossGL
 parser reads as a type, so every target refused the array (the ``constant-array-size`` coverage cell of CUDA and
 HIP input). The importers now fold an extent with C++ integer arithmetic, in the scopes the source declares its
-constants in, and keep the identifier spelling for an extent they cannot evaluate.
+constants in, write an extent of names they cannot evaluate (a template value parameter) as the expression, and
+refuse any other extent with a typed import refusal instead of writing an identifier no program declares.
 """
 
 from __future__ import annotations
@@ -15,9 +16,10 @@ import crosstl
 from crosstl.backend.CUDA.array_extents import (
     IntegerConstants,
     crossgl_array_extent,
-    extent_identifier,
+    expression_extent,
     fold_integer_constant,
 )
+from crosstl.backend.import_refusals import ImportRefused
 
 TARGETS = ("cuda", "hip", "metal", "directx", "opengl", "vulkan")
 
@@ -72,21 +74,48 @@ def test_leaves_what_it_cannot_evaluate_exactly(expression):
 
 def test_extent_keeps_an_unknown_expression():
     constants = _constants(N=(4, False))
+    refused = []
 
     def extent(size):
-        return crossgl_array_extent(
-            size,
-            constants,
-            lambda other: extent_identifier(other, "cuda_array_extent_"),
-        )
+        def other(text):
+            expression = expression_extent(text)
+            if expression is None:
+                refused.append(text)
+                return "refused"
+            return expression
+
+        return crossgl_array_extent(size, constants, other)
 
     assert extent("N * 2") == "8"
     assert extent("K") == "K"
-    # An extent the importer cannot evaluate keeps an identifier spelling that no program declares.
-    assert extent("K + 1") == "K_plus_1"
-    assert extent("N - 4") == "N_minus_4"
-    assert extent("FFT::storage_size") == "FFT_storage_size"
-    assert extent("cosize_v<Layout>") == "cosize_v_Layout"
+    # An extent of names the importer cannot evaluate is written as the expression, for CrossGL to substitute.
+    assert extent("K + 1") == "(K + 1)"
+    assert extent("(K * 2) + 1u") == "((K * 2) + 1u)"
+    assert extent("(K << 0x2)") == "(K << 2)"
+    assert extent("-K + 010") == "(-K + 8)"
+    assert extent("N - 4") == "(N - 4)"
+    # Any other extent has no CrossGL spelling and is refused.
+    for other in (
+        "FFT::storage_size",
+        "cosize_v<Layout>",
+        "sizeof(float) * K",
+        "K > 2 ? 4 : 8",
+        "f(K)",
+        "K K",
+        "(K",
+        "4u - 5u",
+    ):
+        assert extent(other) == "refused", other
+    assert refused == [
+        "FFT::storage_size",
+        "cosize_v<Layout>",
+        "sizeof(float) * K",
+        "K > 2 ? 4 : 8",
+        "f(K)",
+        "K K",
+        "(K",
+        "4u - 5u",
+    ]
 
 
 def test_an_inner_declaration_hides_a_constant():
@@ -172,3 +201,96 @@ __device__ float first(float x) {
     crossgl = _import(tmp_path, source, suffix)
     assert "generic<N> f32 first(f32 x)" in crossgl
     assert "var local: array<f32, N>;" in crossgl
+
+
+TEMPLATE_EXTENT_SOURCE = """
+template <int K>
+__device__ float spread(float x) {
+    float s[K * 2 + 1];
+    for (int i = 0; i < K * 2 + 1; ++i) {
+        s[i] = x * i;
+    }
+    return s[K * 2];
+}
+__global__ void k(float* out) { out[0] = spread<3>(1.0f); }
+"""
+
+
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+def test_a_template_value_extent_is_written_as_an_expression(tmp_path, suffix):
+    source = TEMPLATE_EXTENT_SOURCE
+    if suffix == ".hip":
+        source = "#include <hip/hip_runtime.h>\n" + source
+    crossgl = _import(tmp_path, source, suffix)
+    assert "var s: array<f32, ((K * 2) + 1)>;" in crossgl
+    assert "_mul_" not in crossgl and "_plus_" not in crossgl
+
+    path = tmp_path / "template_extent.cgl"
+    path.write_text(crossgl)
+    # CrossGL substitutes K = 3 into the extent, so every target sizes the array with 7 elements.
+    for target in TARGETS:
+        code = crosstl.translate(str(path), backend=target, format_output=False)
+        if target == "vulkan":
+            assert "OpTypeArray" in code
+        else:
+            assert "K_mul_2" not in code and "K * 2" not in code
+            assert "3 * 2" in code
+
+
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+@pytest.mark.parametrize(
+    "extent", ["Config::size", "sizeof(float4) / 4", "Wide<int>::value"]
+)
+def test_an_extent_crossgl_cannot_spell_is_refused(tmp_path, suffix, extent):
+    source = (
+        "struct Config { static constexpr int size = 4; };\n"
+        "template <typename T> struct Wide { static constexpr int value = 4; };\n"
+        f"__global__ void k(float* out) {{ float s[{extent}]; s[0] = 1.0f; out[0] = s[0]; }}\n"
+    )
+    if suffix == ".hip":
+        source = "#include <hip/hip_runtime.h>\n" + source
+    with pytest.raises(ImportRefused, match="array extent") as raised:
+        _import(tmp_path, source, suffix)
+    language = "cuda" if suffix == ".cu" else "hip"
+    assert raised.value.code == f"project.translate.{language}-import-unsupported"
+
+
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+def test_an_extent_that_names_an_undeclared_macro_is_refused(tmp_path, suffix):
+    # CHUNK_K and SKEW are macros of a header the importer did not read: written as the expression, every target
+    # compiler rejected the undeclared names, so the import is refused and names them.
+    source = (
+        "__global__ void k(float* out) {\n"
+        "    float s[CHUNK_K * 2 + SKEW];\n"
+        "    s[0] = 1.0f;\n"
+        "    out[0] = s[0];\n"
+        "}\n"
+    )
+    if suffix == ".hip":
+        source = "#include <hip/hip_runtime.h>\n" + source
+    with pytest.raises(ImportRefused, match="'CHUNK_K', 'SKEW', which the program"):
+        _import(tmp_path, source, suffix)
+
+
+ENUM_EXTENT_SOURCE = """
+enum { FIRST, TILE = 16, NEXT };
+enum class Scoped { NEXT = 2 };
+__global__ void k(float* out) {
+    float s[TILE * 2];
+    float t[NEXT - FIRST];
+    s[0] = 1.0f;
+    t[0] = s[0];
+    out[0] = t[0];
+}
+"""
+
+
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+def test_an_enumerator_extent_folds(tmp_path, suffix):
+    source = ENUM_EXTENT_SOURCE
+    if suffix == ".hip":
+        source = "#include <hip/hip_runtime.h>\n" + source
+    crossgl = _import(tmp_path, source, suffix)
+    # FIRST is 0 and NEXT is 17 ([dcl.enum]/2); the scoped enum's NEXT needs its enum's name, so it does not hide.
+    assert "var s: array<f32, 32>;" in crossgl
+    assert "var t: array<f32, 17>;" in crossgl

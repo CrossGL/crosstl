@@ -11,7 +11,10 @@ refused the array.
 importer's block scopes, so a later declaration of the same name (a parameter, a local variable, a template value
 parameter) hides it as C++ does. :func:`crossgl_array_extent` folds an extent to its value with C++ integer
 arithmetic ([expr.mul]/4: division truncates toward zero), so the array has the same length in every target. An
-extent that is not a constant the importer can evaluate keeps the identifier spelling the importers wrote before.
+extent of names the importer cannot evaluate, such as ``K * 2`` for a template value parameter ``K``, is written as
+the expression (:func:`expression_extent`), which CrossGL substitutes and every target sizes. Any other extent
+(a qualified name, a template-id, ``sizeof``) is refused with a typed import refusal; before, the importers wrote
+it as an identifier that no program declares, which the target compilers rejected.
 """
 
 from __future__ import annotations
@@ -29,9 +32,12 @@ from ..common_ast import (
 __all__ = [
     "IntegerConstants",
     "crossgl_array_extent",
+    "declare_enumerators",
+    "expression_extent",
     "extent_identifier",
     "fold_integer_constant",
     "integral_constant_declaration_value",
+    "undeclared_extent_names",
 ]
 
 _INTEGRAL_WORDS = frozenset(
@@ -118,6 +124,10 @@ class IntegerConstants:
             if name in scope:
                 return scope[name]
         return None
+
+    def declares(self, name):
+        """Whether a declaration of ``name`` (a constant, variable, parameter or enumerator) is in scope."""
+        return any(name in scope for scope in self.scopes)
 
 
 class _NotConstant(Exception):
@@ -357,11 +367,40 @@ def integral_constant_declaration_value(node, constants):
     return folded[0], unsigned or (folded[1] and "auto" in type_words)
 
 
+def declare_enumerators(constants, node):
+    """Record the enumerators of an unscoped enum ``node`` in ``constants``, with their values where they fold.
+
+    An enumerator without an initializer is one more than the one before it, and the first is 0 ([dcl.enum]/2). A
+    scoped enum's enumerators need their enum's name, so an extent cannot name them unqualified.
+    """
+    if getattr(node, "is_scoped", False):
+        return
+    unsigned = "unsigned" in str(getattr(node, "underlying_type", None) or "")
+    previous = (-1, unsigned)
+    for member in getattr(node, "members", None) or []:
+        if isinstance(member, tuple):
+            name, value = member
+        else:
+            name, value = getattr(member, "name", None), getattr(member, "value", None)
+        if value is not None:
+            folded = fold_integer_constant(value, constants)
+        elif previous is not None:
+            folded = (previous[0] + 1, previous[1])
+        else:
+            folded = None
+        if folded is not None:
+            folded = (folded[0], unsigned)
+            if unsigned and folded[0] < 0:
+                folded = None
+        constants.declare(name, folded)
+        previous = folded
+
+
 def extent_identifier(size, prefix):
     """An identifier spelling of an extent CrossGL cannot read (``FFT_storage_size`` for ``FFT::storage_size``).
 
-    No program declares it, so a target that reaches the array refuses it as an undeclared type that names the
-    source extent.
+    It is only the placeholder of a refused extent (``refuse_import``), which lets the importer reach the other
+    refusals in the program; no program is written while a refusal is pending.
     """
     replacements = {
         "*": "_mul_",
@@ -380,13 +419,126 @@ def extent_identifier(size, prefix):
     return extent
 
 
+# The operators an expression extent keeps: C++ integer arithmetic that every CrossGL target spells the same way.
+_EXPRESSION_BINARY_OPERATORS = frozenset(
+    {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
+)
+_EXPRESSION_UNARY_OPERATORS = frozenset({"+", "-", "~"})
+# C++ words that read like names but make an extent no CrossGL expression can spell.
+_NOT_EXTENT_NAMES = frozenset(
+    {"sizeof", "alignof", "decltype", "true", "false", "nullptr", "this"}
+)
+
+
+def expression_extent(size, rename=None, declared=None):
+    """``(K * 2)`` for an integral extent ``K * 2`` made of names, integer literals and arithmetic, else ``None``.
+
+    A function template's value parameter, such as ``template <int K>`` in ``float s[K * 2]``, has no value where
+    the importer reads the template, so the extent cannot fold; CrossGL substitutes the generic value into an
+    expression extent (``array<f32, (K * 2)>``) in every declaration, so it is written as the expression. Each name
+    is spelled through ``rename`` (the importer's output name for it), and a literal becomes its decimal value with
+    ``u`` when the source literal is unsigned. A qualified name, a template-id, ``sizeof``, a call, a comparison or a
+    conditional has no CrossGL extent spelling, and gives ``None``; so does a name for which ``declared`` is false,
+    such as a macro of a header the importer did not read, because no target can size the array by it.
+    """
+    text = str(size).strip()
+    pieces = []
+    position = 0
+    previous = None  # "operand", "open", "close" or "operator"
+    depth = 0
+    has_name = False
+    while position < len(text):
+        match = _TOKEN.match(text, position)
+        if match is None or match.end() == position:
+            return None
+        position = match.end()
+        number, name, op = match.group("number"), match.group("name"), match.group("op")
+        if number is not None:
+            if previous in ("operand", "close"):
+                return None
+            try:
+                value, _ = _literal(number, "")
+            except _NotConstant:
+                return None
+            suffix = "u" if "u" in match.group("suffix").lower() else ""
+            pieces.append(f"{value}{suffix}")
+            previous = "operand"
+        elif name is not None:
+            if (
+                "::" in name
+                or name in _NOT_EXTENT_NAMES
+                or previous in ("operand", "close")
+            ):
+                return None
+            if declared is not None and not declared(name):
+                return None
+            pieces.append(rename(name) if rename is not None else name)
+            previous = "operand"
+            has_name = True
+        elif op == "(":
+            if previous in ("operand", "close"):
+                return None
+            pieces.append("(")
+            previous = "open"
+            depth += 1
+        elif op == ")":
+            if previous not in ("operand", "close") or depth == 0:
+                return None
+            pieces.append(")")
+            previous = "close"
+            depth -= 1
+        elif previous in ("operand", "close") and op in _EXPRESSION_BINARY_OPERATORS:
+            pieces.append(f" {op} ")
+            previous = "operator"
+        elif (
+            previous in (None, "open", "operator") and op in _EXPRESSION_UNARY_OPERATORS
+        ):
+            pieces.append(op)
+            previous = "operator"
+        else:
+            return None
+    if depth != 0 or previous not in ("operand", "close") or not has_name:
+        return None
+    expression = "".join(pieces)
+    if _wrapped_in_parentheses(expression):
+        return expression
+    return f"({expression})"
+
+
+def undeclared_extent_names(size, declared):
+    """The unqualified names of extent ``size`` for which ``declared`` is false, in source order, without repeats."""
+    names = []
+    for match in _TOKEN.finditer(str(size)):
+        name = match.group("name")
+        if (
+            name is not None
+            and "::" not in name
+            and name not in _NOT_EXTENT_NAMES
+            and not declared(name)
+            and name not in names
+        ):
+            names.append(name)
+    return names
+
+
+def _wrapped_in_parentheses(expression):
+    """Whether the first ``(`` of ``expression`` closes at its last character."""
+    if not expression.startswith("("):
+        return False
+    depth = 0
+    for index, char in enumerate(expression):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0:
+            return index == len(expression) - 1
+    return False
+
+
 def crossgl_array_extent(size, constants, other_extent):
     """The CrossGL extent for a CUDA or HIP array extent ``size``.
 
     A constant the importer can evaluate becomes its value, and a bare name or literal it cannot evaluate stays as
-    it is. ``other_extent`` spells any other extent: the CrossGL parser reads an expression extent in some
-    declarations only (``var a: array<f32, (K + 1)>`` but not ``var<workgroup>`` or a resource), so such an extent
-    keeps the identifier spelling of :func:`extent_identifier`, which a target refuses as undeclared.
+    it is. ``other_extent`` spells any other extent: an expression of names (:func:`expression_extent`), or a typed
+    import refusal for an extent CrossGL cannot write.
     """
     size = str(size).strip()
     if not size:
