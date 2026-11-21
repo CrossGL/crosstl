@@ -219,6 +219,7 @@ from .hlsl_byte_address_atomics import (
 )
 from .hlsl_byteaddress_typed_access import hlsl_byteaddress_component_refusal
 from .hlsl_call_argument_order import hlsl_ordered_call_expression
+from .hlsl_call_cycles import validate_hlsl_call_cycles
 from .hlsl_exact_float_builtins import (
     emit_hlsl_exact_float_helpers,
     hlsl_exact_float_expression,
@@ -1716,6 +1717,8 @@ class HLSLCodeGen(
             self.collect_unsupported_glsl_buffer_block_functions(functions)
         )
         self.prepare_hlsl_software_subgroup_contract(ast, target_stage)
+        # After the software subgroup contract, whose recursive-helper diagnostic is more specific.
+        validate_hlsl_call_cycles(ast)
         self.validate_global_resource_shadows(ast)
         self.global_mixed_sampler_names = self.collect_global_mixed_sampler_names(ast)
         self.global_mixed_sampler_aliases = {
