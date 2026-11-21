@@ -312,11 +312,10 @@ class RustResourceAttributeMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -364,11 +363,10 @@ class RustResourceAttributeMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -376,6 +374,24 @@ class RustResourceAttributeMixin:
                 binding = None
             if binding is not None:
                 return attr_name
+        return None
+
+    def rust_resource_register_class(self, node):
+        """Return the HLSL register class letter from an explicit ``register`` attribute."""
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            raw_value = self.attribute_argument_text(arguments[0]) or ""
+            raw_value = str(raw_value).strip().lower()
+            if (
+                raw_value
+                and raw_value[0] in ("b", "s", "t", "u")
+                and raw_value[1:].isdigit()
+            ):
+                return raw_value[0]
         return None
 
     def rust_resource_base_type_and_count(self, type_name):
@@ -434,6 +450,12 @@ class RustResourceAttributeMixin:
             return 1
         return count
 
+    def rust_resource_binding_family_keys(self, base_namespace, set_index):
+        """Yield the unscoped key and all class-scoped keys for a base namespace."""
+        yield (base_namespace, set_index)
+        for cls in ("b", "s", "t", "u"):
+            yield (f"{base_namespace}:{cls}", set_index)
+
     def rust_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.rust_used_resource_bindings.get(
@@ -443,10 +465,23 @@ class RustResourceAttributeMixin:
                 return True
         return False
 
+    def rust_resource_binding_family_conflicts(
+        self, base_namespace, set_index, binding, count
+    ):
+        for key in self.rust_resource_binding_family_keys(base_namespace, set_index):
+            if self.rust_resource_binding_range_conflicts(key, binding, count):
+                return True
+        return False
+
     def next_available_rust_resource_binding(self, namespace, set_index, count):
         key = (namespace, set_index)
         binding = self.rust_resource_binding_cursors.get(key, 0)
-        while self.rust_resource_binding_range_conflicts(key, binding, count):
+        # Auto-assignment is always classless, so consult the whole family of
+        # class-scoped reservations the same way CUDA, HIP and Mojo do.
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+        while self.rust_resource_binding_family_conflicts(
+            base_namespace, set_index, binding, count
+        ):
             binding += 1
         self.rust_resource_binding_cursors[key] = binding + count
         return binding
@@ -454,17 +489,33 @@ class RustResourceAttributeMixin:
     def reserve_rust_resource_binding(self, namespace, set_index, binding, count, name):
         key = (namespace, set_index)
         end = binding + count - 1
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+
+        # Register-class resources only conflict with the same class, but still
+        # conflict with classless resources in the unscoped namespace. Classless
+        # resources conflict with every class-scoped range in the same family.
+        if ":" in namespace:
+            keys_to_check = [(namespace, set_index), (base_namespace, set_index)]
+        else:
+            keys_to_check = self.rust_resource_binding_family_keys(
+                base_namespace, set_index
+            )
+
+        for check_key in keys_to_check:
+            for used_start, used_end, used_name in self.rust_used_resource_bindings.get(
+                check_key, []
+            ):
+                if binding <= used_end and used_start <= end:
+                    if used_start == binding and used_end == end and used_name == name:
+                        return
+                    raise RustRefusal(
+                        "Conflicting Rust resource binding for "
+                        f"'{name}': {base_namespace} set {set_index} binding "
+                        f"{binding}-{end} overlaps '{used_name}' binding "
+                        f"{used_start}-{used_end}"
+                    )
+
         ranges = self.rust_used_resource_bindings.setdefault(key, [])
-        for used_start, used_end, used_name in ranges:
-            if binding <= used_end and used_start <= end:
-                if used_start == binding and used_end == end and used_name == name:
-                    return
-                raise RustRefusal(
-                    "Conflicting Rust resource binding for "
-                    f"'{name}': {namespace} set {set_index} binding "
-                    f"{binding}-{end} overlaps '{used_name}' binding "
-                    f"{used_start}-{used_end}"
-                )
         ranges.append((binding, end, name))
         self.rust_resource_binding_cursors[key] = max(
             self.rust_resource_binding_cursors.get(key, 0), end + 1
@@ -486,6 +537,9 @@ class RustResourceAttributeMixin:
             node, resource_kind, count
         )
         namespace = self.rust_resource_binding_namespace(resource_kind)
+        register_class = self.rust_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_rust_resource_set_index(node)
         binding = self.explicit_rust_resource_binding_index(node)
         if binding is None:
@@ -578,6 +632,9 @@ class RustResourceAttributeMixin:
             node, resource_kind, count
         )
         namespace = self.rust_resource_binding_namespace(resource_kind)
+        register_class = self.rust_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_rust_resource_set_index(node)
         self.reserve_rust_resource_binding(
             namespace, set_index, binding, validation_count, name
