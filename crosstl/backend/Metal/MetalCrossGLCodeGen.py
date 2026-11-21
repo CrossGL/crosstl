@@ -1157,7 +1157,7 @@ float {scalar}(float base, float exponent) {{
                 and name == "position"
             ):
                 out = "gl_FragCoord"
-            elif name == "barycentric_coord":
+            elif name == "barycentric_coord" and name not in self.map_semantics:
                 out = (
                     "gl_BaryCoordNoPerspEXT"
                     if no_perspective_barycentric

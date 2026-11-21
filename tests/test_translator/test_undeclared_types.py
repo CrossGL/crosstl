@@ -167,8 +167,9 @@ shader Library {
 """
 
 
-def test_functions_no_entry_reaches_are_not_checked():
-    assert undeclared_type_uses(_program(DEAD_HELPER)) == []
+def test_functions_no_entry_reaches_are_checked():
+    uses = undeclared_type_uses(_program(DEAD_HELPER))
+    assert [name for name, _ in uses] == ["Missing"]
 
 
 def test_functions_an_entry_calls_are_checked():
@@ -181,9 +182,10 @@ def test_every_function_of_a_program_without_entries_is_checked():
     assert [name for name, _ in uses] == ["Missing"]
 
 
-def test_a_dead_helper_does_not_block_translation(tmp_path):
+def test_a_dead_helper_blocks_translation(tmp_path):
     path = _write(tmp_path, "dead.cgl", DEAD_HELPER)
-    assert "values" in crosstl.translate(path, backend="opengl")
+    with pytest.raises(UndeclaredTypeError):
+        crosstl.translate(path, backend="opengl")
 
 
 def test_crossgl_trait_and_payload_types_are_built_in():

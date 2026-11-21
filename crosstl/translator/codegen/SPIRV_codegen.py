@@ -50,6 +50,7 @@ from .spirv_enums_and_structs import SpirvEnumStructMixin
 from .spirv_exact_lookups import spirv_builtin_call_key
 from .spirv_expression_kinds import SpirvExpressionKindMixin
 from .spirv_extension_builtins import BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES
+from .spirv_float_operand_widths import widen_float_operands
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_function_parameters import (
     SpirvFunctionParameterMixin,
@@ -404,6 +405,7 @@ class VulkanSPIRVCodeGen(
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
         function_name = spirv_builtin_call_key(function_name)
+        args = widen_float_operands(self, function_name, args)
         handled = self.spirv_delegated_builtin_call(function_name, args)
         if handled is not UNHANDLED:
             return handled
