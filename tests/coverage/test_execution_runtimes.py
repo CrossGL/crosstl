@@ -418,6 +418,59 @@ def test_a_probe_the_runtime_would_not_compile_says_why_it_did_not_run(monkeypat
     )
 
 
+def _native_records(monkeypatch, **fields):
+    """Make every native record the harness returns carry ``fields`` instead of an execution."""
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        records = original(cases, *args, **kwargs)
+        for record in records:
+            if record["case"].endswith("-native"):
+                record.pop("execution", None)
+                record.update(fields)
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+
+
+def test_a_harness_error_quotes_the_harness_message(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    _native_records(
+        monkeypatch,
+        outcome="harness-error",
+        message="resource 'B1' has no binding the D3D12 root signature can take",
+    )
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert result.unrun == (
+        "on d3d12-warp, its native probe did not run (harness-error)\n"
+        "resource 'B1' has no binding the D3D12 root signature can take"
+    )
+
+
+def test_a_probe_the_validator_rejected_quotes_the_failed_step(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    _native_records(
+        monkeypatch,
+        outcome="invalid",
+        validation=[
+            {"command": ["dxc"], "status": "accepted", "returncode": 0, "log": ""},
+            {
+                "command": ["dxv"],
+                "status": "rejected",
+                "returncode": 1,
+                "log": (
+                    "error: validation failed\nInstructions should not read uninitialized value.\n"
+                ),
+            },
+        ],
+    )
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert result.unrun == (
+        "on d3d12-warp, its native probe did not run (invalid)\n"
+        "error: validation failed\nInstructions should not read uninitialized value."
+    )
+
+
 def test_a_translation_the_runtime_skipped_says_why_it_did_not_run(monkeypatch):
     fake_harness(
         monkeypatch, "skipped", 0, "d3d12-warp", message="needs 64-bit atomics"

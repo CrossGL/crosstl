@@ -137,9 +137,27 @@ def found(detail: str) -> bool:
     )
 
 
+def _said(record: dict) -> str:
+    """What the harness ``record`` says went wrong: the runtime's message, the harness's own message for a
+    ``harness-error``, or the log of the first validation step that did not accept the artifact.
+    """
+    message = (record.get("execution") or {}).get("message") or record.get("message")
+    if message:
+        return str(message)
+    failed = next(
+        (
+            step
+            for step in record.get("validation") or ()
+            if isinstance(step, dict) and step.get("status") != "accepted"
+        ),
+        None,
+    )
+    return str(failed.get("log") or "") if failed else ""
+
+
 def _quoted(record: dict) -> str:
     """The first lines of what the runtime said when it rejected the artifact of the harness ``record``."""
-    message = (record.get("execution") or {}).get("message") or ""
+    message = _said(record)
     lines = [line.rstrip() for line in message.splitlines() if line.strip()]
     text = "\n".join(lines[:_QUOTED_LINES])
     if len(text) > _QUOTED_CHARS:
