@@ -99,8 +99,9 @@ def test_metal_reinterpret_cast_to_its_own_element_type(tmp_path):
 
     assert "int words_offset = int(0);" in glsl
     assert (
-        "tg_pun_float_tile[(words_offset + int(gl_LocalInvocationIndex))] = value;"
-        in (glsl)
+        "tg_pun_float_tile[(words_offset + int(gl_LocalInvocationIndex))] = value;" in (
+            glsl
+        )
     )
     _glslang(
         tmp_path,
