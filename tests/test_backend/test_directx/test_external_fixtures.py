@@ -1074,9 +1074,11 @@ EXTERNAL_FIXTURES = [
                 return a + m + m3[0].xyxy + m3[1].xyxy;
             }
         """).strip(),
+        # DXC makes both globals $Globals members and ignores their initializers
+        # ("Initializer of external global will be ignored").
         contains=(
-            "vec4 m = vec4(4, 5, 6, 7);",
-            "const vec2[2] m3 = {12, 13, 14, 15};",
+            "@ hlsl_program_constant\n    vec4 m;",
+            "@ hlsl_program_constant\n    vec2 m3[2];",
             "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
         ),
     ),

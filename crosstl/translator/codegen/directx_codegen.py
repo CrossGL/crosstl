@@ -251,6 +251,10 @@ from .hlsl_texture_residency import (
     hlsl_texture_residency_call,
     hlsl_texture_resident_call,
 )
+from .hlsl_initialized_globals import (
+    hlsl_initialized_private_global,
+    hlsl_static_global_initializer,
+)
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .hlsl_wave_extended import (
@@ -2277,22 +2281,20 @@ class HLSLCodeGen(
                     "static",
                 } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
+                elif hlsl_initialized_private_global(node, qualifier):
+                    qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:
                 if not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             elif (
                 qualifier.startswith("static")
                 and getattr(node, "initial_value", None) is not None
             ):
                 # A static global starts from its initializer, not from zero.
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             image_format_prefix = self.storage_image_format_prefix(mapped_type, node)
             code += f"{image_format_prefix}{qualifier}{declaration}{register};\n"
