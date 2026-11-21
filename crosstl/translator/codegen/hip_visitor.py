@@ -11,7 +11,11 @@ from ..ast import (
 )
 from ..refusals import HipRefusal
 from .array_utils import split_array_type_suffix
-from .cuda_function_prototypes import late_called_functions, prototype_of
+from .cuda_function_prototypes import (
+    emission_order,
+    late_called_functions,
+    prototype_of,
+)
 from .cuda_shared_memory import helper_shared_variables
 from .enum_utils import (
     enum_struct_fields,
@@ -484,7 +488,11 @@ class HipVisitorMixin:
     def emit_late_function_prototypes(self, functions):
         """Declare each function of ``functions`` that an earlier one calls (:mod:`.cuda_function_prototypes`)."""
         late = late_called_functions(
-            func for func in functions if not generic_function_parameters(func)
+            *emission_order(
+                functions,
+                generic_function_parameters,
+                lambda func: generic_function_emission_list(self, func),
+            )
         )
         for func in late:
             self.visit(prototype_of(func))
