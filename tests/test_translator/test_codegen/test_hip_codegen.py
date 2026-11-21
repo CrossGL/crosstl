@@ -13355,7 +13355,9 @@ class TestHipCodeGen:
         assert "WaveOpNode(" not in hip_code
         assert "Unsupported HIP wave intrinsic" not in hip_code
 
-    def test_direct_shfl_down_sync_lowers_to_guarded_hip_helper(self):
+    def test_direct_shfl_down_sync_lowers_to_a_32_lane_hip_shuffle(self):
+        # CUDA warps are 32 lanes; hipcc 5.7 declares no __shfl_down_sync, and HIP's __shfl_down with width 32
+        # keeps the source lane inside the caller's 32-lane segment of a 32- or 64-lane wavefront.
         source_code = """
         shader HipDirectShuffle {
             compute {
@@ -13370,28 +13372,24 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline float "
-            "cgl_hip_shfl_down_sync_float(unsigned long long mask, float value, "
-            "int offset)" in hip_code
+            "__device__ inline T cgl_cuda_shfl_down_sync(unsigned int mask, T value, "
+            "unsigned int lane, int width = 32) {" in hip_code
         )
+        assert "    return __shfl_down(value, lane & 31u, width);" in hip_code
         assert (
-            "#if defined(__HIP_DEVICE_COMPILE__) && "
-            "defined(HIP_ENABLE_WARP_SYNC_BUILTINS)" in hip_code
+            "float reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 16);"
+            in hip_code
         )
-        assert (
-            "float reduced = cgl_hip_shfl_down_sync_float"
-            "(4294967295u, partial, 16);" in hip_code
-        )
+        assert "HIP_ENABLE_WARP_SYNC_BUILTINS" not in hip_code
+        assert "return value;" not in hip_code
 
-    def test_direct_shfl_down_sync_width_lowers_to_guarded_hip_helper(self):
-        # ROCm HIP documents __shfl_down_sync with optional width=warpSize.
-        # Source: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/reference/kernel_language.html#warp-shuffle-functions
+    def test_direct_shfl_down_sync_width_lowers_to_a_32_lane_hip_shuffle(self):
         source_code = """
         shader HipDirectShuffleWidth {
             compute {
                 void main() {
                     uint partial = 7u;
-                    uint reduced = __shfl_down_sync(0xffffffffffffffff, partial, 1, 32);
+                    uint reduced = __shfl_down_sync(0xffffffffu, partial, 1, 16);
                 }
             }
         }
@@ -13400,16 +13398,10 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline unsigned int "
-            "cgl_hip_shfl_down_sync_width_uint(unsigned long long mask, "
-            "unsigned int value, int offset, int width)" in hip_code
+            "unsigned int reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 1, 16);"
+            in hip_code
         )
-        assert "return __shfl_down_sync(mask, value, offset, width);" in hip_code
-        assert "(void)width;" in hip_code
-        assert (
-            "unsigned int reduced = cgl_hip_shfl_down_sync_width_uint"
-            "(18446744073709551615, partial, 1, 32);" in hip_code
-        )
+        assert hip_code.count("cgl_cuda_shfl_down_sync(unsigned int mask") == 1
 
     def test_direct_shfl_down_sync_rejects_invalid_arity(self):
         source_code = """
@@ -13426,7 +13418,7 @@ class TestHipCodeGen:
 
         with pytest.raises(
             ValueError,
-            match=r"HIP warp sync builtin __shfl_down_sync requires 3 or 4 "
+            match=r"CUDA warp intrinsic __shfl_down_sync takes 3 or 4 "
             r"arguments, got 2",
         ):
             HipCodeGen().generate(ast)

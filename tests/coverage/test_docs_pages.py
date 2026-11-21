@@ -128,8 +128,24 @@ def _opener(files, asked):
     return opener
 
 
+def _with_cell():
+    """:func:`_data` with a GLSL to WGSL translation matrix cell, which the coverage branch keeps in its own file."""
+    feature = {"name": "abs", "category": "function", "outcome": "supported"}
+    cell = {
+        "source": "glsl",
+        "target": "wgsl",
+        "validator": "naga",
+        "executes": False,
+        "score": 100.0,
+        "counts": {"supported": 1, "refused": 0, "wrong": 0, "untested": 0},
+        "features": [feature],
+    }
+    return {**_data(), "pairs": [cell]}
+
+
 def test_fetch_downloads_the_report_and_every_file_it_names(tmp_path):
-    files = report.site(_data())
+    files = report.site(_with_cell())
+    assert "features/pairs/glsl-to-wgsl.json" in files
     asked = []
     data = docs.load("https://example.test/coverage", _opener(files, asked))
     assert asked[0] == "https://example.test/coverage/coverage.json"
@@ -138,13 +154,43 @@ def test_fetch_downloads_the_report_and_every_file_it_names(tmp_path):
         for name in files
         if name != "coverage.json"
     )
-    assert docs.pages(data, {}) == docs.pages(_data(), {})
+    assert data["pairs"] == _with_cell()["pairs"]
+    assert docs.pages(data, {}) == docs.pages(_with_cell(), {})
 
 
-@pytest.mark.parametrize("name", ["../secret.json", "features/x.txt", "/etc/passwd", 3])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../secret.json",
+        "features/x.txt",
+        "/etc/passwd",
+        3,
+        # A row's file is never a matrix cell's.
+        "features/pairs/glsl-to-wgsl.json",
+    ],
+)
 def test_fetch_refuses_a_file_outside_the_published_directories(tmp_path, name):
     published = json.loads(report.site(_data())["coverage.json"])
     published["backends"][0]["file"] = name
+    asked = []
+    opener = _opener({"coverage.json": json.dumps(published)}, asked)
+    with pytest.raises(ValueError, match="not a published file"):
+        docs.fetch("https://example.test/coverage/", tmp_path, opener)
+    assert asked == ["https://example.test/coverage/coverage.json"]
+    assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "features/glsl-output.json",
+        "pairs/glsl-to-wgsl.json",
+        "features/pairs/../x.json",
+    ],
+)
+def test_fetch_refuses_a_cell_file_not_named_as_a_cell(tmp_path, name):
+    published = json.loads(report.site(_with_cell())["coverage.json"])
+    published["pairs"][0]["file"] = name
     asked = []
     opener = _opener({"coverage.json": json.dumps(published)}, asked)
     with pytest.raises(ValueError, match="not a published file"):

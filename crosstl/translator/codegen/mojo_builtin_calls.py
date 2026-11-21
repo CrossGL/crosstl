@@ -25,10 +25,6 @@ from .mojo_tables import (
     MOJO_SCALAR_DTYPES,
     MOJO_SYNC_BUILTINS,
     MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES,
-    MOJO_WAVE_BOOL_RESULT_OPS,
-    MOJO_WAVE_OP_ARITIES,
-    MOJO_WAVE_UINT_RESULT_OPS,
-    MOJO_WAVE_UVEC4_RESULT_OPS,
     ROUND_EVEN_FLOAT_DTYPES,
 )
 
@@ -387,24 +383,6 @@ class MojoBuiltinCallMixin:
             return "float"
         return self.variable_types.get(self.map_semantic(name), "vec4")
 
-    def generate_wave_op(self, expr):
-        operation = getattr(expr, "operation", "wave intrinsic")
-        args = list(getattr(expr, "arguments", []) or [])
-        expected_count = MOJO_WAVE_OP_ARITIES.get(operation)
-        if expected_count is None:
-            raise MojoRefusal(f"Unsupported Mojo wave intrinsic {operation}")
-        if len(args) != expected_count:
-            raise MojoRefusal(
-                f"Mojo wave intrinsic {operation} requires {expected_count} "
-                f"argument{'s' if expected_count != 1 else ''}, got {len(args)}"
-            )
-
-        raise MojoRefusal(
-            f"Mojo wave intrinsic {operation}: the Mojo generator has no lowering to "
-            "Mojo's warp operations, and a single-lane stand-in computes another "
-            "result whenever a wave has more than one active lane"
-        )
-
     def generate_cuda_shuffle_down_call(self, args):
         if len(args) != 3:
             raise MojoRefusal(
@@ -414,17 +392,6 @@ class MojoBuiltinCallMixin:
             "Mojo __shfl_down_sync: the Mojo generator has no lowering to Mojo's warp "
             "shuffles, and returning the lane's own value computes another result"
         )
-
-    def mojo_wave_result_type(self, operation, args):
-        if operation in MOJO_WAVE_UINT_RESULT_OPS:
-            return "uint"
-        if operation in MOJO_WAVE_BOOL_RESULT_OPS:
-            return "bool"
-        if operation in MOJO_WAVE_UVEC4_RESULT_OPS:
-            return "uvec4"
-        if args:
-            return self.expression_result_type(args[0]) or "uint"
-        return "uint"
 
     def generate_ray_tracing_op(self, expr):
         return self.generate_ray_tracing_call_expression(

@@ -40,6 +40,9 @@ from crosstl.backend.Metal.deduction_operand_types import (
     is_unary_sign_position,
     operand_expression_type,
 )
+from crosstl.backend.Metal.defaulted_template_arguments import (
+    primary_template_structs_by_name,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -15128,6 +15131,8 @@ def _metal_find_implicit_template_function_calls(
     )
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
+    # Deduction compares an argument's trailing defaulted template arguments with the declared defaults.
+    template_structs_by_name: dict[str, Any] | None = None
     for function in functions:
         if (
             included is not None
@@ -15205,12 +15210,17 @@ def _metal_find_implicit_template_function_calls(
                 work_budget=work_budget,
                 include_struct_members=False,
             )
+            if template_structs_by_name is None:
+                template_structs_by_name = primary_template_structs_by_name(
+                    preprocessor, source
+                )
             inferred_arguments = _infer_plain_template_helper_arguments(
                 preprocessor,
                 template,
                 arguments,
                 call_type_environment,
                 known_return_types,
+                template_structs_by_name=template_structs_by_name,
                 static_values=preprocessor._local_integral_constants_at(
                     integral_constants,
                     call_position,
@@ -16174,7 +16184,19 @@ def _collect_metal_template_type_bindings(
     ):
         return not actual_args
     if len(expected_args) > len(actual_args):
-        return False
+        # `Tile<float, 1, 1>` names `Tile<float, 1, 1, Frag<float, 8, 8>>`, so a parameter that spells the
+        # defaulted argument deduces it from the completed list ([temp.arg.general]/9).
+        declaration = (template_structs_by_name or {}).get(expected_base.lstrip(":"))
+        completed = (
+            preprocessor._template_arguments_with_resolved_defaults(
+                declaration, list(actual_args)
+            )
+            if declaration is not None
+            else None
+        )
+        if completed is None or len(expected_args) > len(completed):
+            return False
+        actual_args = completed
 
     staged_bindings = dict(bindings)
     for expected_arg, actual_arg in zip(
