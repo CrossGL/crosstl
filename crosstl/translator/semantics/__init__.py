@@ -269,6 +269,10 @@ from .work_graph_nodes import (
     check_work_graph_nodes,
     refuse_work_graph_nodes,
 )
+from .workgroup_uniform_load import (
+    WorkgroupUniformLoadError,
+    lower_workgroup_uniform_loads,
+)
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -307,6 +311,7 @@ __all__ = [
     "HitObjectUnsupportedError",
     "WorkGraphNodeError",
     "WorkGraphUnsupportedError",
+    "WorkgroupUniformLoadError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
@@ -568,6 +573,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     lower_device_private_globals(program, report.target)
+    lower_workgroup_uniform_loads(program, report.target)
     orient_row_major_buffer_struct_members(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
