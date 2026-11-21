@@ -85,44 +85,7 @@ class RustExpressionMixin:
         elif isinstance(expr, MatchNode):
             return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
-            operand_expr = getattr(expr, "operand", "")
-            raw_op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            op = self.map_operator(raw_op)
-            if op in ["++", "--"]:
-                return self.generate_increment_value(expr, operand_expr, op)
-            if op == "~":
-                operand = self.generate_expression(operand_expr)
-                return f"(!{operand})"
-            if op == "+":
-                # Rust has no unary plus; +x is x.
-                return f"({self.generate_expression(operand_expr)})"
-            bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
-            if bool_vector_not is not None:
-                return bool_vector_not
-            operand = self.generate_expression(operand_expr)
-            if op == "-":
-                operand_type = self.expression_result_type(operand_expr)
-                vector = self.vector_type_info(operand_type)
-                component = (
-                    vector["component_type"]
-                    if vector is not None
-                    else self.normalize_scalar_type(operand_type)
-                )
-                if component in {"u8", "u16", "u32", "u64", "uint"}:
-                    # Rust has no unary minus on unsigned types; C negation is modulo 2^n.
-                    if vector is not None:
-                        return f"{self.map_type(operand_type)}::ZERO.wrapping_sub({operand})"
-                    return f"({operand}).wrapping_neg()"
-            if op == "!":
-                operand_type = self.normalize_scalar_type(
-                    self.expression_result_type(operand_expr)
-                )
-                if operand_type is not None and operand_type != "bool":
-                    zero_literal = (
-                        "0.0" if operand_type in {"f16", "f32", "f64"} else "0"
-                    )
-                    return f"({operand} == {zero_literal})"
-            return f"({op}{operand})"
+            return self.generate_unary_expression(expr)
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
@@ -345,6 +308,47 @@ class RustExpressionMixin:
             return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
+
+    def generate_unary_expression(self, expr):
+        """Write a CrossGL unary operation as a Rust expression."""
+        operand_expr = getattr(expr, "operand", "")
+        raw_op = getattr(expr, "operator", getattr(expr, "op", "+"))
+        op = self.map_operator(raw_op)
+        if op in ["++", "--"]:
+            return self.generate_increment_value(expr, operand_expr, op)
+        if op == "~":
+            operand = self.generate_expression(operand_expr)
+            return f"(!{operand})"
+        if op == "+":
+            # Rust has no unary plus; +x is x.
+            return f"({self.generate_expression(operand_expr)})"
+        bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
+        if bool_vector_not is not None:
+            return bool_vector_not
+        operand = self.generate_expression(operand_expr)
+        if op == "-":
+            operand_type = self.expression_result_type(operand_expr)
+            vector = self.vector_type_info(operand_type)
+            component = (
+                vector["component_type"]
+                if vector is not None
+                else self.normalize_scalar_type(operand_type)
+            )
+            if component in {"u8", "u16", "u32", "u64", "uint"}:
+                # Rust has no unary minus on unsigned types; C negation is modulo 2^n.
+                if vector is not None:
+                    return (
+                        f"{self.map_type(operand_type)}::ZERO.wrapping_sub({operand})"
+                    )
+                return f"({operand}).wrapping_neg()"
+        if op == "!":
+            operand_type = self.normalize_scalar_type(
+                self.expression_result_type(operand_expr)
+            )
+            if operand_type is not None and operand_type != "bool":
+                zero_literal = "0.0" if operand_type in {"f16", "f32", "f64"} else "0"
+                return f"({operand} == {zero_literal})"
+        return f"({op}{operand})"
 
     def rust_user_function_of_call(self, func_name):
         """The program function a call names, also when it carries explicit type arguments (``pick<mat4>``)."""
