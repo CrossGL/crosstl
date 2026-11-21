@@ -14,6 +14,7 @@ from ..refusals import RustRefusal
 from .array_utils import prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .rust_exact_lookups import rust_resource_kind_of_spelling
+from .rust_gpu_spec_constants import SPEC_CONSTANT_KIND, spec_constant_parameter
 from .rust_gpu_interface import (
     BUILTIN_INPUT_KIND,
     STORAGE_SLICE_KIND,
@@ -583,6 +584,8 @@ class RustResourceAttributeMixin:
             return (
                 f"#[spirv({resource_info['builtin']})] {name}: {self.map_type(type_name)}"
             )
+        if kind == SPEC_CONSTANT_KIND:
+            return spec_constant_parameter(name, resource_info)
         if kind == WORKGROUP_KIND:
             return f"#[spirv(workgroup)] {name}: {self.map_type(type_name)}"
         attribute = self.rust_resource_parameter_attribute(node, type_name)

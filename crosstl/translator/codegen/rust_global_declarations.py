@@ -195,7 +195,9 @@ class RustGlobalDeclarationMixin:
     def generate_constant_declarations(self, ast):
         code = ""
         for node in getattr(ast, "constants", []) or []:
-            if isinstance(node, ConstantNode):
+            if isinstance(node, ConstantNode) and (
+                node.name not in self.rust_spec_constant_infos
+            ):
                 code += self.generate_constant_declaration(node)
         return f"{code}\n" if code else ""
 

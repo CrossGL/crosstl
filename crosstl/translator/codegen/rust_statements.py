@@ -162,6 +162,10 @@ class RustStatementMixin:
                             return_expr,
                             indent,
                         )
+                    if self.current_rust_stage_outputs:
+                        return self.generate_rust_stage_output_return(
+                            indent_str, return_expr
+                        )
                     if self.current_rust_output_parameters:
                         return self.generate_rust_output_return(indent_str, return_expr)
                     return f"{indent_str}return {return_expr};\n"
@@ -197,7 +201,7 @@ class RustStatementMixin:
         ):
             if hasattr(stmt, "expression"):
                 if self.is_discard_statement(stmt):
-                    return f"{indent_str}gpu::discard();\n"
+                    return f"{indent_str}spirv_std::arch::kill();\n"
                 expression = self.generate_discarded_expression(stmt.expression)
                 if getattr(stmt, "is_tail_expression", False):
                     return f"{indent_str}{expression}\n"

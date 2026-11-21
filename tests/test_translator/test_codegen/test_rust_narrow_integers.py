@@ -6,6 +6,7 @@ narrower than 32 bits to ``int`` (``semantics.hub_types.promote``), so ``30000 +
 60000 and ``3 - 5`` on two ``uint16`` values is -2.
 """
 
+import shutil
 import subprocess
 
 import pytest
@@ -14,10 +15,16 @@ import crosstl
 from tests.test_translator.test_codegen.test_rust_codegen import (
     generate_code,
     parse_code,
-    rust_smoke_source,
-    rustc_or_skip,
+    rust_host_source,
     tokenize_code,
 )
+
+
+def rustc_or_skip():
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is not installed")
+    return rustc
 
 HELPERS = """
 shader NarrowArithmetic {
@@ -46,7 +53,7 @@ def test_ir_narrow_integer_spellings_are_rust_types():
 
 
 def test_narrow_integer_arithmetic_runs_with_integer_promotion(tmp_path):
-    source = rust_smoke_source(rust(HELPERS)) + (
+    source = rust_host_source(rust(HELPERS)) + (
         "\nfn main() {\n"
         '    println!("{}", add16(30000, 30000));\n'
         '    println!("{}", sub16u(3, 5));\n'

@@ -37,6 +37,7 @@ from .rust_resource_bindings import (
     PROMOTABLE_RESOURCE_KINDS,
     resource_parameters,
 )
+from .specialization_constants import declares_specialization_id
 from .rust_gpu_interface import (
     STORAGE_SLICE_KIND,
     UNIFORM_VALUE_KIND,
@@ -223,6 +224,8 @@ class RustProgramAnalysisMixin:
         for name, info in builtin_input_infos(ast).items():
             if name not in declared:
                 resources[name] = info
+        for name, info in self.rust_spec_constant_infos.items():
+            resources[name] = info
         return resources
 
     def rust_gpu_interface_info(self, node, type_name):
@@ -324,10 +327,12 @@ class RustProgramAnalysisMixin:
         return params_by_function
 
     def is_rust_gpu_interface_declaration(self, node):
-        """Whether ``node`` is a buffer pointer, uniform value or workgroup variable, which only entry-point
-        parameters declare: a module-level declaration of one would be a mutable or defaulted static."""
+        """Whether ``node`` is a buffer pointer, uniform value, workgroup variable or specialization constant, which
+        only entry-point parameters declare: a module-level declaration of one would be a mutable or defaulted static."""
         if getattr(node, "name", None) is None:
             return False
+        if node.name in self.rust_spec_constant_infos and declares_specialization_id(node):
+            return True
         type_name = self.rust_variable_source_type(node)
         if self.rust_gpu_interface_info(node, type_name) is None:
             return False

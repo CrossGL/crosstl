@@ -206,7 +206,9 @@ class RustExpressionMixin:
             rust_gpu_call = generate_rust_gpu_builtin_call(self, func_name, args)
             if rust_gpu_call is not None:
                 return rust_gpu_call
-            if not self.is_rust_gpu_constructor_call(func_name, args):
+            if not self.is_rust_gpu_constructor_call(
+                func_name, args
+            ) and not self.is_rust_program_callable(func_name or callee):
                 return self.refuse_lowering(
                     f"function: '{func_name or callee}' has no rust-gpu lowering for these operands",
                     "()",
@@ -340,6 +342,20 @@ class RustExpressionMixin:
             return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
+
+    def is_rust_program_callable(self, callee):
+        """Whether ``callee`` names something the program defines: a local closure or a callable parameter, or an
+        associated function of a generic parameter or of a trait, struct or enum the program declares."""
+        if not isinstance(callee, str) or not callee:
+            return False
+        if callee in self.variable_types or callee in self.local_variable_names:
+            return True
+        owner = callee.split("::", 1)[0] if "::" in callee else None
+        if owner is None:
+            return False
+        if owner in self.current_generic_param_names:
+            return True
+        return owner in getattr(self, "rust_program_type_names", ())
 
     def is_rust_gpu_constructor_call(self, func_name, args):
         """Whether ``func_name(args)`` builds a value: a scalar conversion, a glam vector or matrix, a struct or an

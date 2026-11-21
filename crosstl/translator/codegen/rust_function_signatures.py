@@ -185,6 +185,10 @@ class RustFunctionSignatureMixin:
             for name, bounds in inferred.items():
                 for bound in bounds:
                     self.add_generic_constraint(constraints, name, bound)
+            # A CrossGL value is copied where it is used again; every rust-gpu shader value type is Copy.
+            for name, bounds in constraints.items():
+                if "Copy" not in bounds:
+                    bounds.insert(0, "Copy")
         finally:
             self.active_generic_constraint_functions.remove(cache_key)
 

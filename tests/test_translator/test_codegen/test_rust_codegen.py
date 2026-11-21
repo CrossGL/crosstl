@@ -8,6 +8,7 @@ from typing import List
 import pytest
 
 import crosstl.translator
+from tools.coverage import rustgpu
 from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -58,6 +59,7 @@ from crosstl.translator.ast import (
     WhileNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
+from crosstl.translator.codegen.rust_gpu_interface import RUST_GPU_PRELUDE
 from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -92,4231 +94,18 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
-RUST_SMOKE_STUBS = """
-#![allow(dead_code)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(unused_imports)]
-#![allow(unused_parens)]
-
-mod math {
-    use std::marker::PhantomData;
-    use std::ops::{Add, Div, Mul, Neg, Sub};
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct Vec2<T> {
-        pub x: T,
-        pub y: T,
-    }
-
-    impl<T> Vec2<T> {
-        pub fn new(x: T, y: T) -> Self {
-            Self { x, y }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct Vec3<T> {
-        pub x: T,
-        pub y: T,
-        pub z: T,
-    }
-
-    impl<T> Vec3<T> {
-        pub fn new(x: T, y: T, z: T) -> Self {
-            Self { x, y, z }
-        }
-    }
-
-    impl Add for Vec3<f32> {
-        type Output = Self;
-
-        fn add(self, rhs: Self) -> Self::Output {
-            Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
-        }
-    }
-
-    impl Sub for Vec3<f32> {
-        type Output = Self;
-
-        fn sub(self, rhs: Self) -> Self::Output {
-            Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
-        }
-    }
-
-    impl Mul for Vec3<f32> {
-        type Output = Self;
-
-        fn mul(self, rhs: Self) -> Self::Output {
-            Self::new(self.x * rhs.x, self.y * rhs.y, self.z * rhs.z)
-        }
-    }
-
-    impl Mul<f32> for Vec3<f32> {
-        type Output = Self;
-
-        fn mul(self, rhs: f32) -> Self::Output {
-            Self::new(self.x * rhs, self.y * rhs, self.z * rhs)
-        }
-    }
-
-    impl Mul<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn mul(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self * rhs.x, self * rhs.y, self * rhs.z)
-        }
-    }
-
-    impl Div<f32> for Vec3<f32> {
-        type Output = Self;
-
-        fn div(self, rhs: f32) -> Self::Output {
-            Self::new(self.x / rhs, self.y / rhs, self.z / rhs)
-        }
-    }
-
-    impl Neg for Vec3<f32> {
-        type Output = Self;
-
-        fn neg(self) -> Self::Output {
-            Self::new(-self.x, -self.y, -self.z)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct Vec4<T> {
-        pub x: T,
-        pub y: T,
-        pub z: T,
-        pub w: T,
-    }
-
-    impl<T> Vec4<T> {
-        pub fn new(x: T, y: T, z: T, w: T) -> Self {
-            Self { x, y, z, w }
-        }
-    }
-
-    impl Add for Vec4<f32> {
-        type Output = Self;
-
-        fn add(self, rhs: Self) -> Self::Output {
-            Self::new(
-                self.x + rhs.x,
-                self.y + rhs.y,
-                self.z + rhs.z,
-                self.w + rhs.w,
-            )
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat2<T> {
-        pub c0: Vec2<T>,
-        pub c1: Vec2<T>,
-    }
-
-    impl<T> Mat2<T> {
-        pub fn new(m00: T, m01: T, m10: T, m11: T) -> Self {
-            Self {
-                c0: Vec2::new(m00, m01),
-                c1: Vec2::new(m10, m11),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat3<T> {
-        pub c0: Vec3<T>,
-        pub c1: Vec3<T>,
-        pub c2: Vec3<T>,
-    }
-
-    impl<T> Mat3<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m02: T,
-            m10: T,
-            m11: T,
-            m12: T,
-            m20: T,
-            m21: T,
-            m22: T,
-        ) -> Self {
-            Self {
-                c0: Vec3::new(m00, m01, m02),
-                c1: Vec3::new(m10, m11, m12),
-                c2: Vec3::new(m20, m21, m22),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat4<T> {
-        pub c0: Vec4<T>,
-        pub c1: Vec4<T>,
-        pub c2: Vec4<T>,
-        pub c3: Vec4<T>,
-    }
-
-    impl<T> Mat4<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m02: T,
-            m03: T,
-            m10: T,
-            m11: T,
-            m12: T,
-            m13: T,
-            m20: T,
-            m21: T,
-            m22: T,
-            m23: T,
-            m30: T,
-            m31: T,
-            m32: T,
-            m33: T,
-        ) -> Self {
-            Self {
-                c0: Vec4::new(m00, m01, m02, m03),
-                c1: Vec4::new(m10, m11, m12, m13),
-                c2: Vec4::new(m20, m21, m22, m23),
-                c3: Vec4::new(m30, m31, m32, m33),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat2x3<T> {
-        pub c0: Vec3<T>,
-        pub c1: Vec3<T>,
-    }
-
-    impl<T> Mat2x3<T> {
-        pub fn new(m00: T, m01: T, m02: T, m10: T, m11: T, m12: T) -> Self {
-            Self {
-                c0: Vec3::new(m00, m01, m02),
-                c1: Vec3::new(m10, m11, m12),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat2x4<T> {
-        pub c0: Vec4<T>,
-        pub c1: Vec4<T>,
-    }
-
-    impl<T> Mat2x4<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m02: T,
-            m03: T,
-            m10: T,
-            m11: T,
-            m12: T,
-            m13: T,
-        ) -> Self {
-            Self {
-                c0: Vec4::new(m00, m01, m02, m03),
-                c1: Vec4::new(m10, m11, m12, m13),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat3x2<T> {
-        pub c0: Vec2<T>,
-        pub c1: Vec2<T>,
-        pub c2: Vec2<T>,
-    }
-
-    impl<T> Mat3x2<T> {
-        pub fn new(m00: T, m01: T, m10: T, m11: T, m20: T, m21: T) -> Self {
-            Self {
-                c0: Vec2::new(m00, m01),
-                c1: Vec2::new(m10, m11),
-                c2: Vec2::new(m20, m21),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat3x4<T> {
-        pub c0: Vec4<T>,
-        pub c1: Vec4<T>,
-        pub c2: Vec4<T>,
-    }
-
-    impl<T> Mat3x4<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m02: T,
-            m03: T,
-            m10: T,
-            m11: T,
-            m12: T,
-            m13: T,
-            m20: T,
-            m21: T,
-            m22: T,
-            m23: T,
-        ) -> Self {
-            Self {
-                c0: Vec4::new(m00, m01, m02, m03),
-                c1: Vec4::new(m10, m11, m12, m13),
-                c2: Vec4::new(m20, m21, m22, m23),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat4x2<T> {
-        pub c0: Vec2<T>,
-        pub c1: Vec2<T>,
-        pub c2: Vec2<T>,
-        pub c3: Vec2<T>,
-    }
-
-    impl<T> Mat4x2<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m10: T,
-            m11: T,
-            m20: T,
-            m21: T,
-            m30: T,
-            m31: T,
-        ) -> Self {
-            Self {
-                c0: Vec2::new(m00, m01),
-                c1: Vec2::new(m10, m11),
-                c2: Vec2::new(m20, m21),
-                c3: Vec2::new(m30, m31),
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat4x3<T> {
-        pub c0: Vec3<T>,
-        pub c1: Vec3<T>,
-        pub c2: Vec3<T>,
-        pub c3: Vec3<T>,
-    }
-
-    impl<T> Mat4x3<T> {
-        pub fn new(
-            m00: T,
-            m01: T,
-            m02: T,
-            m10: T,
-            m11: T,
-            m12: T,
-            m20: T,
-            m21: T,
-            m22: T,
-            m30: T,
-            m31: T,
-            m32: T,
-        ) -> Self {
-            Self {
-                c0: Vec3::new(m00, m01, m02),
-                c1: Vec3::new(m10, m11, m12),
-                c2: Vec3::new(m20, m21, m22),
-                c3: Vec3::new(m30, m31, m32),
-            }
-        }
-    }
-
-    macro_rules! matrix_default {
-        ($($name:ident),+) => {
-            $(
-                impl<T> Default for $name<T> {
-                    fn default() -> Self {
-                        unsafe { std::mem::zeroed() }
-                    }
-                }
-            )+
-        };
-    }
-
-    matrix_default!(Mat2, Mat3, Mat4, Mat2x3, Mat2x4, Mat3x2, Mat3x4, Mat4x2, Mat4x3);
-
-    macro_rules! matrix_arithmetic {
-        ($name:ident) => {
-            impl<T> Add for $name<T> {
-                type Output = Self;
-
-                fn add(self, _rhs: Self) -> Self::Output {
-                    self
-                }
-            }
-
-            impl<T> Sub for $name<T> {
-                type Output = Self;
-
-                fn sub(self, _rhs: Self) -> Self::Output {
-                    self
-                }
-            }
-
-            impl<T> Mul<T> for $name<T> {
-                type Output = Self;
-
-                fn mul(self, _rhs: T) -> Self::Output {
-                    self
-                }
-            }
-
-            impl<T> Div<T> for $name<T> {
-                type Output = Self;
-
-                fn div(self, _rhs: T) -> Self::Output {
-                    self
-                }
-            }
-
-            impl Mul<$name<f32>> for f32 {
-                type Output = $name<f32>;
-
-                fn mul(self, rhs: $name<f32>) -> Self::Output {
-                    rhs
-                }
-            }
-
-            impl Mul<$name<f64>> for f64 {
-                type Output = $name<f64>;
-
-                fn mul(self, rhs: $name<f64>) -> Self::Output {
-                    rhs
-                }
-            }
-        };
-    }
-
-    matrix_arithmetic!(Mat2);
-    matrix_arithmetic!(Mat3);
-    matrix_arithmetic!(Mat4);
-    matrix_arithmetic!(Mat2x3);
-    matrix_arithmetic!(Mat2x4);
-    matrix_arithmetic!(Mat3x2);
-    matrix_arithmetic!(Mat3x4);
-    matrix_arithmetic!(Mat4x2);
-    matrix_arithmetic!(Mat4x3);
-
-    pub trait Transpose {
-        type Output;
-
-        fn transposed(self) -> Self::Output;
-    }
-
-    pub fn transpose<M: Transpose>(value: M) -> M::Output {
-        value.transposed()
-    }
-
-    macro_rules! square_transpose {
-        ($matrix:ident) => {
-            impl<T> Transpose for $matrix<T> {
-                type Output = Self;
-
-                fn transposed(self) -> Self::Output {
-                    self
-                }
-            }
-        };
-    }
-
-    square_transpose!(Mat2);
-    square_transpose!(Mat3);
-    square_transpose!(Mat4);
-
-    macro_rules! rectangular_transpose {
-        ($source:ident, $target:ident) => {
-            impl<T> Transpose for $source<T> {
-                type Output = $target<T>;
-
-                fn transposed(self) -> Self::Output {
-                    Default::default()
-                }
-            }
-        };
-    }
-
-    rectangular_transpose!(Mat2x3, Mat3x2);
-    rectangular_transpose!(Mat3x2, Mat2x3);
-    rectangular_transpose!(Mat2x4, Mat4x2);
-    rectangular_transpose!(Mat4x2, Mat2x4);
-    rectangular_transpose!(Mat3x4, Mat4x3);
-    rectangular_transpose!(Mat4x3, Mat3x4);
-
-    pub trait Inverse {
-        fn inverted(self) -> Self;
-    }
-
-    pub fn inverse<M: Inverse>(value: M) -> M {
-        value.inverted()
-    }
-
-    macro_rules! square_inverse {
-        ($matrix:ident) => {
-            impl<T> Inverse for $matrix<T> {
-                fn inverted(self) -> Self {
-                    self
-                }
-            }
-        };
-    }
-
-    square_inverse!(Mat2);
-    square_inverse!(Mat3);
-    square_inverse!(Mat4);
-
-    pub trait Determinant {
-        type Output;
-
-        fn determinant_value(self) -> Self::Output;
-    }
-
-    pub fn determinant<M: Determinant>(value: M) -> M::Output {
-        value.determinant_value()
-    }
-
-    macro_rules! square_determinant {
-        ($matrix:ident) => {
-            impl<T: Default> Determinant for $matrix<T> {
-                type Output = T;
-
-                fn determinant_value(self) -> Self::Output {
-                    T::default()
-                }
-            }
-        };
-    }
-
-    square_determinant!(Mat2);
-    square_determinant!(Mat3);
-    square_determinant!(Mat4);
-
-    impl Mul<Vec3<f32>> for Mat3<f32> {
-        type Output = Vec3<f32>;
-
-        fn mul(self, rhs: Vec3<f32>) -> Self::Output {
-            rhs
-        }
-    }
-
-    impl Mul<Vec4<f32>> for Mat4<f32> {
-        type Output = Vec4<f32>;
-
-        fn mul(self, rhs: Vec4<f32>) -> Self::Output {
-            rhs
-        }
-    }
-
-    pub fn dot(left: Vec3<f32>, right: Vec3<f32>) -> f32 {
-        left.x * right.x + left.y * right.y + left.z * right.z
-    }
-
-    pub fn length(value: Vec3<f32>) -> f32 {
-        dot(value, value).sqrt()
-    }
-
-    pub fn normalize(value: Vec3<f32>) -> Vec3<f32> {
-        value
-    }
-
-    pub fn cross(left: Vec3<f32>, right: Vec3<f32>) -> Vec3<f32> {
-        Vec3::new(
-            left.y * right.z - left.z * right.y,
-            left.z * right.x - left.x * right.z,
-            left.x * right.y - left.y * right.x,
-        )
-    }
-
-    pub fn distance(left: Vec3<f32>, right: Vec3<f32>) -> f32 {
-        length(left - right)
-    }
-
-    pub fn reflect(incident: Vec3<f32>, normal: Vec3<f32>) -> Vec3<f32> {
-        incident - normal * (2.0 * dot(incident, normal))
-    }
-
-    pub fn refract(incident: Vec3<f32>, _normal: Vec3<f32>, _eta: f32) -> Vec3<f32> {
-        incident
-    }
-
-    pub fn faceforward(
-        normal: Vec3<f32>,
-        incident: Vec3<f32>,
-        reference: Vec3<f32>,
-    ) -> Vec3<f32> {
-        if dot(reference, incident) < 0.0 {
-            normal
-        } else {
-            -normal
-        }
-    }
-
-    pub fn outer_product<Column, Row, Output>(_column: Column, _row: Row) -> Output
-    where
-        Output: Default,
-    {
-        Default::default()
-    }
-
-    pub fn matrix_comp_mult<Left, Right, Output>(_left: Left, _right: Right) -> Output
-    where
-        Output: Default,
-    {
-        Default::default()
-    }
-
-    pub trait MinValue<Rhs> {
-        type Output;
-
-        fn min_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn min<Left, Right>(left: Left, right: Right) -> <Left as MinValue<Right>>::Output
-    where
-        Left: MinValue<Right>,
-    {
-        left.min_value(right)
-    }
-
-    impl MinValue<f32> for f32 {
-        type Output = f32;
-
-        fn min_value(self, rhs: f32) -> Self::Output {
-            self.min(rhs)
-        }
-    }
-
-    impl MinValue<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn min_value(self, _rhs: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl MinValue<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn min_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    impl MinValue<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn min_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait MaxValue<Rhs> {
-        type Output;
-
-        fn max_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn max<Left, Right>(left: Left, right: Right) -> <Left as MaxValue<Right>>::Output
-    where
-        Left: MaxValue<Right>,
-    {
-        left.max_value(right)
-    }
-
-    impl MaxValue<f32> for f32 {
-        type Output = f32;
-
-        fn max_value(self, rhs: f32) -> Self::Output {
-            self.max(rhs)
-        }
-    }
-
-    impl MaxValue<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn max_value(self, _rhs: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl MaxValue<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn max_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    impl MaxValue<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn max_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait ClampValue<Low, High> {
-        type Output;
-
-        fn clamp_value(self, low: Low, high: High) -> Self::Output;
-    }
-
-    pub fn clamp<Value, Low, High>(value: Value, low: Low, high: High) -> <Value as ClampValue<Low, High>>::Output
-    where
-        Value: ClampValue<Low, High>,
-    {
-        value.clamp_value(low, high)
-    }
-
-    impl ClampValue<f32, f32> for f32 {
-        type Output = f32;
-
-        fn clamp_value(self, low: f32, high: f32) -> Self::Output {
-            self.max(low).min(high)
-        }
-    }
-
-    impl ClampValue<f32, f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn clamp_value(self, _low: f32, _high: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl ClampValue<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn clamp_value(self, _low: Vec3<f32>, _high: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    impl ClampValue<Vec3<f32>, Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn clamp_value(self, _low: Vec3<f32>, _high: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    pub trait PowValue<Rhs> {
-        type Output;
-
-        fn pow_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn pow<Left, Right>(left: Left, right: Right) -> <Left as PowValue<Right>>::Output
-    where
-        Left: PowValue<Right>,
-    {
-        left.pow_value(right)
-    }
-
-    impl PowValue<f32> for f32 {
-        type Output = f32;
-
-        fn pow_value(self, rhs: f32) -> Self::Output {
-            self.powf(rhs)
-        }
-    }
-
-    impl PowValue<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn pow_value(self, _rhs: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl PowValue<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn pow_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    impl PowValue<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn pow_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    macro_rules! same_shape_unary_function {
-        ($trait_name:ident, $method_name:ident, $function_name:ident) => {
-            pub trait $trait_name {
-                type Output;
-
-                fn $method_name(self) -> Self::Output;
-            }
-
-            pub fn $function_name<T: $trait_name>(value: T) -> T::Output {
-                value.$method_name()
-            }
-
-            impl $trait_name for f32 {
-                type Output = f32;
-
-                fn $method_name(self) -> Self::Output {
-                    self
-                }
-            }
-
-            impl $trait_name for Vec3<f32> {
-                type Output = Vec3<f32>;
-
-                fn $method_name(self) -> Self::Output {
-                    self
-                }
-            }
-        };
-    }
-
-    same_shape_unary_function!(SqrtValue, sqrt_value, sqrt);
-    same_shape_unary_function!(RsqrtValue, rsqrt_value, rsqrt);
-    same_shape_unary_function!(AbsValue, abs_value, abs);
-    same_shape_unary_function!(FloorValue, floor_value, floor);
-    same_shape_unary_function!(CeilValue, ceil_value, ceil);
-    same_shape_unary_function!(RoundValue, round_value, round);
-
-    pub trait TruncValue {
-        type Output;
-
-        fn trunc_value(self) -> Self::Output;
-    }
-
-    pub fn trunc<T: TruncValue>(value: T) -> T::Output {
-        value.trunc_value()
-    }
-
-    impl TruncValue for f32 {
-        type Output = f32;
-
-        fn trunc_value(self) -> Self::Output {
-            self.trunc()
-        }
-    }
-
-    impl TruncValue for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn trunc_value(self) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait RoundEvenValue {
-        type Output;
-
-        fn round_even_value(self) -> Self::Output;
-    }
-
-    pub fn round_even<T: RoundEvenValue>(value: T) -> T::Output {
-        value.round_even_value()
-    }
-
-    impl RoundEvenValue for f32 {
-        type Output = f32;
-
-        fn round_even_value(self) -> Self::Output {
-            self
-        }
-    }
-
-    impl RoundEvenValue for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn round_even_value(self) -> Self::Output {
-            self
-        }
-    }
-
-    same_shape_unary_function!(FractValue, fract_value, fract);
-    same_shape_unary_function!(SinValue, sin_value, sin);
-    same_shape_unary_function!(CosValue, cos_value, cos);
-    same_shape_unary_function!(TanValue, tan_value, tan);
-    same_shape_unary_function!(AsinValue, asin_value, asin);
-    same_shape_unary_function!(AcosValue, acos_value, acos);
-    same_shape_unary_function!(AtanValue, atan_value, atan);
-
-    pub trait Atan2Value<Rhs> {
-        type Output;
-
-        fn atan2_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn atan2<Left, Right>(left: Left, right: Right) -> <Left as Atan2Value<Right>>::Output
-    where
-        Left: Atan2Value<Right>,
-    {
-        left.atan2_value(right)
-    }
-
-    impl Atan2Value<f32> for f32 {
-        type Output = f32;
-
-        fn atan2_value(self, rhs: f32) -> Self::Output {
-            self.atan2(rhs)
-        }
-    }
-
-    impl Atan2Value<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn atan2_value(self, _rhs: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl Atan2Value<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn atan2_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    impl Atan2Value<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn atan2_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    same_shape_unary_function!(SinhValue, sinh_value, sinh);
-    same_shape_unary_function!(CoshValue, cosh_value, cosh);
-    same_shape_unary_function!(TanhValue, tanh_value, tanh);
-    same_shape_unary_function!(ExpValue, exp_value, exp);
-    same_shape_unary_function!(Exp2Value, exp2_value, exp2);
-    same_shape_unary_function!(LogValue, log_value, log);
-    same_shape_unary_function!(Log2Value, log2_value, log2);
-    same_shape_unary_function!(DegreesValue, degrees_value, degrees);
-    same_shape_unary_function!(RadiansValue, radians_value, radians);
-
-    pub trait ModuloValue<Rhs> {
-        type Output;
-
-        fn modulo_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn modulo<Left, Right>(left: Left, right: Right) -> <Left as ModuloValue<Right>>::Output
-    where
-        Left: ModuloValue<Right>,
-    {
-        left.modulo_value(right)
-    }
-
-    impl ModuloValue<f32> for f32 {
-        type Output = f32;
-
-        fn modulo_value(self, rhs: f32) -> Self::Output {
-            self % rhs
-        }
-    }
-
-    impl ModuloValue<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn modulo_value(self, _rhs: f32) -> Self::Output {
-            self
-        }
-    }
-
-    impl ModuloValue<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn modulo_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self, self, self)
-        }
-    }
-
-    impl ModuloValue<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn modulo_value(self, _rhs: Vec3<f32>) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait Sign {
-        type Output;
-
-        fn sign_value(self) -> Self::Output;
-    }
-
-    pub fn sign<T: Sign>(value: T) -> T::Output {
-        value.sign_value()
-    }
-
-    impl Sign for f32 {
-        type Output = f32;
-
-        fn sign_value(self) -> Self::Output {
-            self.signum()
-        }
-    }
-
-    impl Sign for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn sign_value(self) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait IsNan {
-        type Output;
-
-        fn isnan_value(self) -> Self::Output;
-    }
-
-    pub fn isnan<T: IsNan>(value: T) -> T::Output {
-        value.isnan_value()
-    }
-
-    impl IsNan for f32 {
-        type Output = bool;
-
-        fn isnan_value(self) -> Self::Output {
-            self.is_nan()
-        }
-    }
-
-    impl IsNan for Vec3<f32> {
-        type Output = Vec3<bool>;
-
-        fn isnan_value(self) -> Self::Output {
-            Vec3::new(self.x.is_nan(), self.y.is_nan(), self.z.is_nan())
-        }
-    }
-
-    pub trait IsInf {
-        type Output;
-
-        fn isinf_value(self) -> Self::Output;
-    }
-
-    pub fn isinf<T: IsInf>(value: T) -> T::Output {
-        value.isinf_value()
-    }
-
-    impl IsInf for f32 {
-        type Output = bool;
-
-        fn isinf_value(self) -> Self::Output {
-            self.is_infinite()
-        }
-    }
-
-    impl IsInf for Vec3<f32> {
-        type Output = Vec3<bool>;
-
-        fn isinf_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.is_infinite(),
-                self.y.is_infinite(),
-                self.z.is_infinite(),
-            )
-        }
-    }
-
-    pub trait IsFinite {
-        type Output;
-
-        fn isfinite_value(self) -> Self::Output;
-    }
-
-    pub fn isfinite<T: IsFinite>(value: T) -> T::Output {
-        value.isfinite_value()
-    }
-
-    impl IsFinite for f32 {
-        type Output = bool;
-
-        fn isfinite_value(self) -> Self::Output {
-            self.is_finite()
-        }
-    }
-
-    impl IsFinite for Vec3<f32> {
-        type Output = Vec3<bool>;
-
-        fn isfinite_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.is_finite(),
-                self.y.is_finite(),
-                self.z.is_finite(),
-            )
-        }
-    }
-
-    pub trait AnyValue {
-        fn any_value(self) -> bool;
-    }
-
-    pub fn any<T: AnyValue>(value: T) -> bool {
-        value.any_value()
-    }
-
-    impl AnyValue for bool {
-        fn any_value(self) -> bool {
-            self
-        }
-    }
-
-    impl AnyValue for Vec2<bool> {
-        fn any_value(self) -> bool {
-            self.x || self.y
-        }
-    }
-
-    impl AnyValue for Vec3<bool> {
-        fn any_value(self) -> bool {
-            self.x || self.y || self.z
-        }
-    }
-
-    impl AnyValue for Vec4<bool> {
-        fn any_value(self) -> bool {
-            self.x || self.y || self.z || self.w
-        }
-    }
-
-    pub trait AllValue {
-        fn all_value(self) -> bool;
-    }
-
-    pub fn all<T: AllValue>(value: T) -> bool {
-        value.all_value()
-    }
-
-    impl AllValue for bool {
-        fn all_value(self) -> bool {
-            self
-        }
-    }
-
-    impl AllValue for Vec2<bool> {
-        fn all_value(self) -> bool {
-            self.x && self.y
-        }
-    }
-
-    impl AllValue for Vec3<bool> {
-        fn all_value(self) -> bool {
-            self.x && self.y && self.z
-        }
-    }
-
-    impl AllValue for Vec4<bool> {
-        fn all_value(self) -> bool {
-            self.x && self.y && self.z && self.w
-        }
-    }
-
-    pub trait Relational<Rhs = Self> {
-        type Output;
-
-        fn less_than_value(self, rhs: Rhs) -> Self::Output;
-        fn less_than_equal_value(self, rhs: Rhs) -> Self::Output;
-        fn greater_than_value(self, rhs: Rhs) -> Self::Output;
-        fn greater_than_equal_value(self, rhs: Rhs) -> Self::Output;
-        fn equal_value(self, rhs: Rhs) -> Self::Output;
-        fn not_equal_value(self, rhs: Rhs) -> Self::Output;
-    }
-
-    pub fn less_than<Left, Right>(left: Left, right: Right) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.less_than_value(right)
-    }
-
-    pub fn less_than_equal<Left, Right>(
-        left: Left,
-        right: Right,
-    ) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.less_than_equal_value(right)
-    }
-
-    pub fn greater_than<Left, Right>(
-        left: Left,
-        right: Right,
-    ) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.greater_than_value(right)
-    }
-
-    pub fn greater_than_equal<Left, Right>(
-        left: Left,
-        right: Right,
-    ) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.greater_than_equal_value(right)
-    }
-
-    pub fn equal<Left, Right>(left: Left, right: Right) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.equal_value(right)
-    }
-
-    pub fn not_equal<Left, Right>(
-        left: Left,
-        right: Right,
-    ) -> <Left as Relational<Right>>::Output
-    where
-        Left: Relational<Right>,
-    {
-        left.not_equal_value(right)
-    }
-
-    impl Relational<f32> for f32 {
-        type Output = bool;
-
-        fn less_than_value(self, rhs: f32) -> Self::Output {
-            self < rhs
-        }
-
-        fn less_than_equal_value(self, rhs: f32) -> Self::Output {
-            self <= rhs
-        }
-
-        fn greater_than_value(self, rhs: f32) -> Self::Output {
-            self > rhs
-        }
-
-        fn greater_than_equal_value(self, rhs: f32) -> Self::Output {
-            self >= rhs
-        }
-
-        fn equal_value(self, rhs: f32) -> Self::Output {
-            self == rhs
-        }
-
-        fn not_equal_value(self, rhs: f32) -> Self::Output {
-            self != rhs
-        }
-    }
-
-    impl Relational<bool> for bool {
-        type Output = bool;
-
-        fn less_than_value(self, rhs: bool) -> Self::Output {
-            !self && rhs
-        }
-
-        fn less_than_equal_value(self, rhs: bool) -> Self::Output {
-            !self || rhs
-        }
-
-        fn greater_than_value(self, rhs: bool) -> Self::Output {
-            self && !rhs
-        }
-
-        fn greater_than_equal_value(self, rhs: bool) -> Self::Output {
-            self || !rhs
-        }
-
-        fn equal_value(self, rhs: bool) -> Self::Output {
-            self == rhs
-        }
-
-        fn not_equal_value(self, rhs: bool) -> Self::Output {
-            self != rhs
-        }
-    }
-
-    impl Relational<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<bool>;
-
-        fn less_than_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x < rhs.x, self.y < rhs.y, self.z < rhs.z)
-        }
-
-        fn less_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x <= rhs.x, self.y <= rhs.y, self.z <= rhs.z)
-        }
-
-        fn greater_than_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x > rhs.x, self.y > rhs.y, self.z > rhs.z)
-        }
-
-        fn greater_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x >= rhs.x, self.y >= rhs.y, self.z >= rhs.z)
-        }
-
-        fn equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x == rhs.x, self.y == rhs.y, self.z == rhs.z)
-        }
-
-        fn not_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self.x != rhs.x, self.y != rhs.y, self.z != rhs.z)
-        }
-    }
-
-    impl Relational<f32> for Vec3<f32> {
-        type Output = Vec3<bool>;
-
-        fn less_than_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x < rhs, self.y < rhs, self.z < rhs)
-        }
-
-        fn less_than_equal_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x <= rhs, self.y <= rhs, self.z <= rhs)
-        }
-
-        fn greater_than_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x > rhs, self.y > rhs, self.z > rhs)
-        }
-
-        fn greater_than_equal_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x >= rhs, self.y >= rhs, self.z >= rhs)
-        }
-
-        fn equal_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x == rhs, self.y == rhs, self.z == rhs)
-        }
-
-        fn not_equal_value(self, rhs: f32) -> Self::Output {
-            Vec3::new(self.x != rhs, self.y != rhs, self.z != rhs)
-        }
-    }
-
-    impl Relational<Vec3<f32>> for f32 {
-        type Output = Vec3<bool>;
-
-        fn less_than_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self < rhs.x, self < rhs.y, self < rhs.z)
-        }
-
-        fn less_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self <= rhs.x, self <= rhs.y, self <= rhs.z)
-        }
-
-        fn greater_than_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self > rhs.x, self > rhs.y, self > rhs.z)
-        }
-
-        fn greater_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self >= rhs.x, self >= rhs.y, self >= rhs.z)
-        }
-
-        fn equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self == rhs.x, self == rhs.y, self == rhs.z)
-        }
-
-        fn not_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
-            Vec3::new(self != rhs.x, self != rhs.y, self != rhs.z)
-        }
-    }
-
-    impl Relational<Vec3<bool>> for Vec3<bool> {
-        type Output = Vec3<bool>;
-
-        fn less_than_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(!self.x && rhs.x, !self.y && rhs.y, !self.z && rhs.z)
-        }
-
-        fn less_than_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(!self.x || rhs.x, !self.y || rhs.y, !self.z || rhs.z)
-        }
-
-        fn greater_than_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(self.x && !rhs.x, self.y && !rhs.y, self.z && !rhs.z)
-        }
-
-        fn greater_than_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(self.x || !rhs.x, self.y || !rhs.y, self.z || !rhs.z)
-        }
-
-        fn equal_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(self.x == rhs.x, self.y == rhs.y, self.z == rhs.z)
-        }
-
-        fn not_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
-            Vec3::new(self.x != rhs.x, self.y != rhs.y, self.z != rhs.z)
-        }
-    }
-
-    pub trait BitCount {
-        type Output;
-
-        fn bit_count_value(self) -> Self::Output;
-    }
-
-    pub fn bit_count<T: BitCount>(value: T) -> T::Output {
-        value.bit_count_value()
-    }
-
-    impl BitCount for u32 {
-        type Output = i32;
-
-        fn bit_count_value(self) -> Self::Output {
-            self.count_ones() as i32
-        }
-    }
-
-    impl BitCount for i32 {
-        type Output = i32;
-
-        fn bit_count_value(self) -> Self::Output {
-            self.count_ones() as i32
-        }
-    }
-
-    impl BitCount for Vec3<u32> {
-        type Output = Vec3<i32>;
-
-        fn bit_count_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.count_ones() as i32,
-                self.y.count_ones() as i32,
-                self.z.count_ones() as i32,
-            )
-        }
-    }
-
-    impl BitCount for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn bit_count_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.count_ones() as i32,
-                self.y.count_ones() as i32,
-                self.z.count_ones() as i32,
-            )
-        }
-    }
-
-    pub trait BitfieldReverse {
-        type Output;
-
-        fn bitfield_reverse_value(self) -> Self::Output;
-    }
-
-    pub fn bitfield_reverse<T: BitfieldReverse>(value: T) -> T::Output {
-        value.bitfield_reverse_value()
-    }
-
-    impl BitfieldReverse for u32 {
-        type Output = u32;
-
-        fn bitfield_reverse_value(self) -> Self::Output {
-            self.reverse_bits()
-        }
-    }
-
-    impl BitfieldReverse for i32 {
-        type Output = i32;
-
-        fn bitfield_reverse_value(self) -> Self::Output {
-            self.reverse_bits()
-        }
-    }
-
-    impl BitfieldReverse for Vec3<u32> {
-        type Output = Vec3<u32>;
-
-        fn bitfield_reverse_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.reverse_bits(),
-                self.y.reverse_bits(),
-                self.z.reverse_bits(),
-            )
-        }
-    }
-
-    impl BitfieldReverse for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn bitfield_reverse_value(self) -> Self::Output {
-            Vec3::new(
-                self.x.reverse_bits(),
-                self.y.reverse_bits(),
-                self.z.reverse_bits(),
-            )
-        }
-    }
-
-    pub trait FindLsb {
-        type Output;
-
-        fn find_lsb_value(self) -> Self::Output;
-    }
-
-    pub fn find_lsb<T: FindLsb>(value: T) -> T::Output {
-        value.find_lsb_value()
-    }
-
-    impl FindLsb for u32 {
-        type Output = i32;
-
-        fn find_lsb_value(self) -> Self::Output {
-            if self == 0 { -1 } else { self.trailing_zeros() as i32 }
-        }
-    }
-
-    impl FindLsb for i32 {
-        type Output = i32;
-
-        fn find_lsb_value(self) -> Self::Output {
-            if self == 0 { -1 } else { self.trailing_zeros() as i32 }
-        }
-    }
-
-    impl FindLsb for Vec3<u32> {
-        type Output = Vec3<i32>;
-
-        fn find_lsb_value(self) -> Self::Output {
-            Vec3::new(find_lsb(self.x), find_lsb(self.y), find_lsb(self.z))
-        }
-    }
-
-    impl FindLsb for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn find_lsb_value(self) -> Self::Output {
-            Vec3::new(find_lsb(self.x), find_lsb(self.y), find_lsb(self.z))
-        }
-    }
-
-    pub trait FindMsb {
-        type Output;
-
-        fn find_msb_value(self) -> Self::Output;
-    }
-
-    pub fn find_msb<T: FindMsb>(value: T) -> T::Output {
-        value.find_msb_value()
-    }
-
-    impl FindMsb for u32 {
-        type Output = i32;
-
-        fn find_msb_value(self) -> Self::Output {
-            if self == 0 { -1 } else { 31 - self.leading_zeros() as i32 }
-        }
-    }
-
-    impl FindMsb for i32 {
-        type Output = i32;
-
-        fn find_msb_value(self) -> Self::Output {
-            if self == 0 { -1 } else { 31 - self.leading_zeros() as i32 }
-        }
-    }
-
-    impl FindMsb for Vec3<u32> {
-        type Output = Vec3<i32>;
-
-        fn find_msb_value(self) -> Self::Output {
-            Vec3::new(find_msb(self.x), find_msb(self.y), find_msb(self.z))
-        }
-    }
-
-    impl FindMsb for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn find_msb_value(self) -> Self::Output {
-            Vec3::new(find_msb(self.x), find_msb(self.y), find_msb(self.z))
-        }
-    }
-
-    pub trait BitfieldExtract {
-        type Output;
-
-        fn bitfield_extract_value(self, offset: i32, bits: i32) -> Self::Output;
-    }
-
-    pub fn bitfield_extract<T: BitfieldExtract>(value: T, offset: i32, bits: i32) -> T::Output {
-        value.bitfield_extract_value(offset, bits)
-    }
-
-    impl BitfieldExtract for u32 {
-        type Output = u32;
-
-        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldExtract for i32 {
-        type Output = i32;
-
-        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldExtract for Vec3<u32> {
-        type Output = Vec3<u32>;
-
-        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldExtract for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait BitfieldInsert<Insert> {
-        type Output;
-
-        fn bitfield_insert_value(self, insert: Insert, offset: i32, bits: i32) -> Self::Output;
-    }
-
-    pub fn bitfield_insert<Base, Insert>(
-        base: Base,
-        insert: Insert,
-        offset: i32,
-        bits: i32,
-    ) -> <Base as BitfieldInsert<Insert>>::Output
-    where
-        Base: BitfieldInsert<Insert>,
-    {
-        base.bitfield_insert_value(insert, offset, bits)
-    }
-
-    impl BitfieldInsert<u32> for u32 {
-        type Output = u32;
-
-        fn bitfield_insert_value(self, _insert: u32, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldInsert<i32> for i32 {
-        type Output = i32;
-
-        fn bitfield_insert_value(self, _insert: i32, _offset: i32, _bits: i32) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldInsert<Vec3<u32>> for Vec3<u32> {
-        type Output = Vec3<u32>;
-
-        fn bitfield_insert_value(
-            self,
-            _insert: Vec3<u32>,
-            _offset: i32,
-            _bits: i32,
-        ) -> Self::Output {
-            self
-        }
-    }
-
-    impl BitfieldInsert<Vec3<i32>> for Vec3<i32> {
-        type Output = Vec3<i32>;
-
-        fn bitfield_insert_value(
-            self,
-            _insert: Vec3<i32>,
-            _offset: i32,
-            _bits: i32,
-        ) -> Self::Output {
-            self
-        }
-    }
-
-    pub trait FloatBitsToInt {
-        type Output;
-
-        fn float_bits_to_int_value(self) -> Self::Output;
-    }
-
-    pub fn float_bits_to_int<T: FloatBitsToInt>(value: T) -> T::Output {
-        value.float_bits_to_int_value()
-    }
-
-    impl FloatBitsToInt for f32 {
-        type Output = i32;
-
-        fn float_bits_to_int_value(self) -> Self::Output {
-            i32::from_ne_bytes(self.to_bits().to_ne_bytes())
-        }
-    }
-
-    impl FloatBitsToInt for Vec3<f32> {
-        type Output = Vec3<i32>;
-
-        fn float_bits_to_int_value(self) -> Self::Output {
-            Vec3::new(
-                float_bits_to_int(self.x),
-                float_bits_to_int(self.y),
-                float_bits_to_int(self.z),
-            )
-        }
-    }
-
-    pub trait FloatBitsToUint {
-        type Output;
-
-        fn float_bits_to_uint_value(self) -> Self::Output;
-    }
-
-    pub fn float_bits_to_uint<T: FloatBitsToUint>(value: T) -> T::Output {
-        value.float_bits_to_uint_value()
-    }
-
-    impl FloatBitsToUint for f32 {
-        type Output = u32;
-
-        fn float_bits_to_uint_value(self) -> Self::Output {
-            self.to_bits()
-        }
-    }
-
-    impl FloatBitsToUint for Vec3<f32> {
-        type Output = Vec3<u32>;
-
-        fn float_bits_to_uint_value(self) -> Self::Output {
-            Vec3::new(
-                float_bits_to_uint(self.x),
-                float_bits_to_uint(self.y),
-                float_bits_to_uint(self.z),
-            )
-        }
-    }
-
-    pub trait IntBitsToFloat {
-        type Output;
-
-        fn int_bits_to_float_value(self) -> Self::Output;
-    }
-
-    pub fn int_bits_to_float<T: IntBitsToFloat>(value: T) -> T::Output {
-        value.int_bits_to_float_value()
-    }
-
-    impl IntBitsToFloat for i32 {
-        type Output = f32;
-
-        fn int_bits_to_float_value(self) -> Self::Output {
-            f32::from_bits(u32::from_ne_bytes(self.to_ne_bytes()))
-        }
-    }
-
-    impl IntBitsToFloat for Vec3<i32> {
-        type Output = Vec3<f32>;
-
-        fn int_bits_to_float_value(self) -> Self::Output {
-            Vec3::new(
-                int_bits_to_float(self.x),
-                int_bits_to_float(self.y),
-                int_bits_to_float(self.z),
-            )
-        }
-    }
-
-    pub trait UintBitsToFloat {
-        type Output;
-
-        fn uint_bits_to_float_value(self) -> Self::Output;
-    }
-
-    pub fn uint_bits_to_float<T: UintBitsToFloat>(value: T) -> T::Output {
-        value.uint_bits_to_float_value()
-    }
-
-    impl UintBitsToFloat for u32 {
-        type Output = f32;
-
-        fn uint_bits_to_float_value(self) -> Self::Output {
-            f32::from_bits(self)
-        }
-    }
-
-    impl UintBitsToFloat for Vec3<u32> {
-        type Output = Vec3<f32>;
-
-        fn uint_bits_to_float_value(self) -> Self::Output {
-            Vec3::new(
-                uint_bits_to_float(self.x),
-                uint_bits_to_float(self.y),
-                uint_bits_to_float(self.z),
-            )
-        }
-    }
-
-    pub fn pack_unorm_2x16(_value: Vec2<f32>) -> u32 {
-        0
-    }
-
-    pub fn pack_snorm_2x16(_value: Vec2<f32>) -> u32 {
-        0
-    }
-
-    pub fn pack_unorm_4x8(_value: Vec4<f32>) -> u32 {
-        0
-    }
-
-    pub fn pack_snorm_4x8(_value: Vec4<f32>) -> u32 {
-        0
-    }
-
-    pub fn pack_half_2x16(_value: Vec2<f32>) -> u32 {
-        0
-    }
-
-    pub fn pack_double_2x32(_value: Vec2<u32>) -> f64 {
-        0.0
-    }
-
-    pub fn unpack_unorm_2x16(_value: u32) -> Vec2<f32> {
-        Default::default()
-    }
-
-    pub fn unpack_snorm_2x16(_value: u32) -> Vec2<f32> {
-        Default::default()
-    }
-
-    pub fn unpack_unorm_4x8(_value: u32) -> Vec4<f32> {
-        Default::default()
-    }
-
-    pub fn unpack_snorm_4x8(_value: u32) -> Vec4<f32> {
-        Default::default()
-    }
-
-    pub fn unpack_half_2x16(_value: u32) -> Vec2<f32> {
-        Default::default()
-    }
-
-    pub fn unpack_double_2x32(_value: f64) -> Vec2<u32> {
-        Default::default()
-    }
-
-    pub trait Fma<Multiplier, Addend> {
-        type Output;
-
-        fn fma_value(self, multiplier: Multiplier, addend: Addend) -> Self::Output;
-    }
-
-    pub fn fma<Value, Multiplier, Addend>(
-        value: Value,
-        multiplier: Multiplier,
-        addend: Addend,
-    ) -> <Value as Fma<Multiplier, Addend>>::Output
-    where
-        Value: Fma<Multiplier, Addend>,
-    {
-        value.fma_value(multiplier, addend)
-    }
-
-    impl Fma<f32, f32> for f32 {
-        type Output = f32;
-
-        fn fma_value(self, multiplier: f32, addend: f32) -> Self::Output {
-            self.mul_add(multiplier, addend)
-        }
-    }
-
-    impl Fma<f32, Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn fma_value(self, multiplier: f32, addend: Vec3<f32>) -> Self::Output {
-            self * multiplier + addend
-        }
-    }
-
-    impl Fma<Vec3<f32>, f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn fma_value(self, multiplier: Vec3<f32>, addend: f32) -> Self::Output {
-            self * multiplier + Vec3::new(addend, addend, addend)
-        }
-    }
-
-    impl Fma<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn fma_value(self, multiplier: Vec3<f32>, addend: Vec3<f32>) -> Self::Output {
-            self * multiplier + addend
-        }
-    }
-
-    pub trait LdExp<Exponent> {
-        type Output;
-
-        fn ldexp_value(self, exponent: Exponent) -> Self::Output;
-    }
-
-    pub fn ldexp<Value, Exponent>(value: Value, exponent: Exponent) -> <Value as LdExp<Exponent>>::Output
-    where
-        Value: LdExp<Exponent>,
-    {
-        value.ldexp_value(exponent)
-    }
-
-    impl LdExp<i32> for f32 {
-        type Output = f32;
-
-        fn ldexp_value(self, exponent: i32) -> Self::Output {
-            self * 2.0_f32.powi(exponent)
-        }
-    }
-
-    impl LdExp<i32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn ldexp_value(self, exponent: i32) -> Self::Output {
-            Vec3::new(
-                ldexp(self.x, exponent),
-                ldexp(self.y, exponent),
-                ldexp(self.z, exponent),
-            )
-        }
-    }
-
-    impl LdExp<Vec3<i32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn ldexp_value(self, exponent: Vec3<i32>) -> Self::Output {
-            Vec3::new(
-                ldexp(self.x, exponent.x),
-                ldexp(self.y, exponent.y),
-                ldexp(self.z, exponent.z),
-            )
-        }
-    }
-
-    pub fn dfdx<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn dfdy<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn dfdx_fine<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn dfdy_fine<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn dfdx_coarse<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn dfdy_coarse<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn fwidth<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn fwidth_fine<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub fn fwidth_coarse<T: Copy>(value: T) -> T {
-        value
-    }
-
-    pub trait Step<Edge> {
-        type Output;
-
-        fn step_value(edge: Edge, value: Self) -> Self::Output;
-    }
-
-    pub fn step<Edge, Value>(edge: Edge, value: Value) -> <Value as Step<Edge>>::Output
-    where
-        Value: Step<Edge>,
-    {
-        Value::step_value(edge, value)
-    }
-
-    impl Step<f32> for f32 {
-        type Output = f32;
-
-        fn step_value(edge: f32, value: Self) -> Self::Output {
-            if value < edge { 0.0 } else { 1.0 }
-        }
-    }
-
-    impl Step<f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn step_value(_edge: f32, _value: Self) -> Self::Output {
-            Default::default()
-        }
-    }
-
-    impl Step<Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn step_value(_edge: Vec3<f32>, _value: Self) -> Self::Output {
-            Default::default()
-        }
-    }
-
-    impl Step<Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn step_value(_edge: Vec3<f32>, _value: Self) -> Self::Output {
-            Default::default()
-        }
-    }
-
-    pub trait SmoothStep<Edge0, Edge1> {
-        type Output;
-
-        fn smoothstep_value(edge0: Edge0, edge1: Edge1, value: Self) -> Self::Output;
-    }
-
-    pub fn smoothstep<Edge0, Edge1, Value>(
-        edge0: Edge0,
-        edge1: Edge1,
-        value: Value,
-    ) -> <Value as SmoothStep<Edge0, Edge1>>::Output
-    where
-        Value: SmoothStep<Edge0, Edge1>,
-    {
-        Value::smoothstep_value(edge0, edge1, value)
-    }
-
-    impl SmoothStep<f32, f32> for f32 {
-        type Output = f32;
-
-        fn smoothstep_value(_edge0: f32, _edge1: f32, value: Self) -> Self::Output {
-            value
-        }
-    }
-
-    impl SmoothStep<f32, f32> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn smoothstep_value(_edge0: f32, _edge1: f32, value: Self) -> Self::Output {
-            value
-        }
-    }
-
-    impl SmoothStep<Vec3<f32>, Vec3<f32>> for f32 {
-        type Output = Vec3<f32>;
-
-        fn smoothstep_value(
-            _edge0: Vec3<f32>,
-            _edge1: Vec3<f32>,
-            _value: Self,
-        ) -> Self::Output {
-            Default::default()
-        }
-    }
-
-    impl SmoothStep<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn smoothstep_value(
-            _edge0: Vec3<f32>,
-            _edge1: Vec3<f32>,
-            value: Self,
-        ) -> Self::Output {
-            value
-        }
-    }
-
-    pub trait Lerp<Rhs = Self, T = f32> {
-        type Output;
-
-        fn lerp(self, rhs: Rhs, t: T) -> Self::Output;
-    }
-
-    impl Lerp for f32 {
-        type Output = f32;
-
-        fn lerp(self, rhs: f32, t: f32) -> Self::Output {
-            self + (rhs - self) * t
-        }
-    }
-
-    impl Lerp for Vec3<f32> {
-        type Output = Vec3<f32>;
-
-        fn lerp(self, rhs: Vec3<f32>, t: f32) -> Self::Output {
-            self + (rhs - self) * t
-        }
-    }
-
-    pub fn lerp<Left, Right, Weight>(
-        left: Left,
-        right: Right,
-        weight: Weight,
-    ) -> <Left as Lerp<Right, Weight>>::Output
-    where
-        Left: Lerp<Right, Weight>,
-    {
-        left.lerp(right, weight)
-    }
-}
-
-mod gpu {
-    use super::math::{Vec2, Vec3, Vec4};
-    use std::marker::PhantomData;
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct RayTracingAccelerationStructure;
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct RayDesc {
-        pub origin: Vec3<f32>,
-        pub t_min: f32,
-        pub direction: Vec3<f32>,
-        pub t_max: f32,
-    }
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct BuiltInTriangleIntersectionAttributes {
-        pub barycentrics: Vec2<f32>,
-    }
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct RayQuery;
-
-    pub fn discard() {}
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture1D<T>(PhantomData<T>);
-
-    impl<T> Default for Texture1D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture1DArray<T>(PhantomData<T>);
-
-    impl<T> Default for Texture1DArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture2D<T>(PhantomData<T>);
-
-    impl<T> Default for Texture2D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture2DArray<T>(PhantomData<T>);
-
-    impl<T> Default for Texture2DArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture3D<T>(PhantomData<T>);
-
-    impl<T> Default for Texture3D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct TextureCube<T>(PhantomData<T>);
-
-    impl<T> Default for TextureCube<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct TextureCubeArray<T>(PhantomData<T>);
-
-    impl<T> Default for TextureCubeArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture2DMS<T>(PhantomData<T>);
-
-    impl<T> Default for Texture2DMS<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Texture2DMSArray<T>(PhantomData<T>);
-
-    impl<T> Default for Texture2DMSArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct Sampler;
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct DepthTexture2D<T>(PhantomData<T>);
-
-    impl<T> Default for DepthTexture2D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct DepthTexture2DArray<T>(PhantomData<T>);
-
-    impl<T> Default for DepthTexture2DArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct DepthTextureCube<T>(PhantomData<T>);
-
-    impl<T> Default for DepthTextureCube<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct DepthTextureCubeArray<T>(PhantomData<T>);
-
-    impl<T> Default for DepthTextureCubeArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image1D<T>(PhantomData<T>);
-
-    impl<T> Default for Image1D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image1DArray<T>(PhantomData<T>);
-
-    impl<T> Default for Image1DArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image2D<T>(PhantomData<T>);
-
-    impl<T> Default for Image2D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image3D<T>(PhantomData<T>);
-
-    impl<T> Default for Image3D<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct ImageCube<T>(PhantomData<T>);
-
-    impl<T> Default for ImageCube<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image2DArray<T>(PhantomData<T>);
-
-    impl<T> Default for Image2DArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image2DMS<T>(PhantomData<T>);
-
-    impl<T> Default for Image2DMS<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Image2DMSArray<T>(PhantomData<T>);
-
-    impl<T> Default for Image2DMSArray<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct Buffer<T>(PhantomData<T>);
-
-    impl<T> Default for Buffer<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct RwBuffer<T>(PhantomData<T>);
-
-    impl<T> Default for RwBuffer<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct AppendBuffer<T>(PhantomData<T>);
-
-    impl<T> Default for AppendBuffer<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub struct ConsumeBuffer<T>(PhantomData<T>);
-
-    impl<T> Default for ConsumeBuffer<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    pub type StructuredBuffer<T> = Buffer<T>;
-    pub type RWStructuredBuffer<T> = RwBuffer<T>;
-    pub type AppendStructuredBuffer<T> = AppendBuffer<T>;
-    pub type ConsumeStructuredBuffer<T> = ConsumeBuffer<T>;
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct ByteAddressBuffer;
-
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct RwByteAddressBuffer;
-
-    pub trait SampledTexturePayload {
-        type Sample: Default;
-        type Gather: Default;
-    }
-
-    impl SampledTexturePayload for f32 {
-        type Sample = Vec4<f32>;
-        type Gather = Vec4<f32>;
-    }
-
-    impl SampledTexturePayload for i32 {
-        type Sample = Vec4<i32>;
-        type Gather = Vec4<i32>;
-    }
-
-    impl SampledTexturePayload for u32 {
-        type Sample = Vec4<u32>;
-        type Gather = Vec4<u32>;
-    }
-
-    impl<T: Default> SampledTexturePayload for Vec2<T> {
-        type Sample = Vec2<T>;
-        type Gather = Vec4<T>;
-    }
-
-    impl<T: Default> SampledTexturePayload for Vec3<T> {
-        type Sample = Vec3<T>;
-        type Gather = Vec4<T>;
-    }
-
-    impl<T: Default> SampledTexturePayload for Vec4<T> {
-        type Sample = Vec4<T>;
-        type Gather = Vec4<T>;
-    }
-
-    pub trait TextureLike {
-        type Sample: Default;
-        type Gather: Default;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture1D<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture1DArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture2D<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture2DArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture3D<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for TextureCube<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for TextureCubeArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture2DMS<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for Texture2DMSArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for DepthTexture2D<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for DepthTexture2DArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for DepthTextureCube<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    impl<T: SampledTexturePayload> TextureLike for DepthTextureCubeArray<T> {
-        type Sample = <T as SampledTexturePayload>::Sample;
-        type Gather = <T as SampledTexturePayload>::Gather;
-    }
-
-    pub trait ShadowTextureLike {}
-    impl<T> ShadowTextureLike for DepthTexture2D<T> {}
-    impl<T> ShadowTextureLike for DepthTexture2DArray<T> {}
-    impl<T> ShadowTextureLike for DepthTextureCube<T> {}
-    impl<T> ShadowTextureLike for DepthTextureCubeArray<T> {}
-
-    pub trait ImageLike<T> {}
-    impl<T> ImageLike<T> for Image1D<T> {}
-    impl<T> ImageLike<T> for Image1DArray<T> {}
-    impl<T> ImageLike<T> for Image2D<T> {}
-    impl<T> ImageLike<T> for Image3D<T> {}
-    impl<T> ImageLike<T> for ImageCube<T> {}
-    impl<T> ImageLike<T> for Image2DArray<T> {}
-    impl<T> ImageLike<T> for Image2DMS<T> {}
-    impl<T> ImageLike<T> for Image2DMSArray<T> {}
-
-    pub trait BufferLike<T> {}
-    pub trait ReadableBufferLike<T> {}
-    pub trait WritableBufferLike<T> {}
-    impl<T> BufferLike<T> for Buffer<T> {}
-    impl<T> ReadableBufferLike<T> for Buffer<T> {}
-    impl<T> BufferLike<T> for RwBuffer<T> {}
-    impl<T> ReadableBufferLike<T> for RwBuffer<T> {}
-    impl<T> WritableBufferLike<T> for RwBuffer<T> {}
-    impl<T> BufferLike<T> for AppendBuffer<T> {}
-    impl<T> WritableBufferLike<T> for AppendBuffer<T> {}
-    impl<T> BufferLike<T> for ConsumeBuffer<T> {}
-    impl<T> ReadableBufferLike<T> for ConsumeBuffer<T> {}
-    impl BufferLike<u32> for ByteAddressBuffer {}
-    impl ReadableBufferLike<u32> for ByteAddressBuffer {}
-    impl BufferLike<u32> for RwByteAddressBuffer {}
-    impl ReadableBufferLike<u32> for RwByteAddressBuffer {}
-    impl WritableBufferLike<u32> for RwByteAddressBuffer {}
-
-    pub trait SampleCoord {}
-    impl SampleCoord for f32 {}
-    impl SampleCoord for Vec2<f32> {}
-    impl SampleCoord for Vec3<f32> {}
-    impl SampleCoord for Vec4<f32> {}
-
-    pub fn sample<Texture, Coord>(_texture: Texture, _coord: Coord) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_bias<Texture, Coord, Bias>(
-        _texture: Texture,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_sampler<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_bias_sampler<Texture, SamplerState, Coord, Bias>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_shadow<Texture, Coord>(_texture: Texture, _coord: Coord) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn sample_shadow_bias<Texture, Coord, Bias>(
-        _texture: Texture,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn sample_shadow_sampler<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn sample_shadow_bias_sampler<Texture, SamplerState, Coord, Bias>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn sample_lod<Texture, Coord, Lod>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_lod_sampler<Texture, SamplerState, Coord, Lod>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _lod: Lod,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_lod_offset<Texture, Coord, Lod, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_lod_offset_sampler<Texture, SamplerState, Coord, Lod, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_grad<Texture, Coord, Grad>(
-        _texture: Texture,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_grad_sampler<Texture, SamplerState, Coord, Grad>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_grad_offset<Texture, Coord, Grad, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_grad_offset_sampler<Texture, SamplerState, Coord, Grad, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_offset<Texture, Coord, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_offset_bias<Texture, Coord, Offset, Bias>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_offset_sampler<Texture, SamplerState, Coord, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_offset_bias_sampler<Texture, SamplerState, Coord, Offset, Bias>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected<Texture, Coord>(
-        _texture: Texture,
-        _coord: Coord,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_bias<Texture, Coord, Bias>(
-        _texture: Texture,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_sampler<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_bias_sampler<Texture, SamplerState, Coord, Bias>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_lod<Texture, Coord, Lod>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_lod_sampler<Texture, SamplerState, Coord, Lod>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _lod: Lod,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_grad<Texture, Coord, Grad>(
-        _texture: Texture,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_grad_sampler<Texture, SamplerState, Coord, Grad>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_offset<Texture, Coord, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_offset_bias<Texture, Coord, Offset, Bias>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_offset_sampler<Texture, SamplerState, Coord, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_offset_bias_sampler<Texture, SamplerState, Coord, Offset, Bias>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-        _bias: Bias,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_lod_offset<Texture, Coord, Lod, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_lod_offset_sampler<Texture, SamplerState, Coord, Lod, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_grad_offset<Texture, Coord, Grad, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn sample_projected_grad_offset_sampler<Texture, SamplerState, Coord, Grad, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texel_fetch<Texture, Coord, Lod>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-    {
-        Default::default()
-    }
-
-    pub fn texel_fetch_offset<Texture, Coord, Lod, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Sample
-    where
-        Texture: TextureLike,
-    {
-        Default::default()
-    }
-
-    pub fn texture_size<Texture, Result>(_texture: Texture) -> Result
-    where
-        Texture: TextureLike,
-        Result: Default,
-    {
-        Result::default()
-    }
-
-    pub fn texture_size_lod<Texture, Lod, Result>(
-        _texture: Texture,
-        _lod: Lod,
-    ) -> Result
-    where
-        Texture: TextureLike,
-        Result: Default,
-    {
-        Result::default()
-    }
-
-    pub fn texture_dimensions<Texture, Dimensions>(
-        _texture: Texture,
-        _dimensions: Dimensions,
-    )
-    where
-        Texture: TextureLike,
-    {
-    }
-
-    pub fn texture_query_levels<Texture>(_texture: Texture) -> i32
-    where
-        Texture: TextureLike,
-    {
-        1
-    }
-
-    pub fn texture_query_lod<Texture, Coord>(
-        _texture: Texture,
-        _coord: Coord,
-    ) -> Vec2<f32>
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Vec2::default()
-    }
-
-    pub fn texture_query_lod_sampler<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> Vec2<f32>
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Vec2::default()
-    }
-
-    pub fn texture_calculate_lod<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> f32
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_samples<Texture>(_texture: Texture) -> i32
-    where
-        Texture: TextureLike,
-    {
-        1
-    }
-
-    pub fn texture_gather<Texture, Coord>(
-        _texture: Texture,
-        _coord: Coord,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_sampler<Texture, SamplerState, Coord>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_component<Texture, Coord, Component>(
-        _texture: Texture,
-        _coord: Coord,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_component_sampler<Texture, SamplerState, Coord, Component>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offset<Texture, Coord, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offset_sampler<Texture, SamplerState, Coord, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offset_component<Texture, Coord, Offset, Component>(
-        _texture: Texture,
-        _coord: Coord,
-        _offset: Offset,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offset_component_sampler<Texture, SamplerState, Coord, Offset, Component>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offset: Offset,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offsets<Texture, Coord, Offsets>(
-        _texture: Texture,
-        _coord: Coord,
-        _offsets: Offsets,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offsets_sampler<Texture, SamplerState, Coord, Offsets>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offsets: Offsets,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offsets_component<Texture, Coord, Offsets, Component>(
-        _texture: Texture,
-        _coord: Coord,
-        _offsets: Offsets,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_gather_offsets_component_sampler<Texture, SamplerState, Coord, Offsets, Component>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _offsets: Offsets,
-        _component: Component,
-    ) -> <Texture as TextureLike>::Gather
-    where
-        Texture: TextureLike,
-        Coord: SampleCoord,
-    {
-        Default::default()
-    }
-
-    pub fn texture_compare<Texture, Coord, Compare>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_sampler<Texture, SamplerState, Coord, Compare>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_offset<Texture, Coord, Compare, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_lod<Texture, Coord, Compare, Lod>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_lod_sampler<Texture, SamplerState, Coord, Compare, Lod>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_lod_offset<Texture, Coord, Compare, Lod, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_lod_offset_sampler<Texture, SamplerState, Coord, Compare, Lod, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_grad<Texture, Coord, Compare, Grad>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_grad_sampler<Texture, SamplerState, Coord, Compare, Grad>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_grad_offset<Texture, Coord, Compare, Grad, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_grad_offset_sampler<Texture, SamplerState, Coord, Compare, Grad, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected<Texture, Coord, Compare>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_sampler<Texture, SamplerState, Coord, Compare>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_offset<Texture, Coord, Compare, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_lod<Texture, Coord, Compare, Lod>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_lod_sampler<Texture, SamplerState, Coord, Compare, Lod>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_lod_offset<Texture, Coord, Compare, Lod, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_lod_offset_sampler<Texture, SamplerState, Coord, Compare, Lod, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _lod: Lod,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_grad<Texture, Coord, Compare, Grad>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_grad_sampler<Texture, SamplerState, Coord, Compare, Grad>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_grad_offset<Texture, Coord, Compare, Grad, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_compare_projected_grad_offset_sampler<Texture, SamplerState, Coord, Compare, Grad, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _ddx: Grad,
-        _ddy: Grad,
-        _offset: Offset,
-    ) -> f32
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        0.0
-    }
-
-    pub fn texture_gather_compare<Texture, Coord, Compare>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> Vec4<f32>
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        Vec4::default()
-    }
-
-    pub fn texture_gather_compare_sampler<Texture, SamplerState, Coord, Compare>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-    ) -> Vec4<f32>
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        Vec4::default()
-    }
-
-    pub fn texture_gather_compare_offset<Texture, Coord, Compare, Offset>(
-        _texture: Texture,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> Vec4<f32>
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        Vec4::default()
-    }
-
-    pub fn texture_gather_compare_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
-        _texture: Texture,
-        _sampler: SamplerState,
-        _coord: Coord,
-        _compare: Compare,
-        _offset: Offset,
-    ) -> Vec4<f32>
-    where
-        Texture: ShadowTextureLike,
-        Coord: SampleCoord,
-    {
-        Vec4::default()
-    }
-
-    pub fn image_size<Image, Result>(_image: Image) -> Result
-    where
-        Result: Default,
-    {
-        Result::default()
-    }
-
-    pub fn image_samples<Image>(_image: Image) -> i32 {
-        1
-    }
-
-    pub fn image_load<Image, Coord, Value>(_image: Image, _coord: Coord) -> Value
-    where
-        Image: ImageLike<Value>,
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_load_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-    ) -> Value
-    where
-        Image: ImageLike<Value>,
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_store<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    )
-    where
-        Image: ImageLike<Value>,
-    {
-    }
-
-    pub fn image_store_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    )
-    where
-        Image: ImageLike<Value>,
-    {
-    }
-
-    pub fn image_atomic_add<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_add_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_min<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_min_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_max<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_max_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_and<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_and_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_or<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_or_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_xor<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_xor_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_exchange<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_exchange_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_comp_swap<Image, Coord, Value>(
-        _image: Image,
-        _coord: Coord,
-        _compare: Value,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn image_atomic_comp_swap_sample<Image, Coord, Sample, Value>(
-        _image: Image,
-        _coord: Coord,
-        _sample: Sample,
-        _compare: Value,
-        _value: Value,
-    ) -> Value
-    where
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn buffer_load<Resource, Index, Value>(
-        _resource: Resource,
-        _index: Index,
-    ) -> Value
-    where
-        Resource: ReadableBufferLike<Value>,
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn buffer_store<Resource, Index, Value>(
-        _resource: Resource,
-        _index: Index,
-        _value: Value,
-    )
-    where
-        Resource: WritableBufferLike<Value>,
-    {
-    }
-
-    pub fn buffer_append<Resource, Value>(_resource: Resource, _value: Value)
-    where
-        Resource: WritableBufferLike<Value>,
-    {
-    }
-
-    pub fn buffer_consume<Resource, Value>(_resource: Resource) -> Value
-    where
-        Resource: ReadableBufferLike<Value>,
-        Value: Default,
-    {
-        Value::default()
-    }
-
-    pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
-
-    // Atomics on buffer and workgroup memory take the location as `&mut`
-    // and return the value it held before the operation.
-    pub fn atomic_add<T>(place: &mut T, value: T) -> T
-    where
-        T: Copy + std::ops::Add<Output = T>,
-    {
-        let previous = *place;
-        *place = previous + value;
-        previous
-    }
-
-    pub fn atomic_min<T: Copy + PartialOrd>(place: &mut T, value: T) -> T {
-        let previous = *place;
-        if value < previous {
-            *place = value;
-        }
-        previous
-    }
-
-    pub fn atomic_max<T: Copy + PartialOrd>(place: &mut T, value: T) -> T {
-        let previous = *place;
-        if value > previous {
-            *place = value;
-        }
-        previous
-    }
-
-    pub fn atomic_and<T>(place: &mut T, value: T) -> T
-    where
-        T: Copy + std::ops::BitAnd<Output = T>,
-    {
-        let previous = *place;
-        *place = previous & value;
-        previous
-    }
-
-    pub fn atomic_or<T>(place: &mut T, value: T) -> T
-    where
-        T: Copy + std::ops::BitOr<Output = T>,
-    {
-        let previous = *place;
-        *place = previous | value;
-        previous
-    }
-
-    pub fn atomic_xor<T>(place: &mut T, value: T) -> T
-    where
-        T: Copy + std::ops::BitXor<Output = T>,
-    {
-        let previous = *place;
-        *place = previous ^ value;
-        previous
-    }
-
-    pub fn atomic_exchange<T: Copy>(place: &mut T, value: T) -> T {
-        let previous = *place;
-        *place = value;
-        previous
-    }
-
-    pub fn atomic_comp_swap<T: Copy + PartialEq>(place: &mut T, compare: T, value: T) -> T {
-        let previous = *place;
-        if previous == compare {
-            *place = value;
-        }
-        previous
-    }
-
-    // Rust codegen emits sync and subgroup operations as helper calls.
-    // These stubs pin the placeholder prelude contract used by compile tests.
-    pub fn workgroup_id() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn local_invocation_id() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn global_invocation_id() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn local_invocation_index() -> u32 {
-        0
-    }
-
-    pub fn num_workgroups() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn workgroup_barrier() {}
-    pub fn memory_barrier() {}
-    pub fn memory_barrier_shared() {}
-    pub fn memory_barrier_buffer() {}
-    pub fn memory_barrier_image() {}
-    pub fn group_memory_barrier() {}
-    pub fn all_memory_barrier() {}
-    pub fn device_memory_barrier() {}
-    pub fn group_memory_barrier_with_group_sync() {}
-    pub fn all_memory_barrier_with_group_sync() {}
-    pub fn device_memory_barrier_with_group_sync() {}
-
-    pub fn subgroup_size() -> u32 {
-        0
-    }
-
-    pub fn subgroup_invocation_id() -> u32 {
-        0
-    }
-
-    pub fn subgroup_id() -> u32 {
-        0
-    }
-
-    pub fn num_subgroups() -> u32 {
-        1
-    }
-
-    pub fn subgroup_elect() -> bool {
-        false
-    }
-
-    pub fn subgroup_add<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_mul<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_min<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_max<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_any<Predicate>(_predicate: Predicate) -> bool {
-        false
-    }
-
-    pub fn subgroup_all<Predicate>(_predicate: Predicate) -> bool {
-        true
-    }
-
-    pub fn subgroup_all_equal<T>(_value: T) -> bool {
-        true
-    }
-
-    pub fn subgroup_ballot<Predicate>(_predicate: Predicate) -> Vec4<u32> {
-        Vec4::default()
-    }
-
-    pub fn subgroup_ballot_bit_count<Predicate>(_predicate: Predicate) -> u32 {
-        0
-    }
-
-    pub fn subgroup_and<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_or<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_xor<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_broadcast_first<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_broadcast<T, Lane>(_value: T, _lane: Lane) -> T {
-        _value
-    }
-
-    pub fn subgroup_exclusive_add<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_exclusive_mul<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_exclusive_ballot_bit_count<Predicate>(
-        _predicate: Predicate,
-    ) -> u32 {
-        0
-    }
-
-    pub fn subgroup_match<T>(_value: T) -> Vec4<u32> {
-        Vec4::default()
-    }
-
-    pub fn subgroup_partitioned_add<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_partitioned_mul<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_partitioned_ballot_bit_count<Predicate, Mask>(
-        _predicate: Predicate,
-        _mask: Mask,
-    ) -> u32 {
-        0
-    }
-
-    pub fn subgroup_partitioned_and<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_partitioned_or<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_partitioned_xor<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_quad_broadcast<T, Lane>(_value: T, _lane: Lane) -> T {
-        _value
-    }
-
-    pub fn subgroup_quad_swap_horizontal<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_quad_swap_vertical<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_quad_swap_diagonal<T>(_value: T) -> T {
-        _value
-    }
-
-    pub fn subgroup_quad_any<Predicate>(_predicate: Predicate) -> bool {
-        false
-    }
-
-    pub fn subgroup_quad_all<Predicate>(_predicate: Predicate) -> bool {
-        true
-    }
-
-    pub fn subgroup_shuffle<T, Lane>(_value: T, _lane: Lane) -> T {
-        _value
-    }
-
-    pub fn subgroup_shuffle_xor<T, Mask>(_value: T, _mask: Mask) -> T {
-        _value
-    }
-
-    pub fn subgroup_shuffle_down<T, Delta>(_value: T, _delta: Delta) -> T {
-        _value
-    }
-
-    pub fn ray_launch_id() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn ray_launch_size() -> Vec3<u32> {
-        Vec3::default()
-    }
-
-    pub fn ray_hit_t() -> f32 {
-        0.0
-    }
-
-    pub fn ray_hit_kind() -> u32 {
-        0
-    }
-
-    pub fn ray_world_origin() -> Vec3<f32> {
-        Vec3::default()
-    }
-
-    pub fn ray_world_direction() -> Vec3<f32> {
-        Vec3::default()
-    }
-
-    pub fn ray_object_origin() -> Vec3<f32> {
-        Vec3::default()
-    }
-
-    pub fn ray_object_direction() -> Vec3<f32> {
-        Vec3::default()
-    }
-
-    pub fn ray_t_min() -> f32 {
-        0.0
-    }
-
-    pub fn ray_incoming_flags() -> u32 {
-        0
-    }
-
-    pub fn ray_instance_custom_index() -> u32 {
-        0
-    }
-
-    pub fn ray_geometry_index() -> u32 {
-        0
-    }
-
-    pub fn trace_ray<AccelerationStructure, Flags, Mask, HitGroup, Multiplier, Miss, Ray, Payload>(
-        _acceleration_structure: AccelerationStructure,
-        _flags: Flags,
-        _mask: Mask,
-        _hit_group: HitGroup,
-        _multiplier: Multiplier,
-        _miss: Miss,
-        _ray: Ray,
-        _payload: Payload,
-    ) {
-    }
-
-    pub fn call_shader<ShaderIndex, CallableData>(
-        _shader_index: ShaderIndex,
-        _data: CallableData,
-    ) {
-    }
-
-    pub fn report_hit<Distance, Kind, Attributes>(
-        _distance: Distance,
-        _kind: Kind,
-        _attributes: Attributes,
-    ) -> bool {
-        false
-    }
-
-    pub fn ignore_hit() {}
-
-    pub fn accept_hit_and_end_search() {}
-}
-"""
-
-
-def rustc_or_skip():
-    rustc = shutil.which("rustc")
-    if rustc is None:
-        pytest.skip("rustc is not installed")
-    return rustc
+def rust_gpu_command_or_skip():
+    """The rust-gpu compile command of the coverage harness (``tools/coverage/rustgpu.py``), or a skip."""
+    command = rustgpu.command()
+    if not command:
+        pytest.skip("rust-gpu is not built; set CROSSTL_COVERAGE_RUST_GPU to a built checkout")
+    return command
 
 
 RUST_STAGE_ATTRIBUTES = {
-    "vertex": '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]',
-    "fragment": '#[cfg_attr(feature = "crossgl_gpu", fragment_shader)]',
-    "compute": '#[cfg_attr(feature = "crossgl_gpu", compute_shader)]',
+    "vertex": "#[spirv(vertex",
+    "fragment": "#[spirv(fragment",
+    "compute": "#[spirv(compute(",
 }
 BARE_RUST_STAGE_ATTRIBUTES = {
     "vertex": "#[vertex_shader]",
@@ -4339,41 +128,36 @@ def assert_no_bare_rust_stage_attrs(generated_code: str) -> None:
         assert f"\n{attribute}\n" not in padded_code
 
 
-def rust_smoke_source(generated_code: str) -> str:
-    return textwrap.dedent(RUST_SMOKE_STUBS) + "\n" + generated_code
+def rust_host_source(generated_code: str) -> str:
+    """``generated_code`` without the rust-gpu crate prelude, for helpers that use only Rust primitives.
+
+    Such helpers compile and run on the host, which checks the values they compute.
+    """
+    assert generated_code.startswith(RUST_GPU_PRELUDE), generated_code[:200]
+    return generated_code[len(RUST_GPU_PRELUDE) :]
 
 
-def assert_generated_rust_smoke_compiles(
-    generated_code: str,
-    tmp_path,
-    edition: str = "2021",
-):
-    source = rust_smoke_source(generated_code)
-    source_path = tmp_path / f"generated_{edition}.rs"
-    output_path = tmp_path / f"libgenerated_{edition}.rlib"
-    source_path.write_text(source, encoding="utf-8")
+def assert_generated_rust_smoke_compiles(generated_code: str, tmp_path):
+    """Compile ``generated_code`` with rust-gpu for Vulkan 1.1, as the coverage harness compiles Rust probes.
 
+    A crate without an entry point is a library of shader functions: rust-gpu links a SPIR-V module only for a crate
+    with an entry point, so such a crate is compiled as an ``rlib``, which still type-checks and lowers every function.
+    """
+    command = rust_gpu_command_or_skip()
+    if not re.search(r"#\[spirv\((?:compute|vertex|fragment)\b", generated_code):
+        command = tuple(
+            "--crate-type=rlib" if part == "--crate-type=dylib" else part
+            for part in command
+        )
+    source_path = tmp_path / "generated.rs"
+    source_path.write_text(generated_code, encoding="utf-8")
     result = subprocess.run(
-        [
-            rustc_or_skip(),
-            f"--edition={edition}",
-            "--crate-type=lib",
-            str(source_path),
-            "-o",
-            str(output_path),
-        ],
+        [*command, source_path.name, "--out-dir", str(tmp_path)],
+        cwd=tmp_path,
         capture_output=True,
         text=True,
     )
-
-    if (
-        edition == "2024"
-        and result.returncode != 0
-        and "edition 2024" in (result.stderr.lower())
-    ):
-        pytest.skip("rustc does not support edition 2024")
-
-    assert result.returncode == 0, result.stderr + "\n\n" + source
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
 
 
 def test_struct():
@@ -4392,8 +176,8 @@ def test_struct():
         generated_code = generate_code(ast)
         assert "struct VSInput" in generated_code
         assert "struct VSOutput" in generated_code
-        assert "pub texCoord: Vec2<f32>" in generated_code
-        assert "pub color: Vec4<f32>" in generated_code
+        assert "pub texCoord: Vec2" in generated_code
+        assert "pub color: Vec4" in generated_code
         assert "#[repr(C)]" in generated_code
         print(generated_code)
     except SyntaxError:
@@ -15911,19 +11695,17 @@ def test_traits_and_generic_constraints_emit_rust_and_smoke_compile(tmp_path):
         "pub fn is_same<T: Numeric + PartialEq>(a: T, b: T) -> bool" in generated_code
     )
     assert (
-        "pub fn operator_mix<T: Numeric + Copy + "
-        "std::ops::Add<Output = T> + std::ops::Div<Output = T> + "
-        "std::ops::Sub<Output = T>>"
+        "pub fn operator_mix<T: Numeric + Copy + core::ops::Add<Output = T> + core::ops::Div<Output = T> + core::ops::Sub<Output = T>>"
     ) in generated_code
     assert (
-        "pub fn divide<T: Numeric + std::ops::Div<Output = T>>(a: T, b: T) -> T"
+        "pub fn divide<T: Numeric + core::ops::Div<Output = T>>(a: T, b: T) -> T"
         in generated_code
     )
     assert (
-        "pub fn call_divide<T: Numeric + std::ops::Div<Output = T>>(a: T, b: T) -> T"
+        "pub fn call_divide<T: Numeric + core::ops::Div<Output = T>>(a: T, b: T) -> T"
         in generated_code
     )
-    assert "pub fn make_box<T: Numeric + std::ops::Sub<Output = T>>" in generated_code
+    assert "pub fn make_box<T: Numeric + core::ops::Sub<Output = T>>" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -16836,7 +12618,7 @@ def test_local_struct_outputs_initialize_with_default_before_field_assignment():
 
     assert "#[derive(Debug, Clone, Copy, Default)]" in generated_code
     assert "let mut output: Out = Default::default();" in generated_code
-    assert "output.color = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "output.color = Vec4::new(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "let mut output: Out;" not in generated_code
 
 
@@ -19376,7 +15158,7 @@ def test_local_bindings_are_mutable_only_when_reassigned_or_mutated():
     assert "let mut reassignedValue: i32 = 2;" in generated_code
     assert "let mut output: Output = Default::default();" in generated_code
     assert (
-        "let mut values: [f32; 2] = std::array::from_fn(|_| Default::default());"
+        "let mut values: [f32; 2] = [0.0; 2];"
         in generated_code
     )
     assert "let mut immutableValue" not in generated_code
@@ -19559,8 +15341,7 @@ def test_builtin_alias_targets_qualify_shadowed_rust_math_helpers_and_smoke_comp
     assert "let clamp: f32 = value;" in generated_code
     assert "let rsqrt: f32 = value;" in generated_code
     assert (
-        "let computed: f32 = ((math::fract(value) + "
-        "math::clamp(value, 0.0, 1.0)) + math::rsqrt(value));"
+        "let computed: f32 = (({ let __x = value; __x - __x.floor() } + (value).clamp(0.0, 1.0)) + (1.0 / (value).sqrt()));"
     ) in generated_code
     assert "let computed: f32 = ((fract(value) + clamp(value, 0.0, 1.0))" not in (
         generated_code
@@ -19811,8 +15592,8 @@ def test_inverse_sqrt_alias_preserves_vector_shape_and_smoke_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let inv_root: Vec3<f32> = rsqrt(value);" in generated_code
-    assert "let scalar_inv_root: f32 = rsqrt(scalar);" in generated_code
+    assert "let inv_root: Vec3 = (value).map(|c| 1.0 / c.sqrt());" in generated_code
+    assert "let scalar_inv_root: f32 = (1.0 / (scalar).sqrt());" in generated_code
     assert "inverseSqrt(" not in generated_code
     assert "let inv_root: f32 = rsqrt(value)" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -19942,10 +15723,10 @@ def test_clamp_promotes_mixed_scalar_vector_operands_and_smoke_compile(tmp_path)
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let vector_value: Vec3<f32> = clamp(value, 0.0, 1.0);" in generated_code
-    assert "let vector_bounds: Vec3<f32> = clamp(scalar, low, high);" in generated_code
-    assert "let scalar_value: f32 = clamp(scalar, 0.0, 1.0);" in generated_code
-    assert "let vector_all: Vec3<f32> = clamp(value, low, high);" in generated_code
+    assert "let vector_value: Vec3 = (value).clamp(Vec3::splat(0.0), Vec3::splat(1.0));" in generated_code
+    assert "let vector_bounds: Vec3 = (Vec3::splat(scalar)).clamp(low, high);" in generated_code
+    assert "let scalar_value: f32 = (scalar).clamp(0.0, 1.0);" in generated_code
+    assert "let vector_all: Vec3 = (value).clamp(low, high);" in generated_code
     assert "let vector_bounds: f32 = clamp" not in generated_code
     assert "let vector_value: f32 = clamp" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -19976,14 +15757,14 @@ def test_min_max_promote_mixed_scalar_vector_operands_and_smoke_compile(tmp_path
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let min_vector_scalar: Vec3<f32> = min(value, scalar);" in generated_code
-    assert "let max_vector_scalar: Vec3<f32> = max(value, scalar);" in generated_code
-    assert "let min_scalar_vector: Vec3<f32> = min(scalar, other);" in generated_code
-    assert "let max_scalar_vector: Vec3<f32> = max(scalar, other);" in generated_code
-    assert "let min_vector_vector: Vec3<f32> = min(value, other);" in generated_code
-    assert "let max_vector_vector: Vec3<f32> = max(value, other);" in generated_code
-    assert "let min_scalar_scalar: f32 = min(scalar, 1.0);" in generated_code
-    assert "let max_scalar_scalar: f32 = max(scalar, 0.0);" in generated_code
+    assert "let min_vector_scalar: Vec3 = (value).min(Vec3::splat(scalar));" in generated_code
+    assert "let max_vector_scalar: Vec3 = (value).max(Vec3::splat(scalar));" in generated_code
+    assert "let min_scalar_vector: Vec3 = (Vec3::splat(scalar)).min(other);" in generated_code
+    assert "let max_scalar_vector: Vec3 = (Vec3::splat(scalar)).max(other);" in generated_code
+    assert "let min_vector_vector: Vec3 = (value).min(other);" in generated_code
+    assert "let max_vector_vector: Vec3 = (value).max(other);" in generated_code
+    assert "let min_scalar_scalar: f32 = (scalar).min(1.0);" in generated_code
+    assert "let max_scalar_scalar: f32 = (scalar).max(0.0);" in generated_code
     assert "let min_scalar_vector: f32 = min" not in generated_code
     assert "let max_vector_scalar: f32 = max" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -20054,8 +15835,8 @@ def test_hlsl_fmod_alias_lowers_to_rust_modulo_and_smoke_compile(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let wrapped_vector: Vec3<f32> = modulo(value, scalar);" in generated_code
-    assert "let wrapped_scalar: f32 = modulo(scalar, 2.0);" in generated_code
+    assert "let wrapped_vector: Vec3 = ((value) % (scalar));" in generated_code
+    assert "let wrapped_scalar: f32 = ((scalar) % (2.0));" in generated_code
     assert "fmod(" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
@@ -20338,14 +16119,14 @@ def test_sign_and_classification_intrinsics_infer_bool_vectors_and_smoke_compile
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let signed_value: Vec3<f32> = sign(value);" in generated_code
-    assert "let signed_scale: f32 = sign(scale);" in generated_code
-    assert "let nan_mask: Vec3<bool> = isnan(value);" in generated_code
-    assert "let inf_mask: Vec3<bool> = isinf(value);" in generated_code
-    assert "let finite_mask: Vec3<bool> = isfinite(value);" in generated_code
-    assert "let scalar_nan: bool = isnan(scale);" in generated_code
-    assert "let scalar_inf: bool = isinf(scale);" in generated_code
-    assert "let scalar_finite: bool = isfinite(scale);" in generated_code
+    assert "let signed_value: Vec3 = (value).map(|c| if c > 0.0 { 1.0 } else if c < 0.0 { -1.0 } else { 0.0 });" in generated_code
+    assert "let signed_scale: f32 = { let c = scale; if c > 0.0 { 1.0 } else if c < 0.0 { -1.0 } else { 0.0 } };" in generated_code
+    assert "let nan_mask: BVec3 = (value).is_nan_mask();" in generated_code
+    assert "let inf_mask: BVec3 = (value).map(|c| c.is_infinite());" in generated_code
+    assert "let finite_mask: BVec3 = (value).is_finite_mask();" in generated_code
+    assert "let scalar_nan: bool = (scale).is_nan();" in generated_code
+    assert "let scalar_inf: bool = (scale).is_infinite();" in generated_code
+    assert "let scalar_finite: bool = (scale).is_finite();" in generated_code
     assert "let nan_mask: bool = isnan(value)" not in generated_code
     assert "let scalar_nan: f32 = isnan(scale)" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -20519,27 +16300,27 @@ def test_bit_reinterpret_intrinsics_preserve_shape_and_smoke_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let signedFromVector: Vec3<i32> = float_bits_to_int(value);" in generated_code
+        "let signedFromVector: IVec3 = { let __v = value; IVec3::new((__v.x.to_bits() as i32), (__v.y.to_bits() as i32), (__v.z.to_bits() as i32)) };" in generated_code
     )
     assert (
-        "let unsignedFromVector: Vec3<u32> = float_bits_to_uint(value);"
+        "let unsignedFromVector: UVec3 = { let __v = value; UVec3::new(__v.x.to_bits(), __v.y.to_bits(), __v.z.to_bits()) };"
         in generated_code
     )
-    assert "let signedFromScalar: i32 = float_bits_to_int(scalar);" in generated_code
-    assert "let unsignedFromScalar: u32 = float_bits_to_uint(scalar);" in generated_code
+    assert "let signedFromScalar: i32 = (((scalar).to_bits() as i32));" in generated_code
+    assert "let unsignedFromScalar: u32 = ((scalar).to_bits());" in generated_code
     assert (
-        "let floatFromSigned: Vec3<f32> = int_bits_to_float(signedBits);"
-        in generated_code
-    )
-    assert (
-        "let floatFromUnsigned: Vec3<f32> = uint_bits_to_float(unsignedBits);"
+        "let floatFromSigned: Vec3 = { let __v = signedBits; Vec3::new(f32::from_bits(__v.x as u32), f32::from_bits(__v.y as u32), f32::from_bits(__v.z as u32)) };"
         in generated_code
     )
     assert (
-        "let scalarFromSigned: f32 = int_bits_to_float(signedScalar);" in generated_code
+        "let floatFromUnsigned: Vec3 = { let __v = unsignedBits; Vec3::new(f32::from_bits(__v.x), f32::from_bits(__v.y), f32::from_bits(__v.z)) };"
+        in generated_code
     )
     assert (
-        "let scalarFromUnsigned: f32 = uint_bits_to_float(unsignedScalar);"
+        "let scalarFromSigned: f32 = (f32::from_bits((signedScalar) as u32));" in generated_code
+    )
+    assert (
+        "let scalarFromUnsigned: f32 = (f32::from_bits((unsignedScalar)));"
         in generated_code
     )
     assert "let signedFromVector: Vec3<u32> = float_bits_to_int" not in generated_code
@@ -20602,27 +16383,27 @@ def test_as_bitcast_aliases_lower_to_rust_helpers_and_smoke_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let signedFromVector: Vec3<i32> = float_bits_to_int(value);" in generated_code
+        "let signedFromVector: IVec3 = { let __v = value; IVec3::new((__v.x.to_bits() as i32), (__v.y.to_bits() as i32), (__v.z.to_bits() as i32)) };" in generated_code
     )
     assert (
-        "let unsignedFromVector: Vec3<u32> = float_bits_to_uint(value);"
+        "let unsignedFromVector: UVec3 = { let __v = value; UVec3::new(__v.x.to_bits(), __v.y.to_bits(), __v.z.to_bits()) };"
         in generated_code
     )
-    assert "let signedFromScalar: i32 = float_bits_to_int(scalar);" in generated_code
-    assert "let unsignedFromScalar: u32 = float_bits_to_uint(scalar);" in generated_code
+    assert "let signedFromScalar: i32 = (((scalar).to_bits() as i32));" in generated_code
+    assert "let unsignedFromScalar: u32 = ((scalar).to_bits());" in generated_code
     assert (
-        "let floatFromSigned: Vec3<f32> = int_bits_to_float(signedBits);"
-        in generated_code
-    )
-    assert (
-        "let floatFromUnsigned: Vec3<f32> = uint_bits_to_float(unsignedBits);"
+        "let floatFromSigned: Vec3 = { let __v = signedBits; Vec3::new(f32::from_bits(__v.x as u32), f32::from_bits(__v.y as u32), f32::from_bits(__v.z as u32)) };"
         in generated_code
     )
     assert (
-        "let scalarFromSigned: f32 = int_bits_to_float(signedScalar);" in generated_code
+        "let floatFromUnsigned: Vec3 = { let __v = unsignedBits; Vec3::new(f32::from_bits(__v.x), f32::from_bits(__v.y), f32::from_bits(__v.z)) };"
+        in generated_code
     )
     assert (
-        "let scalarFromUnsigned: f32 = uint_bits_to_float(unsignedScalar);"
+        "let scalarFromSigned: f32 = (f32::from_bits((signedScalar) as u32));" in generated_code
+    )
+    assert (
+        "let scalarFromUnsigned: f32 = (f32::from_bits((unsignedScalar)));"
         in generated_code
     )
     assert "asfloat(" not in generated_code
@@ -20660,16 +16441,16 @@ def test_bitcast_alias_targets_qualify_shadowed_rust_helpers_and_smoke_compile(
     assert "let float_bits_to_uint: f32 = 2.0;" in generated_code
     assert "let int_bits_to_float: f32 = 3.0;" in generated_code
     assert "let uint_bits_to_float: f32 = 4.0;" in generated_code
-    assert "let signed: Vec3<i32> = math::float_bits_to_int(value);" in generated_code
-    assert "let unsigned: Vec3<u32> = math::float_bits_to_uint(value);" in (
+    assert "let signed: IVec3 = { let __v = value; IVec3::new((__v.x.to_bits() as i32), (__v.y.to_bits() as i32), (__v.z.to_bits() as i32)) };" in generated_code
+    assert "let unsigned: UVec3 = { let __v = value; UVec3::new(__v.x.to_bits(), __v.y.to_bits(), __v.z.to_bits()) };" in (
         generated_code
     )
     assert (
-        "let fromSigned: Vec3<f32> = math::int_bits_to_float(signedBits);"
+        "let fromSigned: Vec3 = { let __v = signedBits; Vec3::new(f32::from_bits(__v.x as u32), f32::from_bits(__v.y as u32), f32::from_bits(__v.z as u32)) };"
         in generated_code
     )
     assert (
-        "let fromUnsigned: Vec3<f32> = math::uint_bits_to_float(unsignedBits);"
+        "let fromUnsigned: Vec3 = { let __v = unsignedBits; Vec3::new(f32::from_bits(__v.x), f32::from_bits(__v.y), f32::from_bits(__v.z)) };"
         in generated_code
     )
     assert "let signed: Vec3<i32> = float_bits_to_int(value);" not in generated_code
@@ -20702,22 +16483,16 @@ def test_vec2_vec4_bitcasts_emit_lane_helpers_and_smoke_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let signedFromVec2: Vec2<i32> = Vec2::<i32>::new("
-        "math::float_bits_to_int(value2.x), math::float_bits_to_int(value2.y));"
+        "let signedFromVec2: IVec2 = { let __v = value2; IVec2::new((__v.x.to_bits() as i32), (__v.y.to_bits() as i32)) };"
     ) in generated_code
     assert (
-        "let unsignedFromVec4: Vec4<u32> = Vec4::<u32>::new("
-        "float_bits_to_uint(value4.x), float_bits_to_uint(value4.y), "
-        "float_bits_to_uint(value4.z), float_bits_to_uint(value4.w));"
+        "let unsignedFromVec4: UVec4 = { let __v = value4; UVec4::new(__v.x.to_bits(), __v.y.to_bits(), __v.z.to_bits(), __v.w.to_bits()) };"
     ) in generated_code
     assert (
-        "let floatFromSignedVec2: Vec2<f32> = Vec2::<f32>::new("
-        "math::int_bits_to_float(signed2.x), math::int_bits_to_float(signed2.y));"
+        "let floatFromSignedVec2: Vec2 = { let __v = signed2; Vec2::new(f32::from_bits(__v.x as u32), f32::from_bits(__v.y as u32)) };"
     ) in generated_code
     assert (
-        "let floatFromUnsignedVec4: Vec4<f32> = Vec4::<f32>::new("
-        "uint_bits_to_float(unsigned4.x), uint_bits_to_float(unsigned4.y), "
-        "uint_bits_to_float(unsigned4.z), uint_bits_to_float(unsigned4.w));"
+        "let floatFromUnsignedVec4: Vec4 = { let __v = unsigned4; Vec4::new(f32::from_bits(__v.x), f32::from_bits(__v.y), f32::from_bits(__v.z), f32::from_bits(__v.w)) };"
     ) in generated_code
     assert "let signedFromVec2: Vec2<i32> = float_bits_to_int(value2);" not in (
         generated_code
@@ -20814,31 +16589,21 @@ def test_scalar_left_vector_arithmetic_lowers_to_lane_constructors(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let inverted: Vec3<f32> = "
-        "Vec3::<f32>::new((1.0 - color.x), (1.0 - color.y), (1.0 - color.z));"
+        "let inverted: Vec3 = Vec3::new((1.0 - color.x), (1.0 - color.y), (1.0 - color.z));"
         in generated_code
     )
     assert (
-        "let reciprocal: Vec3<f32> = "
-        "Vec3::<f32>::new((1.0 / color.x), (1.0 / color.y), (1.0 / color.z));"
+        "let reciprocal: Vec3 = Vec3::new((1.0 / color.x), (1.0 / color.y), (1.0 / color.z));"
         in generated_code
     )
     assert (
-        "let scaled: Vec3<f32> = "
-        "Vec3::<f32>::new((exposure * color.x), "
-        "(exposure * color.y), (exposure * color.z));" in generated_code
+        "let scaled: Vec3 = Vec3::new((exposure * color.x), (exposure * color.y), (exposure * color.z));" in generated_code
     )
     assert (
-        "let shifted: Vec3<f32> = "
-        "Vec3::<f32>::new((exposure + color.x), "
-        "(exposure + color.y), (exposure + color.z));" in generated_code
+        "let shifted: Vec3 = Vec3::new((exposure + color.x), (exposure + color.y), (exposure + color.z));" in generated_code
     )
     assert (
-        "let complex: Vec3<f32> = "
-        "{ let __cgl_vec_arg_0 = nextScale(); let __cgl_vec_arg_1 = nextColor(); "
-        "Vec3::<f32>::new((__cgl_vec_arg_0 - __cgl_vec_arg_1.x), "
-        "(__cgl_vec_arg_0 - __cgl_vec_arg_1.y), "
-        "(__cgl_vec_arg_0 - __cgl_vec_arg_1.z)) };" in generated_code
+        "let complex: Vec3 = { let __cgl_vec_arg_0 = nextScale(); let __cgl_vec_arg_1 = nextColor(); Vec3::new((__cgl_vec_arg_0 - __cgl_vec_arg_1.x), (__cgl_vec_arg_0 - __cgl_vec_arg_1.y), (__cgl_vec_arg_0 - __cgl_vec_arg_1.z)) };" in generated_code
     )
     assert "(1.0 - color)" not in generated_code
     assert "(1.0 / color)" not in generated_code
@@ -20868,15 +16633,14 @@ def test_vector_scalar_arithmetic_lowers_to_lane_constructors(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let scaledUv: Vec2<f32> = Vec2::<f32>::new((uv.x * 10.0), (uv.y * 10.0));"
+        "let scaledUv: Vec2 = Vec2::new((uv.x * 10.0), (uv.y * 10.0));"
         in generated_code
     )
     assert (
-        "let shiftedColor: Vec3<f32> = Vec3::<f32>::new((color.x + exposure), "
-        "(color.y + exposure), (color.z + exposure));" in generated_code
+        "let shiftedColor: Vec3 = Vec3::new((color.x + exposure), (color.y + exposure), (color.z + exposure));" in generated_code
     )
     assert (
-        "let dynamicUv: Vec2<f32> = { let __cgl_vec_arg_0 = makeUv();" in generated_code
+        "let dynamicUv: Vec2 = { let __cgl_vec_arg_0 = makeUv();" in generated_code
     )
     assert "(uv * 10.0)" not in generated_code
     assert "(color + exposure)" not in generated_code
@@ -20925,8 +16689,8 @@ def test_vector_compound_assignment_lowers_without_assign_traits(tmp_path):
 
     assert "adjusted *= exposure" not in generated_code
     assert "adjusted += 0.25" not in generated_code
-    assert "adjusted = Vec3::<f32>::new((adjusted.x * exposure)" in generated_code
-    assert "adjusted = Vec3::<f32>::new((adjusted.x + 0.25)" in generated_code
+    assert "adjusted = Vec3::new((adjusted.x * exposure)" in generated_code
+    assert "adjusted = Vec3::new((adjusted.x + 0.25)" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -21117,21 +16881,10 @@ def test_bool_vector_mix_lowers_to_rust_lane_selectors():
     generated_code = generate_code(ast)
 
     assert (
-        "let selected: Vec3<f32> = "
-        "Vec3::<f32>::new((if mask.x { b.x } else { a.x }), "
-        "(if mask.y { b.y } else { a.y }), "
-        "(if mask.z { b.z } else { a.z }));" in generated_code
+        "let selected: Vec3 = Vec3::select(mask, b, a);" in generated_code
     )
     assert (
-        "let complexSelected: Vec3<f32> = "
-        "{ let __cgl_vec_arg_0 = makeMask(); let __cgl_vec_arg_1 = makeB(); "
-        "let __cgl_vec_arg_2 = makeA(); "
-        "Vec3::<f32>::new((if __cgl_vec_arg_0.x { __cgl_vec_arg_1.x } "
-        "else { __cgl_vec_arg_2.x }), "
-        "(if __cgl_vec_arg_0.y { __cgl_vec_arg_1.y } "
-        "else { __cgl_vec_arg_2.y }), "
-        "(if __cgl_vec_arg_0.z { __cgl_vec_arg_1.z } "
-        "else { __cgl_vec_arg_2.z })) };" in generated_code
+        "let complexSelected: Vec3 = Vec3::select(makeMask(), makeB(), makeA());" in generated_code
     )
     assert "lerp(a, b, mask)" not in generated_code
     assert "lerp(makeA(), makeB(), makeMask())" not in generated_code
@@ -21195,27 +16948,13 @@ def test_user_defined_function_call_vector_args_cast_to_param_types():
     generated_code = generate_code(ast)
 
     assert (
-        "let same: f32 = "
-        "consumeVectors(amount, Vec3::<u32>::new(1, 2, 3), "
-        "Vec2::<bool>::new(ready, false));" in generated_code
+        "let same: f32 = consumeVectors(amount, UVec3::new(1, 2, 3), BVec2::new(ready, false));" in generated_code
     )
     assert (
-        "let converted: f32 = "
-        "consumeVectors(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)), "
-        "Vec3::<u32>::new((weights.x as u32), (weights.y as u32), "
-        "(weights.z as u32)), "
-        "Vec2::<bool>::new((amount.x != 0.0), (amount.y != 0.0)));" in generated_code
+        "let converted: f32 = consumeVectors(Vec2::new((pixel.x as f32), (pixel.y as f32)), UVec3::new((weights.x as u32), (weights.y as u32), (weights.z as u32)), BVec2::new((amount.x != 0.0), (amount.y != 0.0)));" in generated_code
     )
     assert (
-        "consumeVectors({ let __cgl_vec_arg_0 = Vec2::<i32>::new(1, 2); "
-        "Vec2::<f32>::new((__cgl_vec_arg_0.x as f32), "
-        "(__cgl_vec_arg_0.y as f32)) }, "
-        "{ let __cgl_vec_arg_1 = Vec3::<f32>::new(1.0, 2.0, 3.0); "
-        "Vec3::<u32>::new((__cgl_vec_arg_1.x as u32), "
-        "(__cgl_vec_arg_1.y as u32), (__cgl_vec_arg_1.z as u32)) }, "
-        "{ let __cgl_vec_arg_2 = Vec2::<f32>::new(1.0, 0.0); "
-        "Vec2::<bool>::new((__cgl_vec_arg_2.x != 0.0), "
-        "(__cgl_vec_arg_2.y != 0.0)) });" in generated_code
+        "consumeVectors({ let __cgl_vec_arg_0 = IVec2::new(1, 2); Vec2::new((__cgl_vec_arg_0.x as f32), (__cgl_vec_arg_0.y as f32)) }, { let __cgl_vec_arg_1 = Vec3::new(1.0, 2.0, 3.0); UVec3::new((__cgl_vec_arg_1.x as u32), (__cgl_vec_arg_1.y as u32), (__cgl_vec_arg_1.z as u32)) }, { let __cgl_vec_arg_2 = Vec2::new(1.0, 0.0); BVec2::new((__cgl_vec_arg_2.x != 0.0), (__cgl_vec_arg_2.y != 0.0)) });" in generated_code
     )
     assert "consumeVectors(pixel, weights, amount)" not in generated_code
     assert "consumeVectors(Vec2::<i32>::new(1, 2)" not in generated_code
@@ -21243,26 +16982,10 @@ def test_user_defined_function_call_matrix_args_cast_to_param_types():
 
     assert "let same: f32 = consumeMatrices(preciseInput, transform);" in generated_code
     assert (
-        "let converted: f32 = "
-        "consumeMatrices(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)), "
-        "Mat2::<f32>::new((preciseInput.c0.x as f32), "
-        "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
-        "(preciseInput.c1.y as f32)));" in generated_code
+        "let converted: f32 = consumeMatrices(DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]), Mat2::from_cols_array(&[(preciseInput.x_axis.x as f32), (preciseInput.x_axis.y as f32), (preciseInput.y_axis.x as f32), (preciseInput.y_axis.y as f32)]));" in generated_code
     )
     assert (
-        "consumeMatrices({ let __cgl_mat_arg_0 = "
-        "Mat2::<f32>::new(weight, (index as f32), 2.0, 1.0); "
-        "Mat2::<f64>::new((__cgl_mat_arg_0.c0.x as f64), "
-        "(__cgl_mat_arg_0.c0.y as f64), "
-        "(__cgl_mat_arg_0.c1.x as f64), "
-        "(__cgl_mat_arg_0.c1.y as f64)) }, "
-        "{ let __cgl_mat_arg_1 = Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0); "
-        "Mat2::<f32>::new((__cgl_mat_arg_1.c0.x as f32), "
-        "(__cgl_mat_arg_1.c0.y as f32), "
-        "(__cgl_mat_arg_1.c1.x as f32), "
-        "(__cgl_mat_arg_1.c1.y as f32)) });" in generated_code
+        "consumeMatrices({ let __cgl_mat_arg_0 = Mat2::from_cols_array(&[weight, (index as f32), 2.0, 1.0]); DMat2::from_cols_array(&[(__cgl_mat_arg_0.x_axis.x as f64), (__cgl_mat_arg_0.x_axis.y as f64), (__cgl_mat_arg_0.y_axis.x as f64), (__cgl_mat_arg_0.y_axis.y as f64)]) }, { let __cgl_mat_arg_1 = DMat2::from_cols_array(&[1.0, 0.0, 0.0, 1.0]); Mat2::from_cols_array(&[(__cgl_mat_arg_1.x_axis.x as f32), (__cgl_mat_arg_1.x_axis.y as f32), (__cgl_mat_arg_1.y_axis.x as f32), (__cgl_mat_arg_1.y_axis.y as f32)]) });" in generated_code
     )
     assert "consumeMatrices(transform, preciseInput)" not in generated_code
     assert "consumeMatrices(Mat2::<f32>::new(weight" not in generated_code
@@ -21578,7 +17301,7 @@ def test_vector_constructor(tmp_path):
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "Vec4::<f32>::new" in generated_code
+        assert "Vec4::new" in generated_code
         assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
@@ -21649,19 +17372,13 @@ def test_matrix_constructors_flatten_vector_args_once(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "let localMatrix: Mat2<f32> = "
-        "Mat2::<f32>::new(a.x, a.y, b.x, b.y);" in generated_code
+        "let localMatrix: Mat2 = Mat2::from_cols_array(&[a.x, a.y, b.x, b.y]);" in generated_code
     )
     assert (
-        "let complexMatrix: Mat2<f32> = "
-        "{ let __cgl_vec_arg_0 = makeCol0(); let __cgl_vec_arg_1 = makeCol1(); "
-        "Mat2::<f32>::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, "
-        "__cgl_vec_arg_1.x, __cgl_vec_arg_1.y) };" in generated_code
+        "let complexMatrix: Mat2 = { let __cgl_vec_arg_0 = makeCol0(); let __cgl_vec_arg_1 = makeCol1(); Mat2::from_cols_array(&[__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, __cgl_vec_arg_1.x, __cgl_vec_arg_1.y]) };" in generated_code
     )
     assert (
-        "let mixedMatrix: Mat2<f32> = "
-        "{ let __cgl_vec_arg_2 = makeCol0(); "
-        "Mat2::<f32>::new(__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, b.x, b.y) };"
+        "let mixedMatrix: Mat2 = { let __cgl_vec_arg_2 = makeCol0(); Mat2::from_cols_array(&[__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, b.x, b.y]) };"
         in generated_code
     )
     assert "Mat2::<f32>::new(a, b)" not in generated_code
@@ -21684,19 +17401,13 @@ def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "let mixedFloat: Mat2<f32> = "
-        "Mat2::<f32>::new(weight, (index as f32), 2.0, 1.0);" in generated_code
+        "let mixedFloat: Mat2 = Mat2::from_cols_array(&[weight, (index as f32), 2.0, 1.0]);" in generated_code
     )
     assert (
-        "let mixedDouble: Mat2<f64> = "
-        "Mat2::<f64>::new((weight as f64), (index as f64), 2.0, 1.0);" in generated_code
+        "let mixedDouble: DMat2 = DMat2::from_cols_array(&[(weight as f64), (index as f64), 2.0, 1.0]);" in generated_code
     )
     assert (
-        "let fromIntVector: Mat2<f32> = "
-        "{ let __cgl_vec_arg_0 = Vec2::<i32>::new(index, 2); "
-        "let __cgl_vec_arg_1 = Vec2::<f32>::new(weight, 1.0); "
-        "Mat2::<f32>::new((__cgl_vec_arg_0.x as f32), "
-        "(__cgl_vec_arg_0.y as f32), __cgl_vec_arg_1.x, __cgl_vec_arg_1.y) };"
+        "let fromIntVector: Mat2 = { let __cgl_vec_arg_0 = IVec2::new(index, 2); let __cgl_vec_arg_1 = Vec2::new(weight, 1.0); Mat2::from_cols_array(&[(__cgl_vec_arg_0.x as f32), (__cgl_vec_arg_0.y as f32), __cgl_vec_arg_1.x, __cgl_vec_arg_1.y]) };"
         in generated_code
     )
     assert "Mat2::<f32>::new(weight, index, 2, 1.0)" not in generated_code
@@ -21752,14 +17463,12 @@ def test_inferred_matrix_binary_bindings_prefer_matrix_operands(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "let leftScaled: Mat2<f32> = "
-        "(Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0) * 2.0);" in generated_code
+        "let leftScaled: Mat2 = (Mat2::from_cols_array(&[1.0, 0.0, 0.0, 1.0]) * 2.0);" in generated_code
     )
     assert (
-        "let rightScaled: Mat2<f32> = "
-        "(2.0 * Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0));" in generated_code
+        "let rightScaled: Mat2 = (2.0 * Mat2::from_cols_array(&[1.0, 0.0, 0.0, 1.0]));" in generated_code
     )
-    assert "let combined: Mat2<f32> = " in generated_code
+    assert "let combined: Mat2 = " in generated_code
     assert "let rightScaled: f32 = " not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
@@ -21781,37 +17490,22 @@ def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():
     generated_code = generate_code(ast)
 
     assert (
-        "let inferredVec: Vec2<f32> = "
-        "Vec2::<f32>::new(((pixel.x as f32) + amount.x), "
-        "((pixel.y as f32) + amount.y));" in generated_code
+        "let inferredVec: Vec2 = Vec2::new(((pixel.x as f32) + amount.x), ((pixel.y as f32) + amount.y));" in generated_code
     )
     assert (
-        "let inferredVecReverse: Vec2<f32> = "
-        "Vec2::<f32>::new((amount.x + (pixel.x as f32)), "
-        "(amount.y + (pixel.y as f32)));" in generated_code
+        "let inferredVecReverse: Vec2 = Vec2::new((amount.x + (pixel.x as f32)), (amount.y + (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let declaredVec: Vec2<f32> = "
-        "Vec2::<f32>::new(((pixel.x as f32) + amount.x), "
-        "((pixel.y as f32) + amount.y));" in generated_code
+        "let declaredVec: Vec2 = Vec2::new(((pixel.x as f32) + amount.x), ((pixel.y as f32) + amount.y));" in generated_code
     )
     assert (
-        "let inferredMat: Mat2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) + preciseInput);" in generated_code
+        "let inferredMat: DMat2 = (DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) + preciseInput);" in generated_code
     )
     assert (
-        "let inferredMatReverse: Mat2<f64> = "
-        "(preciseInput + Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)));" in generated_code
+        "let inferredMatReverse: DMat2 = (preciseInput + DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]));" in generated_code
     )
     assert (
-        "let declaredMat: Mat2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) + preciseInput);" in generated_code
+        "let declaredMat: DMat2 = (DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) + preciseInput);" in generated_code
     )
     assert "(pixel + amount)" not in generated_code
     assert "(transform + preciseInput)" not in generated_code
@@ -21851,53 +17545,34 @@ def test_mixed_vector_and_matrix_scalar_binary_operands_cast_to_components():
     generated_code = generate_code(ast)
 
     assert (
-        "let inferredVec: Vec2<f32> = "
-        "Vec2::<f32>::new(((pixel.x as f32) + weight), "
-        "((pixel.y as f32) + weight));" in generated_code
+        "let inferredVec: Vec2 = Vec2::new(((pixel.x as f32) + weight), ((pixel.y as f32) + weight));" in generated_code
     )
     assert (
-        "let inferredVecReverse: Vec2<f32> = "
-        "Vec2::<f32>::new((weight + (pixel.x as f32)), "
-        "(weight + (pixel.y as f32)));" in generated_code
+        "let inferredVecReverse: Vec2 = Vec2::new((weight + (pixel.x as f32)), (weight + (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let declaredVec: Vec2<f32> = "
-        "Vec2::<f32>::new(((pixel.x as f32) + weight), "
-        "((pixel.y as f32) + weight));" in generated_code
+        "let declaredVec: Vec2 = Vec2::new(((pixel.x as f32) + weight), ((pixel.y as f32) + weight));" in generated_code
     )
     assert (
-        "let inferredDoubleVec: Vec2<f64> = "
-        "Vec2::<f64>::new(((amount.x as f64) + precise), "
-        "((amount.y as f64) + precise));" in generated_code
+        "let inferredDoubleVec: DVec2 = DVec2::new(((amount.x as f64) + precise), ((amount.y as f64) + precise));" in generated_code
     )
     assert (
-        "let indexedVec: Vec2<f32> = Vec2::<f32>::new("
-        "(amount.x + (index as f32)), (amount.y + (index as f32)));" in generated_code
+        "let indexedVec: Vec2 = Vec2::new((amount.x + (index as f32)), (amount.y + (index as f32)));" in generated_code
     )
     assert (
-        "let inferredMat: Mat2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) + precise);" in generated_code
+        "let inferredMat: DMat2 = (DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) + precise);" in generated_code
     )
     assert (
-        "let inferredMatReverse: Mat2<f64> = "
-        "(precise + Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)));" in generated_code
+        "let inferredMatReverse: DMat2 = (precise + DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]));" in generated_code
     )
     assert (
-        "let declaredMat: Mat2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) + precise);" in generated_code
+        "let declaredMat: DMat2 = (DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) + precise);" in generated_code
     )
-    assert "let indexedMat: Mat2<f32> = (transform + (index as f32));" in generated_code
+    assert "let indexedMat: Mat2 = (transform + (index as f32));" in generated_code
     assert (
-        "let sameVec: Vec2<f32> = "
-        "Vec2::<f32>::new((amount.x + weight), (amount.y + weight));" in generated_code
+        "let sameVec: Vec2 = Vec2::new((amount.x + weight), (amount.y + weight));" in generated_code
     )
-    assert "let sameMat: Mat2<f64> = (preciseInput + precise);" in generated_code
+    assert "let sameMat: DMat2 = (preciseInput + precise);" in generated_code
     assert "(pixel + weight)" not in generated_code
     assert "(transform + precise)" not in generated_code
     assert "{ let __cgl_vec_arg_" not in generated_code
@@ -22016,41 +17691,25 @@ def test_vector_comparison_binary_operands_emit_boolean_lanes(tmp_path):
     assert "let scalarEqual: bool = (count == (index as u32));" in generated_code
     assert "let declaredCompare: bool = ((index as f64) < precise);" in generated_code
     assert (
-        "let vectorEqual: Vec2<bool> = "
-        "Vec2::<bool>::new(((pixel.x as f32) == amount.x), "
-        "((pixel.y as f32) == amount.y));" in generated_code
+        "let vectorEqual: BVec2 = BVec2::new(((pixel.x as f32) == amount.x), ((pixel.y as f32) == amount.y));" in generated_code
     )
     assert (
-        "let vectorNotEqual: Vec2<bool> = "
-        "Vec2::<bool>::new((amount.x != (pixel.x as f32)), "
-        "(amount.y != (pixel.y as f32)));" in generated_code
+        "let vectorNotEqual: BVec2 = BVec2::new((amount.x != (pixel.x as f32)), (amount.y != (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let declaredMask: Vec2<bool> = "
-        "Vec2::<bool>::new(((pixel.x as f32) < amount.x), "
-        "((pixel.y as f32) < amount.y));" in generated_code
+        "let declaredMask: BVec2 = BVec2::new(((pixel.x as f32) < amount.x), ((pixel.y as f32) < amount.y));" in generated_code
     )
     assert (
-        "let vectorScalarCompare: Vec2<bool> = "
-        "Vec2::<bool>::new(((pixel.x as f32) < weight), "
-        "((pixel.y as f32) < weight));" in generated_code
+        "let vectorScalarCompare: BVec2 = BVec2::new(((pixel.x as f32) < weight), ((pixel.y as f32) < weight));" in generated_code
     )
     assert (
-        "let scalarVectorCompare: Vec2<bool> = "
-        "Vec2::<bool>::new((weight < (pixel.x as f32)), "
-        "(weight < (pixel.y as f32)));" in generated_code
+        "let scalarVectorCompare: BVec2 = BVec2::new((weight < (pixel.x as f32)), (weight < (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let boolVectorEqual: Vec2<bool> = "
-        "Vec2::<bool>::new(((mask.x as i32) == pixel.x), "
-        "((mask.y as i32) == pixel.y));" in generated_code
+        "let boolVectorEqual: BVec2 = BVec2::new(((mask.x as i32) == pixel.x), ((mask.y as i32) == pixel.y));" in generated_code
     )
     assert (
-        "let complexCompare: Vec2<bool> = "
-        "{ let __cgl_vec_arg_0 = makeAmount(); "
-        "let __cgl_vec_arg_1 = makeWeight(); "
-        "Vec2::<bool>::new((__cgl_vec_arg_0.x > __cgl_vec_arg_1), "
-        "(__cgl_vec_arg_0.y > __cgl_vec_arg_1)) };" in generated_code
+        "let complexCompare: BVec2 = { let __cgl_vec_arg_0 = makeAmount(); let __cgl_vec_arg_1 = makeWeight(); BVec2::new((__cgl_vec_arg_0.x > __cgl_vec_arg_1), (__cgl_vec_arg_0.y > __cgl_vec_arg_1)) };" in generated_code
     )
     assert "let vectorEqual: Vec2<i32>" not in generated_code
     assert "let vectorNotEqual: Vec2<f32>" not in generated_code
@@ -22084,31 +17743,20 @@ def test_bool_vector_logical_binary_operands_emit_boolean_lanes(tmp_path):
 
     assert "let scalarAnd: bool = (ready && makeFlag());" in generated_code
     assert (
-        "let both: Vec3<bool> = "
-        "Vec3::<bool>::new((a.x && b.x), (a.y && b.y), (a.z && b.z));" in generated_code
+        "let both: BVec3 = BVec3::new((a.x && b.x), (a.y && b.y), (a.z && b.z));" in generated_code
     )
     assert (
-        "let either: Vec3<bool> = "
-        "Vec3::<bool>::new((a.x || b.x), (a.y || b.y), (a.z || b.z));" in generated_code
+        "let either: BVec3 = BVec3::new((a.x || b.x), (a.y || b.y), (a.z || b.z));" in generated_code
     )
     assert (
-        "let scalarRight: Vec3<bool> = "
-        "Vec3::<bool>::new((a.x && ready), (a.y && ready), (a.z && ready));"
+        "let scalarRight: BVec3 = BVec3::new((a.x && ready), (a.y && ready), (a.z && ready));"
         in generated_code
     )
     assert (
-        "let scalarLeft: Vec3<bool> = "
-        "{ let __cgl_vec_arg_0 = makeFlag(); "
-        "Vec3::<bool>::new((__cgl_vec_arg_0 || b.x), "
-        "(__cgl_vec_arg_0 || b.y), (__cgl_vec_arg_0 || b.z)) };" in generated_code
+        "let scalarLeft: BVec3 = { let __cgl_vec_arg_0 = makeFlag(); BVec3::new((__cgl_vec_arg_0 || b.x), (__cgl_vec_arg_0 || b.y), (__cgl_vec_arg_0 || b.z)) };" in generated_code
     )
     assert (
-        "let complex: Vec3<bool> = "
-        "{ let __cgl_vec_arg_1 = makeMask(); "
-        "let __cgl_vec_arg_2 = makeFlag(); "
-        "Vec3::<bool>::new((__cgl_vec_arg_1.x && __cgl_vec_arg_2), "
-        "(__cgl_vec_arg_1.y && __cgl_vec_arg_2), "
-        "(__cgl_vec_arg_1.z && __cgl_vec_arg_2)) };" in generated_code
+        "let complex: BVec3 = { let __cgl_vec_arg_1 = makeMask(); let __cgl_vec_arg_2 = makeFlag(); BVec3::new((__cgl_vec_arg_1.x && __cgl_vec_arg_2), (__cgl_vec_arg_1.y && __cgl_vec_arg_2), (__cgl_vec_arg_1.z && __cgl_vec_arg_2)) };" in generated_code
     )
     assert "let both: Vec3<bool> = (a && b);" not in generated_code
     assert "let either: Vec3<bool> = (a || b);" not in generated_code
@@ -22137,18 +17785,13 @@ def test_bool_vector_unary_not_emits_boolean_lanes(tmp_path):
 
     assert "let invFlag: bool = (!flag);" in generated_code
     assert (
-        "let inv2: Vec2<bool> = "
-        "Vec2::<bool>::new((!mask2.x), (!mask2.y));" in generated_code
+        "let inv2: BVec2 = BVec2::new((!mask2.x), (!mask2.y));" in generated_code
     )
     assert (
-        "let inv3: Vec3<bool> = "
-        "Vec3::<bool>::new((!mask3.x), (!mask3.y), (!mask3.z));" in generated_code
+        "let inv3: BVec3 = BVec3::new((!mask3.x), (!mask3.y), (!mask3.z));" in generated_code
     )
     assert (
-        "let inv4: Vec4<bool> = "
-        "{ let __cgl_vec_arg_0 = makeMask(); "
-        "Vec4::<bool>::new((!__cgl_vec_arg_0.x), (!__cgl_vec_arg_0.y), "
-        "(!__cgl_vec_arg_0.z), (!__cgl_vec_arg_0.z)) };" in generated_code
+        "let inv4: BVec4 = { let __cgl_vec_arg_0 = makeMask(); BVec4::new((!__cgl_vec_arg_0.x), (!__cgl_vec_arg_0.y), (!__cgl_vec_arg_0.z), (!__cgl_vec_arg_0.z)) };" in generated_code
     )
     assert "let inv2: Vec2<bool> = (!mask2);" not in generated_code
     assert "let inv3: Vec3<bool> = (!mask3);" not in generated_code
@@ -22352,44 +17995,31 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types(tmp_path)
     generated_code = generate_code(ast)
 
     assert (
-        "let declaredCoords: Vec2<f32> = "
-        "Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32));" in generated_code
+        "let declaredCoords: Vec2 = Vec2::new((pixel.x as f32), (pixel.y as f32));" in generated_code
     )
     assert (
-        "let mut declaredMask: Vec2<bool> = "
-        "Vec2::<bool>::new((amount.x != 0.0), (amount.y != 0.0));" in generated_code
+        "let mut declaredMask: BVec2 = BVec2::new((amount.x != 0.0), (amount.y != 0.0));" in generated_code
     )
     assert (
-        "let declaredPrecise: Mat2<f64> = "
-        "Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64));" in generated_code
+        "let declaredPrecise: DMat2 = DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]);" in generated_code
     )
     assert (
-        "let mut declaredRegular: Mat2<f32> = "
-        "Mat2::<f32>::new((preciseInput.c0.x as f32), "
-        "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
-        "(preciseInput.c1.y as f32));" in generated_code
+        "let mut declaredRegular: Mat2 = Mat2::from_cols_array(&[(preciseInput.x_axis.x as f32), (preciseInput.x_axis.y as f32), (preciseInput.y_axis.x as f32), (preciseInput.y_axis.y as f32)]);" in generated_code
     )
-    assert "let mut coords: Vec2<f32> = amount;" in generated_code
-    assert "let mut precise: Mat2<f64> = preciseInput;" in generated_code
+    assert "let mut coords: Vec2 = amount;" in generated_code
+    assert "let mut precise: DMat2 = preciseInput;" in generated_code
     assert (
-        "coords = Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32));"
+        "coords = Vec2::new((pixel.x as f32), (pixel.y as f32));"
         in generated_code
     )
     assert (
-        "declaredMask = Vec2::<bool>::new((amount.x != 0.0), "
-        "(amount.y != 0.0));" in generated_code
+        "declaredMask = BVec2::new((amount.x != 0.0), (amount.y != 0.0));" in generated_code
     )
     assert (
-        "precise = Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64));" in generated_code
+        "precise = DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]);" in generated_code
     )
     assert (
-        "declaredRegular = Mat2::<f32>::new((preciseInput.c0.x as f32), "
-        "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
-        "(preciseInput.c1.y as f32));" in generated_code
+        "declaredRegular = Mat2::from_cols_array(&[(preciseInput.x_axis.x as f32), (preciseInput.x_axis.y as f32), (preciseInput.y_axis.x as f32), (preciseInput.y_axis.y as f32)]);" in generated_code
     )
     assert "let declaredCoords: Vec2<f32> = pixel;" not in generated_code
     assert "coords = pixel;" not in generated_code
@@ -22547,45 +18177,28 @@ def test_vector_and_matrix_ternary_branches_cast_to_result_type(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "let mut declared: Vec2<f32> = "
-        "(if ready { Vec2::<f32>::new((pixel.x as f32), "
-        "(pixel.y as f32)) } else { amount });" in generated_code
+        "let mut declared: Vec2 = (if ready { Vec2::new((pixel.x as f32), (pixel.y as f32)) } else { amount });" in generated_code
     )
     assert (
-        "let mask: Vec2<bool> = "
-        "(if ready { Vec2::<bool>::new((amount.x != 0.0), "
-        "(amount.y != 0.0)) } else { Vec2::<bool>::new((pixel.x != 0), "
-        "(pixel.y != 0)) });" in generated_code
+        "let mask: BVec2 = (if ready { BVec2::new((amount.x != 0.0), (amount.y != 0.0)) } else { BVec2::new((pixel.x != 0), (pixel.y != 0)) });" in generated_code
     )
     assert (
-        "declared = (if ready { amount } else { "
-        "Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) });" in generated_code
+        "declared = (if ready { amount } else { Vec2::new((pixel.x as f32), (pixel.y as f32)) });" in generated_code
     )
     assert (
-        "return (if ready { Vec2::<f32>::new((pixel.x as f32), "
-        "(pixel.y as f32)) } else { amount });" in generated_code
+        "return (if ready { Vec2::new((pixel.x as f32), (pixel.y as f32)) } else { amount });" in generated_code
     )
     assert (
-        "let mut precise: Mat2<f64> = "
-        "(if ready { Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
+        "let mut precise: DMat2 = (if ready { DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) } else { preciseInput });" in generated_code
     )
     assert (
-        "let regular: Mat2<f32> = "
-        "(if ready { Mat2::<f32>::new((preciseInput.c0.x as f32), "
-        "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
-        "(preciseInput.c1.y as f32)) } else { transform });" in generated_code
+        "let regular: Mat2 = (if ready { Mat2::from_cols_array(&[(preciseInput.x_axis.x as f32), (preciseInput.x_axis.y as f32), (preciseInput.y_axis.x as f32), (preciseInput.y_axis.y as f32)]) } else { transform });" in generated_code
     )
     assert (
-        "precise = (if ready { Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
+        "precise = (if ready { DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) } else { preciseInput });" in generated_code
     )
     assert (
-        "return (if ready { Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
+        "return (if ready { DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) } else { preciseInput });" in generated_code
     )
     assert "{ let __cgl_vec_arg_" not in generated_code
     assert "{ let __cgl_mat_arg_" not in generated_code
@@ -22623,40 +18236,22 @@ def test_bool_vector_ternary_conditions_emit_lane_selectors(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "let scalarSelected: Vec3<f32> = (if cond { a } else { b });" in generated_code
+        "let scalarSelected: Vec3 = (if cond { a } else { b });" in generated_code
     )
     assert (
-        "let laneSelected: Vec3<f32> = "
-        "Vec3::<f32>::new((if mask.x { a.x } else { b.x }), "
-        "(if mask.y { a.y } else { b.y }), "
-        "(if mask.z { a.z } else { b.z }));" in generated_code
+        "let laneSelected: Vec3 = Vec3::new((if mask.x { a.x } else { b.x }), (if mask.y { a.y } else { b.y }), (if mask.z { a.z } else { b.z }));" in generated_code
     )
     assert (
-        "let scalarArms: Vec3<f32> = "
-        "Vec3::<f32>::new((if mask.x { 1.0 } else { 0.0 }), "
-        "(if mask.y { 1.0 } else { 0.0 }), "
-        "(if mask.z { 1.0 } else { 0.0 }));" in generated_code
+        "let scalarArms: Vec3 = Vec3::new((if mask.x { 1.0 } else { 0.0 }), (if mask.y { 1.0 } else { 0.0 }), (if mask.z { 1.0 } else { 0.0 }));" in generated_code
     )
     assert (
-        "let mixedArm: Vec3<f32> = "
-        "Vec3::<f32>::new((if mask.x { a.x } else { 0.0 }), "
-        "(if mask.y { a.y } else { 0.0 }), "
-        "(if mask.z { a.z } else { 0.0 }));" in generated_code
+        "let mixedArm: Vec3 = Vec3::new((if mask.x { a.x } else { 0.0 }), (if mask.y { a.y } else { 0.0 }), (if mask.z { a.z } else { 0.0 }));" in generated_code
     )
     assert (
-        "let inferred: Vec3<f32> = "
-        "Vec3::<f32>::new((if mask.x { a.x } else { 0.0 }), "
-        "(if mask.y { a.y } else { 0.0 }), "
-        "(if mask.z { a.z } else { 0.0 }));" in generated_code
+        "let inferred: Vec3 = Vec3::new((if mask.x { a.x } else { 0.0 }), (if mask.y { a.y } else { 0.0 }), (if mask.z { a.z } else { 0.0 }));" in generated_code
     )
     assert (
-        "let complex: Vec3<f32> = "
-        "{ let __cgl_vec_arg_0 = makeMask(); let __cgl_vec_arg_1 = makeA(); "
-        "let __cgl_vec_arg_2 = makeScalar(); "
-        "Vec3::<f32>::new((if __cgl_vec_arg_0.x { __cgl_vec_arg_1.x } "
-        "else { __cgl_vec_arg_2 }), "
-        "(if __cgl_vec_arg_0.y { __cgl_vec_arg_1.y } else { __cgl_vec_arg_2 }), "
-        "(if __cgl_vec_arg_0.z { __cgl_vec_arg_1.z } else { __cgl_vec_arg_2 })) };"
+        "let complex: Vec3 = { let __cgl_vec_arg_0 = makeMask(); let __cgl_vec_arg_1 = makeA(); let __cgl_vec_arg_2 = makeScalar(); Vec3::new((if __cgl_vec_arg_0.x { __cgl_vec_arg_1.x } else { __cgl_vec_arg_2 }), (if __cgl_vec_arg_0.y { __cgl_vec_arg_1.y } else { __cgl_vec_arg_2 }), (if __cgl_vec_arg_0.z { __cgl_vec_arg_1.z } else { __cgl_vec_arg_2 })) };"
         in generated_code
     )
     assert "(if mask { a } else { b })" not in generated_code
@@ -22680,26 +18275,16 @@ def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types(tmp
     generated_code = generate_code(ast)
 
     assert (
-        "let inferredVec: Vec2<f32> = "
-        "(if ready { Vec2::<f32>::new((pixel.x as f32), "
-        "(pixel.y as f32)) } else { amount });" in generated_code
+        "let inferredVec: Vec2 = (if ready { Vec2::new((pixel.x as f32), (pixel.y as f32)) } else { amount });" in generated_code
     )
     assert (
-        "let inferredVecReverse: Vec2<f32> = "
-        "(if ready { amount } else { Vec2::<f32>::new((pixel.x as f32), "
-        "(pixel.y as f32)) });" in generated_code
+        "let inferredVecReverse: Vec2 = (if ready { amount } else { Vec2::new((pixel.x as f32), (pixel.y as f32)) });" in generated_code
     )
     assert (
-        "let inferredMat: Mat2<f64> = "
-        "(if ready { Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
+        "let inferredMat: DMat2 = (if ready { DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) } else { preciseInput });" in generated_code
     )
     assert (
-        "let inferredMatReverse: Mat2<f64> = "
-        "(if ready { preciseInput } else { Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) });" in generated_code
+        "let inferredMatReverse: DMat2 = (if ready { preciseInput } else { DMat2::from_cols_array(&[(transform.x_axis.x as f64), (transform.x_axis.y as f64), (transform.y_axis.x as f64), (transform.y_axis.y as f64)]) });" in generated_code
     )
     assert "let inferredVec: Vec2<i32>" not in generated_code
     assert "let inferredMat: Mat2<f32>" not in generated_code
@@ -22724,10 +18309,10 @@ def test_generic_vector_constructors_emit_rust_names(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let precise: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
-    assert "let index: Vec3<i32> = Vec3::<i32>::new(1, 2, 3);" in generated_code
-    assert "let mask: Vec4<u32> = Vec4::<u32>::new(1, 2, 3, 4);" in generated_code
-    assert "let flags: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
+    assert "let precise: DVec2 = DVec2::new(1.0, 2.0);" in generated_code
+    assert "let index: IVec3 = IVec3::new(1, 2, 3);" in generated_code
+    assert "let mask: UVec4 = UVec4::new(1, 2, 3, 4);" in generated_code
+    assert "let flags: BVec2 = BVec2::new(true, false);" in generated_code
     assert "Vec2<f64>::new" not in generated_code
     assert "Vec3<i32>::new" not in generated_code
     assert "Vec4<u32>::new" not in generated_code
@@ -22786,7 +18371,7 @@ def test_inferred_let_vector_declarations_preserve_vector_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let value: Vec4<f32> = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0);" in generated_code
+        "let value: Vec4 = Vec4::new(1.0, 2.0, 3.0, 4.0);" in generated_code
     )
     assert "let x: f32 = value.x;" in generated_code
     assert "let value: f32 = Vec4" not in generated_code
@@ -22815,20 +18400,18 @@ def test_scalar_vector_constructors_splat_rust_values():
     generated_code = generate_code(ast)
 
     assert (
-        "let base: Vec4<f32> = Vec4::<f32>::new(1.0, 1.0, 1.0, 1.0);" in generated_code
+        "let base: Vec4 = Vec4::new(1.0, 1.0, 1.0, 1.0);" in generated_code
     )
     assert (
-        "let scaled: Vec3<f32> = Vec3::<f32>::new(weight, weight, weight);"
+        "let scaled: Vec3 = Vec3::new(weight, weight, weight);"
         in generated_code
     )
-    assert "let pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
+    assert "let pixel: IVec2 = IVec2::new(index, index);" in generated_code
     assert (
-        "let mask: Vec4<bool> = "
-        "Vec4::<bool>::new(enabled, enabled, enabled, enabled);" in generated_code
+        "let mask: BVec4 = BVec4::new(enabled, enabled, enabled, enabled);" in generated_code
     )
     assert (
-        "let offset: Vec4<f32> = "
-        "Vec4::<f32>::new(0.25, 0.5, 0.75, 1.0);" in generated_code
+        "let offset: Vec4 = Vec4::new(0.25, 0.5, 0.75, 1.0);" in generated_code
     )
     assert "Vec4::<f32>::new(1.0);" not in generated_code
     assert "Vec3::<f32>::new(weight);" not in generated_code
@@ -22863,27 +18446,16 @@ def test_complex_scalar_vector_constructor_splats_use_single_evaluation_blocks()
     generated_code = generate_code(ast)
 
     assert (
-        "let fromCall: Vec3<f32> = "
-        "{ let __cgl_vec_arg_0 = makeWeight(); "
-        "Vec3::<f32>::new(__cgl_vec_arg_0, __cgl_vec_arg_0, "
-        "__cgl_vec_arg_0) };" in generated_code
+        "let fromCall: Vec3 = { let __cgl_vec_arg_0 = makeWeight(); Vec3::new(__cgl_vec_arg_0, __cgl_vec_arg_0, __cgl_vec_arg_0) };" in generated_code
     )
     assert (
-        "let fromCast: Vec3<f32> = "
-        "{ let __cgl_vec_arg_1 = (nextIndex() as f32); "
-        "Vec3::<f32>::new(__cgl_vec_arg_1, __cgl_vec_arg_1, "
-        "__cgl_vec_arg_1) };" in generated_code
+        "let fromCast: Vec3 = { let __cgl_vec_arg_1 = (nextIndex() as f32); Vec3::new(__cgl_vec_arg_1, __cgl_vec_arg_1, __cgl_vec_arg_1) };" in generated_code
     )
     assert (
-        "let fromBoolCall: Vec4<bool> = "
-        "{ let __cgl_vec_arg_2 = nextFlag(); "
-        "Vec4::<bool>::new(__cgl_vec_arg_2, __cgl_vec_arg_2, "
-        "__cgl_vec_arg_2, __cgl_vec_arg_2) };" in generated_code
+        "let fromBoolCall: BVec4 = { let __cgl_vec_arg_2 = nextFlag(); BVec4::new(__cgl_vec_arg_2, __cgl_vec_arg_2, __cgl_vec_arg_2, __cgl_vec_arg_2) };" in generated_code
     )
     assert (
-        "let fromInt: Vec2<bool> = "
-        "{ let __cgl_vec_arg_3 = (nextIndex() != 0); "
-        "Vec2::<bool>::new(__cgl_vec_arg_3, __cgl_vec_arg_3) };" in generated_code
+        "let fromInt: BVec2 = { let __cgl_vec_arg_3 = (nextIndex() != 0); BVec2::new(__cgl_vec_arg_3, __cgl_vec_arg_3) };" in generated_code
     )
     assert (
         "Vec3::<f32>::new(makeWeight(), makeWeight(), makeWeight())"
@@ -22916,27 +18488,20 @@ def test_mixed_scalar_vector_constructor_lanes_cast_to_component_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let mixedFloat: Vec2<f32> = "
-        "Vec2::<f32>::new(weight, (index as f32));" in generated_code
+        "let mixedFloat: Vec2 = Vec2::new(weight, (index as f32));" in generated_code
     )
     assert (
-        "let mixedUint: Vec3<u32> = "
-        "Vec3::<u32>::new(count, (index as u32), 2);" in generated_code
+        "let mixedUint: UVec3 = UVec3::new(count, (index as u32), 2);" in generated_code
     )
     assert (
-        "let splatFloat: Vec3<f32> = "
-        "Vec3::<f32>::new((index as f32), (index as f32), (index as f32));"
+        "let splatFloat: Vec3 = Vec3::new((index as f32), (index as f32), (index as f32));"
         in generated_code
     )
     assert (
-        "let boolMask: Vec2<bool> = "
-        "Vec2::<bool>::new((index != 0), (weight != 0.0));" in generated_code
+        "let boolMask: BVec2 = BVec2::new((index != 0), (weight != 0.0));" in generated_code
     )
     assert (
-        "let fromIntVector: Vec3<f32> = "
-        "{ let __cgl_vec_arg_0 = Vec2::<i32>::new(index, 2); "
-        "Vec3::<f32>::new((__cgl_vec_arg_0.x as f32), "
-        "(__cgl_vec_arg_0.y as f32), weight) };" in generated_code
+        "let fromIntVector: Vec3 = { let __cgl_vec_arg_0 = IVec2::new(index, 2); Vec3::new((__cgl_vec_arg_0.x as f32), (__cgl_vec_arg_0.y as f32), weight) };" in generated_code
     )
     assert "Vec2::<f32>::new(weight, index)" not in generated_code
     assert "Vec3::<u32>::new(count, index, 2)" not in generated_code
@@ -23014,21 +18579,14 @@ def test_complex_vector_constructor_args_use_single_evaluation_blocks():
     generated_code = generate_code(ast)
 
     assert (
-        "let color: Vec4<f32> = "
-        "{ let __cgl_vec_arg_0 = makeUv(); "
-        "Vec4::<f32>::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, 0.0, 1.0) };"
+        "let color: Vec4 = { let __cgl_vec_arg_0 = makeUv(); Vec4::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, 0.0, 1.0) };"
         in generated_code
     )
     assert (
-        "let packed: Vec4<f32> = "
-        "{ let __cgl_vec_arg_1 = makeNormal(); "
-        "Vec4::<f32>::new(__cgl_vec_arg_1.x, __cgl_vec_arg_1.y, "
-        "__cgl_vec_arg_1.z, 1.0) };" in generated_code
+        "let packed: Vec4 = { let __cgl_vec_arg_1 = makeNormal(); Vec4::new(__cgl_vec_arg_1.x, __cgl_vec_arg_1.y, __cgl_vec_arg_1.z, 1.0) };" in generated_code
     )
     assert (
-        "let mixed: Vec4<f32> = "
-        "{ let __cgl_vec_arg_2 = makeColor(); "
-        "Vec4::<f32>::new(__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, 0.0, 1.0) };"
+        "let mixed: Vec4 = { let __cgl_vec_arg_2 = makeColor(); Vec4::new(__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, 0.0, 1.0) };"
         in generated_code
     )
     assert "makeUv().x" not in generated_code
@@ -23051,12 +18609,11 @@ def test_standalone_vector_swizzles_emit_rust_constructors():
     generated_code = generate_code(ast)
 
     assert (
-        "let rgb: Vec3<f32> = Vec3::<f32>::new(color.x, color.y, color.z);"
+        "let rgb: Vec3 = Vec3::new(color.x, color.y, color.z);"
         in generated_code
     )
     assert (
-        "let bgra: Vec4<f32> = "
-        "Vec4::<f32>::new(color.z, color.y, color.x, color.w);" in generated_code
+        "let bgra: Vec4 = Vec4::new(color.z, color.y, color.x, color.w);" in generated_code
     )
     assert "let red: f32 = color.x;" in generated_code
     assert "color.rgb" not in generated_code
@@ -23082,15 +18639,10 @@ def test_complex_vector_swizzles_use_single_evaluation_blocks():
     generated_code = generate_code(ast)
 
     assert (
-        "let rgb: Vec3<f32> = "
-        "{ let __cgl_swizzle_0 = makeColor(); "
-        "Vec3::<f32>::new(__cgl_swizzle_0.x, __cgl_swizzle_0.y, "
-        "__cgl_swizzle_0.z) };" in generated_code
+        "let rgb: Vec3 = { let __cgl_swizzle_0 = makeColor(); Vec3::new(__cgl_swizzle_0.x, __cgl_swizzle_0.y, __cgl_swizzle_0.z) };" in generated_code
     )
     assert (
-        "let xy: Vec2<f32> = "
-        "{ let __cgl_swizzle_1 = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0); "
-        "Vec2::<f32>::new(__cgl_swizzle_1.x, __cgl_swizzle_1.y) };" in generated_code
+        "let xy: Vec2 = { let __cgl_swizzle_1 = Vec4::new(1.0, 2.0, 3.0, 4.0); Vec2::new(__cgl_swizzle_1.x, __cgl_swizzle_1.y) };" in generated_code
     )
     assert "let red: f32 = makeColor().x;" in generated_code
     assert "makeColor().rgb" not in generated_code
@@ -23425,10 +18977,10 @@ def test_keyword_like_let_binding_inside_match_arm_preserves_function_body(
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "pub fn process_lighting_model(model: i32) -> Vec3<f32> {" in generated_code
+    assert "pub fn process_lighting_model(model: i32) -> Vec3 {" in generated_code
     assert "match model" in generated_code
     assert "let geometry: f32 = 1.0;" in generated_code
-    assert "Vec3::<f32>::new(geometry, geometry, geometry)" in generated_code
+    assert "Vec3::new(geometry, geometry, geometry)" in generated_code
     assert (
         "pub fn process_lighting_model(model: i32) -> Vec3<f32> {\n}\n"
         not in generated_code
@@ -23451,8 +19003,8 @@ def test_match_expression_initializer_emits_rust_match_initializer(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let processed_normal: Vec3<f32> = match model {" in generated_code
-    assert "0 => {\n            Vec3::<f32>::new(1.0, 1.0, 1.0)" in generated_code
+    assert "let processed_normal: Vec3 = match model {" in generated_code
+    assert "0 => {\n            Vec3::new(1.0, 1.0, 1.0)" in generated_code
     assert "_ => {\n            fallback" in generated_code
     assert "};\n    processed_normal" in generated_code
     assert "let processed_normal: f32 = match model" not in generated_code
@@ -23821,21 +19373,18 @@ def test_generic_vector_composite_types_emit_rust_names(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "pub precise: Vec2<f64>," in generated_code
-    assert "pub index: Vec3<i32>," in generated_code
-    assert "pub mask: Vec4<u32>," in generated_code
-    assert "pub flags: Vec2<bool>," in generated_code
+    assert "pub precise: DVec2," in generated_code
+    assert "pub index: IVec3," in generated_code
+    assert "pub mask: UVec4," in generated_code
+    assert "pub flags: BVec2," in generated_code
     assert (
-        "pub fn passthrough(value: Vec2<f64>, index: Vec3<i32>, "
-        "mask: Vec4<u32>, flags: Vec2<bool>) -> Vec2<f64>"
+        "pub fn passthrough(value: DVec2, index: IVec3, mask: UVec4, flags: BVec2) -> DVec2"
     ) in generated_code
     assert (
-        "let mut localValues: [Vec2<f64>; 2] = "
-        "std::array::from_fn(|_| Default::default());" in generated_code
+        "let mut localValues: [DVec2; 2] = [Default::default(); 2];" in generated_code
     )
     assert (
-        "let mut values: [Vec2<f64>; 2] = "
-        "std::array::from_fn(|_| Default::default());" in generated_code
+        "let mut values: [DVec2; 2] = [Default::default(); 2];" in generated_code
     )
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
@@ -23910,9 +19459,7 @@ def test_array_literals_emit_rust_array_initializers():
         "return [1.0, 2.0, Default::default(), Default::default()];"
     ) in generated_code
     assert (
-        "let colors: [Vec3<f32>; 2] = "
-        "[Vec3::<f32>::new(1.0, 2.0, 3.0), "
-        "Vec3::<f32>::new(4.0, 5.0, 6.0)];"
+        "let colors: [Vec3; 2] = [Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)];"
     ) in generated_code
     assert "ArrayLiteralNode" not in generated_code
 
@@ -23970,9 +19517,9 @@ def test_inferred_array_access_bindings_use_element_types():
 
     assert "let scalar: f32 = values[index as usize];" in generated_code
     assert "let globalScalar: f32 = GLOBAL_WEIGHTS[index as usize];" in generated_code
-    assert "let color: Vec3<f32> = colors[index as usize];" in generated_code
+    assert "let color: Vec3 = colors[index as usize];" in generated_code
     assert (
-        "let globalColor: Vec3<f32> = (*GLOBAL_COLORS)[index as usize];"
+        "let globalColor: Vec3 = (GLOBAL_COLORS())[index as usize];"
         in generated_code
     )
     assert "let literalScalar: f32 = values[0];" in generated_code
@@ -24042,7 +19589,7 @@ def test_inferred_function_call_bindings_use_user_return_types():
     generated_code = generate_code(ast)
 
     assert "let weight: f32 = pickWeight();" in generated_code
-    assert "let color: Vec3<f32> = makeColor();" in generated_code
+    assert "let color: Vec3 = makeColor();" in generated_code
     assert "let enabled: bool = isEnabled();" in generated_code
     assert "let color: f32 = makeColor();" not in generated_code
     assert "let enabled: f32 = isEnabled();" not in generated_code
@@ -24358,9 +19905,9 @@ def test_rust_struct_member_semantic_position():
     generated_code = generate_code(ast)
 
     assert "pub struct VSInput" in generated_code
-    assert "pub position: Vec3<f32>," in generated_code
-    assert "pub normal: Vec3<f32>," in generated_code
-    assert "pub uv: Vec2<f32>," in generated_code
+    assert "pub position: Vec3," in generated_code
+    assert "pub normal: Vec3," in generated_code
+    assert "pub uv: Vec2," in generated_code
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// texcoord(0)" in generated_code
@@ -24387,8 +19934,8 @@ def test_rust_struct_member_semantic_color():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "pub color: Vec4<f32>," in generated_code
-    assert "pub position: Vec4<f32>," in generated_code
+    assert "pub color: Vec4," in generated_code
+    assert "pub position: Vec4," in generated_code
     assert "// color" in generated_code
     assert "// position" in generated_code
 
@@ -24411,9 +19958,9 @@ def test_rust_struct_member_multiple_texcoords():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "pub uv0: Vec2<f32>," in generated_code
-    assert "pub uv1: Vec2<f32>," in generated_code
-    assert "pub uv2: Vec2<f32>," in generated_code
+    assert "pub uv0: Vec2," in generated_code
+    assert "pub uv1: Vec2," in generated_code
+    assert "pub uv2: Vec2," in generated_code
     assert "// texcoord(0)" in generated_code
     assert "// texcoord(1)" in generated_code
     assert "// texcoord(2)" in generated_code
@@ -24509,7 +20056,7 @@ def test_rust_fragment_stage_basic():
 
     assert_rust_stage_attr(generated_code, "fragment")
     assert "-> Vec4<f32>" in generated_code
-    assert "Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0)" in generated_code
+    assert "Vec4::new(1.0, 0.0, 0.0, 1.0)" in generated_code
 
 
 def test_rust_fragment_stage_with_texture_sampling():
@@ -24779,9 +20326,9 @@ def test_rust_struct_member_semantics_tangent_binormal():
     generated_code = generate_code(ast)
 
     assert "pub struct VertexData" in generated_code
-    assert "pub position: Vec3<f32>," in generated_code
-    assert "pub tangent: Vec3<f32>," in generated_code
-    assert "pub binormal: Vec3<f32>," in generated_code
+    assert "pub position: Vec3," in generated_code
+    assert "pub tangent: Vec3," in generated_code
+    assert "pub binormal: Vec3," in generated_code
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// tangent" in generated_code
@@ -24889,9 +20436,9 @@ def test_rust_struct_semantic_fragment_outputs():
     generated_code = generate_code(ast)
 
     assert "pub struct GBufferOutput" in generated_code
-    assert "pub albedo: Vec4<f32>," in generated_code
-    assert "pub normals: Vec4<f32>," in generated_code
-    assert "pub emission: Vec4<f32>," in generated_code
+    assert "pub albedo: Vec4," in generated_code
+    assert "pub normals: Vec4," in generated_code
+    assert "pub emission: Vec4," in generated_code
     assert "// target(0)" in generated_code
     assert "// target(1)" in generated_code
     assert "// target(2)" in generated_code
@@ -24916,9 +20463,9 @@ def test_rust_struct_semantics_validate_builtin_types_and_stage_context():
     """
     generated_code = generate_code(parse_code(tokenize_code(valid_code)))
 
-    assert "pub color: Vec4<f32>,  // target(1)" in generated_code
+    assert "pub color: Vec4,  // target(1)" in generated_code
     assert "pub depth: f32,  // depth(any)" in generated_code
-    assert "pub uv: Vec2<f32>,  // texcoord(0)" in generated_code
+    assert "pub uv: Vec2,  // texcoord(0)" in generated_code
 
     invalid_type = """
     shader BadStructSemanticType {
@@ -25067,7 +20614,7 @@ def test_rust_vertex_stage_position_output(tmp_path):
 
     assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct VSOutput" in generated_code
-    assert "pub position: Vec4<f32>," in generated_code
+    assert "pub position: Vec4," in generated_code
     assert "// position" in generated_code
     assert "-> VSOutput" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -25094,7 +20641,7 @@ def test_rust_fragment_stage_color_output(tmp_path):
 
     assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct PSOutput" in generated_code
-    assert "pub color: Vec4<f32>," in generated_code
+    assert "pub color: Vec4," in generated_code
     assert "// target(0)" in generated_code
     assert "-> PSOutput" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -25136,8 +20683,8 @@ def test_rust_stage_io_semantics_sv_position_sv_target(tmp_path):
     assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct VSOut" in generated_code
     assert "pub struct PSOut" in generated_code
-    assert "pub pos: Vec4<f32>," in generated_code
-    assert "pub norm: Vec3<f32>," in generated_code
+    assert "pub pos: Vec4," in generated_code
+    assert "pub norm: Vec3," in generated_code
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// target(0)" in generated_code
@@ -25175,12 +20722,12 @@ def test_rust_vertex_multiple_attributes(tmp_path):
     assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct VertexIn" in generated_code
     assert "pub struct VertexOut" in generated_code
-    assert "pub position: Vec3<f32>," in generated_code
-    assert "pub normal: Vec3<f32>," in generated_code
-    assert "pub texcoord: Vec2<f32>," in generated_code
-    assert "pub clipPos: Vec4<f32>," in generated_code
-    assert "pub worldNormal: Vec3<f32>," in generated_code
-    assert "pub uv: Vec2<f32>," in generated_code
+    assert "pub position: Vec3," in generated_code
+    assert "pub normal: Vec3," in generated_code
+    assert "pub texcoord: Vec2," in generated_code
+    assert "pub clipPos: Vec4," in generated_code
+    assert "pub worldNormal: Vec3," in generated_code
+    assert "pub uv: Vec2," in generated_code
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// texcoord(0)" in generated_code
@@ -25274,9 +20821,9 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
 
     assert "pub struct Vertex" in generated_code
     assert "pub struct Fragment" in generated_code
-    assert "pub pos: Vec3<f32>," in generated_code
-    assert "pub norm: Vec3<f32>," in generated_code
-    assert "pub color: Vec4<f32>," in generated_code
+    assert "pub pos: Vec3," in generated_code
+    assert "pub norm: Vec3," in generated_code
+    assert "pub color: Vec4," in generated_code
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// color" in generated_code
@@ -26051,13 +21598,12 @@ def test_rust_keyword_like_bindings_escape_in_functions_and_members(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "pub type_: f32," in generated_code
-    assert "pub match_: Vec4<f32>," in generated_code
-    assert "pub fn match_(type_: f32, match_: Vec3<f32>) -> f32" in generated_code
+    assert "pub match_: Vec4," in generated_code
+    assert "pub fn match_(type_: f32, match_: Vec3) -> f32" in generated_code
     assert "let while_: f32 = (type_ + match_.x);" in generated_code
     assert "return while_;" in generated_code
     assert (
-        "return (match_(input.type_, Vec3::<f32>::new(1.0, 2.0, 3.0)) "
-        "+ input.match_.x);"
+        "return (match_(input.type_, Vec3::new(1.0, 2.0, 3.0)) + input.match_.x);"
     ) in generated_code
     assert "pub fn match(" not in generated_code
     assert "let while:" not in generated_code
@@ -26089,7 +21635,7 @@ def test_rust_escapes_abstract_and_gen_reserved_identifiers(tmp_path):
     assert "abstract: f32" not in generated_code
     assert "let gen: f32" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
-    assert_generated_rust_smoke_compiles(generated_code, tmp_path, edition="2024")
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_keyword_struct_fields_survive_default_formatting(tmp_path):
@@ -26220,10 +21766,10 @@ def test_rust_subgroup_builtin_expressions_lower_to_helpers(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "let lane: u32 = subgroup_invocation_id();" in generated_code
-    assert "let size: u32 = subgroup_size();" in generated_code
+    assert "let lane: u32 = gl_SubgroupInvocationID;" in generated_code
+    assert "let size: u32 = gl_SubgroupSize;" in generated_code
     assert "let subgroup: u32 = subgroup_id();" in generated_code
-    assert "let subgroupCount: u32 = num_subgroups();" in generated_code
+    assert "let subgroupCount: u32 = gl_NumSubgroups;" in generated_code
     assert "gl_SubgroupInvocationID" not in generated_code
     assert "gl_SubgroupSize" not in generated_code
     assert "gl_SubgroupID" not in generated_code
@@ -26313,7 +21859,7 @@ def test_rust_plain_struct_constructor_calls_lower_to_new_and_compile(tmp_path):
 
     assert "return Material::new(albedo, (roughnessBucket as f32));" in generated_code
     assert "let material: Material = Material::new(normal, 1.0);" in generated_code
-    assert "return Surface::new(material, Vec4::<f32>::new(" in generated_code
+    assert "return Surface::new(material, Vec4::new(" in generated_code
     assert "return Material(albedo" not in generated_code
     assert "return Surface(material" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -26386,7 +21932,7 @@ def test_rust_stage_local_function_captures_entry_params(tmp_path):
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "pub fn shade(lightDir: Vec3<f32>, input: FragmentInput) -> f32" in (
+    assert "pub fn shade(lightDir: Vec3, input: FragmentInput) -> f32" in (
         generated_code
     )
     assert "shade(input.worldPosition, input)" in generated_code
@@ -26551,11 +22097,11 @@ def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
     assert "input: VSOutput" in generated_code
     assert "-> VSOutput" in generated_code
     assert "-> Vec4<f32>" in generated_code
-    assert "pub position: Vec3<f32>," in generated_code
-    assert "pub normal: Vec3<f32>," in generated_code
-    assert "pub texCoord: Vec2<f32>," in generated_code
-    assert "pub clipPos: Vec4<f32>," in generated_code
-    assert "pub uv: Vec2<f32>," in generated_code
+    assert "pub position: Vec3," in generated_code
+    assert "pub normal: Vec3," in generated_code
+    assert "pub texCoord: Vec2," in generated_code
+    assert "pub clipPos: Vec4," in generated_code
+    assert "pub uv: Vec2," in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

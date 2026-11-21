@@ -10,6 +10,8 @@ compiles with rust-gpu or is refused with every reason listed.
 
 from __future__ import annotations
 
+import re
+
 from ..ast import (
     AssignmentNode,
     AtomicOpNode,
@@ -30,7 +32,7 @@ from .ast_walk import walk_ast_values
 from .stage_utils import normalize_stage_name
 
 # Entry-point stages the generator writes for rust-gpu.
-RUST_GPU_STAGES = frozenset({"compute"})
+RUST_GPU_STAGES = frozenset({"compute", "vertex", "fragment"})
 _NODE_REASONS = (
     (TextureNode, "texture sampling"),
     (TextureOpNode, "texture operations"),
@@ -70,6 +72,11 @@ def written_names(ast) -> frozenset[str]:
         if name:
             names.add(name)
     return frozenset(names)
+
+
+def program_stage_names(ast):
+    """The normalized names of every stage ``ast`` declares, as a stage block or a stage-qualified function."""
+    return _stage_names(ast)
 
 
 def _stage_names(ast):
@@ -121,8 +128,8 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
     """Record a refusal on ``generator`` for each construct of ``ast`` the rust-gpu output does not lower."""
     for stage in sorted(_stage_names(ast) - RUST_GPU_STAGES):
         generator.refuse_lowering(
-            f"stage: Rust output writes rust-gpu compute entry points only; {stage} entry points are not "
-            "lowered for rust-gpu"
+            f"stage: Rust output writes rust-gpu compute, vertex and fragment entry points; {stage} entry "
+            "points are not lowered for rust-gpu"
         )
     written = written_names(ast)
     for node in _declarations(ast):
@@ -164,3 +171,20 @@ def _refuse_declaration(generator, node, written):
         generator.refuse_lowering(
             f"global: '{name}' is written, and rust-gpu has no mutable statics"
         )
+
+
+# Types and macros of Rust's ``alloc`` and ``std`` that a ``#![no_std]`` rust-gpu crate cannot name, and string
+# constants, which rust-gpu cannot lower ("unsupported unsized `[u8]` constant").
+_HOST_ONLY = (
+    (re.compile(r"(?<![\w:])Vec<"), "a dynamic array (Vec) needs an allocator, which rust-gpu shaders do not have"),
+    (re.compile(r"\bvec!\["), "a dynamic array (vec!) needs an allocator, which rust-gpu shaders do not have"),
+    (re.compile(r"(?<![\w:])String\b"), "strings need an allocator, which rust-gpu shaders do not have"),
+    (re.compile(r"&'static str\b"), "rust-gpu cannot lower string constants"),
+)
+
+
+def refuse_host_only_rust(generator, code: str) -> None:
+    """Refuse a generated crate that names an allocator type or a string constant (each reason once)."""
+    for pattern, reason in _HOST_ONLY:
+        if pattern.search(code):
+            generator.refuse_lowering(f"type: {reason}")
