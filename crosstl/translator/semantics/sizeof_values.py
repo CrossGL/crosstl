@@ -85,6 +85,10 @@ _EXTRA_SCALARS = {
     "float64_t": 8,
 }
 _EXTRA_VECTOR = re.compile(r"(bfloat16vec|bfloat|i8vec|u8vec|i16vec|u16vec)([234])")
+# ``vec2<bfloat16>``: the generic vector spelling of an element the hub's scalar table does not list.
+_GENERIC_EXTRA_VECTOR = re.compile(
+    r"vec([234])<(" + "|".join(map(re.escape, _EXTRA_SCALARS)) + r")>"
+)
 _EXTRA_VECTOR_BYTES = {
     "bfloat16vec": 2,
     "bfloat": 2,
@@ -158,6 +162,11 @@ def _scalar_or_vector_bytes(type_value, operand, layout):
     if match:
         return _vector_bytes(
             int(match.group(2)), _EXTRA_VECTOR_BYTES[match.group(1)], operand, layout
+        )
+    match = _GENERIC_EXTRA_VECTOR.fullmatch(name or "")
+    if match:
+        return _vector_bytes(
+            int(match.group(1)), _EXTRA_SCALARS[match.group(2)], operand, layout
         )
     if isinstance(type_value, A.VectorType):
         element = _scalar_or_vector_bytes(type_value.element_type, operand, layout)

@@ -169,7 +169,7 @@ def test_hlsl_round_calls_an_existing_mojo_round_even_overload(
     )
     out = crosstl.translate(str(path), backend="mojo", format_output=False)
     assert call in out
-    overloads = re.findall(r"^fn round_even\(\w+: (.+?)\) -> (.+?):$", out, re.M)
+    overloads = re.findall(r"^def round_even\(\w+: (.+?)\) -> (.+?):$", out, re.M)
     assert (overload_type, overload_type) in overloads
 
 

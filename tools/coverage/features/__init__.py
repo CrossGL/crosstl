@@ -38,9 +38,13 @@ def _cuda(offline: bool) -> list[Feature]:
     )
 
 
+def _subgroup(offline: bool) -> list[str]:
+    return [fetch(source, offline=offline) for source in glsl_subgroup.SOURCES]
+
+
 def _glsl(offline: bool) -> list[Feature]:
     return glsl.parse(fetch("glsl", offline=offline)) + glsl_subgroup.parse(
-        fetch("glsl-subgroup", offline=offline)
+        *_subgroup(offline)
     )
 
 
@@ -55,7 +59,11 @@ def _hip(offline: bool) -> list[Feature]:
 
 
 def _hlsl(offline: bool) -> list[Feature]:
-    return hlsl.parse(fetch("hlsl", offline=offline), _glsl_names(offline))
+    return hlsl.parse(
+        fetch("hlsl", offline=offline),
+        _glsl_names(offline),
+        fetch("hlsl-preview", offline=offline),
+    )
 
 
 def _metal(offline: bool) -> list[Feature]:
@@ -117,6 +125,8 @@ def _rust(offline: bool) -> list[Feature]:
     features += spirv_std.images(fetch("rust-image", offline=offline))
     features += spirv_std.byte_buffers(fetch("rust-byte-buffer", offline=offline))
     features += ray_query.parse(fetch("rust-ray-query", offline=offline))
+    features += spirv_std.runtime_arrays(fetch("rust-runtime-array", offline=offline))
+    features += spirv_std.debug_printf(fetch("rust-macros", offline=offline))
     features += glam.parse(
         {name: fetch(key, offline=offline) for name, key in glam.SOURCES.items()},
         glsl_names,
@@ -137,7 +147,7 @@ def _spirv(offline: bool) -> list[Feature]:
     return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
         fetch("spirv-core", offline=offline),
         glsl_text,
-        fetch("glsl-subgroup", offline=offline),
+        *_subgroup(offline),
     )
 
 

@@ -15,7 +15,7 @@ this file in the same change whenever a validator, driver or container pin moves
 | `spirv-val` | SPIRV-Tools v2026.4 | available |
 | `docker` | server 29.5.2 | available |
 | `vkrun` | built from `vkrun.c` (dfd360e2b4d00a13) | available |
-| `mesa-image` | Mesa 25.2.8-0ubuntu0.24.04.4 aarch64 (`docker/mesa/Dockerfile`) | available |
+| `mesa-image` | Mesa 25.2.8-0ubuntu0.24.04.5 aarch64 (`docker/mesa/Dockerfile`) | available |
 
 ## Runtimes
 
@@ -36,7 +36,9 @@ Windows CI path.
 Probed with a trivial compute kernel per version.
 
 - **MSL** (`xcrun metal -std=`): `macos-metal1.0`–`macos-metal2.4`, `ios-metal1.0`–`ios-metal2.4`,
-  `metal3.0`, `metal3.1`, `metal3.2`, `metal4.0`, `metal4.1`. `metal3.3` and `metal4.2` are rejected.
+  `metal3.0`, `metal3.1`, `metal3.2`, `metal4.0`, `metal4.1`. `metal3.3` and `metal4.2` are rejected. The
+  harness compiles each artifact under the oldest of `metal3.1`, `metal3.2`, `metal4.0` and `metal4.1` that
+  accepts it, and the Metal driver compiles it under the same version.
 - **HLSL** (DXC 1.9.0.5512): profiles `cs_6_0`–`cs_6_9`; `cs_6_10` is rejected. `cs_5_0` and `cs_5_1` are
   accepted and compiled to DXIL, so SM 5.x is a source profile, not a DXBC target. `-HV 2018` and `-HV 202x` are
   accepted; the harness validates at `cs_6_6` with HLSL 2021.

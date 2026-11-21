@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 50,
-        "endOffset": 1771,
+        "endLine": 58,
+        "endOffset": 2022,
         "file": "crosstl-out/opengl/AAPLMeshRenderer.glsl",
-        "length": 1771,
+        "length": 2022,
         "line": 1,
         "offset": 0
       },

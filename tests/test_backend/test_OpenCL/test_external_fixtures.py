@@ -641,7 +641,7 @@ def test_external_arrayfire_magma_opencl_api_typedefs_codegen_reparse():
     assert "typedef vec2<f64> magmaDoubleComplex;" in crossgl
     assert "typedef vec2<f32> magmaFloatComplex;" in crossgl
     assert "typedef u64 magma_ptr;" in crossgl
-    assert "typedef u32 magma_type_t;" in crossgl
+    assert "typedef magma_uplo_t magma_type_t;" in crossgl
     assert "struct cpu_blas_gemv_func_float" in crossgl
     assert "cl_command_queue" not in crossgl
 
@@ -930,7 +930,8 @@ def test_external_pocl_typename_const_alias_declarator_codegen_reparse():
     global_name = ast.statements[1]
     assert global_name.vtype == "string const"
     assert global_name.name == "typename"
-    assert 'var typename: ptr<i8> = "char";' in crossgl
+    # `string const` makes the pointer itself const, so it imports as a constant.
+    assert 'const ptr<i8> typename = "char";' in crossgl
     assert "out[0] = typename[0];" in crossgl
 
 

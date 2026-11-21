@@ -13,11 +13,23 @@ import re
 import struct
 from pathlib import Path
 
+from . import metal_textures
 from .process import run
 
 FILES = ("input.bin", "output.bin")
 CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
+
+# The Metal Shading Language version of every Metal compile: ``xcrun metal -std=metal3.1`` offline and
+# ``MTLCompileOptions.languageVersion`` in the driver. Left unset, the driver picks its own default, which is the
+# newest version on an Apple GPU but older than 3.1 on the Apple Paravirtual device of hosted macOS runners, so one
+# artifact compiled under two languages. MSL 3.1 is the first with ``bfloat`` (MSL specification section 2.1).
+METAL_LANGUAGE_VERSION = (3, 1)
+# An artifact that MSL 3.1 rejects compiles under the oldest later version that accepts it, offline and then in the
+# driver: ``coherent(device)`` arrives in MSL 3.2, ``pack_float_to_snorm10a2`` in 4.0 and the atomic functions without
+# ``_explicit`` in 4.1, the version the coverage validators check (tools/coverage/validators.py METAL_STANDARD). An
+# artifact keeps one language either way, and every artifact MSL 3.1 accepts keeps 3.1.
+METAL_LANGUAGE_VERSIONS = ((3, 1), (3, 2), (4, 0), (4, 1))
 
 
 class DriverRejected(RuntimeError):
@@ -61,6 +73,34 @@ def _constants(job, *kinds):
     return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
+def metal_language_version(metal, version=METAL_LANGUAGE_VERSION):
+    """``version`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
+    major, minor = version
+    return getattr(metal, f"MTLLanguageVersion{major}_{minor}", major << 16 | minor)
+
+
+def _metal_function(Metal, library, entry):
+    """The entry function, specialized when it declares ``[[function_constant(n)]]`` values.
+
+    A function that reads function constants builds a pipeline only once specialized (Metal Shading Language
+    Specification, "Program Scope Function Constants"). The harness sets no value, so ``is_function_constant_defined``
+    is false for each constant and the kernel takes the default it writes, as a SPIR-V, GLSL or HLSL kernel does
+    without a specialization value.
+    """
+    function = library.newFunctionWithName_(entry)
+    if function is None:
+        raise RuntimeError(f"Missing Metal entry {entry}")
+    constants = function.functionConstantsDictionary()
+    if constants is None or not len(constants):
+        return function
+    function, error = library.newFunctionWithName_constantValues_error_(
+        entry, Metal.MTLFunctionConstantValues.new(), None
+    )
+    if function is None:
+        raise DriverRejected(f"Metal function specialization: {error}")
+    return function
+
+
 def execute_metal(job):
     import Metal
 
@@ -69,6 +109,11 @@ def execute_metal(job):
         raise RuntimeError("No Metal device")
     identity = _expect(job, str(device.name()))
     options = Metal.MTLCompileOptions.new()
+    options.setLanguageVersion_(
+        metal_language_version(
+            Metal, tuple(job.get("metal_language", METAL_LANGUAGE_VERSION))
+        )
+    )
     strict = job["config"] == "strict"
     options.setMathMode_(Metal.MTLMathModeSafe if strict else Metal.MTLMathModeFast)
     options.setMathFloatingPointFunctions_(
@@ -81,9 +126,7 @@ def execute_metal(job):
     )
     if library is None:
         raise DriverRejected(f"Metal driver compile: {error}")
-    function = library.newFunctionWithName_(job["entry"])
-    if function is None:
-        raise RuntimeError(f"Missing Metal entry {job['entry']}")
+    function = _metal_function(Metal, library, job["entry"])
     pipeline, error = device.newComputePipelineStateWithFunction_error_(function, None)
     if pipeline is None:
         raise DriverRejected(f"Metal pipeline: {error}")
@@ -117,6 +160,8 @@ def execute_metal(job):
         encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
     if constants is not None:
         encoder.setBuffer_offset_atIndex_(constants, 0, block["slot"])
+    # Held until the command buffer completes.
+    textures = metal_textures.bind(Metal, device, encoder, job)
     # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
     # whole workgroups, which is the hazard the partial-threadgroup cases measure.
     encoder.dispatchThreads_threadsPerThreadgroup_(
@@ -125,6 +170,7 @@ def execute_metal(job):
     encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()
+    del textures
     if command.error() is not None:
         raise RuntimeError(f"Metal execution: {command.error()}")
     for _, buffer, filename in buffers:

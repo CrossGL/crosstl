@@ -12,15 +12,18 @@ from ..dialect import (
 )
 from ..model import (
     COOP_COLUMNS,
+    GENERIC_POINTER,
+    SCHEDULE_MASK,
     SLANG_ENUMERATORS,
     WIDE_INTEGERS,
     Type,
     coop_element,
     descriptor_reading,
     slang_literal,
+    struct_reading,
     tuple_element,
 )
-from ..objects import HIT_OBJECT, OBJECTS, VERTEX
+from ..objects import HIT_OBJECT, OBJECTS, RECORD, STORAGE_BUFFER, VERTEX
 from ..spellings import ELEMENT, SUBSCRIPT
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -76,6 +79,8 @@ class CrossGL(Dialect):
 
     # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        if qualifier == STORAGE_BUFFER:
+            return f"buffer {spelling}* {name};"
         layout = f"layout({qualifier}) " if qualifier else ""
         return f"{layout}uniform {spelling} {name};"
 
@@ -277,13 +282,51 @@ class CrossGL(Dialect):
         )
         return self._program("task", shared, buffers, functions, parts)
 
-    def absent(self, stage: str) -> str:
-        return "CrossGL has no work-graph node stage" if stage == "node" else ""
+    # A work-graph node as HLSL's probe writes one (:meth:`.hlsl.HLSL.node`): a node input that makes it a coalescing
+    # node, which runs a thread group per batch of input records, and otherwise a broadcasting node with a fixed
+    # dispatch grid. A records object is requested from a node output; only a record whose structure tracks it can
+    # signal FinishedCrossGroupSharing (crosstl.translator.semantics.work_graph_nodes).
+    _COALESCING = ("EmptyNodeInput", "GroupNodeInputRecords")
+    _RECORDS = {
+        "ThreadNodeOutputRecords": "GetThreadNodeOutputRecords",
+        "GroupNodeOutputRecords": "GetGroupNodeOutputRecords",
+    }
+
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        parameter = parts.get("parameter", "")
+        kind = parameter.split("<")[0]
+        shared = kind == "RWDispatchNodeInputRecord"
+        declared, opening = f"@max_records(1) {parameter} obj", []
+        if kind in self._RECORDS:
+            declared = f"@max_records(1) NodeOutput<{RECORD}> output"
+            opening = [f"    {parameter} obj = output.{self._RECORDS[kind]}(1u);"]
+        elif shared:
+            declared = f"@globallycoherent {parameter} obj"
+        coalescing = kind in self._COALESCING
+        functions = [
+            f"void main({declared if parameter else ''})",
+            f"    @node_launch({'coalescing' if coalescing else 'broadcasting'})",
+            *(() if coalescing else ("    @node_dispatch_grid(1, 1, 1)",)),
+            "    @numthreads(1, 1, 1) {",
+            "    uint i = 0u;",
+            *opening,
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        record = (
+            *(("@node_track_rw_input_sharing",) if shared else ()),
+            f"struct {RECORD} {{",
+            "    uint value;",
+            "}",
+        )
+        return self._program("node", record, buffers, functions, parts)
 
     def type(self, kind: Type) -> str:
         # A Metal ballot returns a simd_vote or quad_vote mask (features.metal.VOTES), which no CrossGL type holds.
         if kind.opaque in ("simd_vote", "quad_vote"):
             raise NoSpelling(f"CrossGL has no type for Metal's {kind.opaque} mask")
+        if kind.opaque == SCHEDULE_MASK:
+            raise NoSpelling("CrossGL has no AMD instruction scheduling groups")
         # CrossGL spells Slang's cooperative vectors, their enumerations and tuples as Slang does.
         if kind == COOP_COLUMNS:
             return super().type(kind.with_scalar("int"))
@@ -312,6 +355,10 @@ class CrossGL(Dialect):
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
 
+    def constant_memory(self, kind: Type, name: str) -> str:
+        # The CUDA and HIP generators write a uniform as a __constant__ variable.
+        return f"uniform {self.type(kind)} {name};"
+
     def assignment(
         self, name: str, kind: Type, arguments: list[str]
     ) -> tuple[list[str], str] | None:
@@ -331,15 +378,29 @@ class CrossGL(Dialect):
             return name.format(*arguments)
         return super().call(name, arguments)
 
+    # CrossGL spells a Metal ballot as an expression that already computes the mask's vote_t integer
+    # (spellings.OTHER_NAMES), which the Metal probe reads with a static_cast: 64 bits for a SIMD-group, and a quad's
+    # four bits, which the Metal probe stores as a uint.
+    _VOTE_MASKS = {"simd_vote": Type("uint64"), "quad_vote": Type("uint")}
+
     def reading(self, opaque: str) -> tuple[Type, str] | None:
+        if opaque in self._VOTE_MASKS:
+            return self._VOTE_MASKS[opaque], "{}"
         element = coop_element(opaque)
         if element:
             return element, "{}[0]"
         held = tuple_element(opaque)
-        return (held[0], "{}._0") if held else descriptor_reading(opaque)
+        if held:
+            return held[0], "{}._0"
+        return descriptor_reading(opaque) or struct_reading(opaque)
 
-    # CrossGL spells Direct3D's hit object as HLSL does.
+    # CrossGL spells Direct3D's hit object and work-graph records as HLSL does, and a pointer to any memory as
+    # ptr<void>.
     def holding(self, opaque: str) -> str:
+        if opaque == GENERIC_POINTER:
+            return "ptr<void>"
+        if opaque in self._RECORDS:
+            return f"{opaque}<{RECORD}>"
         return OBJECTS[HIT_OBJECT].spelling if opaque == HIT_OBJECT else ""
 
 

@@ -155,9 +155,9 @@ def test_translator_legs_warm_the_cache_before_their_tests():
     path = ROOT / ".github" / "workflows" / "translator-tests.yml"
     steps = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]["test"]["steps"]
     step = steps[warm]
-    assert "startsWith(matrix.component, 'all')" in step["if"]
-    assert "startsWith(matrix.component, 'general')" in step["if"]
-    assert "--ignore=tests/test_translator/test_codegen" in step["run"]
+    # Every leg runs a shard of the whole suite, so every leg warms all of it.
+    assert "if" not in step
+    assert step["run"] == "python -m tools.pytest_warm tests/test_translator"
 
 
 def test_complete_suite_warms_the_cache_before_the_shard_runs():

@@ -219,6 +219,10 @@ class Dialect:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
 
+    def declare_mutable(self, kind: Type, name: str, value: str) -> str:
+        """The declaration of a local that a method changes in place; locals are mutable unless a dialect says."""
+        return self.declare(kind, name, value)
+
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
@@ -263,6 +267,17 @@ class Dialect:
         """The workgroup variable ``name``, for a parameter that takes one."""
         return name
 
+    def shared_pointer(self, kind: Type, name: str, value: str) -> Handle:
+        """A variable ``name`` of ``kind`` that the compute workgroup shares, set to ``value``, and the pointer to it,
+        for a parameter that takes one."""
+        argument = self.address(name)
+        return Handle(argument, (f"{name} = {value};",), (self.workgroup(kind, name),))
+
+    def constant_memory(self, kind: Type, name: str) -> str:
+        """The declaration of a variable ``name`` in constant memory, which the host sets, for a parameter that takes
+        its address."""
+        raise ProbeError(f"no probe declares {self.language} constant memory yet")
+
     def handle(self, kind: Type, name: str) -> Handle | None:
         """How a probe makes an argument of the opaque type ``kind`` in a local ``name``, or ``None`` when the
         language has no built-in that makes one."""
@@ -270,6 +285,10 @@ class Dialect:
 
     def inout_argument(self) -> str:
         return "outp[i]"
+
+    def atomic_argument(self, kind: Type) -> str:
+        """The output buffer's element as an atomic value holding a ``kind``, for a method of an atomic type."""
+        raise ProbeError(f"{self.language} has no atomic values")
 
     def buffer_argument(self, name: str) -> str:
         """The whole input buffer ``name``, for a parameter that takes a runtime-sized array."""

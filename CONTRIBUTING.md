@@ -57,10 +57,10 @@ Coverage is measured, so there is no support table to edit. The Coverage
 workflow writes a probe for every built-in in each language's pinned upstream
 feature list and for a set of language constructs (types, operators, control
 flow, resources, compute and stages), translates it, and checks the result
-with the language's reference tool. A comment on your pull request lists how
-it changes coverage against `main`.
-Once the change is on `main`, it closes the `coverage` issues whose probes now
-pass. Each of those issues gives the command that reproduces it, for example:
+with the language's reference tool. A comment on your pull request lists the
+scores and features your change moves against `main`. Once it is on `main`, the
+Coverage workflow closes the `coverage` issues whose probes now pass. Each of
+those issues gives the command that reproduces it, for example:
 
 ```bash
 python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum --keep probes
@@ -89,9 +89,9 @@ Open the pull request against `main`. Required checks run on every push:
 translator, backend, complete-suite, example and demo tests on Linux, macOS and
 Windows, plus Lint and Coverage. Once they pass and a maintainer has reviewed
 the change, it joins the merge queue, which tests the exact commit that will
-land, and is squash-merged. When the next change lands on `main`, a pull request
-without labels gets the `backend:`, `direction:` and `area:` labels of the files
-it changes. A pull request with no activity for 14 days is marked `stale` and
+land, and is squash-merged. A few minutes after a push, a pull request without
+labels gets the `backend:`, `direction:` and `area:` labels of the files it
+changes. A pull request with no activity for 14 days is marked `stale` and
 closed 7 days later; any push or comment resets the clock.
 
 Keep a pull request to one change. Write commit messages and the pull request

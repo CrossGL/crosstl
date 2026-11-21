@@ -47,7 +47,7 @@ COUNTED = """\
 
 def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
     # DXC declares one for a RWStructuredBuffer a function takes; the host binds no such buffer.
-    kept = execution.without_unused_counters(COUNTED)
+    kept = lowering.without_unused_counters(COUNTED)
     assert "counter_var_outp" not in kept
     assert '"main" %id\n' in kept and "%outp Binding 1" in kept
     assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
@@ -80,8 +80,8 @@ def test_rust_spirv_declares_only_the_capabilities_it_uses():
     # lavapipe will not create a pipeline from a module that declares a capability the device does not enable.
     if not (validators.command("spirv-as") and validators.command("spirv-val")):
         pytest.skip("spirv-as or spirv-val is not installed")
-    kept = execution.without_unused_capabilities(OVERDECLARED)
-    assert execution._CAPABILITY.findall(kept) == ["Shader", "Float64"]
+    kept = lowering.without_unused_capabilities(OVERDECLARED)
+    assert lowering._CAPABILITY.findall(kept) == ["Shader", "Float64"]
     assert kept == OVERDECLARED.replace(
         "               OpCapability RayTracingKHR\n", ""
     ).replace("               OpCapability StencilExportEXT\n", "")
@@ -89,17 +89,15 @@ def test_rust_spirv_declares_only_the_capabilities_it_uses():
 
 def test_only_rust_spirv_loses_capabilities(monkeypatch):
     monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: (OVERDECLARED, ""))
-    monkeypatch.setattr(
-        execution, "without_unused_capabilities", lambda text: "trimmed"
-    )
+    monkeypatch.setattr(lowering, "without_unused_capabilities", lambda text: "trimmed")
     assert execution.as_spirv("rust", "") == "trimmed"
     assert execution.as_spirv("wgsl", "") == OVERDECLARED
     monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: ("", "rejected"))
     assert execution.as_spirv("rust", "") == ""
     used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
-    assert execution.without_unused_counters(used) == used
+    assert lowering.without_unused_counters(used) == used
     plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
-    assert execution.without_unused_counters(plain) == plain
+    assert lowering.without_unused_counters(plain) == plain
 
 
 HELPER = """\
@@ -199,6 +197,12 @@ def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
         1,
     )
     assert "| 1 | 0 | 0 | 0 | 1 on metal-apple |" in publish.markdown(data)
+    # Each probe that ran names its runtime, and the row counts them per runtime.
+    assert row["executions"] == {"metal-apple": 1}
+    assert row["features"][0]["runtime"] == "metal-apple"
+    assert "execution_only" not in data
+    only = report.build([ran], ["metal"], ["output"], execute=True, execution_only=True)
+    assert only["execution_only"] is True
     # Measured without --execute, a language that has a runtime says so instead of claiming that none could run.
     plain = report.build([Result(SIN, "output", "supported")], ["metal"], ["output"])
     [row] = [b for b in plain["backends"] if b["language"] == "metal"]

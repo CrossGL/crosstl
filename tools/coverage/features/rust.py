@@ -12,6 +12,7 @@ parameters take the values of :data:`_CONSTANTS`.
 
 from __future__ import annotations
 
+import math
 import re
 
 from .. import spellings
@@ -131,6 +132,16 @@ _TEMPLATE = re.compile(r"pub (?:const )?(?:unsafe )?fn \$name")
 _CLOSURE = re.compile(r"(Fn(?:Mut|Once)?)\s*\(([^()]*)\)\s*->\s*(\w+)")
 # A slice parameter, ``&[T]`` or ``&mut [T]``. The probe passes its input buffer for one the function reads.
 _SLICE = re.compile(r"&\s*(mut\s+)?\[([^;\]]+)\]")
+# glam's quaternions, which :func:`rust_type` keeps opaque, hold four values: x, y, z and w.
+_QUATERNIONS = frozenset({"Quat", "DQuat"})
+
+
+def _components(kind: Type) -> int:
+    """How many values a vector, a matrix or a quaternion holds, which is how many it writes to a slice; 0 for
+    another type."""
+    if kind.opaque:
+        return 4 if kind.opaque in _QUATERNIONS else 0
+    return math.prod(kind.shape) if kind.shape else 0
 
 
 def _nesting(text: str, index: int) -> int:
@@ -225,7 +236,7 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
             continue
         closure = _CLOSURE.fullmatch(bounds.strip())
         if closure:
-            # A closure keeps its bound as its type, from which a probe writes one (kernels.Rust.handle).
+            # A closure keeps its bound as its type, from which a probe writes one (..rust.Rust.handle).
             arguments = ", ".join(separated(closure.group(2)))
             types[name] = Type.other(
                 f"{closure.group(1)}({arguments}) -> {closure.group(3)}"
@@ -325,7 +336,9 @@ def signature(
     for part in separated(parameters):
         if re.fullmatch(r"(?:mut\s+)?&?(?:mut\s+)?self", part):
             method = True
-            params.append(Param(self_type))
+            # ``&mut self`` changes the receiver in place, so the probe declares it mutable and stores it afterwards.
+            changed = bool(re.fullmatch(r"&\s*mut\s+self", part))
+            params.append(Param(self_type, "mutable" if changed else "in"))
             continue
         kind = part.partition(":")[2].strip()
         direction = "in"
@@ -334,10 +347,10 @@ def signature(
         if element and not element.opaque and not sliced.group(1):
             params.append(Param(element, "buffer"))
             continue
-        if element and not element.opaque and len(self_type.shape) == 1:
-            # A vector's mutable slice holds one value per component, as glam requires, so the probe passes a local
-            # array of that length.
-            array = Type(element.scalar, element.shape, count=self_type.shape[0])
+        if element and not element.opaque and _components(self_type):
+            # A mutable slice holds one value per component of the receiver, as glam requires: a matrix writes its
+            # columns in order and a quaternion x, y, z and w. The probe passes a local array of that length.
+            array = Type(element.scalar, element.shape, count=_components(self_type))
             params.append(Param(array, "out"))
             continue
         mutable = bool(re.match(r"&\s*mut\b", kind))

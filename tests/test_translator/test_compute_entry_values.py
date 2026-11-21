@@ -98,6 +98,19 @@ def test_slang_declares_the_values_as_a_constant_buffer(tmp_path):
     assert not re.search(r"\bint n\s*[,)]", code)
 
 
+def test_wgsl_reads_the_values_from_a_uniform_block(tmp_path):
+    code = _translate(tmp_path, _kernel(group=1), "wgsl")
+    assert re.search(
+        r"struct scale_Args \{\s*n: i32,\s*s: f32,\s*v: vec2<f32>,\s*\};", code
+    ), code
+    assert re.search(
+        r"@group\(1\) @binding\(2\)\s*var<uniform> _scale_Args: scale_Args;", code
+    ), code
+    entry = re.search(r"@workgroup_size\(64, 1, 1\)\s*fn \w+\((.*)\)\s*\{", code)
+    assert entry.group(1).count(":") == 1 and "@builtin" in entry.group(1)
+    assert "_scale_Args.n" in code and "_scale_Args.s" in code
+
+
 def test_block_takes_the_first_free_binding(tmp_path):
     source = _kernel(globals="RWStructuredBuffer<float> C @binding(2);")
     assert "cbuffer scale_Args : register(b3)" in _translate(
@@ -105,9 +118,13 @@ def test_block_takes_the_first_free_binding(tmp_path):
     )
     assert "[[buffer(3)]]" in _translate(tmp_path, source, "metal")
     assert re.search(r"OpDecorate %scale_Args\w* Binding 3", _spirv(tmp_path, source))
+    assert re.search(
+        r"@group\(0\) @binding\(3\)\s*var<uniform> _scale_Args",
+        _translate(tmp_path, source, "wgsl"),
+    )
 
 
-@pytest.mark.parametrize("backend", ["directx", "metal", "vulkan"])
+@pytest.mark.parametrize("backend", ["directx", "metal", "vulkan", "wgsl"])
 def test_a_written_value_becomes_a_local_copy(tmp_path, backend):
     if backend == "vulkan":
         code = _spirv(tmp_path, WRITTEN)
@@ -120,6 +137,9 @@ def test_a_written_value_becomes_a_local_copy(tmp_path, backend):
     elif backend == "metal":
         assert "int count_value = drain_Args.count;" in code
         assert "drain_Args.count =" not in code
+    elif backend == "wgsl":
+        assert "var count_value: i32 = _drain_Args.count;" in code
+        assert "_drain_Args.count =" not in code
     else:
         assert re.search(r"OpName %count_value \"count_value\"", code)
 
@@ -160,6 +180,17 @@ def test_spirv_validates(tmp_path, source):
         ["spirv-val", "--target-env", "vulkan1.1", str(binary)],
     ):
         subprocess.run(command, check=True)
+
+
+@pytest.mark.skipif(shutil.which("naga") is None, reason="naga is not installed")
+@pytest.mark.parametrize(
+    "source", [_kernel(group=1), WRITTEN], ids=["values", "written"]
+)
+def test_wgsl_validates(tmp_path, source):
+    shader = tmp_path / "kernel.wgsl"
+    shader.write_text(_translate(tmp_path, source, "wgsl"))
+    result = subprocess.run(["naga", str(shader)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.skipif(

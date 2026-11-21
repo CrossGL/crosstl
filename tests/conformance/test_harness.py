@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from . import runner, runtimes, scoreboard, toolchains, validators
+from . import native, runner, runtimes, scoreboard, toolchains, validators
 from .cases import BY_ID, CASES, CASES_DIR, compare
 from .heldout import heldout_cases
 from .interface import InterfaceChanged, hlsl_reflected_strides, interface
@@ -330,8 +330,19 @@ def test_metal_slots_come_from_buffer_indices_not_names(tmp_path):
             32,
         )
     extra = kernel.replace(") {}", ", texture2d<float> t [[texture(0)]]) {}")
-    with pytest.raises(InterfaceChanged, match="resource kinds"):
-        interface(write(tmp_path, "c.metal", extra), "metal", 32)
+    assert interface(write(tmp_path, "c.metal", extra), "metal", 32)["resources"] == [
+        {
+            "kind": "texture",
+            "slot": 0,
+            "count": 1,
+            "type": "texture2d",
+            "element": "float",
+            "access": "sample",
+        }
+    ]
+    depth = kernel.replace(") {}", ", depth2d<float> t [[texture(0)]]) {}")
+    with pytest.raises(InterfaceChanged, match="Unexpected Metal texture type"):
+        interface(write(tmp_path, "e.metal", depth), "metal", 32)
     with pytest.raises(InterfaceChanged, match="one compute entry"):
         interface(write(tmp_path, "d.metal", kernel + "\n" + kernel), "metal", 32)
 
@@ -468,9 +479,123 @@ def test_native_command_configurations_are_retained(tmp_path, recorded):
     validate(source, "spirv", binary, "main", environment="vulkan1.3")
     assert recorded[-1][0] == "spirv-val" and "vulkan1.3" in recorded[-1]
     validate(source, "metal", binary, "main", config="relaxed")
-    assert "-ffast-math" in recorded[-1]
+    assert "-ffast-math" in recorded[-1] and "-std=metal3.1" in recorded[-1]
     with pytest.raises(ValueError):
         validate(source, "metal", binary, "main", config="fast")
+
+
+def test_metal_compiles_name_one_language_version():
+    """The driver compile uses the MSL version the offline check names, never the device's own default."""
+
+    class Bindings:
+        MTLLanguageVersion3_1 = 196609
+
+    assert native.METAL_LANGUAGE_VERSION == (3, 1)
+    assert native.metal_language_version(Bindings) == 196609
+    # Bindings older than the constant fall back to its documented encoding, major << 16 | minor.
+    assert native.metal_language_version(object()) == 3 << 16 | 1
+    assert native.metal_language_version(object(), (4, 1)) == 4 << 16 | 1
+
+
+def _metal_compiler_accepting(monkeypatch, tmp_path, accepted):
+    commands = []
+
+    def compile_under(command, **_):
+        commands.append([str(word) for word in command])
+        status = "accepted" if any(word in accepted for word in command) else "rejected"
+        if status == "accepted":
+            (tmp_path / "binary").write_bytes(b"air")
+        return CommandResult(
+            tuple(map(str, command)), status, int(status != "accepted"), ""
+        )
+
+    monkeypatch.setattr(validators, "run", compile_under)
+    monkeypatch.setattr(
+        validators, "tool", lambda name: toolchains.Tool(name, (name,), "test")
+    )
+    return commands
+
+
+def test_metal_artifacts_compile_under_the_oldest_version_that_accepts_them(
+    tmp_path, monkeypatch
+):
+    commands = _metal_compiler_accepting(monkeypatch, tmp_path, {"-std=metal4.0"})
+    results, reflection = validate(
+        tmp_path / "src", "metal", tmp_path / "binary", "main"
+    )
+    assert [item.status for item in results] == ["accepted"]
+    assert reflection == {"metal_language": [4, 0]}
+    assert [command[1] for command in commands] == [
+        "-std=metal3.1",
+        "-std=metal3.2",
+        "-std=metal4.0",
+    ]
+
+    commands.clear()
+    monkeypatch.setattr(
+        validators,
+        "run",
+        lambda command, **_: CommandResult(tuple(map(str, command)), "accepted", 0, ""),
+    )
+    (tmp_path / "binary").write_bytes(b"air")
+    _, reflection = validate(tmp_path / "src", "metal", tmp_path / "binary", "main")
+    assert reflection == {"metal_language": [3, 1]}
+
+
+def test_metal_artifacts_every_version_rejects_report_the_newest_compiler(
+    tmp_path, monkeypatch
+):
+    commands = _metal_compiler_accepting(monkeypatch, tmp_path, set())
+    results, reflection = validate(
+        tmp_path / "src", "metal", tmp_path / "binary", "main"
+    )
+    assert [item.status for item in results] == ["rejected"]
+    assert "-std=metal4.1" in results[0].command and reflection == {}
+    assert len(commands) == len(native.METAL_LANGUAGE_VERSIONS)
+
+
+class _MetalFunction:
+    def __init__(self, constants):
+        self.constants = constants
+
+    def functionConstantsDictionary(self):
+        return self.constants
+
+
+class _MetalLibrary:
+    def __init__(self, constants, specialized):
+        self.constants, self.specialized, self.calls = constants, specialized, []
+
+    def newFunctionWithName_(self, entry):
+        self.calls.append(("plain", entry))
+        return _MetalFunction(self.constants)
+
+    def newFunctionWithName_constantValues_error_(self, entry, values, error):
+        self.calls.append(("specialized", entry, values))
+        return self.specialized, "no value for a constant without a default"
+
+
+class _MetalBindings:
+    class MTLFunctionConstantValues:
+        @staticmethod
+        def new():
+            return "no values"
+
+
+def test_metal_kernels_with_function_constants_are_specialized_to_their_defaults():
+    plain = _MetalLibrary({}, None)
+    assert native._metal_function(_MetalBindings, plain, "probe").constants == {}
+    assert plain.calls == [("plain", "probe")]
+
+    specialized = _MetalFunction({"scale_value": object()})
+    library = _MetalLibrary({"scale_value": object()}, specialized)
+    assert native._metal_function(_MetalBindings, library, "probe") is specialized
+    assert library.calls[-1] == ("specialized", "probe", "no values")
+
+    with pytest.raises(native.DriverRejected, match="specialization"):
+        native._metal_function(
+            _MetalBindings, _MetalLibrary({"required": object()}, None), "probe"
+        )
 
 
 def test_unsigned_dxil_is_invalid(tmp_path, recorded, monkeypatch):
