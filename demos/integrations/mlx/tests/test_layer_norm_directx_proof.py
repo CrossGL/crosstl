@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
+
 ROOT = Path(__file__).resolve().parents[4]
 PROOF_PATH = ROOT / "demos" / "integrations" / "mlx" / "prove_layer_norm_directx.py"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "demo-project-testing.yml"
@@ -71,7 +73,8 @@ def _test_evidence_source():
 
 
 def _reduced_layer_norm_source():
-    return textwrap.dedent("""
+    return (
+        textwrap.dedent("""
             #include <metal_stdlib>
             using namespace metal;
 
@@ -135,7 +138,14 @@ def _reduced_layer_norm_source():
             #define instantiate_layer_norm(name, itype)
             instantiate_layer_norm(float32, float)
             // clang-format on
-            """).strip() + "\n"
+            """).strip().replace(
+            # The projection keeps everything before the instantiation manifest and
+            # appends one instantiate_kernel call, so the macro is defined up here.
+            "using namespace metal;\n",
+            f"using namespace metal;\n{INSTANTIATE_KERNEL_DEFINE}\n",
+            1,
+        ) + "\n"
+    )
 
 
 def _write_reduced_layer_norm_source(module, mlx_root):
@@ -328,7 +338,12 @@ def test_case_project_preserves_kernel_body_and_selects_one_instantiation(
     original_prefix = source.partition(module.LAYER_NORM_INSTANTIATION_MARKER)[0]
     projected_prefix = projected.partition("// clang-format off\n")[0]
     assert projected_prefix == original_prefix
-    assert projected.count("instantiate_kernel(") == 1
+    calls = [
+        line
+        for line in projected.splitlines()
+        if line.startswith("instantiate_kernel(")
+    ]
+    assert len(calls) == 1
     assert (
         f'instantiate_kernel("{case["entryPoint"]}", ' f'{case["templateName"]}, float)'
     ) in projected
