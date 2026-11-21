@@ -18,6 +18,7 @@ import pytest
 import crosstl
 from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.translator.semantics.member_placements import MemberPlacementError
+from tests.spirv_friendly_names import translate_spirv
 
 
 def to_crossgl(tmp_path, source):
@@ -298,7 +299,7 @@ void main(inout Payload payload) {
     assert "Record record @glsl_buffer_block(shaderRecordEXT, std140);" in crossgl
     path = tmp_path / "record.cgl"
     path.write_text(crossgl, encoding="utf-8")
-    spirv = crosstl.translate(str(path), backend="vulkan")
+    spirv = translate_spirv(path)
     # slangc lays the record out by std140: a at 0, b at 16, c at 32 with a 16-byte stride.
     assert re.search(r"OpTypePointer ShaderRecordBufferKHR %Record", spirv)
     offsets = re.findall(r"OpMemberDecorate %Record\w* (\d) Offset (\d+)", spirv)
