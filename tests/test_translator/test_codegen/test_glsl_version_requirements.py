@@ -154,7 +154,8 @@ def test_es_300_omits_binding_layouts(tmp_path):
     [
         ("#version 330", "#version 400 core", False),
         ("#version 300 es", "#version 310 es", True),
-        ("", "#version 450 core", True),
+        # Without a #version line: textureGatherOffset (4.00) and the binding layout (4.20).
+        ("", "#version 420 core", True),
     ],
 )
 def test_texture_gather_offset_raises_version(tmp_path, version, emitted, binding):

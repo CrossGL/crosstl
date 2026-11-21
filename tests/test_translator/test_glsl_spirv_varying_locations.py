@@ -164,7 +164,7 @@ def test_opengl_compilation_reads_the_unlocated_declaration():
         "out vec2 out_uv;"
     )
     # A varying location needs GLSL 4.10 or GL_ARB_separate_shader_objects, but only the SPIR-V branch has it.
-    assert vertex.startswith("#version 450 core\n")
+    assert vertex.startswith("#version 330 core\n")
     assert "#if defined(GL_SPIRV) || defined(VULKAN)\n" in vertex
     assert "#define CROSSGL_LOCATION(n)\n#endif\n" in vertex
 

@@ -20,11 +20,13 @@ from __future__ import annotations
 from .glsl_version_requirements import GLSLRequirement, parse_version_line
 
 __all__ = [
+    "INTEGER_MIX",
     "LOWEST_DESKTOP_VERSION_LINE",
     "RAY_TRACING_VERSION_LINE",
     "glsl_implicit_literal_conversion",
     "glsl_version_may_rise",
     "glsl_version_reaches",
+    "require_integer_mix",
 ]
 
 LOWEST_DESKTOP_VERSION_LINE = "#version 330 core"
@@ -36,9 +38,10 @@ _IMPLICIT_INT_TO_UINT_VERSION = 400
 
 def glsl_version_may_rise(codegen):
     """Whether the output's ``#version`` line is the generator's to choose: the program has none of its own."""
-    return bool(
-        getattr(codegen, "glsl_version_line_is_default", False)
-    ) and not codegen.glsl_version_line_is_fixed()
+    return (
+        bool(getattr(codegen, "glsl_version_line_is_default", False))
+        and not codegen.glsl_version_line_is_fixed()
+    )
 
 
 def glsl_version_reaches(codegen, feature, desktop, es=None, desktop_extensions=()):
@@ -82,3 +85,27 @@ def glsl_implicit_literal_conversion(codegen, actual_family, expected_family):
     if number is None:
         return True
     return profile != "es" and number >= _IMPLICIT_INT_TO_UINT_VERSION
+
+
+# ``mix`` with a boolean selector on integer or boolean values: GLSL 4.50 and GLSL ES 3.10 (section 8.3 of both),
+# or GL_EXT_shader_integer_mix.
+INTEGER_MIX = GLSLRequirement(
+    "mix with a boolean selector on integer or boolean values",
+    450,
+    310,
+    ("GL_EXT_shader_integer_mix",),
+    ("GL_EXT_shader_integer_mix",),
+)
+
+
+def require_integer_mix(codegen, value_family):
+    """Record :data:`INTEGER_MIX` when a boolean-selector ``mix`` selects ``value_family`` values.
+
+    The requirement is recorded whatever the version line: resolution raises a line that may rise and refuses one
+    the profile fixes, such as WebGL 2's GLSL ES 3.00.
+    """
+    if value_family not in {"int", "uint", "bool"}:
+        return
+    recorded = getattr(codegen, "glsl_emission_requirements", None)
+    if recorded is not None and INTEGER_MIX not in recorded:
+        recorded.append(INTEGER_MIX)

@@ -154,7 +154,7 @@ def _glslang(tmp_path, code, stage, *arguments):
 def test_fragment_reads_the_view_index_through_a_profile_macro(tmp_path, source):
     code = _translate(tmp_path, source, "opengl")
 
-    assert code.startswith("#version 450 core\n" + PRELUDE)
+    assert code.startswith("#version 330 core\n" + PRELUDE)
     assert "float(CROSSGL_VIEW_INDEX)" in code
     assert code.count("gl_ViewIndex") == 1
     for arguments in ((), ("-G",), ("-V",)):

@@ -59,6 +59,10 @@ _BUILTIN_VARIABLES = {
     "gl_SamplePosition": _SAMPLE_VARIABLE,
     "gl_SampleMaskIn": _SAMPLE_VARIABLE,
     "gl_SampleMask": _SAMPLE_VARIABLE,
+    "gl_NumSamples": _SAMPLE_VARIABLE,
+    # GLSL ES fragment shaders read gl_PrimitiveID from GLSL ES 3.20 (or the geometry shader extensions); desktop
+    # GLSL has it from GLSL 1.50.
+    "gl_PrimitiveID": {"fragment": (150, 320, (), _ES_GEOMETRY)},
     "gl_Layer": {
         "fragment": (430, 320, (), _ES_GEOMETRY),
         "vertex": (410, None, ("GL_ARB_shader_viewport_layer_array",)),
@@ -81,7 +85,7 @@ _BUILTIN_VARIABLES = {
     "gl_DrawID": {_ANY_STAGE: (460, None)},
     "gl_BaryCoordEXT": {_ANY_STAGE: (450, 320)},
     "gl_BaryCoordNoPerspEXT": {_ANY_STAGE: (450, 320)},
-    "gl_ShadingRateEXT": {_ANY_STAGE: (450, 320)},
+    "gl_ShadingRateEXT": {_ANY_STAGE: (450, 310)},
     "gl_PrimitiveShadingRateEXT": {_ANY_STAGE: (450, 320)},
 }
 _VARIABLE_USE = re.compile(
@@ -115,14 +119,6 @@ _QUALIFIER_REQUIREMENTS = {
     ),
 }
 _QUALIFIER_USE = re.compile(r"(?:^|[\s(])(precise|sample)\s+(?=[A-Za-z_])")
-_FRAGMENT_DEPTH_REDECLARATION = re.compile(r"\bout\s+(?:highp\s+)?float\s+gl_FragDepth\s*;")
-FRAGMENT_DEPTH_REDECLARATION = GLSLRequirement(
-    "a gl_FragDepth redeclaration",
-    420,
-    None,
-    ("GL_ARB_conservative_depth",),
-    ("GL_EXT_conservative_depth",),
-)
 _LAYOUT_ID_REQUIREMENTS = (
     (
         frozenset({"early_fragment_tests"}),
@@ -213,8 +209,6 @@ def interface_line_requirements(stripped, stage, layout_ids=None, sampler_arrays
             requirements.append(requirement)
     for match in _QUALIFIER_USE.finditer(stripped):
         requirements.append(_QUALIFIER_REQUIREMENTS[match.group(1)])
-    if _FRAGMENT_DEPTH_REDECLARATION.search(stripped):
-        requirements.append(FRAGMENT_DEPTH_REDECLARATION)
     if layout_ids:
         for ids, requirement in _LAYOUT_ID_REQUIREMENTS:
             if ids & layout_ids:

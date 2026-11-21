@@ -620,7 +620,14 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
     emitter guards that stage's declarations with when one artifact carries several stages.
     """
     # Imported here: the interface tables are built from this module's GLSLRequirement.
-    from .glsl_interface_versions import interface_line_requirements, sampler_array_names
+    from .glsl_extension_versions import (
+        extension_floor_requirements,
+        typed_overload_requirements,
+    )
+    from .glsl_interface_versions import (
+        interface_line_requirements,
+        sampler_array_names,
+    )
 
     stage_names = [stage for stage in stage_names if stage is not None]
     default_stage = stage_names[0] if len(stage_names) == 1 else _UNKNOWN_STAGE
@@ -665,6 +672,11 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
         ):
             found.setdefault(requirement, None)
     for requirement in stage_requirements(stage_names):
+        found.setdefault(requirement, None)
+    enabled = program_extensions(code)
+    for requirement in extension_floor_requirements(
+        enabled
+    ) + typed_overload_requirements(body, enabled):
         found.setdefault(requirement, None)
     return list(found)
 

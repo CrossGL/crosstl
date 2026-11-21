@@ -142,7 +142,8 @@ def _validate(tmp_path, glsl, stage="vert", options=()):
 
 def test_struct_member_semantics_read_the_extension_names_before_glsl_460(tmp_path):
     glsl = _translate(tmp_path, STRUCT_MEMBERS)
-    assert glsl.startswith("#version 450 core\n")
+    # glslang declares the GL_ARB_shader_draw_parameters variables from GLSL 4.40.
+    assert glsl.startswith("#version 440 core\n")
     assert "#extension GL_ARB_shader_draw_parameters : require" in glsl
     assert sorted(set(_SUFFIXED.findall(glsl))) == [
         "gl_BaseInstanceARB",
@@ -187,7 +188,7 @@ def test_builtin_identifiers_read_the_extension_names(tmp_path):
 def test_helper_reads_share_one_extension_directive(tmp_path):
     glsl = _translate(tmp_path, HELPER)
     assert glsl.splitlines()[:2] == [
-        "#version 450 core",
+        "#version 440 core",
         "#extension GL_ARB_shader_draw_parameters : require",
     ]
     assert glsl.count("GL_ARB_shader_draw_parameters") == 1

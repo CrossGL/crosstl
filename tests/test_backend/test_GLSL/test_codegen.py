@@ -2990,7 +2990,8 @@ def test_codegen_inserts_default_version_when_missing():
     shader_ast = parse_crossgl(crossgl)
     assert ShaderStage.VERTEX in shader_ast.stages
     glsl_code = GLSLCodeGen().generate(shader_ast)
-    assert glsl_code.lstrip().startswith("#version 450 core")
+    # Without a #version line of its own, output starts from GLSL 3.30.
+    assert glsl_code.lstrip().startswith("#version 330 core")
 
 
 def test_codegen_untyped_var_keeps_the_function_body():
