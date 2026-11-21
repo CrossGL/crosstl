@@ -27,9 +27,11 @@ touches Metal or Direct3D.
   when the group changes `demos/integrations/mlx/**` or the MLX workflow, as
   for pushes to `main`. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
-  backend, complete, examples, conformance and ComputeSharp workflows skip a
-  push whose commits already passed the merge queue, and run in full for any
-  other commit.
+  backend, complete and examples workflows skip a push whose commits already
+  passed the merge queue, and run in full for any other commit. Conformance,
+  the corpus and ComputeSharp report no required check, so they do not run in
+  the merge queue: conformance and ComputeSharp test the push to `main`, and
+  the corpus tests `main` nightly.
   The MLX tier, conformance, the corpus and coverage also run nightly, and
   fuzzing runs weekly.
 

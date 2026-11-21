@@ -187,7 +187,14 @@ def test_opengl_gives_each_sampler_of_a_texture_its_own_unit(tmp_path):
 
     assert "layout(binding = 0) uniform sampler2D albedo;" in glsl
     assert "uniform sampler2D albedo_linearSampler;" in glsl
-    assert "texture(albedo, uv) + texture(albedo_linearSampler, uv)" in glsl
+    # The OpenGL argument of each CROSSGL_SAMPLED is the pair's combined uniform.
+    assert (
+        "texture(CROSSGL_SAMPLED(sampler2D(albedo, pointSampler), albedo), uv) + "
+        "texture(CROSSGL_SAMPLED(sampler2D(albedo, linearSampler), albedo_linearSampler), uv)"
+    ) in glsl
+    assert (
+        "#ifndef VULKAN\nlayout(binding = 1) uniform sampler2D albedo_linearSampler;\n#endif\n"
+    ) in glsl
     assert _pairs(glsl) == [
         {
             "sampler": "pointSampler",
@@ -402,10 +409,20 @@ def test_opengl_keeps_elementwise_texture_and_sampler_arrays(tmp_path):
 def test_vulkan_glsl_separate_texture_lowers_to_combined_opengl(tmp_path):
     glsl = _translate(tmp_path, VULKAN_ONE_SAMPLER_GLSL, ".frag", "opengl")
 
-    assert "layout(binding = 0) uniform sampler2D albedo;" in glsl
-    assert "texture2D" not in glsl
-    assert "linearSampler" not in glsl
-    assert "texture(albedo, uv)" in glsl
+    # The separate texture and sampler exist only in the VULKAN branch; OpenGL reads the combined albedo.
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 0) uniform texture2D albedo;\n#else\n"
+        "layout(binding = 0) uniform sampler2D albedo;\n#endif\n"
+    ) in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 1) uniform sampler linearSampler;\n#endif\n"
+        in glsl
+    )
+    assert glsl.count("texture2D") == 1
+    assert glsl.count("linearSampler") == 2
+    assert (
+        "texture(CROSSGL_SAMPLED(sampler2D(albedo, linearSampler), albedo), uv)" in glsl
+    )
     _validate_glsl(glsl)
 
 

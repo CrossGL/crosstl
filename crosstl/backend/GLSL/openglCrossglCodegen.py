@@ -22,6 +22,11 @@ from .import_tables import (
     GLSL_TEXTURE_FUNCTION_OPERATIONS,
     GLSL_TYPE_MAP,
 )
+from .narrow_arithmetic import (
+    import_narrow_binary,
+    import_narrow_unary,
+    narrow_store_targets,
+)
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1072,6 +1077,8 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
         for var in getattr(node, "global_variables", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "io_variables", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "constant", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
             if self.is_anonymous_ssbo_member_variable(var):
@@ -2307,6 +2314,8 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
         refuse_unsupported_glsl_types(node)
         retype_shadow_textures(node)
         self.reset_glsl_shader_state(node)
+        # Narrow integer results stored straight into a register of their own type (:mod:`.narrow_arithmetic`).
+        self.glsl_narrow_stores = narrow_store_targets(node)
 
         fragment_uses_direct_outputs = self.collect_glsl_stage_builtin_writes(node)
 
@@ -2935,13 +2944,13 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
             equality = lower_aggregate_equality(self, node, left, right)
             if equality is not None:
                 return equality
-            return f"({left} {operator} {right})"
+            return import_narrow_binary(self, node, left, operator, right)
         elif isinstance(node, UnaryOpNode):
             if node.op in {"++", "--"}:
                 self.mark_structured_element_reference(node.operand)
             operand = self.generate_operand(node.operand)
             operator = crossgl_operator(node.op)
-            return f"({operator}{operand})"
+            return import_narrow_unary(self, node, operator, operand)
         elif isinstance(node, PostfixOpNode):
             self.mark_structured_element_reference(node.operand)
             operand = self.generate_operand(node.operand)

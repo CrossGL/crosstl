@@ -15,6 +15,7 @@ from ..refusals import VulkanRefusal
 from .image_access_contracts import PACKED_IMAGE_FORMAT_CHANNEL_COUNTS
 from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
 from .spirv_argument_tables import plan_entry_descriptor_slots
+from .spirv_conservative_depth import DEPTH_LAYOUT_ATTRIBUTES, record_depth_layout
 from .spirv_extension_builtins import unmapped_builtin_reason
 from .spirv_inline_requirements import is_inline_spirv_attribute
 from .spirv_interface_locations import (
@@ -700,6 +701,8 @@ class SpirvEntryPointParameterMixin:
             "writeonly",
             # Interpolation, invariance and precision qualifiers decorate the value; they never name it.
             *INTERFACE_QUALIFIER_ATTRIBUTES,
+            # So does a conservative depth layout (spirv_conservative_depth).
+            *DEPTH_LAYOUT_ATTRIBUTES,
         }
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -974,6 +977,7 @@ class SpirvEntryPointParameterMixin:
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
                 self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
+                record_depth_layout(self, variable, function_node, "Output")
                 decorate_invariant_builtin_output(
                     self, variable, function_node, "Output"
                 )
@@ -984,6 +988,7 @@ class SpirvEntryPointParameterMixin:
                 name, builtin_type, builtin_name, "Output"
             )
             self.global_variables[cache_key] = variable
+            record_depth_layout(self, variable, function_node, "Output")
             decorate_invariant_builtin_output(self, variable, function_node, "Output")
             self.mark_function_interface_variable(variable)
             return variable
@@ -1388,6 +1393,7 @@ class SpirvEntryPointParameterMixin:
             execution_model, storage_class, node, type_id, member_name
         )
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
+        record_depth_layout(self, builtin, node, storage_class)
         if builtin is not None:
             decorate_invariant_builtin_output(self, builtin, node, storage_class)
             return builtin

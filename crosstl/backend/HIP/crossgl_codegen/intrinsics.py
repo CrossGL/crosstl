@@ -3,9 +3,11 @@
 import re
 
 from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ...CUDA.pointer_math_import import format_pointer_output_call
 from ..HipAst import (
     FunctionCallNode,
     MemberAccessNode,
+    UnaryOpNode,
 )
 
 
@@ -50,6 +52,13 @@ class HipIntrinsicMixin:
         cooperative_call = self.format_cooperative_group_call(node)
         if cooperative_call is not None:
             return cooperative_call
+
+        if not self.is_user_defined_function(func_name):
+            pointer_output_call = format_pointer_output_call(
+                self, func_name, raw_args, UnaryOpNode
+            )
+            if pointer_output_call is not None:
+                return pointer_output_call
 
         args = [self.visit(arg) for arg in raw_args]
         args_str = ", ".join(args)

@@ -1,16 +1,22 @@
 import json
 
+import pytest
+
 from . import size_budgets
 from .size_budgets import (
     FUNCTION_HEADROOM,
     FUNCTION_LIMIT,
     MODULE_LIMIT,
+    budget_file,
     compare,
     function_lengths,
     line_count,
+    load,
     lowered,
     measure,
+    missing,
     resolved,
+    write,
 )
 
 NESTED = """
@@ -137,12 +143,65 @@ def test_update_only_lowers_ceilings_and_never_admits():
     )
 
 
-def test_translator_modules_and_functions_stay_within_their_ceilings():
-    document = json.loads(size_budgets.BUDGETS.read_text())
-    assert set(document) == {"schemaVersion", "limits", "modules", "functions"}
-    assert document["limits"] == {
-        "moduleLines": MODULE_LIMIT,
-        "functionLines": FUNCTION_LIMIT,
+def test_each_module_has_its_own_budget_file(tmp_path):
+    document = budgets(
+        {"crosstl/a.py": MODULE_LIMIT + 5},
+        {
+            "crosstl/a.py::A.f": FUNCTION_LIMIT + 1,
+            "crosstl/sub/b.py::g": FUNCTION_LIMIT + 2,
+        },
+    )
+    write(document, {"crosstl/a.py", "crosstl/sub/b.py"}, tmp_path)
+    assert json.loads(budget_file("crosstl/a.py", tmp_path).read_text()) == {
+        "module": MODULE_LIMIT + 5,
+        "functions": {"A.f": FUNCTION_LIMIT + 1},
     }
+    assert json.loads(budget_file("crosstl/sub/b.py", tmp_path).read_text()) == {
+        "functions": {"g": FUNCTION_LIMIT + 2}
+    }
+    assert load(tmp_path) == document
+
+
+def test_update_deletes_the_file_of_a_module_under_both_limits(tmp_path):
+    recorded = budgets(
+        {"crosstl/a.py": MODULE_LIMIT + 5},
+        {"crosstl/a.py::f": FUNCTION_LIMIT + 1, "crosstl/b.py::g": FUNCTION_LIMIT + 1},
+    )
+    write(recorded, {"crosstl/a.py", "crosstl/b.py"}, tmp_path)
+    modules = {"crosstl/a.py": MODULE_LIMIT, "crosstl/b.py": 10}
+    functions = {"crosstl/a.py::f": 20, "crosstl/b.py::g": FUNCTION_LIMIT + 1}
+    write(
+        lowered(recorded, modules, functions, {"crosstl/a.py"}),
+        {"crosstl/a.py"},
+        tmp_path,
+    )
+    assert not budget_file("crosstl/a.py", tmp_path).exists()
+    assert load(tmp_path) == budgets({}, {"crosstl/b.py::g": FUNCTION_LIMIT + 1})
+
+
+def test_a_budget_file_for_a_missing_module_fails(tmp_path):
+    recorded = budgets({}, {"crosstl/old.py::f": FUNCTION_LIMIT + 1})
+    modules = {"crosstl/new.py": 10}
+    assert missing(recorded, modules) == [
+        "Budget file for missing module crosstl/old.py: "
+        "move it with the module (git mv) or delete it"
+    ]
+    assert missing(recorded, {"crosstl/old.py": 10}) == []
+
+
+def test_a_budget_file_with_unknown_keys_is_rejected(tmp_path):
+    path = budget_file("crosstl/a.py", tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"modules": 1}))
+    with pytest.raises(ValueError, match="unknown keys"):
+        load(tmp_path)
+
+
+def test_translator_modules_and_functions_stay_within_their_ceilings():
+    assert not (size_budgets.HERE / "size_budgets.json").exists()
+    document = load()
     modules, functions = measure()
+    assert missing(document, modules) == []
     assert compare(document, modules, functions) == []
+    for path in size_budgets.BUDGETS.rglob("*"):
+        assert path.is_dir() or path.name.endswith(".py.json"), path
