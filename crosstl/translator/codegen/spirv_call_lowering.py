@@ -29,6 +29,10 @@ from .spirv_exponent_builtins import (
     spirv_output_operand_call,
 )
 from .spirv_fragment_interlock import INTERLOCK_CALLS, spirv_interlock_call
+from .spirv_interpolation import (
+    SPIRV_INTERPOLATION_FUNCTIONS,
+    spirv_interpolation_call,
+)
 from .spirv_geometry_streams import (
     STREAM_FUNCTIONS,
 )
@@ -153,6 +157,12 @@ class SpirvCallLoweringMixin:
             self.has_function_reference(callee_name)
         ):
             return spirv_texture_resident_call(self, list(expr.args), expr)
+
+        if (
+            callee_name in SPIRV_INTERPOLATION_FUNCTIONS
+            and not self.has_function_reference(callee_name)
+        ):
+            return spirv_interpolation_call(self, callee_name, list(expr.args), SpirvId)
 
         if callee_name in OUTPUT_OPERAND_FUNCTIONS and not self.has_function_reference(
             callee_name
