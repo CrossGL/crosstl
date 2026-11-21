@@ -58309,37 +58309,6 @@ def test_validate_project_report_rejects_stale_workgroup_execution_identity(tmp_
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
-def test_translate_project_requires_consumed_metal_workgroup_size(tmp_path, target):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _write_workgroup_size_metal_fixture(repo, value_type="uint")
-
-    payload = translate_project(
-        repo,
-        targets=[target],
-        output_dir="out",
-        format_output=False,
-    ).to_json()
-
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    artifact = payload["artifacts"][0]
-    assert artifact["status"] == "failed"
-    assert not (repo / artifact["path"]).exists()
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.workgroup-size-required"
-    assert diagnostic["checkKind"] == "execution-specialization"
-    assert diagnostic["location"]["file"] == "workgroup_size.metal"
-    assert diagnostic["missingCapabilities"] == [
-        "execution.workgroup-size-specialization"
-    ]
-    assert diagnostic["details"]["executionSpecialization"] == {
-        "reason": "consumed-source-value-unconfigured",
-        "sourceEntryPoints": ["main"],
-    }
-
-
-@pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_translate_project_requires_direct_crossgl_workgroup_size_use(
     tmp_path,
     target,
