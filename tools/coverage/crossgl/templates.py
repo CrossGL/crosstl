@@ -57,6 +57,7 @@ from ..templates.lexical import FAMILY as LEXICAL
 from ..templates.lexical import FILL, SPREAD4, reserved
 from ..templates.memory import CROSSGL as MEMORY
 from ..templates.meshes import CROSSGL as MESHES
+from ..templates.meshes import METAL_CROSSGL as METAL_MESHES
 from ..templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from ..templates.packing import CROSSGL as PACKING_CROSSGL
 from ..templates.pipeline import CROSSGL as PIPELINE
@@ -404,6 +405,19 @@ FOR_LANGUAGE: dict[str, dict[str, Template]] = {
     "hlsl": {
         "half": Template(
             "half v = half(float(int(fin[i] * 256.0)) * 0.00390625);\noutp[i] = float(v * v);"
+        ),
+    },
+    # Metal's intersection function hands its hit back as a result structure and takes no buffer
+    # (:data:`..templates.metal`), so its CrossGL probe has the same form and the translation the same arguments.
+    "metal": {
+        **METAL_MESHES,
+        "intersection": Template(
+            program="shader Probe {\n    struct BoxResult {\n        bool accept @ accept_intersection;\n"
+            "        float distance @ distance;\n    }\n    ray_intersection {\n"
+            "        BoxResult main(float min_distance @ min_distance) @bounding_box {\n"
+            "            BoxResult result;\n            result.accept = true;\n"
+            "            result.distance = min_distance;\n            return result;\n"
+            "        }\n    }\n}\n"
         ),
     },
 }

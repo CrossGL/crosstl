@@ -16002,22 +16002,42 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
 
 
 @pytest.mark.parametrize(
-    "statement",
+    ("statement", "expected"),
     [
-        "uint lane = WaveGetLaneIndex();",
-        "uint count = WaveGetLaneCount();",
-        "bool first = WaveIsFirstLane();",
-        "uint sumValue = WaveActiveSum(1u);",
-        "bool anyLane = WaveActiveAnyTrue(true);",
-        "uvec4 ballot = WaveActiveBallot(true);",
-        "uint broadcast = WaveReadLaneAt(1u, 0u);",
-        "uint prefix = WavePrefixCountBits(true);",
-        "uvec4 match = WaveMatch(1u);",
-        "uint quad = QuadReadAcrossX(1u);",
+        ("uint lane = WaveGetLaneIndex();", "var lane: UInt32 = UInt32(lane_id())"),
+        ("uint count = WaveGetLaneCount();", "var count: UInt32 = UInt32(WARP_SIZE)"),
+        (
+            "bool first = WaveIsFirstLane();",
+            "var first: Bool = _crossgl_wave_is_first_lane()",
+        ),
+        (
+            "uint sumValue = WaveActiveSum(1u);",
+            "var sumValue: UInt32 = _crossgl_wave_active_sum_u32(1)",
+        ),
+        (
+            "bool anyLane = WaveActiveAnyTrue(true);",
+            "var anyLane: Bool = _crossgl_wave_active_any_true(Bool(True))",
+        ),
+        (
+            "uvec4 ballot = WaveActiveBallot(true);",
+            "var ballot: SIMD[DType.uint32, 4] = _crossgl_wave_active_ballot(Bool(True))",
+        ),
+        (
+            "uint broadcast = WaveReadLaneAt(1u, 0u);",
+            "var broadcast: UInt32 = _crossgl_wave_read_lane_at_u32(1, UInt32(0))",
+        ),
+        (
+            "uint prefix = WavePrefixCountBits(true);",
+            "var prefix: UInt32 = _crossgl_wave_prefix_count_bits(Bool(True))",
+        ),
+        (
+            "uvec4 match = WaveMatch(1u);",
+            "_crossgl_wave_match_u32(1)",
+        ),
     ],
 )
-def test_wave_intrinsics_are_refused_by_mojo(statement):
-    # A one-lane stand-in (the lane's own value, lane 0 of a one-lane wave) is wrong on every GPU wave.
+def test_wave_intrinsics_lower_to_mojo_warp_loops(statement, expected):
+    # Each wave operation becomes a call of a helper that loops over the warp's active lanes.
     code = f"""
     shader ComputeWave {{
         compute {{
@@ -16028,7 +16048,30 @@ def test_wave_intrinsics_are_refused_by_mojo(statement):
     }}
     """
 
-    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic .*no lowering"):
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert expected in generated_code
+    if "_crossgl_wave" in expected:
+        assert "def _crossgl_active_lanes() -> UInt64:" in generated_code
+        assert (
+            "from max.gpu.primitives.warp import shuffle_idx as _crossgl_shuffle_idx"
+            in generated_code
+        )
+
+
+def test_quad_intrinsics_are_refused_by_mojo():
+    # Quad lanes depend on CrossGL's compute quad layout, which the Mojo generator does not model.
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint quad = QuadReadAcrossX(1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(MojoRefusal, match="QuadReadAcrossX: .*does not lower quad"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -16129,13 +16172,15 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     assert "dispatch_mesh" in codegen.required_mesh_helpers
 
 
-def test_direct_wave_ir_node_is_refused_by_mojo():
+def test_direct_wave_ir_node_lowers_to_a_mojo_warp_helper():
     codegen = MojoCodeGen()
 
-    with pytest.raises(MojoRefusal, match="Mojo wave intrinsic WaveActiveSum"):
-        codegen.generate_expression(
-            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
-        )
+    expression = codegen.generate_expression(
+        WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+    )
+
+    assert expression == "_crossgl_wave_active_sum_u32(1)"
+    assert "def _crossgl_wave_active_sum_u32(" in codegen.mojo_wave_helper_source()
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
