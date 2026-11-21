@@ -186,6 +186,11 @@ def _run_pairs(args: argparse.Namespace) -> int:
         results, used = execution.run(results)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} translations on {', '.join(used) or 'no runtime'}")
+        unlowered = execution.unlowered(results)
+        if unlowered:
+            print(
+                f"compile-only here, a compiler that lowers an end to SPIR-V is missing: {', '.join(unlowered)}"
+            )
         idle = execution.idle(results)
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
