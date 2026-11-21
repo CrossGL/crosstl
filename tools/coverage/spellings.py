@@ -281,11 +281,13 @@ COUNTERPARTS["metal"].update(
 # Metal functions that take memory flags, which CrossGL writes as the operations the Metal importer makes of them. The
 # probe passes mem_none and memory_order_relaxed. A simdgroup barrier with mem_none is CrossGL's execution-only
 # subgroupExecutionBarrier, and a fence keeps its flags, order and scope as CrossGL constants (:data:`OTHER_NAMES`).
-# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result.
+# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result, for
+# atomic_fetch_sub as for atomic_fetch_sub_explicit.
 COUNTERPARTS["metal"].update(
     {
         "simdgroup_barrier": "void subgroupExecutionBarrier()",
         "atomic_thread_fence": "void atomicThreadFence()",
+        "atomic_fetch_sub": "int atomicAdd(inout int, int)",
         "atomic_fetch_sub_explicit": "int atomicAdd(inout int, int)",
     }
 )
@@ -405,12 +407,13 @@ OTHER_NAMES = {
         ),
     },
     # Metal's fence takes its scope as a third argument that defaults to thread_scope_device (MSL 4.1, "Fence
-    # Functions"). Its atomic_fetch_sub_explicit is an atomicAdd of the negated operand, as the Metal importer
-    # writes it.
+    # Functions"). Its atomic_fetch_sub and atomic_fetch_sub_explicit are an atomicAdd of the negated operand, as the
+    # Metal importer writes them.
     "metal": {
         "atomic_thread_fence": (
             "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device)"
         ),
+        "atomic_fetch_sub": "atomicAdd({0}, -({1}))",
         "atomic_fetch_sub_explicit": "atomicAdd({0}, -({1}))",
     },
     # CUDA's fdivide and, without fast math, fdividef return a / b (__clang_cuda_math.h).
