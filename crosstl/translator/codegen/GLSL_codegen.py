@@ -2753,9 +2753,10 @@ class GLSLCodeGen(
         for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
             if operation not in operations:
                 continue
-            line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
-            if line and line not in lines:
-                lines.append(line)
+            required = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation) or ""
+            for line in required.splitlines():
+                if line not in lines:
+                    lines.append(line)
             if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
                 shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
                 if shuffle_line not in lines:
