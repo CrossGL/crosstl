@@ -340,6 +340,8 @@ class HipTypeConversionMixin:
             # Math functions
             "sqrtf": "sqrt",
             "powf": "pow",
+            # HIP's single-precision integer power; CrossGL spells both precisions powi.
+            "powif": "powi",
             # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
             # carries; CrossGL's sin and cos have the precision of the target.
             "sinf": "__cgl_libm_sin",
