@@ -7,6 +7,7 @@ qualifier. Every output is compiled with slangc when it is installed.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
@@ -153,7 +154,8 @@ def test_early_fragment_tests_become_earlydepthstencil(tmp_path):
         }
     }"""
     code = translate(tmp_path, source)
-    assert '[earlydepthstencil][shader("fragment")]' in code
+    # clang-format, when installed, joins the attribute lines; the attribute order is what matters.
+    assert re.search(r'\[earlydepthstencil\]\s*\[shader\("fragment"\)\]', code)
     compile_slang(tmp_path, code)
 
 
