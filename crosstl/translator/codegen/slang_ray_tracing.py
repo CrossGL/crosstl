@@ -448,9 +448,7 @@ class SlangRayTracingMixin:
                 f"scalar floating, got {actual_type}"
             )
 
-    def validate_slang_ray_value_argument(
-        self, argument, shader_type, operation, role
-    ):
+    def validate_slang_ray_value_argument(self, argument, shader_type, operation, role):
         base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
             argument
         )
