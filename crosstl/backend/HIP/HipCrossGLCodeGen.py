@@ -4,6 +4,7 @@ import re
 
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
+from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.pointer_math_import import sine_cosine_statements
@@ -594,6 +595,7 @@ class HipToCrossGLConverter(
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
+        self.block_votes = BlockVoteLibrary(())
         # Inside a __global__ kernel or a __device__ function, where host runtime calls are refused.
         self.in_device_code = False
         self.identifier_name_scopes = [{}]
@@ -686,8 +688,12 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.block_votes = BlockVoteLibrary(self.source_identifier_names)
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
+        insert_block_vote_functions(
+            self.output, self.block_votes, "// HIP to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def refuse_incomplete_record_values(self, ast_node):
@@ -1828,11 +1834,12 @@ class HipToCrossGLConverter(
         }:
             return None
 
-        return self.refuse_import(
-            f"HIP block-wide sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
-            "reduces a predicate",
-            "0",
-        )
+        if len(args) != 1:
+            return self.refuse_import(
+                f"HIP block-wide sync vote {function_name}({', '.join(args)}) takes one predicate",
+                "0",
+            )
+        return self.block_votes.call(function_name, self.format_wave_predicate(args[0]))
 
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
         return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)

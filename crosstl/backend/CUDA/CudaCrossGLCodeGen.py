@@ -14,6 +14,7 @@ from ..thread_hierarchy import (
     kernel_workgroup_size_attribute,
     normalize_threadgroup_size_option,
 )
+from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
@@ -306,6 +307,7 @@ class CudaToCrossGLConverter(
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
+        self.block_votes = BlockVoteLibrary(())
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -368,6 +370,7 @@ class CudaToCrossGLConverter(
         self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.union_layout_contracts = UnionLayoutContracts("CUDA")
+        self.block_votes = BlockVoteLibrary(self.source_identifier_names)
         self.visit(ast_node)
         self.union_layout_contracts.apply(
             self.output,
@@ -376,6 +379,9 @@ class CudaToCrossGLConverter(
             self.refuse_import,
         )
         self.emitted_buffer_layouts.apply(self.output)
+        insert_block_vote_functions(
+            self.output, self.block_votes, "// CUDA to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def visit(self, node):
