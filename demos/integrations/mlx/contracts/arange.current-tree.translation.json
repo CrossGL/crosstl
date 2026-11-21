@@ -100,7 +100,7 @@
         "sizeBytes": 1426
       },
       "arangeint32": {
-        "sha256": "c902ecd467cb4e6d67bb60afe4b4a90976609c6d6d1c465f8e5fc1cf151654b7",
+        "sha256": "4fc62929b2e3024f998c03e2138dd1805cd43fbc00a3e8f6b5c98cc53d2e131f",
         "sizeBytes": 1402
       },
       "arangeint64": {
@@ -112,7 +112,7 @@
         "sizeBytes": 2801
       },
       "arangefloat32": {
-        "sha256": "71fed60f43d13ab2ade4e2cbb3fd8a45b6ec41b2a6174f772690afd3debb1b43",
+        "sha256": "1249d6286b36b782ca4c38789ae26c577c797f3ff21b2bf2489d079e1193a13f",
         "sizeBytes": 11222
       },
       "arangebfloat16": {
