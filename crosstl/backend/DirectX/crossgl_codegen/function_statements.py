@@ -133,9 +133,12 @@ class FunctionStatementMixin:
             f"{function_name}({params}){semantic}{stage_entry_attribute} {{\n"
         )
         previous_return_type = self.current_function_return_type
+        previous_source_function = getattr(self, "current_source_function", None)
         self.current_function_return_type = func.return_type
+        self.current_source_function = func
         code += self.generate_function_body(func.body, indent=indent + 1)
         self.current_function_return_type = previous_return_type
+        self.current_source_function = previous_source_function
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims

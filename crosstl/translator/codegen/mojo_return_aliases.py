@@ -29,7 +29,11 @@ class MojoReturnAliasMixin:
             )
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
-            value_code = self.generate_expression(value, const_type, f"constant {name}")
+            context = f"constant {name}"
+            if not isinstance(value, ArrayLiteralNode):
+                self.validate_expression_target_shape(value, const_type, context)
+            value_code = self.generate_expression(value, const_type, context)
+            self.validate_scalar_target_conversion(value, const_type, context)
             code += f"comptime {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 

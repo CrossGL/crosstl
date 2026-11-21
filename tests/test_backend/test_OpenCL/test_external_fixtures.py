@@ -930,7 +930,8 @@ def test_external_pocl_typename_const_alias_declarator_codegen_reparse():
     global_name = ast.statements[1]
     assert global_name.vtype == "string const"
     assert global_name.name == "typename"
-    assert 'var typename: ptr<i8> = "char";' in crossgl
+    # `string const` makes the pointer itself const, so it imports as a constant.
+    assert 'const ptr<i8> typename = "char";' in crossgl
     assert "out[0] = typename[0];" in crossgl
 
 

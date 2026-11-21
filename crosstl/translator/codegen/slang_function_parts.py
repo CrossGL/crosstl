@@ -17,6 +17,7 @@ from .slang_wave_shuffles import (
 )
 from .stage_utils import (
     is_fragment_output_parameter,
+    requests_early_fragment_tests,
 )
 
 
@@ -307,6 +308,12 @@ class SlangFunctionPartsMixin:
             )
             result += self.generate_slang_stage_attributes(node, shader_type)
             shader_stage = self.slang_shader_stage_name(shader_type)
+            if shader_stage == "fragment" and requests_early_fragment_tests(
+                node, getattr(self, "current_slang_stage_node", None)
+            ):
+                # Slang spells layout(early_fragment_tests) in; as HLSL's [earlydepthstencil]; slangc writes
+                # the EarlyFragmentTests execution mode for SPIR-V.
+                result += "[earlydepthstencil]\n"
             result += f'[shader("{shader_stage}")]\n'
         function_name = entry_name or node.name
         precise_prefix = "precise " if self.slang_function_is_precise(node) else ""
