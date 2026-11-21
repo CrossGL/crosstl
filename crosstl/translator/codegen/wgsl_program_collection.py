@@ -17,18 +17,36 @@ class WGSLProgramCollectionMixin:
         self._identifier_alias_scopes.append(self.wgsl_identifier_map(names))
         self._value_type_scopes.append({})
         self._resource_alias_scopes.append({})
+        self._local_mutability_scopes.append({})
 
     def pop_identifier_scope(self):
         self._identifier_scopes.pop()
         self._identifier_alias_scopes.pop()
         self._value_type_scopes.pop()
         self._resource_alias_scopes.pop()
+        self._local_mutability_scopes.pop()
 
     def register_local_identifier(self, name):
         if not self._identifier_scopes:
             return
         if name:
             self._identifier_scopes[-1].add(name)
+
+    def register_local_mutability(self, name, mutable):
+        """Record whether the local ``name`` of the innermost scope is a WGSL ``var`` (``True``) or ``let``."""
+        if self._local_mutability_scopes and name:
+            self._local_mutability_scopes[-1][name] = bool(mutable)
+
+    def local_mutability(self, name):
+        """Whether the innermost declaration of ``name`` is a ``var`` local; ``None`` when it is no declared local."""
+        for scope, mutability in zip(
+            reversed(self._identifier_scopes), reversed(self._local_mutability_scopes)
+        ):
+            if name in mutability:
+                return mutability[name]
+            if name in scope:
+                return None
+        return None
 
     def is_local_identifier(self, name):
         return any(name in scope for scope in reversed(self._identifier_scopes))
