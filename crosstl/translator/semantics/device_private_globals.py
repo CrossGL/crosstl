@@ -1,7 +1,8 @@
 """Module-scope private variables become kernel locals passed by reference on CUDA and HIP.
 
 CrossGL's module-scope ``static`` variable has one copy per invocation, which every function the invocation calls
-reads and writes: SPIR-V ``Private`` storage, a WGSL ``var<private>``, an HLSL ``static`` global. Stage-scope private
+reads and writes: SPIR-V ``Private`` storage, a WGSL ``var<private>``, an HLSL ``static`` global. CrossGL's
+``var<private>`` and an unqualified module-scope ``var`` of a plain value type declare the same storage. Stage-scope private
 variables and function-scope ``static`` locals reach the same form (:mod:`.stage_private_variables`,
 :mod:`.static_locals`). CUDA and HIP have no per-thread storage at namespace scope. A namespace-scope variable
 without a memory-space specifier is a host variable that device code cannot use, and a ``__device__`` variable is one
@@ -27,7 +28,7 @@ from copy import deepcopy
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..stage_utils import SHADER_STAGE_BY_NAME, normalize_stage_name
-from .hub_types import iter_functions
+from .hub_types import iter_functions, type_from_name
 from .stage_private_variables import (
     _aliases,
     _is_value_type,
@@ -48,6 +49,11 @@ __all__ = [
 TARGETS = frozenset({"cuda", "hip"})
 
 _ENTRY_QUALIFIERS = frozenset({"kernel", "__global__"})
+
+# ``static int D;``, ``var<private> D: i32;`` and an unqualified ``var D: i32;`` (or ``int D;``) all declare one copy
+# per invocation at module scope. Only the unqualified spelling can also name a resource (``sampler2D tex;``), so
+# an unqualified variable moves only when its type is a plain value and is otherwise left to the generator.
+_PRIVATE_QUALIFIER_SETS = (frozenset({"static"}), frozenset({"private"}), frozenset())
 
 
 class DevicePrivateGlobalUnsupportedError(TranslationDiagnostic):
@@ -78,12 +84,14 @@ def lower_device_private_globals(program, target) -> int:
     functions = [f for f in iter_functions(program) if isinstance(f, A.FunctionNode)]
     privates = []
     for variable in statics:
-        if _is_value_type(getattr(variable, "var_type", None), structs, aliases, set()):
+        if _is_value(getattr(variable, "var_type", None), structs, aliases):
             variable.var_type = variable.vtype = _without_aliases(
                 variable.var_type, aliases, frozenset()
             )
             privates.append(variable)
-        elif any(_uses(function, variable.name) for function in functions):
+        elif _qualifiers(variable) and any(
+            _uses(function, variable.name) for function in functions
+        ):
             raise DevicePrivateGlobalUnsupportedError(
                 f"The module-scope private variable '{variable.name}' has a type that is not a plain value, "
                 f"so {target.upper()} device code cannot hold a copy of it per thread",
@@ -127,10 +135,13 @@ def lower_device_private_globals(program, target) -> int:
 
 
 def _is_static_variable(variable):
-    """A mutable module-scope ``static`` variable with no storage, interface or resource qualifier."""
+    """A mutable module-scope ``static`` or ``var<private>`` variable with no storage, interface or resource qualifier."""
     if type(variable) is not A.VariableNode or not getattr(variable, "name", None):
         return False
-    if not getattr(variable, "is_mutable", True) or _qualifiers(variable) != {"static"}:
+    if (
+        not getattr(variable, "is_mutable", True)
+        or _qualifiers(variable) not in _PRIVATE_QUALIFIER_SETS
+    ):
         return False
     return not (
         getattr(variable, "semantic", None)
@@ -138,6 +149,21 @@ def _is_static_variable(variable):
         or getattr(variable, "resource_qualifiers", None)
         or getattr(variable, "is_type_alias", False)
     )
+
+
+def _is_value(type_node, structs, aliases):
+    """A plain value type, with scalars in any spelling CrossGL accepts (``int``, ``i32``, ``u64``, ``f16``)."""
+    if isinstance(type_node, A.PrimitiveType):
+        scalar = type_from_name(type_node.name)
+        if scalar is not None and scalar.lanes == 1:
+            return True
+    if isinstance(type_node, (A.VectorType, A.MatrixType)):
+        return _is_value(type_node.element_type, structs, aliases)
+    if isinstance(type_node, A.ArrayType):
+        return type_node.size is not None and _is_value(
+            type_node.element_type, structs, aliases
+        )
+    return _is_value_type(type_node, structs, aliases, set())
 
 
 def _entry_ids(program):
