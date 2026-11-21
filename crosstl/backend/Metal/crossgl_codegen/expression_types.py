@@ -1086,8 +1086,7 @@ class MetalExpressionTypeMixin:
             if atomic_name.startswith("metal::"):
                 atomic_name = atomic_name[len("metal::") :]
             if (
-                atomic_name
-                in {
+                atomic_name in {
                     "atomic_load_explicit",
                     "atomic_fetch_sub_explicit",
                     *self.metal_atomic_intrinsics,

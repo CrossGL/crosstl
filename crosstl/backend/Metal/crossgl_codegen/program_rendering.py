@@ -369,8 +369,9 @@ class MetalProgramRenderingMixin:
                         static_member_types=static_member_types,
                         semantic_context=(
                             {"kind": "fetched_member"}
-                            if struct_node.name
-                            in getattr(self, "metal_fetched_struct_names", ())
+                            if struct_node.name in getattr(
+                                self, "metal_fetched_struct_names", ()
+                            )
                             else None
                         ),
                     )
@@ -418,8 +419,9 @@ class MetalProgramRenderingMixin:
 
         globals_list = [
             glob
-            for glob in getattr(ast, "global_variables", [])
-            or getattr(ast, "global_vars", [])
+            for glob in getattr(ast, "global_variables", []) or getattr(
+                ast, "global_vars", []
+            )
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
         if globals_list:
