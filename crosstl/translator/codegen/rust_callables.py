@@ -2,7 +2,6 @@
 
 import re
 
-from .rust_gpu_spelling import GLAM_AXES
 from ..ast import (
     BlockNode,
     IdentifierNode,
@@ -10,8 +9,8 @@ from ..ast import (
     LiteralNode,
 )
 from .rust_exact_lookups import RUST_PRIMITIVE_SOURCE_TYPES
+from .rust_gpu_spelling import GLAM_AXES
 from .rust_refusals import RustEnumEmptyBraceError
-
 
 # A matrix as the generator spells it before glam names it (``Mat2<f64>``), or glam's own name (``DMat2``).
 _RUST_MATRIX_TYPE = re.compile(r"D?Mat[234](?:x[234])?(?:<\w+>)?")

@@ -7,7 +7,6 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    CaseNode,
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,

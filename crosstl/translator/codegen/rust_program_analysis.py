@@ -33,11 +33,6 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import prepend_array_dimension
-from .rust_resource_bindings import (
-    PROMOTABLE_RESOURCE_KINDS,
-    resource_parameters,
-)
-from .specialization_constants import declares_specialization_id
 from .rust_gpu_interface import (
     STORAGE_SLICE_KIND,
     UNIFORM_VALUE_KIND,
@@ -51,6 +46,11 @@ from .rust_gpu_interface import (
 )
 from .rust_gpu_layouts import STD140, STD430, layout_mismatch
 from .rust_gpu_storage import PADDED_ELEMENTS
+from .rust_resource_bindings import (
+    PROMOTABLE_RESOURCE_KINDS,
+    resource_parameters,
+)
+from .specialization_constants import declares_specialization_id
 from .stage_utils import normalize_stage_name
 
 

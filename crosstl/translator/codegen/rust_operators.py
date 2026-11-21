@@ -1,6 +1,5 @@
 """Rust binary, ternary, vector and matrix operators, array literals, constructors and assignments."""
 
-from .assignment_values import is_reevaluable_place
 from ..ast import (
     ArrayAccessNode,
     BinaryOpNode,
@@ -12,6 +11,7 @@ from ..ast import (
     UnaryOpNode,
 )
 from ..refusals import RustRefusal
+from .assignment_values import is_reevaluable_place
 
 
 class RustOperatorMixin:
