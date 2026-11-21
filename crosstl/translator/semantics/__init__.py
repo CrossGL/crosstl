@@ -221,6 +221,7 @@ from .structured_layouts import (
     StructuredLayoutUnsupportedError,
     legalize_structured_layouts,
 )
+from .subgroup_rotations import WaveRotationUnsupportedError, lower_wave_rotations
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
 from .template_assertions import resolve_template_assertions
@@ -248,7 +249,6 @@ from .vertex_input_positions import (
 from .void_casts import VoidCastError, lower_void_casts
 from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
-from .wave_rotations import WaveRotationUnsupportedError, lower_wave_rotations
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -481,7 +481,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`), and partitioned
     wave reductions and scans become loops over the subgroup's lanes, or are refused with
     :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`), and subgroup rotations become
-    ``WaveReadLaneAt`` reads of the rotated lane (:mod:`.wave_rotations`). HLSL's
+    ``WaveReadLaneAt`` reads of the rotated lane (:mod:`.subgroup_rotations`). HLSL's
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width

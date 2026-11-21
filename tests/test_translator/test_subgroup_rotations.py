@@ -12,7 +12,7 @@ from crosstl.translator import parse
 from crosstl.translator.semantics import WaveRotationUnsupportedError
 from crosstl.translator.semantics.hub_types import call_name
 from crosstl.translator.semantics.scoped_walk import program_stages
-from crosstl.translator.semantics.wave_rotations import (
+from crosstl.translator.semantics.subgroup_rotations import (
     lower_wave_rotations,
     native_wave_rotations,
     register_native_wave_rotations,

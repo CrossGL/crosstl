@@ -39,7 +39,7 @@ Rotations read the value of another lane at a fixed distance, wrapping around (G
   the value of lane ``((WaveGetLaneIndex() + delta) & (clusterSize - 1)) + (WaveGetLaneIndex() & ~(clusterSize -
   1))``. ``clusterSize`` is a constant power of two no larger than the subgroup.
 
-The result of reading an inactive lane is undefined. :mod:`crosstl.translator.semantics.wave_rotations` lowers the
+The result of reading an inactive lane is undefined. :mod:`crosstl.translator.semantics.subgroup_rotations` lowers the
 rotations to ``WaveReadLaneAt`` for every target that does not register them as native.
 """
 

@@ -1,6 +1,6 @@
 """Shared pieces of the passes that compute wave operations from ``WaveReadLaneAt`` reads of single lanes.
 
-:mod:`.partitioned_waves` and :mod:`.wave_rotations` write CrossGL helper functions, one per operation and operand
+:mod:`.partitioned_waves` and :mod:`.subgroup_rotations` write CrossGL helper functions, one per operation and operand
 type, whose reads go through ``WaveReadLaneAt``. Every subgroup target implements that operation as an arbitrary-lane
 shuffle, but Direct3D and Metal take numeric values only and CUDA takes scalars only, so a ``bool`` travels as a
 ``uint`` and a vector is read one component at a time.
