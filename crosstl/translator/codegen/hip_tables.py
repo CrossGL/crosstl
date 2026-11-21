@@ -58,9 +58,6 @@ HIP_WAVE_UVEC4_RESULT_OPS = {
     "WaveActiveBallot",
     "WaveMatch",
 }
-HIP_WARP_SYNC_BUILTIN_ARITIES = {
-    "__shfl_down_sync": (3, 4),
-}
 HIP_BITCAST_FUNCTION_TARGETS = {
     "floatBitsToInt": "int",
     "floatBitsToUint": "uint",
