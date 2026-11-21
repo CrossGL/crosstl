@@ -325,14 +325,12 @@ class CudaImportIntrinsicMixin:
         }:
             return None
 
-        return self.format_unsupported_cuda_block_sync_vote(function_name, args)
-
-    def format_unsupported_cuda_block_sync_vote(self, function_name, args):
-        return self.refuse_import(
-            f"CUDA thread block sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
-            "reduces a predicate",
-            "0",
-        )
+        if len(args) != 1:
+            return self.refuse_import(
+                f"CUDA thread block sync vote {function_name}({', '.join(args)}) takes one predicate",
+                "0",
+            )
+        return self.block_votes.call(function_name, self.format_wave_predicate(args[0]))
 
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
