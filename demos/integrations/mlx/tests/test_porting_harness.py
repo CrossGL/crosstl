@@ -9080,11 +9080,8 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert result["runtimeParityClaimed"] is False
     assert result["sources"] == list(module.MLX_VULKAN_FRONTIER_SOURCES)
     assert result["trackedRefusals"] == [
-        {
-            "source": module.MLX_LAYER_NORM_SOURCE,
-            "code": "project.translate.vulkan-lowering-unsupported",
-            "issue": "https://github.com/CrossGL/crosstl/issues/2283",
-        }
+        {"source": source, "code": code, "issue": issue}
+        for source, (code, issue) in module.MLX_VULKAN_FRONTIER_REFUSALS.items()
     ]
     assert result["workgroupBlockedSources"] == []
     assert result["workgroupBlockedReport"] is None
