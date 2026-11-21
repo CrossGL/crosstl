@@ -9,6 +9,7 @@ from ..ast import (
     PointerType,
 )
 from ..refusals import DirectXRefusal
+from ..semantics.shader_records import is_shader_record_buffer
 from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
@@ -414,11 +415,17 @@ class DirectXGlslBlockMixin:
         type_name = self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
         return str(type_name) in self.structs_by_name
 
+    def is_glsl_storage_block_variable(self, node, vtype=None):
+        """A GLSL buffer block other than a shader record, which :mod:`.hlsl_shader_records` declares."""
+        return not is_shader_record_buffer(node) and self.is_glsl_buffer_block_variable(
+            node, vtype
+        )
+
     def collect_glsl_buffer_block_struct_names(self, global_vars):
         names = set()
         for node in global_vars:
             node_type = glsl_buffer_block_node_type(node)
-            if not self.is_glsl_buffer_block_variable(node, node_type):
+            if not self.is_glsl_storage_block_variable(node, node_type):
                 continue
             type_name = self.resource_base_type(node_type)
             names.add(str(type_name))

@@ -12,6 +12,7 @@ from ..import_exact_lookups import (
     constant_or_literal,
 )
 from ..matrix_order_import import member_is_row_major
+from ..type_declaration_names import declarable_struct_name
 from ..VulkanAst import LayoutNode
 
 
@@ -107,10 +108,11 @@ class VulkanLayoutMixin:
         variable_name = self.spirv_assembly_value_name(variable_id, names, decorations)
         # A storage block is declared as a struct type plus a variable of it, so an unnamed block type takes a name
         # of its own: the variable's name would make each use of the variable also read as a use of the type.
-        block_name = (
+        block_name = declarable_struct_name(
             names.get(struct_type_id)
             or (None if layout_type == "BUFFER" else variable_name)
-            or self.spirv_fallback_identifier(struct_type_id, "block")
+            or self.spirv_fallback_identifier(struct_type_id, "block"),
+            frozenset(names.values()),
         )
         qualifiers = []
         if storage_class in {"StorageBuffer", "Uniform"}:

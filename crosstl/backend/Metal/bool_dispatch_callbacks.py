@@ -44,6 +44,13 @@ The rewrite is applied only when it provably keeps the program's behaviour:
   evaluates its right operand where the built-in one may skip it, so under such overloads a bare left operand needs
   a right operand without side effects (an identifier, ``x.value`` or a Boolean literal).
 
+A callback that synchronizes (it calls ``threadgroup_barrier``, ``simdgroup_barrier`` or a ``simd_``/``quad_``
+function) and reads its parameter only as a leaf of ``if``, ``if constexpr`` and ``while`` conditions is inlined
+once instead, with the parameter read from a ``bool`` the call's condition initializes, so its barriers and
+collectives stay in the caller's control flow::
+
+    { const bool kAligned_value = static_cast<bool>((n % 32 == 0)); ... if (kAligned_value) { ... } ... }
+
 Calls that miss any condition are left unchanged for the existing callback lowering, which keeps its typed
 diagnostics. Nested calls expand from the inside out, and the number of instantiated bodies is bounded by the
 preprocessor's ``max_template_specializations`` like other compile-time expansions.
@@ -409,8 +416,20 @@ def _expand_call(preprocessor, text, masked, match, helper, budget, *, depth):
         budget,
         depth=depth + 1,
     )
+    inlinable = _body_is_inlinable(preprocessor, body, parameter)
+    runtime = (
+        _runtime_flag_form(preprocessor, body, parameter, condition, helper)
+        if inlinable
+        else None
+    )
+    if runtime is not None:
+        # One body, which the nested calls' instantiations are part of.
+        budget.used += 1
+        if budget.used > budget.limit:
+            _raise_expansion_limit(preprocessor, helper.name, budget)
+        return qualified_start, semicolon + 1, runtime
     substituted = []
-    if _body_is_inlinable(preprocessor, body, parameter):
+    if inlinable:
         for value in (True, False):
             instantiated = _substitute(preprocessor, body, parameter, value, helper)
             if instantiated is not None:
@@ -531,34 +550,127 @@ def _bare_use_is_condition_operand(
 
     There the tag is only converted to ``bool``, so its value is all that matters.
     """
-    if not helper.bare_conversion or not _LOGICAL_LEFT.search(masked[:start].rstrip()):
+    if not helper.bare_conversion:
         return False
+    return _condition_of_operand(masked, start, end, helper, bare=True) is not None
+
+
+def _condition_of_operand(
+    masked: str, start: int, end: int, helper: _Helper, *, bare: bool
+) -> int | None:
+    """The opening parenthesis of the ``if`` or ``while`` condition whose logical leaf is ``start:end``."""
+    if not _LOGICAL_LEFT.search(masked[:start].rstrip()):
+        return None
     right = _LOGICAL_RIGHT.match(masked, end)
     if right is None:
-        return False
+        return None
     if (
-        helper.logical_overloads
+        bare
+        and helper.logical_overloads
         and masked[right.start() : right.end()].strip() != ")"
         and _SIDE_EFFECT_FREE_OPERAND.match(masked, right.end()) is None
     ):
         # An overloaded operator evaluates its right operand, which the built-in
         # operator may skip, so that operand must not have effects.
-        return False
+        return None
     position = start
     while True:
         open_paren = _enclosing_open_paren(masked, position)
         if open_paren is None:
-            return False
+            return None
         prefix = masked[:open_paren].rstrip()
         if _CONDITION_KEYWORD.search(prefix):
-            return True
+            return open_paren
         # Any other parentheses must only group logical operands.
         if not _LOGICAL_LEFT.search(prefix):
-            return False
+            return None
         close_paren = _matching_close_paren(masked, open_paren)
         if close_paren is None or _LOGICAL_RIGHT.match(masked, close_paren + 1) is None:
-            return False
+            return None
         position = open_paren
+
+
+# Calls that synchronize the threadgroup or exchange values between lanes.
+_SYNCHRONIZING_CALL = re.compile(
+    r"\b(?:threadgroup_barrier|simdgroup_barrier|simd_\w+|quad_\w+)\s*\("
+)
+_CONSTEXPR_IF = re.compile(r"\bif(?P<constexpr>\s+constexpr)$")
+
+
+def _runtime_flag_form(preprocessor, body, parameter, condition, helper) -> str | None:
+    """The callback inlined once, with its tag read from a run-time flag, if that is equivalent.
+
+    Instantiating a body that synchronizes for each value puts its barriers and collectives under the
+    dispatch condition, which may differ between the SIMD-groups of a threadgroup. Every invocation then
+    reaches the same barriers only through different branches, which targets that need uniform control
+    flow for barriers and emulated collectives refuse. When every use of the tag is a leaf of an ``if``,
+    ``if constexpr`` or ``while`` condition, the body reads the same value from a ``bool`` the helper's
+    condition initializes once::
+
+        { const bool k_value = static_cast<bool>((c)); ... if (k_value) { ... } ... }
+
+    Such an ``if constexpr`` becomes an ``if``, so both of its branches are instantiated, as the body's
+    other ``if`` statements are. Bodies with any other use of the tag (a template argument, a constant
+    initializer, a nested lambda's use), and bodies that do not synchronize, keep their two
+    instantiations.
+    """
+    masked = _masked(preprocessor, body)
+    if _SYNCHRONIZING_CALL.search(masked) is None:
+        return None
+    nested = preprocessor._const_for_loop_nested_lambda_spans(body)
+    edits: list[tuple[int, int, str]] = []
+    constexpr_spans: set[tuple[int, int]] = set()
+    flag = _fresh_flag_name(masked + "\n" + condition, parameter)
+    for match in re.finditer(rf"\b{re.escape(parameter)}\b", masked):
+        start = match.start()
+        if preprocessor._is_member_identifier_context(masked, start):
+            continue
+        if any(
+            lambda_start <= start < lambda_end for lambda_start, lambda_end in nested
+        ):
+            return None
+        member = re.match(r"\s*\.\s*value\b", masked[match.end() :])
+        if member is not None:
+            end = match.end() + member.end()
+        elif helper.bare_conversion:
+            end = match.end()
+        else:
+            return None
+        open_paren = _condition_of_operand(
+            masked, start, end, helper, bare=member is None
+        )
+        if open_paren is None:
+            return None
+        prefix = masked[:open_paren].rstrip()
+        keyword = _CONSTEXPR_IF.search(prefix)
+        if keyword is not None:
+            constexpr_spans.add(keyword.span("constexpr"))
+        edits.append((start, end, flag))
+    if not edits:
+        return None
+    edits.extend((start, end, "") for start, end in constexpr_spans)
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, replacement in sorted(edits):
+        pieces.append(body[cursor:start])
+        pieces.append(replacement)
+        cursor = end
+    pieces.append(body[cursor:])
+    return (
+        f"{{ const bool {flag} = static_cast<bool>(({condition.strip()})); "
+        f"{''.join(pieces)} }}"
+    )
+
+
+def _fresh_flag_name(text: str, parameter: str) -> str:
+    """``<parameter>_value``, suffixed until no identifier of ``text`` has the name."""
+    names = set(re.findall(r"[A-Za-z_]\w*", text))
+    flag = f"{parameter}_value"
+    index = 1
+    while flag in names:
+        flag = f"{parameter}_value_{index}"
+        index += 1
+    return flag
 
 
 def _enclosing_open_paren(masked: str, position: int) -> int | None:

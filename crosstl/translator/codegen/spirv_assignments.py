@@ -23,6 +23,7 @@ from ..ast import (
 from .pointer_reinterpret import PointerReinterpretationError
 from .spirv_constant_folding import spirv_folded_constant
 from .spirv_constant_matrices import constant_matrix_constructor
+from .spirv_pointer_rebinding import rebind_storage_pointer_alias
 from .spirv_single_evaluation import evaluate_subscript_index
 from .spirv_specialization_conversions import specialization_constituent
 from .spirv_values import (
@@ -771,6 +772,9 @@ class SpirvAssignmentMixin:
             return
 
         if self.process_mesh_output_assignment(target, node.value):
+            return
+
+        if rebind_storage_pointer_alias(self, target, node.value):
             return
 
         if isinstance(node.value, MatchNode):

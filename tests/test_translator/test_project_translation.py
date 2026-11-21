@@ -11258,30 +11258,20 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     payload = report.to_json()
     output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
 
-    assert output.exists()
-    rust_code = output.read_text(encoding="utf-8")
-    assert payload["summary"]["translatedCount"] == 1
-    assert (
-        "// CrossGL resource metadata: name=colorMap kind=texture set=1 "
-        "binding=2 binding_source=explicit" in rust_code
-    )
-    assert (
-        "// CrossGL resource metadata: name=linearSampler kind=sampler set=1 "
-        "binding=3 binding_source=explicit" in rust_code
-    )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>" in rust_code
-    )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler" in rust_code
-    )
-    assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
-    assert "CrossGL Rust limitation: resource colorMap" not in rust_code
-    assert "CrossGL Rust limitation: resource linearSampler" not in rust_code
-    assert "static COLOR_MAP" not in rust_code
-    assert "static LINEAR_SAMPLER" not in rust_code
+    # rust-gpu output does not bind textures and samplers yet: the file is refused by resource name, with no
+    # output and no placeholder, instead of writing default-valued statics.
+    assert not output.exists()
+    assert payload["summary"]["translatedCount"] == 0
+    messages = [
+        diagnostic["message"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("target") == "rust"
+    ]
+    assert any(
+        "resource: 'colorMap' (sampler2D) is not lowered to a rust-gpu resource binding"
+        in message
+        for message in messages
+    ), messages
     assert not [
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -11302,7 +11292,8 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
                 RWStructuredBuffer<int> values @binding(0);
 
                 compute {
-                    void main(uint index) {
+                    void main() {
+                        uint index = gl_GlobalInvocationID.x;
                         int value = buffer_load(values, index);
                         buffer_store(values, index, value + 1);
                     }
@@ -11339,9 +11330,10 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
     assert "CrossGL Rust limitation" not in rust_code
     assert "static VALUES" not in rust_code
     assert (
-        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
-        "binding = 0))] values: RWStructuredBuffer<i32>"
-    ) in rust_code
+        "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [i32]"
+        in rust_code
+    )
+    assert "values[index as usize] = (value + 1);" in rust_code
     assert placeholder_diagnostics == []
     assert validate_project_report(report_path)["success"] is True
 
@@ -49217,7 +49209,10 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "uint2 id" not in hip
 
     mojo = outputs["mojo"]
-    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id_globalInvocationID = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in mojo
     assert (
         "var id: SIMD[DType.uint32, 2] = "
         "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
@@ -49227,11 +49222,12 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "var col: UInt32 = id[0]" in mojo
 
     rust = outputs["rust"]
-    assert "id_globalInvocationID: Vec3<u32>" in rust
+    assert "#[spirv(global_invocation_id)] id_global_invocation_id: UVec3" in rust
+    assert "let id: UVec2 = id_global_invocation_id.truncate();" in rust
     assert (
-        "let id: Vec2<u32> = "
-        "Vec2::<u32>::new(id_globalInvocationID.x, id_globalInvocationID.y);"
-    ) in rust
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] params: &MatMulParams"
+        in rust
+    )
     assert "let row: u32 = id.y;" in rust
     assert "let col: u32 = id.x;" in rust
 
@@ -56449,8 +56445,12 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
 
     assert "# CrossGL GPU builtin placeholders" not in output
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
-    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
-    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "def saxpy(" in output
+    assert (
+        "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in output
+    assert "var gid: Int32 = Int32(global_idx_uint[0])" in output
     assert "gl_GlobalInvocationID" not in output
 
     assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
@@ -56476,8 +56476,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
             }
             """,
             # The grid index imports as the global invocation id.
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
         (
             "add_kernel.hip",
@@ -56494,8 +56497,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
     ],
 )
@@ -56957,18 +56963,19 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     }
 
     mojo = outputs["mojo"]
-    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "def main_fs() -> SIMD[DType.float32, 4]:" in mojo
     assert "var output: SIMD[DType.float32, 4]" in mojo
     assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
     assert "return output" in mojo
-    assert "fn main_fs(output" not in mojo
+    assert "def main_fs(output" not in mojo
     assert "CrossGL parameter semantic" not in mojo
 
     rust = outputs["rust"]
-    assert "pub fn main_fs() -> Vec4<f32>" in rust
-    assert "let mut output: Vec4<f32>;" in rust
-    assert "output = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in rust
-    assert "return output;" in rust
+    assert "#[spirv(fragment)]" in rust
+    assert "pub fn main_fs(#[spirv(location = 0)] out_value: &mut Vec4) -> ()" in rust
+    assert "let mut output: Vec4;" in rust
+    assert "output = Vec4::new(1.0, 0.0, 0.0, 1.0);" in rust
+    assert "*out_value = return_value;" in rust
     assert "pub fn main_fs(output" not in rust
     assert "CrossGL parameter semantic: output" not in rust
 

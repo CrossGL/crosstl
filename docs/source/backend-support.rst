@@ -15,7 +15,9 @@ the language's reference compiler or validator checks the result. Compute
 probes also run, on the GPU or on Mesa's software drivers, where the
 translation must compute what the native probe computes: Metal, GLSL and
 SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
-reference compilers produce. A subgroup operation's probes run as one
+reference compilers produce. HLSL probes also run as HLSL on Direct3D 12
+WARP on a Windows runner, and a probe that computes something else there is
+wrong too. A subgroup operation's probes run as one
 workgroup of 64 invocations, with every third one inactive, so a translation
 that reads only its own invocation, or every invocation, computes something
 else. A translation must also keep the built-ins and decorations, such as
@@ -130,6 +132,9 @@ so its programs can be translated through CrossGL to the targets above.
      - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
        ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
        ``.rgen``
+   * - WebGL 2 / GLSL ES 3.00
+     - ``opengl``, named as ``webgl``, ``webgl2``, ``essl`` or ``glsl-es``
+     - the GLSL extensions; ``.webgl.glsl`` when the source backend is named
    * - Metal
      - ``metal``
      - ``.metal``, ``.msl``
@@ -169,7 +174,9 @@ are still under development.
      - Source input behavior
    * - WebGL / GLSL ES
      - ``.webgl.glsl``
-     - Rejected as target-only output; use ``.glsl`` or ``.cgl`` as input.
+     - Not read as source by its extension, so translated output is not imported
+       again; pass ``source_backend="webgl"`` (``--source-backend webgl``) to read
+       it, or use a GLSL extension such as ``.frag``.
    * - WebGPU / WGSL
      - ``.wgsl``
      - Rejected until a dedicated WGSL/WESL source frontend lands.

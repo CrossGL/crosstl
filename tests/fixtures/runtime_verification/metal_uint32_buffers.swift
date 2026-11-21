@@ -8,6 +8,9 @@ struct Request: Decodable {
     // Optional width of each one-dimensional threadgroup; threadCount then
     // counts threadgroups. Existing requests dispatch one thread per group.
     let threadsPerThreadgroup: Int?
+    // Optional [width, height, depth] of each threadgroup; it replaces
+    // threadsPerThreadgroup for kernels that read a 2D or 3D thread position.
+    let threadgroupSize: [Int]?
 }
 
 enum ExecutionError: Error {
@@ -31,10 +34,12 @@ func run() throws {
         throw ExecutionError.unavailable("Kernel entry point is missing")
     }
     let pipeline = try device.makeComputePipelineState(function: function)
-    let groupWidth = request.threadsPerThreadgroup ?? 1
-    guard groupWidth > 0, groupWidth <= pipeline.maxTotalThreadsPerThreadgroup else {
+    let shape = request.threadgroupSize ?? [request.threadsPerThreadgroup ?? 1, 1, 1]
+    let groupThreads = shape.reduce(1, *)
+    guard shape.count == 3, shape.allSatisfy({ $0 > 0 }),
+          groupThreads <= pipeline.maxTotalThreadsPerThreadgroup else {
         throw ExecutionError.unavailable(
-            "Threadgroup width \(groupWidth) exceeds the pipeline limit " +
+            "Threadgroup size \(shape) exceeds the pipeline limit " +
             "\(pipeline.maxTotalThreadsPerThreadgroup)")
     }
     func buffer(_ values: [UInt32]) throws -> MTLBuffer {
@@ -55,7 +60,7 @@ func run() throws {
         encoder.setBuffer(allocation, offset: 0, index: index)
     }
     encoder.dispatchThreadgroups(MTLSize(width: request.threadCount, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: groupWidth, height: 1, depth: 1))
+                                threadsPerThreadgroup: MTLSize(width: shape[0], height: shape[1], depth: shape[2]))
     encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()

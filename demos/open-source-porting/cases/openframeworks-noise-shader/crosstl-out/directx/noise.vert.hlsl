@@ -14,7 +14,7 @@ cbuffer Uniforms : register(b0) {
 };
 float4 rand(float2 A, float2 B, float2 C, float2 D);
 
-float noise(float2 coord, float d);
+float noise_fn(float2 coord, float d);
 
 float4 rand(float2 A, float2 B, float2 C, float2 D) {
     float2 s = float2(12.9898, 78.233);
@@ -22,7 +22,7 @@ float4 rand(float2 A, float2 B, float2 C, float2 D) {
     return ((frac((sin(tmp) * 43758.5453)) * 2.0) - 1.0);
 }
 
-float noise(float2 coord, float d) {
+float noise_fn(float2 coord, float d) {
     float2 C[4];
     float d1 = (1.0 / d);
     C[0] = (floor((coord * d)) * d1);
@@ -39,9 +39,9 @@ float noise(float2 coord, float d) {
 VertexOutput VSMain(VertexInput input) {
     VertexOutput output;
     float4 pos = mul(modelViewProjectionMatrix, input.position);
-    float noiseAmntX = noise(float2((asfloat(asuint(timeValX) ^ 0x80000000u) + (pos.x / 1000.0)), 100.0), 20.0);
-    float noiseAmntY = noise(float2((timeValY + (pos.y / 1000.0)), (pos.x / 2000.0)), 20.0);
-    float noiseB = noise(float2((timeValY * 0.25), (pos.y / 2000.0)), 20.0);
+    float noiseAmntX = noise_fn(float2((asfloat(asuint(timeValX) ^ 0x80000000u) + (pos.x / 1000.0)), 100.0), 20.0);
+    float noiseAmntY = noise_fn(float2((timeValY + (pos.y / 1000.0)), (pos.x / 2000.0)), 20.0);
+    float noiseB = noise_fn(float2((timeValY * 0.25), (pos.y / 2000.0)), 20.0);
     float2 d = (float2(pos.x, pos.y) - mouse);
     float len = sqrt(((d.x * d.x) + (d.y * d.y)));
     if ((len < 300.0) && (len > 0.0)) {

@@ -4,6 +4,7 @@ from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .depth_layout_import import fragment_depth_layout_attribute
+from .fragment_interlock_import import SPIRV_INTERLOCK_LAYOUTS
 from .import_exact_lookups import SpirvBuiltinUnsupportedError
 from .matrix_order_import import row_major_field_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
@@ -668,7 +669,30 @@ class VulkanToCrossGLConverter:
                 return "vertex"
         return "fragment"
 
+    # SPV_KHR_compute_shader_derivatives groups (the NV names are aliases) and their CrossGL stage layouts. The
+    # group also forms the quads of the entry's quad operations, so it is kept even without derivatives (#4840).
+    SPIRV_DERIVATIVE_GROUP_LAYOUTS = {
+        "DerivativeGroupQuadsKHR": "derivative_group_quadsKHR",
+        "DerivativeGroupQuadsNV": "derivative_group_quadsKHR",
+        "DerivativeGroupLinearKHR": "derivative_group_linearKHR",
+        "DerivativeGroupLinearNV": "derivative_group_linearKHR",
+    }
+
+    def spirv_derivative_group_layouts(self, node):
+        """``layout(derivative_group_quadsKHR) in;`` or the linear form for the entry's derivative group."""
+        names = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            name = self.SPIRV_DERIVATIVE_GROUP_LAYOUTS.get(mode.get("mode"))
+            if name is not None and name not in names:
+                names.append(name)
+        return [LayoutNode([(name, None)], layout_type="in") for name in names]
+
     def spirv_compute_execution_layouts(self, node):
+        return self.spirv_workgroup_size_layouts(
+            node
+        ) + self.spirv_derivative_group_layouts(node)
+
+    def spirv_workgroup_size_layouts(self, node):
         dimensions = getattr(node, "spirv_workgroup_size", None)
         if dimensions is not None:
             return [
@@ -738,6 +762,9 @@ class VulkanToCrossGLConverter:
                 layouts.append(
                     LayoutNode([("early_fragment_tests", None)], layout_type="in")
                 )
+            interlock = SPIRV_INTERLOCK_LAYOUTS.get(mode.get("mode"))
+            if interlock is not None:
+                layouts.append(LayoutNode([(interlock, None)], layout_type="in"))
         return layouts
 
     def spirv_geometry_execution_layouts(self, node):
@@ -824,7 +851,7 @@ class VulkanToCrossGLConverter:
         return bool(qualifier_names & self.fragment_execution_layout_qualifiers())
 
     def fragment_execution_layout_qualifiers(self):
-        return {"early_fragment_tests"}
+        return {"early_fragment_tests", *SPIRV_INTERLOCK_LAYOUTS.values()}
 
     def generate_compute_layout(self, node):
         qualifiers = ", ".join(

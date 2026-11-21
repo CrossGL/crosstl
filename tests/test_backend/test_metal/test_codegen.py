@@ -6709,7 +6709,7 @@ def test_codegen_raytracing_qualifiers_output():
         )
 
 
-def test_codegen_msl_intersection_function_is_refused():
+def test_codegen_msl_intersection_function_with_tags_is_refused():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6733,7 +6733,10 @@ def test_codegen_msl_intersection_function_is_refused():
     """
     with pytest.raises(
         MetalImportRefused,
-        match="Metal intersection function 'sphere' has no CrossGL import",
+        match=(
+            "Metal intersection function 'sphere' names intersection tags "
+            "triangle_data, instancing; CrossGL has no spelling for intersection tags"
+        ),
     ):
         convert(code)
 

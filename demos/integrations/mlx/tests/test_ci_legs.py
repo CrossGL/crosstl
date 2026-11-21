@@ -150,6 +150,27 @@ def test_changed_files_select_the_legs_that_read_them(changed, selected):
     assert affected_legs(_legs(), changed, _closure()) == selected
 
 
+def test_a_json_document_names_files_in_keys_and_values_but_not_in_prose():
+    document = {
+        "helper": "sort_helper.py",
+        "orphan.py": {
+            "reason": "tests/kernels/test_unused.py executes the excluded entries",
+            "steps": ["echo sort_helper.py", "README.md"],
+        },
+    }
+    tree = {**TREE, "contracts/gemv.json": json.dumps(document)}
+    closure = Closure(PathIndex(tree), tree.get)
+    assert closure.references("contracts/gemv.json") == {
+        "sort_helper.py",
+        "orphan.py",
+        "README.md",
+    }
+    # A data file that is not JSON keeps naming every file it spells.
+    tree["contracts/gemv.yaml"] = "reason: tests/kernels/test_unused.py runs them\n"
+    closure = Closure(PathIndex(tree), tree.get)
+    assert closure.references("contracts/gemv.yaml") == {"tests/kernels/test_unused.py"}
+
+
 def test_a_deleted_file_that_no_leg_reaches_selects_every_leg():
     closure = Closure(PathIndex({*TREE, "removed.py"}), TREE.get)
     assert affected_legs(_legs(), ["removed.py"], closure) == set(_legs())

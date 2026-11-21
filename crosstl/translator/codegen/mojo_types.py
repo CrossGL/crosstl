@@ -10,6 +10,7 @@ from ..ast import (
 )
 from .array_utils import evaluate_literal_int_expression
 from .mojo_integer_promotion import promoted_type
+from .mojo_shared_memory import split_pointee_address_space
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
     MOJO_BUFFER_OP_ALIASES,
@@ -115,7 +116,7 @@ class MojoTypeMixin:
         type_text = str(type_name or "").strip()
         if not self.is_pointer_type_name(type_text):
             return None
-        return type_text[:-1].strip()
+        return split_pointee_address_space(type_text[:-1].strip())[1]
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
@@ -154,7 +155,7 @@ class MojoTypeMixin:
         size = self.format_array_size(size)
         if size is None:
             return f"List[{element_type_name}]"
-        return f"InlineArray[{element_type_name}, {size}]"
+        return f"StaticTuple[{element_type_name}, {size}]"
 
     def array_initial_value(self, element_type, size):
         array_type = self.array_storage_type(element_type, size)
@@ -162,7 +163,7 @@ class MojoTypeMixin:
             return f"{array_type}()"
         if self.should_zero_initialize_array_elements(element_type):
             return self.zero_array_value(element_type, size)
-        return f"{array_type}(unsafe_uninitialized=True)"
+        return f"{array_type}()"
 
     def array_initial_value_for_type(self, type_name):
         element_type, size = self.parse_array_type_name(type_name)
@@ -270,10 +271,12 @@ class MojoTypeMixin:
         try:
             element_count = int(size)
         except (TypeError, ValueError):
-            return f"{array_type}(unsafe_uninitialized=True)"
+            return f"{array_type}()"
 
-        values = [self.zero_value_for_type(element_type) for _ in range(element_count)]
-        return f"{array_type}({', '.join(values)})"
+        if element_count <= 0:
+            return f"{array_type}()"
+        # A StaticTuple fills every element from one value.
+        return f"{array_type}(fill={self.zero_value_for_type(element_type)})"
 
     def zero_struct_value(self, type_name, fields=None, mapped_type=None):
         fields = fields if fields is not None else self.struct_types.get(type_name, {})
@@ -335,7 +338,7 @@ class MojoTypeMixin:
         if preserve_integer_index_types and index_type in preserve_integer_index_types:
             return index
         if index_type in MOJO_INTEGER_INDEX_TYPES:
-            return f"int({index})"
+            return f"Int({index})"
         return index
 
     def literal_int_value(self, expr):
@@ -383,6 +386,10 @@ class MojoTypeMixin:
             # A comparison or logical operation on scalars yields a ``Bool``,
             # not a value of its operand type.
             return "bool"
+        if self.type_name(left_type) != self.type_name(right_type):
+            common_type = self.mojo_binary_common_type(mapped_op, left_type, right_type)
+            if common_type is not None:
+                return common_type
         left_type = promoted_type(self, mapped_op, left_type)
         right_type = promoted_type(self, mapped_op, right_type)
         return left_type if left_type == right_type else left_type or right_type

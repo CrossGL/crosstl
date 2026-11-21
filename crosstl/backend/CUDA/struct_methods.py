@@ -61,6 +61,7 @@ from ..common_ast import (
 )
 from .CudaAst import AtomicOperationNode, CudaBuiltinNode, SharedMemoryNode
 from .keyword_renames import source_identifier_names
+from .parameter_defaults import parameter_default
 
 __all__ = ["lower_struct_methods"]
 
@@ -185,9 +186,7 @@ class _Method:
         self.free_name = free_name
         params = list(getattr(function, "params", None) or [])
         self.max_args = len(params)
-        self.min_args = sum(
-            1 for param in params if getattr(param, "value", None) is None
-        )
+        self.min_args = sum(1 for param in params if parameter_default(param) is None)
 
     def accepts(self, count):
         return self.min_args <= count <= self.max_args

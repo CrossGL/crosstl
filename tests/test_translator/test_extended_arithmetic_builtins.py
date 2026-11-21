@@ -183,7 +183,12 @@ def test_a_user_function_named_uaddCarry_is_called_unchanged():
     )
     body = body.replace(" + sums.y + carries.x", "")
     source = source[:body_start] + body
-    for codegen in (GLSLCodeGen, HLSLCodeGen, MetalCodeGen):
+    # GLSL output renames a user function that spells a GLSL built-in (uaddCarry_); the call still reaches it.
+    for codegen, name in (
+        (GLSLCodeGen, "uaddCarry_"),
+        (HLSLCodeGen, "uaddCarry"),
+        (MetalCodeGen, "uaddCarry"),
+    ):
         code = codegen().generate(parse(source))
         assert "__crossgl_uaddCarry" not in code
-        assert re.search(r"uaddCarry\(values\[i\], 1u\)", code)
+        assert re.search(rf"(?<!\w){name}\(values\[i\], 1u\)", code)
