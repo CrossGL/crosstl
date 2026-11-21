@@ -136,7 +136,7 @@ def _method(receiver, method, *arguments):
     return f"({receiver}).{method}({', '.join(arguments)})"
 
 
-def _typed_receiver(value, scalar):
+def typed_receiver(value, scalar):
     """``value`` cast to ``scalar`` when it is an unsuffixed literal, whose type Rust cannot infer for a method call
     (E0689)."""
     if _UNTYPED_LITERAL.fullmatch(value):
@@ -202,7 +202,7 @@ def generate_rust_gpu_math_call(generator, name, args):
     if len(sizes) != 1:
         return None
     (size,) = sizes
-    receiver = _typed_receiver(values[0], scalar) if values else None
+    receiver = typed_receiver(values[0], scalar) if values else None
     if name in _FLOAT_METHODS and len(values) == 1:
         method = _FLOAT_METHODS[name]
         if size and method not in _GLAM_VECTOR_METHODS:

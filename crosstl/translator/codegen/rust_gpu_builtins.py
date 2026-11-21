@@ -11,21 +11,19 @@ the call rather than naming a function rust-gpu does not have.
 
 from __future__ import annotations
 
-import re
-
 from .rust_gpu_common_functions import (
     COMMON_FUNCTION_NAMES,
     generate_common_function_call,
 )
-from .rust_gpu_math_calls import RUST_GPU_MATH_CALL_NAMES, generate_rust_gpu_math_call
+from .rust_gpu_math_calls import (
+    RUST_GPU_MATH_CALL_NAMES,
+    generate_rust_gpu_math_call,
+    typed_receiver,
+)
 
 _FLOATS = frozenset({"f32", "f64"})
 _SIGNED = frozenset({"i32", "i64"})
 _UNSIGNED = frozenset({"u32", "u64"})
-# A numeric literal without a type suffix, possibly negated and parenthesized: ``3``, ``(-3)``, ``2.5e3``.
-_UNTYPED_LITERAL = re.compile(
-    r"[(\s]*-?[(\s]*\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?[)\s]*"
-)
 _VECTOR_SCALARS = {
     "float": "f32",
     "double": "f64",
@@ -213,20 +211,12 @@ def generate_rust_gpu_builtin_call(generator, name, args):
     return _vector_call(name, shapes, values)
 
 
-def _typed_receiver(value: str, scalar: str) -> str:
-    """``value`` cast to ``scalar`` when it is an unsuffixed literal, whose type Rust cannot infer for a method call
-    (E0689)."""
-    if _UNTYPED_LITERAL.fullmatch(value):
-        return f"({value} as {scalar})"
-    return value
-
-
 def _scalar_call(name, shapes, values):
     scalars = {scalar for scalar, _size in shapes}
     if len(scalars) != 1:
         return None
     (scalar,) = scalars
-    receiver = _typed_receiver(values[0], scalar)
+    receiver = typed_receiver(values[0], scalar)
     if scalar in _FLOATS:
         if len(values) == 1 and name in _FLOAT_UNARY:
             return _method(receiver, _FLOAT_UNARY[name])
