@@ -116,13 +116,14 @@ def spirv_struct_members(output, name):
 
 
 @pytest.mark.parametrize("target", TARGETS)
-def test_used_byte_view_is_refused_at_its_declared_width(tmp_path, target):
-    with pytest.raises(ValueError) as caught:
-        translate(tmp_path, "uint(b.bytes[1].x) + b.words.x", target)
-    error = caught.value
-    assert (
-        getattr(error, "project_diagnostic_code", None)
-        == f"project.translate.{target}-union-layout-unsupported"
-    )
-    assert error.reason == "member-view-unsupported"
-    assert error.member_type == "u8vec4[2]"
+def test_used_byte_view_lowers_at_its_declared_width(tmp_path, target):
+    # Each u8vec4 of the view is one storage word, so the union keeps its two words (not ivec4[2]'s eight).
+    output = translate(tmp_path, "uint(b.bytes[1].x) + b.words.x", target)
+    if target == "wgsl":
+        assert "CrossGLUnionStorage: vec2<u32>" in output
+        assert (
+            "(vec4<u32>(b.CrossGLUnionStorage[1]) >> vec4<u32>(0u, 8u, 16u, 24u))"
+            in output
+        )
+    else:
+        assert spirv_struct_members(output, "Bits") == [("OpTypeVector", "uint", "2")]
