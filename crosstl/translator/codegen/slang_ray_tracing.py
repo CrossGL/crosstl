@@ -77,27 +77,30 @@ class SlangRayTracingMixin:
             getattr(parameter, "annotations", {}).get("slang_stage_local_interface")
         )
 
+    def is_slang_ray_interface_value_type(self, base_type, role=None):
+        """Whether Slang accepts ``base_type`` as a ray payload, hit attribute or
+        callable data type.
+
+        DXC requires a user-defined structure there, but Slang accepts any value
+        type and wraps a non-structure in a structure itself when it writes HLSL.
+        """
+        if base_type in self.user_struct_names:
+            return True
+        if base_type == "BuiltInTriangleIntersectionAttributes":
+            return role in {None, "hit_attribute"}
+        return self.is_slang_ray_query_value_type(base_type)
+
     def validate_slang_ray_parameter_type(self, parameter, role):
         type_name = self.slang_parameter_type_name(parameter)
         if not type_name:
             return
 
         mapped_type = self.convert_type(type_name)
-        base_type, array_suffix = split_array_type_suffix(mapped_type)
-        allowed_builtin_types = {
-            "hit_attribute": {"BuiltInTriangleIntersectionAttributes"},
-        }.get(role, set())
-        if role == "hit_attribute" and self.is_slang_stage_local_interface_parameter(
-            parameter
-        ):
-            allowed_builtin_types.update({"float2", "float3", "float4"})
-        if array_suffix or (
-            base_type not in self.user_struct_names
-            and base_type not in allowed_builtin_types
-        ):
+        base_type, _array_suffix = split_array_type_suffix(mapped_type)
+        if not self.is_slang_ray_interface_value_type(base_type, role):
             raise SlangRefusal(
                 f"Slang ray {role} parameter '{parameter.name}' must use a "
-                "user-defined struct type"
+                "structure, scalar, vector or matrix type"
             )
 
     def validate_slang_ray_stage_parameters(self, func, shader_type, parameters):
@@ -445,7 +448,7 @@ class SlangRayTracingMixin:
                 f"scalar floating, got {actual_type}"
             )
 
-    def validate_slang_ray_struct_argument(
+    def validate_slang_ray_value_argument(
         self, argument, shader_type, operation, role
     ):
         base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
@@ -453,15 +456,11 @@ class SlangRayTracingMixin:
         )
         if base_type is None:
             return
-        allowed_builtin_types = {"BuiltInTriangleIntersectionAttributes"}
-        if array_suffix or (
-            base_type not in self.user_struct_names
-            and base_type not in allowed_builtin_types
-        ):
+        if not self.is_slang_ray_interface_value_type(base_type):
             actual_type = f"{base_type}{array_suffix}"
             raise SlangRefusal(
                 f"Slang {shader_type} {operation} {role} argument must use a "
-                f"user-defined struct type, got {actual_type}"
+                f"structure, scalar, vector or matrix type, got {actual_type}"
             )
 
     def validate_slang_call_shader_callable_data_type(self, argument, shader_type):
@@ -553,7 +552,7 @@ class SlangRayTracingMixin:
             self.validate_slang_ray_scalar_float_argument(
                 args[9], shader_type, "TraceRay", "maximum distance"
             )
-        self.validate_slang_ray_struct_argument(
+        self.validate_slang_ray_value_argument(
             args[-1], shader_type, "TraceRay", "payload"
         )
         self.validate_slang_trace_ray_payload_type(args[-1], shader_type)
@@ -568,7 +567,7 @@ class SlangRayTracingMixin:
             self.validate_slang_ray_scalar_int_uint_argument(
                 args[0], shader_type, "CallShader", "shader index"
             )
-            self.validate_slang_ray_struct_argument(
+            self.validate_slang_ray_value_argument(
                 args[1], shader_type, "CallShader", "callable data"
             )
             self.validate_slang_call_shader_callable_data_type(args[1], shader_type)
@@ -583,7 +582,7 @@ class SlangRayTracingMixin:
                 args[1], shader_type, "ReportHit", "hit kind"
             )
             if len(args) == 3:
-                self.validate_slang_ray_struct_argument(
+                self.validate_slang_ray_value_argument(
                     args[2], shader_type, "ReportHit", "hit attribute"
                 )
                 self.validate_slang_report_hit_attribute_type(args[2], shader_type)

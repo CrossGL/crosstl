@@ -8593,10 +8593,11 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
         (
             """
             ray_miss {
-                void main(float payload @ payload) { }
+                void main(sampler2D payload @ payload) { }
             }
             """,
-            "payload parameter 'payload' must use a user-defined struct type",
+            "payload parameter 'payload' must use a structure, scalar, vector or "
+            "matrix type",
         ),
         (
             """
@@ -9611,12 +9612,12 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
                 void main() {
                     RaytracingAccelerationStructure scene;
                     RayDesc ray;
-                    uint payload;
+                    RaytracingAccelerationStructure payload;
                     TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
                 }
             }
             """,
-            "TraceRay payload.*user-defined struct",
+            "TraceRay payload.*structure, scalar, vector or matrix",
         ),
         (
             """
@@ -9818,12 +9819,12 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
             """
             ray_intersection {
                 void main() {
-                    uint attributes;
+                    RaytracingAccelerationStructure attributes;
                     ReportHit(1.0, 0, attributes);
                 }
             }
             """,
-            "ReportHit hit attribute.*user-defined struct",
+            "ReportHit hit attribute.*structure, scalar, vector or matrix",
         ),
         (
             """
@@ -9908,20 +9909,6 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
             """,
             "ReportHit hit attribute argument type OtherHitAttributes "
             "must match hit attribute parameter type HitAttributes",
-        ),
-        (
-            """
-            uint makeAttributeScalar() {
-                return 1u;
-            }
-
-            ray_intersection {
-                void main() {
-                    ReportHit(1.0, 0, makeAttributeScalar());
-                }
-            }
-            """,
-            "ReportHit hit attribute.*user-defined struct",
         ),
     ],
 )
