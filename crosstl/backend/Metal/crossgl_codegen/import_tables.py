@@ -2,6 +2,8 @@
 function attributes and stage-attribute semantics. ``MetalToCrossGLConverter`` keeps a per-instance copy of each.
 """
 
+from ..vote_masks import MASK_CROSSGL_TYPES
+
 # Metal function qualifiers of ray-tracing, mesh and object stages.
 METAL_RAY_TRACING_STAGE_QUALIFIERS = {
     "intersection",
@@ -70,6 +72,8 @@ METAL_TO_CROSSGL_TYPES = {
     "uint2": "uvec2",
     "uint3": "uvec3",
     "uint4": "uvec4",
+    # SIMD-group and quad ballot masks and their vote_t integers (see vote_masks.py)
+    **MASK_CROSSGL_TYPES,
     # Vector Types - 64-bit int
     "long2": "i64vec2",
     "long3": "i64vec3",

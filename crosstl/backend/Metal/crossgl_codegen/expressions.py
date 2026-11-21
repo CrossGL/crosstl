@@ -24,7 +24,11 @@ from ..MetalAst import (
 )
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
 from ..static_member_calls import unresolved_static_member_call_owner
-from ..vote_masks import render_vote_mask_conversion, render_vote_mask_method
+from ..vote_masks import (
+    render_ballot_call,
+    render_vote_mask_conversion,
+    render_vote_mask_method,
+)
 from .support import (
     MetalDivisionProfileError,
     MetalStructMethodCallResolutionError,
@@ -194,6 +198,9 @@ class MetalExpressionMixin:
             )
             if vote_mask is not None:
                 return vote_mask
+        ballot = render_ballot_call(self, expr, is_main)
+        if ballot is not None:
+            return ballot
         filled_matrix = self.generate_metal_make_filled_matrix(expr, is_main)
         if filled_matrix is not None:
             return filled_matrix
