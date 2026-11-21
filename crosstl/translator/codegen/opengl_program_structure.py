@@ -307,8 +307,9 @@ class OpenGLProgramStructureMixin:
         if (
             not isinstance(condition, BinaryOpNode)
             or self.expression_name(condition.left) != loop_name
-            or loop_name
-            in self.glsl_software_subgroup_expression_identifier_names(condition.right)
+            or loop_name in self.glsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
         ):
             return False
         constants = {
