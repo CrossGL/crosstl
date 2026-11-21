@@ -365,7 +365,7 @@ def test_wgpu_underscore_separated_integer_suffix_codegen_reparse():
 
     assert "0_u32" not in result
     assert "1_u32" not in result
-    assert "{0, 0, 0, 0}" in result
+    assert "{0u, 0u, 0u, 0u}" in result
     crosstl.translator.parse(result)
 
 
@@ -3023,7 +3023,7 @@ def test_for_loop_enumerate_iter_tuple_pattern_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "for (int i = 0; i < values.length; i++)" in result
+        assert "for (int i = 0; i < values.length(); i++)" in result
         assert "auto value = values[i];" in result
         assert "consume(i, value);" in result
         assert "values.iter().enumerate()" not in result
@@ -3046,7 +3046,7 @@ def test_for_loop_enumerate_iter_side_effect_source_conversion():
         assert "auto _for_iterable_0 = next_values();" in result
         assert (
             "for (int _for_index_0 = 0; "
-            "_for_index_0 < _for_iterable_0.length; _for_index_0++)"
+            "_for_index_0 < _for_iterable_0.length(); _for_index_0++)"
         ) in result
         assert "auto value = _for_iterable_0[_for_index_0];" in result
         assert "consume(value);" in result
@@ -3227,10 +3227,10 @@ def test_len_method_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "n = values.length;" in result
-        assert "for (int i = 0; i < values.length; i++)" in result
-        assert "for (int j = 0; j < values.length; j++)" in result
-        assert "int _for_bound_0 = next_values().length;" in result
+        assert "n = values.length();" in result
+        assert "for (int i = 0; i < values.length(); i++)" in result
+        assert "for (int j = 0; j < values.length(); j++)" in result
+        assert "int _for_bound_0 = next_values().length();" in result
         assert "for (int k = 0; k < _for_bound_0; k++)" in result
         assert result.count("next_values()") == 1
         assert ".len()" not in result
@@ -4234,7 +4234,7 @@ def test_inferred_struct_local_impl_method_named_like_scalar_builtin_does_not_lo
     result = parse_and_generate(code)
 
     assert "float Wave_sin(" in result
-    assert "let w = Wave { value: x };" in result
+    assert "Wave w = Wave { value: x };" in result
     assert "return Wave_sin(w);" in result
     assert "return sin(w);" not in result
 
@@ -9197,21 +9197,21 @@ def test_numeric_literal_suffix_conversion():
         result = parse_and_generate(code)
 
         assert "signed = 42;" in result
-        assert "unsigned = 10;" in result
+        assert "unsigned = 10u;" in result
         assert "sized = 7;" in result
         assert "float32 = 1.5;" in result
         assert "float64 = 2.0;" in result
-        assert "casted = int(1);" in result
+        assert "casted = int(1u);" in result
         assert "int repeated[3] = {4, 4, 4};" in result
-        assert "grouped = 1000;" in result
-        assert "hexed = 255;" in result
-        assert "binary = 10;" in result
+        assert "grouped = 1000u;" in result
+        assert "hexed = 255u;" in result
+        assert "binary = 10u;" in result
         assert "octal = 63;" in result
         assert "grouped_float = 1000.5;" in result
         assert "exponent = 1.0e-3;" in result
         assert "trailing_dot = 1.;" in result
-        assert "case 1:" in result
-        assert "case 255:" in result
+        assert "case 1u:" in result
+        assert "case 255u:" in result
         assert "i32" not in result
         assert "u32" not in result
         assert "usize" not in result

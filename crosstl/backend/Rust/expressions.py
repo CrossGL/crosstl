@@ -44,6 +44,9 @@ from .RustAst import (
     VectorConstructorNode,
 )
 
+I32_MAX = 2**31 - 1
+U32_MAX = 2**32 - 1
+
 
 class RustExpressionMixin:
     """Expression, macro and literal members of ``RustToCrossGLConverter``."""
@@ -333,10 +336,10 @@ class RustExpressionMixin:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
-            return f"({left} {expr.op} {right})"
+            return self.format_crossgl_binary(expr, left, right)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
-            return f"({expr.op}{operand})"
+            return f"({self.crossgl_unary_operator(expr)}{operand})"
         elif isinstance(expr, FunctionCallNode):
             method_call = self.format_method_call(expr)
             if method_call is not None:
@@ -369,6 +372,9 @@ class RustExpressionMixin:
                 )
                 if associated_call is not None:
                     return associated_call
+                default_value = self.format_default_value_call(expr.name, expr.args)
+                if default_value is not None:
+                    return default_value
                 primitive_bitcast_call = (
                     self.format_primitive_float_bitcast_associated_call(
                         expr.name,
@@ -756,12 +762,27 @@ class RustExpressionMixin:
             return value
 
         body = match.group("body").replace("_", "")
+        suffix = (match.group("suffix") or "").lstrip("_")
         if body.startswith(("0x", "0X")):
-            return str(int(body, 16))
-        if body.startswith(("0b", "0B")):
-            return str(int(body, 2))
-        if body.startswith(("0o", "0O")):
-            return str(int(body, 8))
+            body = str(int(body, 16))
+        elif body.startswith(("0b", "0B")):
+            body = str(int(body, 2))
+        elif body.startswith(("0o", "0O")):
+            body = str(int(body, 8))
+        elif suffix in {"f32", "f64"}:
+            # ``1f32`` is a float in Rust; CrossGL reads a bare ``1`` as an int.
+            if not any(char in body for char in ".eE"):
+                body += ".0"
+            elif body.endswith("."):
+                body += "0"
+            return body
+        if not body.isdigit():
+            return body
+        if suffix == "u32":
+            return f"{body}u"
+        if not suffix and I32_MAX < int(body) <= U32_MAX:
+            # Too large for an i32, so the literal is unsigned (or wider, which keeps the value).
+            return f"{body}u"
         return body
 
     def normalize_raw_string_literal(self, content):

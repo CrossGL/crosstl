@@ -909,7 +909,9 @@ class RustExpressionResultMixin:
                 indent,
                 loop_contexts,
             )
-            return left_code + right_code, f"({left} {expression.op} {right})"
+            return left_code + right_code, self.format_crossgl_binary(
+                expression, left, right
+            )
 
         if isinstance(expression, UnaryOpNode):
             code, operand = self.generate_materialized_expression(
@@ -917,7 +919,7 @@ class RustExpressionResultMixin:
                 indent,
                 loop_contexts,
             )
-            return code, f"({expression.op}{operand})"
+            return code, f"({self.crossgl_unary_operator(expression)}{operand})"
 
         if isinstance(expression, FunctionCallNode):
             return self.generate_materialized_function_call(
@@ -1231,6 +1233,9 @@ class RustExpressionResultMixin:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            default_value = self.format_default_value_call(expression.name, args)
+            if default_value is not None:
+                return args_code, default_value
             primitive_bitcast_call = (
                 self.format_primitive_float_bitcast_associated_call(
                     expression.name,

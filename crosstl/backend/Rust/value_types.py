@@ -1,10 +1,13 @@
 """Type inference for Rust values, calls, generic substitutions and Option payloads."""
 
+import re
+
 from .import_tables import RUST_NUMERIC_LITERAL_RE
 from .RustAst import (
     ArrayAccessNode,
     ArrayNode,
     BinaryOpNode,
+    CastNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
@@ -18,6 +21,9 @@ from .RustAst import (
     UnaryOpNode,
     VariableNode,
 )
+
+# The element type of the structured buffer a storage-buffer slice parameter imports as.
+STRUCTURED_BUFFER_ELEMENT_RE = re.compile(r"^(?:RW)?StructuredBuffer<(.+)>$")
 
 
 class RustValueTypeMixin:
@@ -304,6 +310,9 @@ class RustValueTypeMixin:
             return self.infer_binary_expression_value_type(expression)
         if isinstance(expression, UnaryOpNode):
             return self.infer_value_type(expression.operand)
+        if isinstance(expression, CastNode):
+            target_type = getattr(expression, "target_type", None)
+            return target_type if isinstance(target_type, str) else None
         if isinstance(expression, FunctionCallNode):
             return self.infer_function_call_return_type(expression)
         if isinstance(expression, TernaryOpNode):
@@ -330,6 +339,8 @@ class RustValueTypeMixin:
         if self.is_block_expression_node(expression):
             return self.infer_block_expression_value_type(expression)
         if isinstance(expression, str):
+            if expression.strip() in {"true", "false"}:
+                return "bool"
             literal_type = self.infer_numeric_literal_type(expression)
             if literal_type is not None:
                 return literal_type
@@ -354,6 +365,17 @@ class RustValueTypeMixin:
         element_type = self.common_array_element_type(element_types)
         if element_type is None:
             return None
+        return self.outer_array_type(element_type, array_size)
+
+    def outer_array_type(self, element_type, array_size):
+        """The type of an array of ``array_size`` ``element_type`` values, the outer dimension first.
+
+        ``[[f32; 3]; 2]`` is two arrays of three floats, which CrossGL, like C, writes ``float[2][3]``.
+        """
+        array_parts = self.split_array_type(element_type)
+        if array_parts is not None:
+            base_type, inner_suffix = array_parts
+            return f"{base_type}[{array_size}]{inner_suffix}"
         return f"{element_type}[{array_size}]"
 
     def infer_array_literal_size(self, expression):
@@ -409,11 +431,18 @@ class RustValueTypeMixin:
         return None
 
     def inferred_array_declarator(self, type_name, target_name):
+        """A typed declarator for a ``let`` whose inferred type is an array or a non-generic struct.
+
+        CrossGL's untyped ``let`` leaves the type to each generator, which cannot see through an initializer list,
+        and the shared aggregate passes (equality, copies) need a struct operand's type.
+        """
         if not type_name:
             return None
 
         if self.split_array_type(self.map_type(type_name)) is None:
-            return None
+            resolved = self.resolve_struct_type(self.normalize_receiver_type(type_name))
+            if resolved is None or resolved[1]:
+                return None
         return self.format_typed_declarator(type_name, target_name)
 
     def infer_binary_expression_value_type(self, expression):
@@ -504,6 +533,9 @@ class RustValueTypeMixin:
         )
         if associated_return_type is not None:
             return associated_return_type
+        default_value_type = self.default_value_type(raw_function_name, expression.args)
+        if default_value_type is not None:
+            return default_value_type
 
         function_name, explicit_type_args = self.split_function_type_arguments(
             raw_function_name
@@ -1110,6 +1142,12 @@ class RustValueTypeMixin:
         if array_parts:
             return array_parts[0]
 
+        # A storage-buffer slice parameter, which the importer types as a structured buffer.
+        for candidate in (normalized, mapped):
+            if isinstance(candidate, str):
+                match = STRUCTURED_BUFFER_ELEMENT_RE.match(candidate.strip())
+                if match is not None:
+                    return match.group(1).strip()
         return None
 
     def lookup_struct_member_type(self, struct_type, member_name):

@@ -249,6 +249,8 @@ class RustDeclarationMixin:
 
         code = helper_code
         code += f"    {stage_header} {{\n"
+        for mode_line in self.stage_execution_mode_lines(func, shader_type):
+            code += f"        {mode_line}\n"
         code += f"        {return_type} main({params_str}){numthreads_suffix} {{\n"
         code += pattern_binding_code
         code += body_code

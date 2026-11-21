@@ -43,7 +43,7 @@ class RustCallMixin:
             return resource_call
 
         if method_name == "len" and not args:
-            return f"{obj}.length"
+            return f"{obj}.length()"
 
         primitive_bitcast_call = self.format_primitive_float_bitcast_method_call(
             method_name,
@@ -57,6 +57,12 @@ class RustCallMixin:
         derivative_method = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(method_name)
         if derivative_method is not None and not args:
             return f"{derivative_method}({obj})"
+
+        vector_predicate = self.format_vector_predicate_call(
+            method_name, obj, args, receiver_type
+        )
+        if vector_predicate is not None:
+            return vector_predicate
 
         if not args and method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return f"{self.SCALAR_ZERO_ARG_METHOD_MAP[method_name]}({obj})"
@@ -247,6 +253,8 @@ class RustCallMixin:
             return True
         if base_method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return True
+        if base_method_name in {"is_nan_mask", "is_finite_mask"}:
+            return arg_count == 0
         if base_method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
             return True
         if base_method_name in self.SCALAR_TWO_ARG_METHOD_MAP:
@@ -925,7 +933,13 @@ class RustCallMixin:
 
         mapped_type = self.map_type(type_name)
         if mapped_type == type_name:
-            return None
+            # ``type Duo = Vec2;`` keeps the alias as a CrossGL typedef, so ``Duo::new`` is ``vec2(...)``.
+            alias_target = self.resolve_type_alias_target(type_name)
+            if not isinstance(alias_target, str):
+                return None
+            mapped_type = self.map_type(alias_target)
+            if mapped_type == alias_target:
+                return None
 
         if constructor_name == "from":
             return self.format_vector_from_constructor_call(
