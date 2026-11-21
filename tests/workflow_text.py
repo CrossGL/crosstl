@@ -1,11 +1,13 @@
 """Read GitHub Actions workflows as text, for tests that check how a job or step is written.
 
 YAML parsing loses comments and the order of steps across jobs, so these helpers slice the text instead. Sections
-are found by indentation: a job is a two-space key under ``jobs:``, a step starts at ``- name:``.
+are found by indentation: a job is a two-space key under ``jobs:``, a step starts at ``- name:``. A step written
+once as a YAML anchor and reused through aliases is read in full wherever it is reused.
 """
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
@@ -28,9 +30,67 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+_ITEM_ANCHOR = re.compile(r"^( *)- &([A-Za-z0-9_-]+)[ \t]*$")
+_ITEM_ALIAS = re.compile(r"^( *)- \*([A-Za-z0-9_-]+)[ \t]*$")
+
+
+@functools.lru_cache(maxsize=8)
+def expand_item_aliases(text: str) -> str:
+    """The text with every anchored list item written out where an alias reuses it.
+
+    A workflow can write a repeated step once as ``- &name`` with its mapping on the following lines, and reuse it as
+    ``- *name``. The anchor line joins the item's first key (``- name: ...``) and each alias becomes a copy of the item
+    at the alias's indentation, so the helpers below find every step inside its job. Other aliases stay as written.
+    """
+    if "- *" not in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    items: dict[str, tuple[int, list[str]]] = {}
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        anchor = _ITEM_ANCHOR.match(line.rstrip("\r\n"))
+        if anchor:
+            indent = len(anchor.group(1))
+            end = index + 1
+            while end < len(lines) and (
+                not lines[end].strip() or _indent(lines[end]) > indent
+            ):
+                end += 1
+            while end > index + 1 and not lines[end - 1].strip():
+                end -= 1
+            body = lines[index + 1 : end]
+            if not body:
+                out.append(line)
+                index += 1
+                continue
+            item = [" " * indent + "- " + body[0].lstrip(" "), *body[1:]]
+            items[anchor.group(2)] = (indent, item)
+            out.extend(item)
+            index = end
+            continue
+        alias = _ITEM_ALIAS.match(line.rstrip("\r\n"))
+        if alias and alias.group(2) in items:
+            indent, item = items[alias.group(2)]
+            shift = len(alias.group(1)) - indent
+            for copied in item:
+                if shift >= 0:
+                    out.append(" " * shift + copied if copied.strip() else copied)
+                else:
+                    out.append(copied[min(-shift, _indent(copied)) :])
+            if not out[-1].endswith("\n") and line.endswith("\n"):
+                out[-1] += "\n"
+            index += 1
+            continue
+        out.append(line)
+        index += 1
+    return "".join(out)
+
+
 def nested_yaml_section(text: str, name: str, indent: int) -> list[str]:
     """The lines under the first ``name:`` key at ``indent`` spaces, without the key itself."""
-    lines = text.splitlines()
+    lines = expand_item_aliases(text).splitlines()
     header = " " * indent + name + ":"
     for index, line in enumerate(lines):
         if line.rstrip() != header:
@@ -81,6 +141,7 @@ def _step_match(text: str, name: str) -> re.Match[str] | None:
 
 def workflow_step_section(text: str, name: str) -> str:
     """The step named ``name``, up to the next step, or ``""``."""
+    text = expand_item_aliases(text)
     match = _step_match(text, name)
     if not match:
         return ""
@@ -90,6 +151,7 @@ def workflow_step_section(text: str, name: str) -> str:
 
 def workflow_step_after(text: str, later: str, earlier: str) -> bool:
     """Whether both steps exist and ``later`` comes after ``earlier``."""
+    text = expand_item_aliases(text)
     first, second = _step_match(text, earlier), _step_match(text, later)
     return bool(first and second and second.start() > first.start())
 

@@ -117,14 +117,17 @@ def changed_paths(base, head):
 
 
 def _without_plan_job(text):
-    """Return the workflow's lines outside its top-level ``ci-plan`` job."""
-    kept, in_plan = [], False
-    for line in text.splitlines():
-        if re.fullmatch(r"(  )?[A-Za-z0-9_-]+:\s*", line):
-            in_plan = line.rstrip() == "  ci-plan:"
-        if not in_plan:
-            kept.append(line)
-    return kept
+    """Return the parsed workflow without its top-level ``ci-plan`` job.
+
+    The text is parsed first, so a step that the plan job anchors and another
+    job reuses through a YAML alias still belongs to that other job. A
+    comment-only edit changes nothing here.
+    """
+    workflow = yaml.safe_load(text)
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if isinstance(jobs, dict):
+        jobs.pop("ci-plan", None)
+    return workflow
 
 
 def _merge_base(base, head):
@@ -161,7 +164,11 @@ def classify_workflow_change(base, head, paths):
     before, after = _file_at(merge_base, WORKFLOW), _file_at(head, WORKFLOW)
     if before is None or after is None:
         return paths
-    if _without_plan_job(before) != _without_plan_job(after):
+    try:
+        confined = _without_plan_job(before) == _without_plan_job(after)
+    except yaml.YAMLError:
+        return paths
+    if not confined:
         return paths
     return tuple(PLAN_JOB if path == WORKFLOW else path for path in paths)
 

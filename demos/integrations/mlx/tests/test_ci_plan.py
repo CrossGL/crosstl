@@ -391,7 +391,7 @@ def test_planner_changes_need_only_the_smoke_tier(event, path):
 def test_plan_job_split_removes_exactly_the_plan_job():
     text = WORKFLOW.read_text()
     workflow = yaml.safe_load(text)
-    remaining = yaml.safe_load("\n".join(_without_plan_job(text)) + "\n")
+    remaining = _without_plan_job(text)
     del workflow["jobs"]["ci-plan"]
     assert remaining == workflow
 
@@ -450,6 +450,71 @@ def test_workflow_change_confined_to_plan_job_skips_full_tier(
     arguments = ["--event", "merge_group", "--base", base, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
     assert _outputs(output) == _tier(heavy, "true", legs)
+
+
+_ANCHORED_WORKFLOW = """name: Demo
+on:
+  push:
+    branches: [main]
+jobs:
+  ci-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - &step-shared
+        run: echo {shared}
+  native:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: windows-2025
+    steps:
+      - *step-shared
+"""
+
+
+@pytest.mark.parametrize(
+    "plan,shared,heavy,legs",
+    [
+        # A comment in the plan job changes nothing outside it.
+        ("# planner", "shared", "false", []),
+        # The plan job anchors a step that another job reuses: editing the
+        # anchor edits that job too.
+        ("", "shared-two", "true", ["native"]),
+    ],
+)
+def test_anchored_plan_job_step_reaches_the_jobs_that_alias_it(
+    tmp_path, monkeypatch, plan, shared, heavy, legs
+):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(workflow))
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_ANCHORED_WORKFLOW.format(shared="shared"))
+    base = _commit("Start")
+    changed = _ANCHORED_WORKFLOW.format(shared=shared)
+    workflow.write_text(changed.replace("    steps:\n", f"    steps:\n      {plan}\n", 1))
+    head = _commit("Edit workflow")
+    paths = classify_workflow_change(base, head, changed_paths(base, head))
+    assert paths == (
+        (PLAN_JOB,) if heavy == "false" else (str(WORKFLOW.relative_to(ROOT)),)
+    )
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert _outputs(output) == _tier(heavy, "true", legs)
+
+
+def test_unparsable_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    base = _commit("Start")
+    workflow.write_text(workflow.read_text() + "  broken: [\n")
+    head = _commit("Break workflow")
+    paths = changed_paths(base, head)
+    assert classify_workflow_change(base, head, paths) == paths
 
 
 def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
