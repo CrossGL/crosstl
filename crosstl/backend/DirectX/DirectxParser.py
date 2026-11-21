@@ -16,6 +16,7 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..switch_clauses import record_default_position
+from .class_declarations import class_definitions_as_structs
 from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
@@ -42,7 +43,11 @@ from .DirectxAst import (
     VectorConstructorNode,
     WhileNode,
 )
-from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .entry_stage_hints import (
+    demote_name_hinted_helpers,
+    discards_pixels,
+    entry_name_stage_hint,
+)
 from .function_templates import (
     begin_template_declaration,
     expire_template_declaration,
@@ -384,6 +389,8 @@ class HLSLParser:
     """Parse HLSL tokens into the DirectX backend shader AST."""
 
     def __init__(self, tokens):
+        # HLSL classes are structs (see .class_declarations).
+        tokens = class_definitions_as_structs(tokens)
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else ("EOF", "")
@@ -2357,6 +2364,10 @@ class HLSLParser:
         for param in params:
             if str(getattr(param, "semantic", "")).upper() == "SV_DISPATCHTHREADID":
                 return "compute"
+        if any(getattr(param, "semantic", None) for param in params) and (
+            discards_pixels(body)
+        ):
+            return "fragment"
         return None
 
     def apply_struct_parameter_stage_qualifiers(self, functions, structs):
