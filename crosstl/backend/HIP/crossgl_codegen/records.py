@@ -127,12 +127,17 @@ class HipRecordMixin:
             materialized = self.clone_ast_node(node)
             materialized.name = output_name
             materialized.members = storage_members
+            union = None
             if getattr(materialized, "is_union", False):
-                name = materialized.name or "anonymous"
-                self.emit(
-                    f"// {self.SOURCE_LANGUAGE_NAME} union {name} represented as "
-                    "struct-like layout; overlapping storage is not modeled"
-                )
+                if materialized.name:
+                    union = self.hip_union_layout_record(node, materialized.name)
+                if union is None:
+                    # A union without the layout contract: the importer tracks its active member instead.
+                    name = materialized.name or "anonymous"
+                    self.emit(
+                        f"// {self.SOURCE_LANGUAGE_NAME} union {name} represented as "
+                        "struct-like layout; overlapping storage is not modeled"
+                    )
                 if not materialized.name:
                     return
 
@@ -151,6 +156,14 @@ class HipRecordMixin:
                 ):
                     continue
                 if self.record_member_layout_issue(node, member) is not None:
+                    if union is not None:
+                        union.member(
+                            "",
+                            member.name,
+                            None,
+                            member,
+                            self.hip_union_member_issue(node, member),
+                        )
                     continue
                 member_type = self.convert_hip_type_to_crossgl(
                     self.resolve_record_member_type_alias(
@@ -161,6 +174,14 @@ class HipRecordMixin:
                     # HIP stores a three-component vector member at its scalar alignment; see buffer_layout_import.
                     layouts.member(
                         materialized.name, member_type, member.name, len(self.output)
+                    )
+                if union is not None:
+                    union.member(
+                        member_type,
+                        member.name,
+                        len(self.output),
+                        member,
+                        self.hip_union_member_issue(node, member),
                     )
                 self.emit(f"{member_type} {member.name};")
             self.indent_level -= 1
