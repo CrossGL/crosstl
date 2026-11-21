@@ -30697,9 +30697,18 @@ def test_opengl_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
+            output.position = vec4(input.position, 1.0);
 
             // Array access in various forms
             float value = weights[2];
