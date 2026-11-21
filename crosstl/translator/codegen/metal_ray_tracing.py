@@ -374,6 +374,9 @@ class MetalRayTracingMixin:
 
     def is_metal_ray_intersection_buffer_parameter(self, parameter, shader_type):
         raw_type = self.parameter_raw_type(parameter)
+        if self.is_structured_buffer_type(raw_type):
+            # The Metal importer writes a ``device T* [[buffer(n)]]`` parameter as a structured buffer.
+            return self.explicit_buffer_binding_index(parameter) is not None
         if not (
             isinstance(raw_type, (PointerType, ReferenceType))
             or self.is_array_type_node(raw_type)

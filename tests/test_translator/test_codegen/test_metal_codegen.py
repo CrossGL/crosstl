@@ -18593,7 +18593,7 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "envMap.sample" in generated_code
 
 
-def test_metal_rejects_non_resource_shadow_of_global_resource():
+def test_metal_renames_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {
         sampler2D colorMap;
@@ -18616,14 +18616,13 @@ def test_metal_rejects_non_resource_shadow_of_global_resource():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Non-resource local declaration\\(s\\) shadow Metal global "
-            "resource\\(s\\): colorMap, linearSampler"
-        ),
-    ):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The parameter and the local keep their values under names that no longer hide the resources.
+    assert "float4 shade(float colorMap_, FSInput input)" in generated_code
+    assert "float linearSampler_ = 1.0;" in generated_code
+    assert "return float4(colorMap_ + linearSampler_);" in generated_code
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
 
 
 def test_metal_rejects_texture_call_with_non_resource_argument():

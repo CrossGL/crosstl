@@ -108,9 +108,21 @@ class SpirvGlobalDeclarationMixin:
         builtin_type = self.variable_value_types.get(builtin.id)
         if builtin_type is not None:
             self.validate_spirv_builtin_semantic_type(
-                semantic, type_id.type.base_type, "interface declaration"
+                semantic,
+                self.crossgl_spelling_of_type(type_id),
+                "interface declaration",
             )
         return builtin
+
+    def crossgl_spelling_of_type(self, type_id: SpirvId) -> str:
+        """``type_id``'s CrossGL spelling, ``int[1]`` for a sized array, as the semantic type checks read it."""
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is None or array_info[0] is None:
+            return type_id.type.base_type
+        element_type, size = array_info
+        if isinstance(size, int):
+            return f"{self.crossgl_spelling_of_type(element_type)}[{size}]"
+        return type_id.type.base_type
 
     def process_global_variable_declaration(
         self, node: VariableNode, default_storage_class: str = "Private"
