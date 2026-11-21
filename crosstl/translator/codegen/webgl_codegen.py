@@ -208,6 +208,18 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
 
+    def glsl_wave_operations(self, ast, target_stage=None):
+        # Reuse the GLSL prepass once function declarations are known, so a
+        # user function can still shadow a plain Metal SIMD alias.
+        operations = super().glsl_wave_operations(ast, target_stage)
+        unsupported = operations & self.GLSL_WAVE_INTRINSIC_ARITIES.keys()
+        if unsupported:
+            raise webgl_refusal(
+                "WebGL 2 (GLSL ES 3.00) does not support "
+                f"subgroup intrinsic '{min(unsupported)}'"
+            )
+        return operations
+
     def map_type(self, vtype):
         mapped_type = super().map_type(vtype)
         base_type = mapped_type.split("[", 1)[0].rstrip("*&")
