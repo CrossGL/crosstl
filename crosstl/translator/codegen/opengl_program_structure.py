@@ -56,7 +56,10 @@ from .fixed_sampler_contracts import (
     fixed_sampler_records,
     with_glsl_fixed_samplers,
 )
-from .generic_function_utils import generic_function_parameters
+from .generic_function_utils import (
+    generic_function_definition_name,
+    generic_function_parameters,
+)
 from .generic_pointer_spaces import (
     assign_generic_pointer_spaces,
     refuse_written_generic_pointers,
@@ -1309,11 +1312,20 @@ class OpenGLProgramStructureMixin:
             )
 
     def collect_called_function_names(self, root):
-        return {
-            self.function_call_name(node)
-            for node in self.walk_ast(root)
-            if isinstance(node, FunctionCallNode) and self.function_call_name(node)
-        }
+        """Names of the functions ``root`` calls.
+
+        A call spelled ``helper<float>(x)`` also names its generic definition ``helper``, so a call that comes
+        before the definition gets the specialization's prototype like the implicit call ``helper(x)``.
+        """
+        names = set()
+        for node in self.walk_ast(root):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name:
+                names.add(name)
+                names.add(generic_function_definition_name(self, name))
+        return names
 
     def should_skip_unreachable_lowered_member_helper(self, func):
         reachable_names = self.glsl_stage_reachable_function_names
