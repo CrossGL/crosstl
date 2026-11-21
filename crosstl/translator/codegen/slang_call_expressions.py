@@ -20,6 +20,7 @@ from .slang_buffer_lengths import (
     slang_glsl_buffer_block_length,
     slang_structured_buffer_length,
 )
+from .slang_core_functions import generate_slang_core_function_call
 from .slang_value_resizes import slang_resize_constructor
 from .slang_wave_shuffles import (
     as_type_target,
@@ -217,5 +218,8 @@ class SlangCallExpressionMixin:
             bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
             if bit_query is not None:
                 return bit_query
+            core_call = generate_slang_core_function_call(self, callee, node.args)
+            if core_call is not None:
+                return core_call
             callee = self.slang_callee_name(callee)
         return f"{callee}({args})"

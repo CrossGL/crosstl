@@ -12,10 +12,10 @@ know into Slang as CrossGL spelled it. This module replaces those lookups:
   table does not rename, which slangc would read as a user semantic no stage writes.)
 - :data:`SLANG_BITCAST_INTRINSICS` lists the call names that are Slang's bit-preserving casts.
 - :func:`slang_foreign_call_reason` refuses a call that would be written with a built-in function name of another
-  language. Slang's core module declares the HLSL intrinsics, and the inverse hyperbolic functions
-  :data:`SLANG_CORE_FUNCTION_NAMES` lists besides; a GLSL, MSL, CUDA or CrossGL built-in the generator did not
-  lower or rename is neither, so a call to it would not compile or would reach a function the program declares
-  for another purpose.
+  language. Slang's core module declares the HLSL intrinsics, and the functions
+  :data:`~.slang_core_functions.SLANG_CORE_FUNCTION_NAMES` lists besides; a GLSL, MSL, CUDA or CrossGL built-in the
+  generator did not lower or rename is neither, so a call to it would not compile or would reach a function the
+  program declares for another purpose.
 """
 
 from __future__ import annotations
@@ -26,6 +26,10 @@ from ..semantics.builtin_function_names import (
 )
 from ..stage_utils import requested_stage_name
 from .hlsl_semantic_attributes import HLSL_SEMANTIC_NAME
+from .slang_core_functions import (
+    SLANG_CORE_FUNCTION_NAMES,
+    SLANG_CORE_FUNCTION_RENAMES,
+)
 
 __all__ = [
     "SLANG_BITCAST_INTRINSICS",
@@ -66,9 +70,6 @@ SLANG_BITCAST_INTRINSICS = {
     "uintBitsToFloat": "asfloat",
 }
 
-# Functions Slang's core module declares that HLSL does not: the inverse hyperbolic functions.
-SLANG_CORE_FUNCTION_NAMES = frozenset({"acosh", "asinh", "atanh"})
-
 _SLANG_CALLABLE_FUNCTION_NAMES = HLSL_FUNCTION_NAMES | SLANG_CORE_FUNCTION_NAMES
 
 
@@ -93,7 +94,11 @@ def slang_foreign_call_reason(callee, function_map):
     """
     if not isinstance(callee, str) or callee not in BUILTIN_FUNCTION_NAMES:
         return None
-    if callee in function_map or callee in _SLANG_CALLABLE_FUNCTION_NAMES:
+    if (
+        callee in function_map
+        or callee in SLANG_CORE_FUNCTION_RENAMES
+        or callee in _SLANG_CALLABLE_FUNCTION_NAMES
+    ):
         return None
     return (
         f"call to {callee}: {callee} is a built-in function of another language, and "
