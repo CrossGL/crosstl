@@ -2,6 +2,7 @@
 
 from ..ast import (
     BinaryOpNode,
+    IdentifierNode,
 )
 from .c_family_operands import (
     postfix_operand,
@@ -13,6 +14,8 @@ from .enum_utils import (
 from .generic_struct_utils import (
     named_struct_constructor_arguments,
 )
+
+HIT_TRIANGLE_VERTEX_POSITIONS = "gl_HitTriangleVertexPositionsEXT"
 
 
 class SlangExpressionNodeMixin:
@@ -34,8 +37,14 @@ class SlangExpressionNodeMixin:
         matrix_access = self.hlsl_matrix_orientation.subscript(array_expr, index_expr)
         if matrix_access is not None:
             return matrix_access
-        array = postfix_operand(self.generate_expression(array_expr))
         index = self.format_array_access_index(index_expr)
+        if (
+            isinstance(array_expr, IdentifierNode)
+            and array_expr.name == HIT_TRIANGLE_VERTEX_POSITIONS
+        ):
+            # GL_EXT_ray_tracing_position_fetch's array; Slang reads one vertex position at a time.
+            return f"HitTriangleVertexPosition({index})"
+        array = postfix_operand(self.generate_expression(array_expr))
         return f"{array}[{index}]"
 
     def generate_slang_array_literal_expression(

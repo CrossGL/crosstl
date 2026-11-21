@@ -10,6 +10,7 @@ from ..DirectxAst import (
     StructNode,
     VariableNode,
 )
+from ..raw_gather_textures import raw_gather_texture_type
 
 
 class TextureUsageMixin:
@@ -382,6 +383,10 @@ class TextureUsageMixin:
             return legacy_texture_type
 
         hlsl_type = getattr(node, "vtype", None)
+        if id(node) in self.raw_gather_texture_declaration_ids:
+            raw_gather_type = raw_gather_texture_type(self, hlsl_type)
+            if raw_gather_type is not None:
+                return raw_gather_type
         if id(node) not in self.shadow_texture_declaration_ids:
             return self.map_type(hlsl_type)
         type_name = hlsl_type

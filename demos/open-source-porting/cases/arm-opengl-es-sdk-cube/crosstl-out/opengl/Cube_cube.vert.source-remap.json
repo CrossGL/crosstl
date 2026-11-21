@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 315,
+        "endLine": 23,
+        "endOffset": 566,
         "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
-        "length": 315,
+        "length": 566,
         "line": 1,
         "offset": 0
       },

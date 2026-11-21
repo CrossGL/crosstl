@@ -227,7 +227,9 @@ class HipFunctionPartsMixin:
                     f"{self.format_typed_declarator(fragment_output_type, fragment_output_name)};"
                 )
             for local_var in getattr(self, "current_stage_local_variables", []) or []:
-                if self.is_hip_shared_variable(local_var):
+                if self.is_hip_shared_variable(local_var) and id(
+                    local_var
+                ) not in getattr(self, "file_scope_shared_variable_ids", ()):
                     self.visit(local_var)
             try:
                 self.emit_body(body)

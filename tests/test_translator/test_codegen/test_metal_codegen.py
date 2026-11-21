@@ -8157,7 +8157,8 @@ def test_metal_global_resource_binding_attributes_drive_indices():
         in generated_code
     )
     assert "texture2d<float> registerTex [[texture(8)]]" in generated_code
-    assert "texture2d<float> autoTex [[texture(9)]]" in generated_code
+    # An unbound texture takes the lowest texture slot the explicit bindings leave free.
+    assert "texture2d<float> autoTex [[texture(0)]]" in generated_code
     assert "sampler samp [[sampler(5)]]" in generated_code
 
 
@@ -8280,7 +8281,8 @@ def test_metal_cbuffer_binding_attributes_drive_buffer_indices():
 
     assert "constant Camera& camera [[buffer(2)]]" in generated_code
     assert "constant Material& material [[buffer(4)]]" in generated_code
-    assert "constant AutoBlock& autoBlock [[buffer(5)]]" in generated_code
+    # An unbound cbuffer takes the lowest buffer slot the explicit bindings leave free.
+    assert "constant AutoBlock& autoBlock [[buffer(0)]]" in generated_code
 
 
 def test_metal_cbuffer_reserves_implicit_structured_buffer_indices():

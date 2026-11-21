@@ -27800,7 +27800,7 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
         (
             "float value = WaveActiveMin(1.0);",
             (32, 1, 1),
-            " @ WaveSize(32)",
+            " @ WaveSize(16)",
             "hardware-contract-conflict",
         ),
         (

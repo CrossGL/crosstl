@@ -17,6 +17,7 @@ from ..validation import (
 )
 from .array_utils import format_c_style_array_declaration
 from .glsl_exact_lookups import glsl_mesh_intrinsic_call
+from .glsl_fragment_interlock import fragment_interlock_layout
 from .glsl_host_workgroup_size import (
     glsl_host_workgroup_layout,
     glsl_program_host_workgroup_size_ids,
@@ -370,6 +371,7 @@ class OpenGLMeshLayoutMixin:
             func, {"early_fragment_tests"}, stage_layout_qualifiers, "in"
         ):
             code += "layout(early_fragment_tests) in;\n"
+        code += fragment_interlock_layout(self, func, stage_layout_qualifiers)
 
         blend_support = self.glsl_fragment_blend_support_layout_parts(
             func, stage_layout_qualifiers
