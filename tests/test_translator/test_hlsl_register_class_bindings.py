@@ -5,7 +5,13 @@ HLSL keeps separate register ranges for ``b`` (constant buffers), ``t`` (SRVs),
 map buffers into one namespace, so they used to reject ``register(b0)`` and
 ``register(u0)`` as a binding conflict. They should only conflict when the class
 letter is the same.
+
+Rust rust-gpu attributes are the Vulkan interface, so each resource in a
+descriptor set still receives a distinct ``binding = N`` even when HLSL register
+classes share a number.
 """
+
+import re
 
 import pytest
 
@@ -174,3 +180,75 @@ def test_crossgl_binding_zero_conflicts_with_register_t0(backend_name, codegen_c
     """
     with pytest.raises(Exception, match="Conflicting .* resource binding"):
         _translate_crossgl(source, codegen_cls)
+
+
+def _rust_entry_descriptor_pairs(code):
+    """Collect ``(descriptor_set, binding)`` pairs from rust-gpu entry attributes."""
+    return [
+        (int(set_index), int(binding))
+        for set_index, binding in re.findall(
+            r"descriptor_set\s*=\s*(\d+)\s*,\s*binding\s*=\s*(\d+)", code
+        )
+    ]
+
+
+def test_rust_shared_register_classes_emit_unique_descriptor_bindings(tmp_path):
+    """Rust gives each resource its own Vulkan binding when HLSL classes share numbers."""
+    hlsl = """
+    StructuredBuffer<float> inp : register(t0);
+    RWStructuredBuffer<float> outp : register(u0);
+    RWStructuredBuffer<float> extra;
+    [numthreads(64, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        outp[tid.x] = inp[tid.x] + extra[tid.x];
+    }
+    """
+    code = _write_and_translate(tmp_path, hlsl, "rust")
+    pairs = _rust_entry_descriptor_pairs(code)
+    assert len(pairs) == 3
+    assert len(pairs) == len(set(pairs))
+    assert "binding = 0))] inp:" in code
+    assert "binding = 1))] outp:" in code
+    assert "binding = 2))] extra:" in code
+    assert "name=inp kind=buffer set=0 binding=0" in code
+    assert "name=outp kind=buffer set=0 binding=1" in code
+    assert "name=extra kind=buffer set=0 binding=2" in code
+
+
+def test_rust_register_remap_follows_class_order_not_declaration_order(tmp_path):
+    """Register remapping visits t before u, matching SPIR-V numbering."""
+    hlsl = """
+    RWStructuredBuffer<float> outp : register(u0);
+    StructuredBuffer<float> inp : register(t0);
+    [numthreads(64, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        outp[tid.x] = inp[tid.x];
+    }
+    """
+    code = _write_and_translate(tmp_path, hlsl, "rust")
+    pairs = _rust_entry_descriptor_pairs(code)
+    assert len(pairs) == len(set(pairs))
+    assert "binding = 0))] inp:" in code
+    assert "binding = 1))] outp:" in code
+
+
+def test_rust_four_register_program_emits_unique_descriptor_bindings(tmp_path):
+    """Four resources that share numbers across classes still get unique Rust bindings."""
+    hlsl = """
+    StructuredBuffer<float> inp : register(t0);
+    RWStructuredBuffer<float> outp : register(u0);
+    StructuredBuffer<float> bias : register(t1);
+    RWStructuredBuffer<float> cnt : register(u1);
+    [numthreads(64, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        outp[tid.x] = inp[tid.x] + bias[tid.x] + cnt[tid.x];
+    }
+    """
+    code = _write_and_translate(tmp_path, hlsl, "rust")
+    pairs = _rust_entry_descriptor_pairs(code)
+    assert len(pairs) == 4
+    assert len(pairs) == len(set(pairs))
+    assert "binding = 0))] inp:" in code
+    assert "binding = 1))] bias:" in code
+    assert "binding = 2))] outp:" in code
+    assert "binding = 3))] cnt:" in code
