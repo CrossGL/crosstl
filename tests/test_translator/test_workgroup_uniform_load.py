@@ -100,11 +100,19 @@ def test_spirv_reads_between_two_workgroup_memory_barriers(tmp_path):
     path.write_text(
         _program("outp[lane] = workgroupUniformLoad(a0);"), encoding="utf-8"
     )
-    # The formatted module names its constants (%uint_2, %uint_264).
-    code = crosstl.translate(str(path), backend="vulkan")
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed,
+    # so resolve the constant ids before matching the barriers.
+    code = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    uint = re.search(r"^(%\w+) = OpTypeInt 32 0$", code, re.M).group(1)
+
+    def constant(value):
+        return re.search(rf"^(%\w+) = OpConstant {uint} {value}$", code, re.M).group(1)
 
     # Execution and memory scope Workgroup (2); semantics AcquireRelease | WorkgroupMemory (0x108).
-    barriers = re.findall(r"OpControlBarrier %uint_2 %uint_2 %uint_264", code)
+    scope, semantics = constant(2), constant(264)
+    barriers = re.findall(
+        rf"^OpControlBarrier {scope} {scope} {semantics}$", code, re.M
+    )
     assert len(barriers) == 2
     assert FUNCTION not in code
 
