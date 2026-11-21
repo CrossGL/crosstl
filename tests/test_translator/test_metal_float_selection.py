@@ -336,7 +336,8 @@ def test_half_selection_rejects_shadowed_target_intrinsics(builtin):
             _shader(
                 "float16_t a = float16_t(1.0); float16_t b = float16_t(2.0); "
                 "float16_t selected = output[0] < 0.0 ? a : b;",
-                f"float16_t {builtin}(float16_t value) {{ return value; }}",
+                # A helper function of that name is renamed apart from the intrinsic; a value is not.
+                f"float {builtin} = 1.0;",
             )
         )
     assert error.value.reason == "half-selection-intrinsic-shadowed"

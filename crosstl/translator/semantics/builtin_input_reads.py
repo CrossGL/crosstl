@@ -50,8 +50,9 @@ from .rewrite import child_slots, get_child, set_child
 __all__ = ["pass_builtin_inputs"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
-# Targets whose fragment generators bind only gl_FragCoord, so every other fragment input is passed here.
-_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal"}
+# Targets whose fragment generators bind only gl_FragCoord (HLSL, Metal) or no built-in read by name (the rust-gpu
+# output), so every other fragment input is passed here.
+_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal", "rust"}
 TARGETS = _FRAGMENT_BINDING_TARGETS | {"slang", "wgsl"}
 _FRAGMENT_INPUTS = {
     "gl_FragCoord": "vec4",

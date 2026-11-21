@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_compute_derivative_groups import DERIVATIVE_GROUP_EXTENSIONS
 from .glsl_fragment_interlock import INTERLOCK_LAYOUTS
 from .glsl_spirv_varying_locations import (
     spirv_location_macro_definition,
@@ -365,6 +366,8 @@ _LAYOUT_REQUIREMENTS = {
     ),
     # glslang accepts the GL_ARB_fragment_shader_interlock modes only from GLSL 4.50, extension or not.
     "interlock": GLSLRequirement("a fragment shader interlock layout", 450, None),
+    # GL_KHR_compute_shader_derivatives and GL_NV_compute_shader_derivatives apply to GLSL 4.50 and later.
+    "derivative_group": GLSLRequirement("a compute derivative group layout", 450, None),
 }
 _STAGE_REQUIREMENTS = {
     "geometry": GLSLRequirement(
@@ -564,6 +567,8 @@ def _layout_line_requirements(ids, declaration, stage):
         requirements.append(_LAYOUT_REQUIREMENTS["local_size"])
     if ids & INTERLOCK_LAYOUTS:
         requirements.append(_LAYOUT_REQUIREMENTS["interlock"])
+    if ids & DERIVATIVE_GROUP_EXTENSIONS.keys():
+        requirements.append(_LAYOUT_REQUIREMENTS["derivative_group"])
     return requirements
 
 

@@ -552,10 +552,15 @@ class HipRecordSemanticMixin:
         )
         return members
 
-    def record_contains_union_storage(self, node, visiting=None):
+    def record_contains_tracked_union_storage(self, node, visiting=None):
+        """Whether record ``node`` holds a union whose active member the importer tracks.
+
+        Such a union is written as separate members (see :meth:`union_tracks_active_member`), so a copy, a call
+        argument or an assignment of the record would carry storage of members that were never written.
+        """
         if node is None:
             return False
-        if getattr(node, "is_union", False):
+        if self.union_tracks_active_member(node):
             return True
         visiting = set(visiting or ())
         if id(node) in visiting:
@@ -566,10 +571,10 @@ class HipRecordSemanticMixin:
                 getattr(member, "vtype", "")
             )
             nested = self.record_definition_from_type(member_type)
-            if self.record_contains_union_storage(nested, visiting):
+            if self.record_contains_tracked_union_storage(nested, visiting):
                 return True
         return any(
-            self.record_contains_union_storage(base, visiting)
+            self.record_contains_tracked_union_storage(base, visiting)
             for base in self.record_base_definitions(node)
         )
 
@@ -647,7 +652,7 @@ class HipRecordSemanticMixin:
                     self.raise_record_semantic(issue, context)
         source = self.infer_record_expression_definition(value)
         if source is definition:
-            if self.record_contains_union_storage(definition):
+            if self.record_contains_tracked_union_storage(definition):
                 self.raise_record_semantic(
                     ("union-containing copy construction active storage", definition),
                     context,
@@ -734,7 +739,7 @@ class HipRecordSemanticMixin:
         self.union_active_member_scopes[-1][key] = member_name
 
     def register_union_variable_initializer(self, name, definition, value):
-        if definition is None or not getattr(definition, "is_union", False):
+        if definition is None or not self.union_tracks_active_member(definition):
             return
         if not isinstance(value, InitializerListNode) or not value.elements:
             return
@@ -757,7 +762,7 @@ class HipRecordSemanticMixin:
         if found is None:
             return
         owner, _member = found
-        if not getattr(owner, "is_union", False):
+        if not self.union_tracks_active_member(owner):
             return
         root_name = self.get_lvalue_metadata_root_name(expression.object)
         if root_name is not None and self.is_union_indirect_object(root_name):

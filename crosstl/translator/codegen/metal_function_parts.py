@@ -18,7 +18,15 @@ from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
 )
+from .metal_post_tessellation import (
+    MetalPostTessellationError,
+    post_tessellation_plan,
+)
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_stage_input_merge import (
+    merge_metal_stage_inputs,
+    metal_stage_input_struct_parameter,
+)
 from .metal_varyings import (
     metal_varying_attribute,
 )
@@ -151,6 +159,7 @@ class MetalFunctionPartsMixin:
         skipped_parameter_indices = self.skipped_function_parameter_indices(
             self.current_function_name
         )
+        stage_input_structs = []
         for index, p in enumerate(param_list):
             if index in skipped_parameter_indices:
                 continue
@@ -399,29 +408,44 @@ class MetalFunctionPartsMixin:
             param_attr += metal_raster_order_group_attribute(
                 p, shader_type, declaration
             )
+            stage_input = metal_stage_input_struct_parameter(
+                self, shader_type, p, param_type, param_attr
+            )
+            if stage_input is not None:
+                stage_input_structs.append((len(params), stage_input))
             params.append(f"{declaration}{param_attr}")
-            if self.is_structured_buffer_type(
-                raw_param_type
-            ) and self.structured_buffer_parameter_requires_length(
-                self.current_function_name, p.name
-            ):
-                length_name = self.structured_buffer_length_parameter_name(p.name)
-                self.current_structured_buffer_length_parameters[p.name] = length_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_length_parameter(p.name, array_size)
-                )
-            if self.structured_buffer_requires_counter(raw_param_type):
-                counter_name = self.structured_buffer_counter_parameter_name(p.name)
-                self.current_structured_buffer_counter_parameters[p.name] = counter_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_counter_parameter(p.name, array_size)
-                )
+            self.append_metal_structured_buffer_side_parameters(
+                p, raw_param_type, params
+            )
+        merge_metal_stage_inputs(
+            self,
+            shader_type,
+            params,
+            stage_input_structs,
+            vertex_stage_input_parameters,
+            fragment_stage_input_parameters,
+        )
+
+    def append_metal_structured_buffer_side_parameters(self, p, raw_param_type, params):
+        """Append the length and counter parameters a structured buffer parameter needs."""
+        if self.is_structured_buffer_type(
+            raw_param_type
+        ) and self.structured_buffer_parameter_requires_length(
+            self.current_function_name, p.name
+        ):
+            length_name = self.structured_buffer_length_parameter_name(p.name)
+            self.current_structured_buffer_length_parameters[p.name] = length_name
+            array_size = self.structured_buffer_parameter_array_size(raw_param_type, p)
+            params.append(
+                self.format_structured_buffer_length_parameter(p.name, array_size)
+            )
+        if self.structured_buffer_requires_counter(raw_param_type):
+            counter_name = self.structured_buffer_counter_parameter_name(p.name)
+            self.current_structured_buffer_counter_parameters[p.name] = counter_name
+            array_size = self.structured_buffer_parameter_array_size(raw_param_type, p)
+            params.append(
+                self.format_structured_buffer_counter_parameter(p.name, array_size)
+            )
 
     def metal_stage_entry_parameters(
         self,
@@ -650,6 +674,25 @@ class MetalFunctionPartsMixin:
         """Write the stage attribute and the signature of the entry point or function."""
         if shader_type == "vertex":
             function_name = entry_name or f"vertex_{func.name}"
+            patch_attribute = ""
+            if post_tessellation_plan(func) is not None:
+                if vertex_stage_input_parameters:
+                    raise MetalPostTessellationError(
+                        function_name,
+                        "it reads stage inputs besides its patch, and a Metal post-tessellation vertex "
+                        "function has one [[stage_in]] structure",
+                    )
+                structures, patch_parameters, patch_attribute, preamble = (
+                    self.metal_post_tessellation_interface(
+                        func, function_name, reserved_parameter_names
+                    )
+                )
+                code += structures
+                for declaration in reversed(patch_parameters):
+                    params_str = (
+                        f"{declaration}, {params_str}" if params_str else declaration
+                    )
+                vertex_stage_input_alias_declarations = preamble
             if vertex_stage_input_parameters:
                 stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
                     function_name
@@ -698,7 +741,7 @@ class MetalFunctionPartsMixin:
                     code += self.generate_return_wrapper_struct(return_wrapper)
                     return_type = return_wrapper["struct_name"]
                 self.current_function_return_wrapper = return_wrapper
-            code += f"vertex {return_type} {function_name}({params_str}) {{\n"
+            code += f"{patch_attribute}vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
             function_name = entry_name or f"fragment_{func.name}"
             if fragment_stage_input_parameters:
@@ -835,6 +878,11 @@ class MetalFunctionPartsMixin:
             code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["ray_intersection", "intersection"]:
             function_name = entry_name or f"intersection_{func.name}"
+            # An intersection function takes buffers, textures and samplers that the intersection function
+            # table binds (MSL section 5.1.6).
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name, func
+            )
             stage_attribute = self.metal_ray_intersection_stage_attribute(
                 func, raw_return_type
             )

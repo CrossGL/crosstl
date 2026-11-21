@@ -56,7 +56,11 @@ from .metal_keyword_identifiers import (
 )
 from .metal_library_functions import rename_msl_library_functions
 from .metal_namespace_names import rename_metal_namespace_names
+from .metal_post_tessellation import lower_metal_post_tessellation
+from .metal_reported_hits import lower_metal_reported_hits
+from .metal_runtime_texture_arrays import lower_runtime_texture_arrays
 from .metal_safe_math import metal_safe_math_requested
+from .metal_shadowed_storage import rename_metal_shadowing_declarations
 from .metal_specialization_constants import (
     metal_function_constant_type_refusal,
     render_metal_specialization_constant,
@@ -403,6 +407,7 @@ class MetalProgramEntryMixin:
         )
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        ast = lower_runtime_texture_arrays(ast)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         ast = bind_combined_samplers(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
@@ -413,10 +418,13 @@ class MetalProgramEntryMixin:
         ast = rename_msl_library_functions(ast)
         ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
+        ast = lower_metal_post_tessellation(ast, self)
+        ast = rename_metal_shadowing_declarations(ast, self)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
         ast = lower_metal_helper_invocation_reads(ast, self.refuse_lowering)
         ast = offset_metal_draw_base_indices(ast, self)
+        ast = lower_metal_reported_hits(ast, self.refuse_lowering)
         return ast, target_stage
 
     def collect_metal_atomic_fence_calls(self, ast):

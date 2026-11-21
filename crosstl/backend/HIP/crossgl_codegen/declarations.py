@@ -30,7 +30,7 @@ class HipDeclarationMixin:
         if self.is_nonconst_record_reference_type(
             raw_type, referenced_record_definition
         ):
-            if self.record_contains_union_storage(referenced_record_definition):
+            if self.record_contains_tracked_union_storage(referenced_record_definition):
                 feature = (
                     "union indirect object access through non-const record "
                     "reference alias/writeback"

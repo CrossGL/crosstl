@@ -100,12 +100,14 @@ from .crossgl_codegen.vector_types import MetalVectorTypeMixin
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
 from .function_constants import import_function_constant_defaults
+from .intersection_import import MetalIntersectionImport
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
 from .namespace_scope_variables import resolve_namespace_scope_variables
+from .post_tessellation_import import MetalPostTessellationImport
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
     refuse_sparse_color_reference,
@@ -195,6 +197,8 @@ class MetalToCrossGLConverter(
     MetalAlignmentSpecifiers,
     MetalBufferLayoutImport,
     MetalMeshImport,
+    MetalIntersectionImport,
+    MetalPostTessellationImport,
     MetalProgramRenderingMixin,
     MetalConverterSetupMixin,
     MetalFunctionDefinitionMixin,
@@ -480,6 +484,7 @@ class MetalToCrossGLConverter(
             "    // __crossgl_metal_function_local_aggregates__\n"
         )
         self.reset_program_render_state()
+        self.plan_metal_post_tessellation_functions(ast)
         typedefs, functions = self.prepare_program_declarations(ast)
         code = self.render_program_header(ast, wide_vector_support_marker)
         structs, enums, code = self.render_program_type_declarations(

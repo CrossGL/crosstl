@@ -38,6 +38,21 @@ class MetalStructDeclarationMixin:
             # already become a concrete function. One that is left has no
             # entry point in the Metal library, so it emits nothing.
             return ""
+        if qualifier == "vertex" and self.is_metal_post_tessellation_function(function):
+            # A [[patch]] vertex function is a tessellation evaluation stage (:mod:`..post_tessellation_import`).
+            return (
+                "    // Tessellation Evaluation Shader\n"
+                "    tessellation_evaluation {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
@@ -110,6 +125,15 @@ class MetalStructDeclarationMixin:
         if qualifier is None and ray_attribute is not None:
             # [[intersection(bounding_box, ...)]] keeps the stage as an attribute rather than a qualifier.
             qualifier = ray_attribute
+        if qualifier == "intersection" and ray_attribute == "intersection":
+            # [[intersection(primitive_type, tags...)]]; MSL has no intersection function qualifier keyword.
+            return self.generate_metal_intersection_stage(
+                function,
+                template_value_bindings=template_value_bindings,
+                template_type_bindings=template_type_bindings,
+                output_name=output_name,
+                specialization_key=specialization_key,
+            )
         if qualifier in self.rt_qualifiers:
             # Printed as a plain helper, the function would lose the qualifier that lets the host place it in an
             # intersection function table, and the targets would get no ray-tracing stage.
