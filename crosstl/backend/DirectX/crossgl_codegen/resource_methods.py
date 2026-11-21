@@ -5,6 +5,16 @@ import re
 from ..DirectxAst import VectorConstructorNode
 from ..subpass_inputs import SUBPASS_INPUT_TYPES
 
+QUERY_LOD_MEMBERS = frozenset(
+    {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}
+)
+# Components of the in-layer coordinate an array texture's CalculateLevelOfDetail takes.
+QUERY_LOD_ARRAY_COORDINATE_WIDTHS = {
+    "Texture1DArray": 1,
+    "Texture2DArray": 2,
+    "TextureCubeArray": 3,
+}
+
 
 class ResourceMethodMixin:
     """Resource method members of ``HLSLToCrossGLConverter``."""
@@ -210,6 +220,14 @@ class ResourceMethodMixin:
         ):
             sampler, coords, compare, _bias, offset = rendered_args[:5]
             method_args = [obj, sampler, coords, compare, offset]
+        elif member in QUERY_LOD_MEMBERS and len(rendered_args) == 2:
+            sampler, coords = rendered_args
+            coords = self.layered_query_lod_coordinate(
+                descriptor.get("resource_type"),
+                coords,
+                raw_args[1] if raw_args and len(raw_args) == 2 else None,
+            )
+            method_args = [obj, sampler, coords]
         else:
             method_args = [obj, *rendered_args]
 
@@ -539,6 +557,32 @@ class ResourceMethodMixin:
             self.swizzle_rendered_expression(rendered_coord, "xy"),
             self.swizzle_rendered_expression(rendered_coord, "w"),
         )
+
+    def layered_query_lod_coordinate(self, resource_type, rendered, raw_coord):
+        """The CrossGL ``textureQueryLod`` coordinate of a ``CalculateLevelOfDetail`` call on an array texture.
+
+        HLSL passes an array texture's level-of-detail query only the coordinate within a layer: a ``float2`` for
+        ``Texture2DArray``. CrossGL's ``textureQueryLod`` takes the sampling coordinate of the texture, layer
+        included, and every generator drops the layer again (``texture_query_lod_coordinate_swizzle``), so the
+        importer appends a layer of 0. A coordinate HLSL truncates loses its extra components first, and a scalar
+        HLSL splats becomes a vector. A coordinate of unknown width is left for the generator to check.
+        """
+        width = QUERY_LOD_ARRAY_COORDINATE_WIDTHS.get(self.raw_type_base(resource_type))
+        if width is None or raw_coord is None:
+            return rendered
+        coord_type = self.expression_value_raw_type(raw_coord)
+        count = self.numeric_vector_component_count(coord_type)
+        if count is None and self.numeric_type_family(coord_type) is not None:
+            count = 1
+        if count is None:
+            return rendered
+        if count > width:
+            rendered = self.swizzle_rendered_expression(rendered, "xyz"[:width])
+        elif count < width:
+            if count != 1:
+                return rendered
+            rendered = f"vec{width}({rendered})"
+        return f"vec{width + 1}({rendered}, 0.0)"
 
     def numeric_vector_component_count(self, type_name):
         base = self.canonical_composite_type(str(type_name or "").strip())

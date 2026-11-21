@@ -19,6 +19,9 @@ from ..DirectxParser import (
 from ..function_templates import (
     templated_call_name,
 )
+from ..helper_lanes import (
+    helper_lanes_always_false,
+)
 from ..select_overload_error import (
     HLSLSelectOverloadError,
 )
@@ -115,6 +118,10 @@ class CallExpressionMixin:
         )
         func_name = self.normalize_hlsl_intrinsic_name(func_name)
         if func_name == "IsHelperLane" and not expr.args:
+            if helper_lanes_always_false(
+                self, getattr(self, "current_source_function", None)
+            ):
+                return "false"
             return "gl_HelperInvocation"
         if func_name == "sizeof":
             sizeof_value = self.generate_sizeof_expression(expr.args)
