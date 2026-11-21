@@ -835,6 +835,11 @@ class MetalFunctionPartsMixin:
             code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["ray_intersection", "intersection"]:
             function_name = entry_name or f"intersection_{func.name}"
+            # An intersection function takes buffers, textures and samplers that the intersection function
+            # table binds (MSL section 5.1.6).
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name, func
+            )
             stage_attribute = self.metal_ray_intersection_stage_attribute(
                 func, raw_return_type
             )
