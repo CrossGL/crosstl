@@ -15,6 +15,7 @@ import re
 from .. import spellings
 from ..model import (
     OTHER_WIDTHS,
+    STRING,
     VOID,
     Feature,
     Param,
@@ -23,6 +24,7 @@ from ..model import (
     raytracing_stage,
 )
 from ..objects import OBJECTS, SAMPLERS, VERTEX, element
+from ..validators import HLSL_PREVIEW, HLSL_PREVIEW_SHADER_MODEL, HLSL_SPIRV
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
@@ -45,10 +47,8 @@ _LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
 # no equivalent or no implementation when compiling to SPIR-V.
 _REJECTED = frozenset({("Intrinsics", "abort"), ("Intrinsics", "source_mark")})
 # Functions DXC compiles only when it targets SPIR-V. DXIL has no print operation, and DXC rejects printf there ("use of
-# unsupported identifier"), so the probes, which compile to DXIL, cannot check it.
-_SPIRV_ONLY = {
-    "printf": "DXC compiles printf only to SPIR-V; DXIL has no print operation"
-}
+# unsupported identifier"), so their probes are checked as SPIR-V (validators.HLSL_SPIRV).
+_SPIRV_ONLY = frozenset({"printf"})
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
@@ -271,10 +271,12 @@ def _unsigned(spellings: list[str], directions: list[str]) -> list[str]:
 
 
 def _signature(result: str, params: str) -> Signature:
-    if "..." in params:
-        raise _Unsupported("variadic")
+    """The signature of a declaration. A format string is a constant, and variable arguments are left out: printf's
+    probe passes an empty format, as Slang's does."""
     spellings, directions = [result], []
     for text in [p.strip() for p in re.split(r",(?![^<]*>)", params) if p.strip()]:
+        if text == "...":
+            continue
         words = text.split()
         direction = "in"
         while words and words[0] in _QUALIFIERS:
@@ -288,7 +290,11 @@ def _signature(result: str, params: str) -> Signature:
         directions.append(direction)
     kinds = _resolve(_unsigned(spellings, directions))
     return Signature(
-        kinds[0], tuple(Param(k, d) for k, d in zip(kinds[1:], directions))
+        kinds[0],
+        tuple(
+            Param(k, "const" if k == STRING else d)
+            for k, d in zip(kinds[1:], directions)
+        ),
     )
 
 
@@ -348,28 +354,35 @@ def _probed(signature: Signature) -> bool:
     return all(not k.opaque or k == VOID or k.opaque in SAMPLERS for k in kinds)
 
 
+def _needed(declared: list) -> tuple[int, ...]:
+    """The oldest shader model any of the overloads ``declared`` has."""
+    return min(_shader_model(attributes) for attributes, _, _ in declared)
+
+
 def _overloads(
-    declared: list, concrete=lambda text: text
+    declared: list, concrete=lambda text: text, model=SHADER_MODEL
 ) -> tuple[list[Signature], str]:
-    """The overloads the probes' shader model has, and a note when there are none."""
-    needed = min(_shader_model(attributes) for attributes, _, _ in declared)
+    """The overloads shader model ``model`` has, and a note when there are none."""
+    needed = _needed(declared)
     signatures = []
     for attributes, result, params in declared:
-        if _shader_model(attributes) > SHADER_MODEL:
+        if _shader_model(attributes) > model:
             continue
         try:
             signatures.append(_signature(concrete(result), concrete(params)))
         except _Unsupported:
             continue
-    if needed > SHADER_MODEL:
+    if needed > model:
         return [], f"needs shader model {needed[0]}.{needed[1]}"
     return signatures, "" if signatures else "variadic"
 
 
-def _method(owner: str, name: str, declared: list) -> Feature:
+def _method(owner: str, name: str, declared: list, target: str = "") -> Feature:
     kind = OBJECTS.get(owner)
     signatures, note = _overloads(
-        declared, (lambda text: _concrete(text, element(owner, name))) if kind else str
+        declared,
+        (lambda text: _concrete(text, element(owner, name))) if kind else str,
+        _MODELS[target],
     )
     if kind is None and not note.startswith("needs"):
         signatures, note = [], f"no probe for {owner} objects yet"
@@ -390,12 +403,20 @@ def _method(owner: str, name: str, declared: list) -> Feature:
         stage="fragment" if name in _DERIVATIVES else kind.stage if kind else "compute",
         note=note,
         spelling=f"{kind.spelling}::{name}" if static else name,
+        target=target,
     )
 
 
-def parse(
-    text: str, glsl_names: set[str] | frozenset[str] = frozenset()
-) -> list[Feature]:
+# The shader model each HLSL probe target compiles for.
+_MODELS = {
+    "": SHADER_MODEL,
+    HLSL_SPIRV: SHADER_MODEL,
+    HLSL_PREVIEW: HLSL_PREVIEW_SHADER_MODEL,
+}
+
+
+def _collect(text: str) -> tuple[dict[str, list], dict[tuple[str, str], list]]:
+    """The declarations of a table's functions, by name, and of its methods, by object and name."""
     functions: dict[str, list] = {}
     methods: dict[tuple[str, str], list] = {}
     for namespace, name, attributes, result, params in declarations(text):
@@ -409,10 +430,45 @@ def parse(
         else:
             owner = namespace.removesuffix("Methods")
             methods.setdefault((owner, name), []).append((attributes, result, params))
+    return functions, methods
+
+
+def _previewed(release: dict, preview: dict) -> tuple[dict, set]:
+    """The declarations to probe, and the keys checked by the Shader Model 6.10 preview.
+
+    An entry that needs a newer shader model than the release compiler has comes from the preview's table, which
+    declares it as the preview compiler accepts it; the release table's declaration of it is dropped, since the
+    release cannot compile it and the preview may have renamed it."""
+    kept = {k: v for k, v in release.items() if _needed(v) <= SHADER_MODEL}
+    newer = {
+        k for k, v in preview.items() if k not in kept and _needed(v) > SHADER_MODEL
+    }
+    return {**kept, **{k: preview[k] for k in newer}}, newer
+
+
+def parse(
+    text: str, glsl_names: set[str] | frozenset[str] = frozenset(), preview: str = ""
+) -> list[Feature]:
+    """The features of the release table ``text``. With the Shader Model 6.10 preview's table ``preview``, the
+    entries that need shader model 6.10 come from it and are probed for :data:`~tools.coverage.validators.
+    HLSL_PREVIEW`; without it they are listed with a note."""
+    functions, methods = _collect(text)
+    previewed: set = set()
+    if preview:
+        newer_functions, newer_methods = _collect(preview)
+        functions, previewed_functions = _previewed(functions, newer_functions)
+        methods, previewed_methods = _previewed(methods, newer_methods)
+        previewed = previewed_functions | previewed_methods
     features = []
     for name, declared in sorted(functions.items()):
-        signatures, note = _overloads(_documented(name, declared))
-        note = _SPIRV_ONLY.get(name, note)
+        target = (
+            HLSL_PREVIEW
+            if name in previewed
+            else HLSL_SPIRV if name in _SPIRV_ONLY else ""
+        )
+        signatures, note = _overloads(
+            _documented(name, declared), model=_MODELS[target]
+        )
         features.append(
             Feature(
                 "hlsl",
@@ -427,10 +483,13 @@ def parse(
                 crossgl=spellings.spelling("hlsl", name, glsl_names),
                 stage=_STAGE_OF.get(name, "compute"),
                 note=note,
+                target=target,
             )
         )
     features += [
-        _method(owner, name, declared)
+        _method(
+            owner, name, declared, HLSL_PREVIEW if (owner, name) in previewed else ""
+        )
         for (owner, name), declared in sorted(methods.items())
     ]
     return features

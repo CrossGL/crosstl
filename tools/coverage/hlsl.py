@@ -11,6 +11,7 @@ from .model import (
     Type,
     coop_element,
     descriptor_reading,
+    struct_reading,
     slang_literal,
     tuple_element,
 )
@@ -28,6 +29,8 @@ class HLSL(Dialect):
     wide_integers = True
     narrow_scalars = True
     packed_bytes = True
+    # printf's format, the one string an intrinsic takes.
+    string = "string"
     _SCALARS = {
         "int64": "int64_t",
         "uint64": "uint64_t",
@@ -231,6 +234,9 @@ class HLSL(Dialect):
         "ThreadNodeOutputRecords": "GetThreadNodeOutputRecords",
         "GroupNodeOutputRecords": "GetGroupNodeOutputRecords",
     }
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        return struct_reading(opaque) or super().reading(opaque)
 
     def holding(self, opaque: str) -> str:
         if opaque == HIT_OBJECT:

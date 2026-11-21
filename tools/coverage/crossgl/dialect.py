@@ -19,6 +19,7 @@ from ..model import (
     Type,
     coop_element,
     descriptor_reading,
+    struct_reading,
     slang_literal,
     tuple_element,
 )
@@ -346,7 +347,9 @@ class CrossGL(Dialect):
         if element:
             return element, "{}[0]"
         held = tuple_element(opaque)
-        return (held[0], "{}._0") if held else descriptor_reading(opaque)
+        if held:
+            return held[0], "{}._0"
+        return descriptor_reading(opaque) or struct_reading(opaque)
 
     # CrossGL spells Direct3D's hit object as HLSL does, and a pointer to any memory as ptr<void>.
     def holding(self, opaque: str) -> str:
