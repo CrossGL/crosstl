@@ -96,7 +96,8 @@ def generate_mojo_numeric_function_call(generator, func_name, args, target_type=
         return f"{name}({_operands(generator, args)})"
     if dtypes[0] not in _FLOAT_DTYPES:
         return None
-    name = _FLOAT_RENAMES.get(func_name, func_name)
+    # Every name left here is one of the floating-point renames.
+    name = _FLOAT_RENAMES[func_name]
     return f"{name}({_operands(generator, args)})"
 
 
