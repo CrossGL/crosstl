@@ -28,6 +28,7 @@ from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
     spirv_output_operand_call,
 )
+from .spirv_fragment_interlock import INTERLOCK_CALLS, spirv_interlock_call
 from .spirv_geometry_streams import (
     STREAM_FUNCTIONS,
 )
@@ -163,6 +164,11 @@ class SpirvCallLoweringMixin:
             and not self.has_function_reference(callee_name)
         ):
             return spirv_extended_arithmetic_call(self, callee_name, list(expr.args))
+
+        if callee_name in INTERLOCK_CALLS and not self.has_function_reference(
+            callee_name
+        ):
+            return spirv_interlock_call(self, callee_name, list(expr.args))
 
         if callee_name in {"SetVertex", "SetPrimitive"}:
             return self.process_mesh_output_function_call(callee_name, expr.args)

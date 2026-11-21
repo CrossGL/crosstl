@@ -14,6 +14,7 @@ from ..ast import (
 from ..refusals import VulkanRefusal
 from .enum_utils import generic_type_parts
 from .precise_dataflow import declaration_is_precise
+from .spirv_conservative_depth import record_depth_layout
 from .spirv_hlsl_registers import (
     reserve_exact_binding,
     reserve_hlsl_descriptor_slots,
@@ -182,6 +183,7 @@ class SpirvGlobalDeclarationMixin:
             var_type = sized_per_vertex_interface_type(self, var_type, storage_class)
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
+            record_depth_layout(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Input")
                 var_id = self.register_input(
@@ -190,6 +192,7 @@ class SpirvGlobalDeclarationMixin:
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            record_depth_layout(self, var_id, node, storage_class)
             decorate_invariant_builtin_output(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
