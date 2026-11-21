@@ -1,7 +1,8 @@
 """Implicit level-of-detail operations outside fragment stages (``crosstl.translator.semantics.implicit_lod``).
 
 CrossGL follows GLSL: an implicit-LOD sample samples the base level outside fragment shaders. SPIR-V, HLSL, WGSL and
-Slang sample implicitly only in fragment shaders, so those samples become explicit level-0 samples there; a helper
+Slang sample implicitly only in fragment shaders, so those samples become explicit level-0 samples there; compute
+stages in WGSL and Slang are also rewritten (and bias/derivatives from compute are refused); a helper
 that both kinds of stage call is cloned for the base-level paths. Bias, derivative, LOD-query and implicit LOD-clamp
 operations reached from a base-level stage are refused for every target.
 """
@@ -315,8 +316,9 @@ def test_separate_sampler_hlsl_validates(tmp_path):
     _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
 
 
-@pytest.mark.parametrize("target", ["vulkan", "wgsl", "slang"])
+@pytest.mark.parametrize("target", ["vulkan"])
 def test_compute_stages_are_left_to_the_emitters(target):
+    """SPIR-V emits ImplicitLod in compute itself; WGSL and Slang rewrite to explicit LOD at the semantic level."""
     program = _parse(COMPUTE_SAMPLING)
     legalize_implicit_lod(program, target)
 
@@ -326,6 +328,22 @@ def test_compute_stages_are_left_to_the_emitters(target):
         if isinstance(node.function, A.IdentifierNode)
     ]
     assert "texture" in names and "textureLod" not in names
+
+
+@pytest.mark.parametrize("target", ["wgsl", "slang"])
+def test_wgsl_slang_compute_samples_take_level_zero(target):
+    """WGSL and Slang disallow textureSample in compute; legalize_implicit_lod rewrites to textureLod there."""
+    program = _parse(COMPUTE_SAMPLING)
+    legalize_implicit_lod(program, target)
+
+    calls = [
+        node
+        for node in _calls(_stage(program, "compute").entry_point)
+        if isinstance(node.function, A.IdentifierNode)
+        and node.function.name.startswith("texture")
+    ]
+    assert [call.function.name for call in calls] == ["textureLod"]
+    assert calls[0].arguments[2].value == 0.0
 
 
 def test_directx_compute_samples_take_level_zero():
@@ -383,6 +401,119 @@ shader ComputeAndFragmentHelper {
     }
 }
 """
+COMPUTE_PROBE_SHADER = """
+shader Probe {
+    sampler2D u0;
+    buffer vec4* outp;
+
+    vec4 shade(sampler2D t, vec2 uv) {
+        return texture(t, uv);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = shade(u0, vec2(0.5));
+        }
+    }
+}
+"""
+
+COMPUTE_PROBE_OFFSET_SHADER = """
+shader ProbeOffset {
+    sampler2D u0;
+    buffer vec4* outp;
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = textureOffset(u0, vec2(0.5), ivec2(1, 0));
+        }
+    }
+}
+"""
+
+COMPUTE_PROBE_BIAS_HELPER = """
+shader ProbeBiasHelper {
+    sampler2D u0;
+    buffer float* outp;
+
+    float shade(sampler2D t, vec2 uv) {
+        return texture(t, uv, 1.0).r;
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = shade(u0, vec2(0.5));
+        }
+    }
+}
+"""
+
+COMPUTE_PROBE_DERIVATIVE_HELPER = """
+shader ProbeDerivativeHelper {
+    buffer float* outp;
+
+    float computeSlope(float v) {
+        return dFdx(v);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = computeSlope(float(i));
+        }
+    }
+}
+"""
+
+
+def test_wgsl_compute_helper_with_texture_emits_texture_sample_level(tmp_path):
+    """A helper called from a WGSL compute entry uses textureSampleLevel, not textureSample."""
+    wgsl = _translate(tmp_path, COMPUTE_PROBE_SHADER, "wgsl")
+
+    assert "textureSampleLevel(" in wgsl
+    assert "textureSample(" not in wgsl
+
+
+def test_wgsl_compute_texture_offset_emits_texture_sample_level(tmp_path):
+    """textureOffset() in a WGSL compute entry becomes textureSampleLevel(..., offset)."""
+    wgsl = _translate(tmp_path, COMPUTE_PROBE_OFFSET_SHADER, "wgsl")
+
+    assert "textureSampleLevel(" in wgsl
+    assert "textureSample(" not in wgsl
+
+
+@pytest.mark.parametrize("target", ["wgsl", "slang"])
+def test_compute_bias_in_helper_is_refused(tmp_path, target):
+    """A bias reached from a compute stage is refused with ImplicitLodStageUnsupportedError."""
+    with pytest.raises(ImplicitLodStageUnsupportedError) as error:
+        _translate(tmp_path, COMPUTE_PROBE_BIAS_HELPER, target)
+
+    assert error.value.operation == "texture"
+    assert error.value.stage == "compute"
+    assert error.value.code.endswith("implicit-lod-stage-unsupported")
+
+
+@pytest.mark.parametrize("target", ["wgsl", "slang"])
+def test_compute_derivative_in_helper_is_refused(tmp_path, target):
+    """A derivative function reached from a compute stage is refused with ImplicitLodStageUnsupportedError."""
+    with pytest.raises(ImplicitLodStageUnsupportedError) as error:
+        _translate(tmp_path, COMPUTE_PROBE_DERIVATIVE_HELPER, target)
+
+    assert error.value.operation == "dFdx"
+    assert error.value.stage == "compute"
+    assert error.value.code.endswith("implicit-lod-stage-unsupported")
+
 
 
 def test_directx_compute_helper_is_cloned_and_fragment_keeps_implicit_lod(tmp_path):
