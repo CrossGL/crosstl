@@ -99,7 +99,10 @@ from .slang_declaration_modifiers import (
     slang_member_modifier_prefix,
 )
 from .slang_declarations import SlangDeclarationsMixin
-from .slang_expression_nodes import SlangExpressionNodeMixin
+from .slang_expression_nodes import (
+    HIT_TRIANGLE_VERTEX_POSITIONS,
+    SlangExpressionNodeMixin,
+)
 from .slang_expression_parts import SlangExpressionPartsMixin
 from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
@@ -141,6 +144,7 @@ from .slang_wave_shuffles import (
 )
 from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .slang_workgroup_size import SlangWorkgroupSizeConstants
+from .spirv_union_storage import lower_union_storage
 from .storage_parameter_texels import StorageParameterTexels
 
 
@@ -427,6 +431,7 @@ class SlangCodeGen(
         if self._generating:
             return self.generate_program(ast)
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
+        ast = lower_union_storage(ast, "slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
@@ -1566,6 +1571,11 @@ class SlangCodeGen(
         elif isinstance(node, IdentifierNode):
             if node.name == "gl_HelperInvocation":
                 return self.slang_helper_invocation_expression()
+            if node.name == HIT_TRIANGLE_VERTEX_POSITIONS:
+                # An element is HitTriangleVertexPosition(index) (slang_expression_nodes); the array is no value.
+                self.refuse_lowering(
+                    f"Slang {node.name}: only an element is readable, as HitTriangleVertexPosition(index)"
+                )
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value is not None:

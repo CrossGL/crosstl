@@ -57,6 +57,7 @@ from .import_tables import (
 from .namespaces import resolve_namespaces
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .push_constant_offsets import member_offsets as push_constant_member_offsets
+from .raw_gather_textures import collect_raw_gather_texture_declaration_ids
 from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
 from .struct_methods import analyze_receiver_mutations, collect_struct_methods
@@ -416,6 +417,7 @@ class HLSLToCrossGLConverter(
         self.type_identifier_renames = {}
         self.legacy_sampler_bindings = {}
         self.legacy_sampler_declaration_ids = set()
+        self.raw_gather_texture_declaration_ids = set()
         self.legacy_bound_texture_types = {}
 
     def texture_method_descriptor(self, member, arg_count=None, resource_type=None):
@@ -744,6 +746,9 @@ class HLSLToCrossGLConverter(
         ) = self.collect_legacy_sampler_bindings(ast)
         self.legacy_bound_texture_types = self.collect_legacy_bound_texture_types(ast)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
+        self.raw_gather_texture_declaration_ids = (
+            collect_raw_gather_texture_declaration_ids(self, ast)
+        )
         self.hlsl_program_constant_global_ids = (
             self.collect_hlsl_program_constant_global_ids(ast)
         )
@@ -1021,6 +1026,9 @@ class HLSLToCrossGLConverter(
             operand = self.maybe_parenthesize(expr.operand, operand)
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{expr.op}"
+            if str(expr.op)[-1:] in {"+", "-"} and operand[:1] in {"+", "-"}:
+                # '-(-x)' written as '--x' would read as a decrement, and '+(+x)' as an increment.
+                return f"{expr.op}({operand})"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
             return self.generate_function_call_expression(expr, is_main)

@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 254,
+        "endLine": 19,
+        "endOffset": 525,
         "file": "crosstl-out/opengl/batch.frag.glsl",
-        "length": 254,
+        "length": 525,
         "line": 1,
         "offset": 0
       },

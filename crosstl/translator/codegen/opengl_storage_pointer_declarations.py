@@ -38,7 +38,13 @@ from .opengl_values import OpenGLStoragePointerError
 class OpenGLStoragePointerDeclarationMixin:
     """Storage pointer declaration members of ``GLSLCodeGen``."""
 
-    def glsl_global_declaration_identifier_name(self, node, name):
+    def glsl_global_redeclares_builtin(self, node, name):
+        """Return whether a global declaration redeclares a GLSL built-in.
+
+        GLSL 4.60 section 4.4.2.3 lets a fragment shader redeclare
+        ``gl_FragDepth`` with a depth layout. The redeclaration and every
+        use of it must keep the built-in name.
+        """
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", ()) or ()
@@ -47,7 +53,7 @@ class OpenGLStoragePointerDeclarationMixin:
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", ()) or ()
         }
-        preserves_fragment_depth = (
+        return (
             name == "gl_FragDepth"
             and "out" in qualifiers
             and bool(
@@ -55,7 +61,18 @@ class OpenGLStoragePointerDeclarationMixin:
                 & {"depth_any", "depth_greater", "depth_less", "depth_unchanged"}
             )
         )
-        if preserves_fragment_depth:
+
+    def glsl_builtin_redeclaration_names(self, ast):
+        """Names of the globals of ``ast`` that redeclare a GLSL built-in."""
+        names = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            name = self.resource_node_name(node)
+            if name and self.glsl_global_redeclares_builtin(node, name):
+                names.add(name)
+        return names
+
+    def glsl_global_declaration_identifier_name(self, node, name):
+        if self.glsl_global_redeclares_builtin(node, name):
             self.current_identifier_aliases.pop(name, None)
             return name
         return self.glsl_global_identifier_name(name)

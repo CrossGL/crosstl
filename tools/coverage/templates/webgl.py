@@ -67,6 +67,7 @@ from .subgroups import WEBGL as _SUBGROUPS
 from .tasks import WEBGL as _TASKS
 from .tessellation import WEBGL as _TESSELLATION
 from .textures import WEBGL as _TEXTURES
+from .unions import ELSEWHERE as _UNIONS
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
 from .vertices import WEBGL as _VERTICES
@@ -154,6 +155,7 @@ WEBGL = {
     **_COMPONENTS,
     **_POINTERS,
     **_MEMORY,
+    **_UNIONS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,
