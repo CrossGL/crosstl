@@ -352,6 +352,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .type_query_memo import scoped_type_query
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .union_lanes import hlsl_lane_helpers
 
@@ -5801,6 +5802,7 @@ class HLSLCodeGen(
             return True
         return str(getattr(attr, "name", "")).lower() in metadata
 
+    @scoped_type_query
     def expression_result_type(self, expr):
         if expr is None:
             return None
