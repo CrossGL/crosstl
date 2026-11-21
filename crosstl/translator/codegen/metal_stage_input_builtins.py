@@ -19,6 +19,12 @@ with such members:
 
 Every structure member loses a parameter-only built-in attribute, which Metal rejects on any structure member; the
 structure itself stays, since the body and helpers use it as a plain value. The input AST is not modified.
+
+A fragment input bound to ``gl_HelperInvocation`` (GLSL 4.60 section 7.1, SPIR-V ``BuiltIn HelperInvocation``) has
+no Metal attribute at all: a fragment function asks for it with ``simd_is_helper_thread()`` (Metal Shading Language
+Specification, section 6.9.2, \"SIMD-Group Functions\"). Such a member is split out the same way and filled from that
+call instead of a parameter, an entry-point parameter bound to it becomes a local initialised from the call, and
+:func:`lower_metal_helper_invocation_reads` writes every read of the bare built-in as the call.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from ..ast import (
     AssignmentNode,
     BlockNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
     MemberAccessNode,
     NamedType,
@@ -36,9 +43,15 @@ from ..ast import (
     StructNode,
     VariableNode,
 )
+from ..semantics.rewrite import child_slots, get_child, set_child
 from .stage_utils import collect_stage_entry_records
 
-__all__ = ["PARAMETER_ONLY_BUILTINS", "split_metal_stage_input_builtins"]
+__all__ = [
+    "COMPUTED_BUILTINS",
+    "PARAMETER_ONLY_BUILTINS",
+    "lower_metal_helper_invocation_reads",
+    "split_metal_stage_input_builtins",
+]
 
 # Metal attributes, as ``canonical_metal_semantic`` spells them, that the stage's functions take only as parameters.
 PARAMETER_ONLY_BUILTINS = {
@@ -56,6 +69,27 @@ PARAMETER_ONLY_BUILTINS = {
 }
 _ANY_STAGE = frozenset().union(*PARAMETER_ONLY_BUILTINS.values())
 _OUTPUT_QUALIFIERS = frozenset({"out", "inout"})
+
+# Stage inputs Metal has no attribute for, as ``canonical_metal_semantic`` spells them, and the Metal function that
+# returns each one inside the stage's functions.
+HELPER_INVOCATION = "gl_HelperInvocation"
+HELPER_THREAD_QUERY = "simd_is_helper_thread"
+COMPUTED_BUILTINS = {"fragment": {HELPER_INVOCATION: HELPER_THREAD_QUERY}}
+
+
+def _computed_value(function_name):
+    return FunctionCallNode(IdentifierNode(function_name), [])
+
+
+def _prepend(function, statements):
+    """Insert ``statements`` at the start of ``function``'s body."""
+    body = function.body
+    if isinstance(body, BlockNode):
+        body.statements[0:0] = statements
+    elif isinstance(body, list):
+        body[0:0] = statements
+    else:
+        function.body = BlockNode(statements)
 
 
 def _iter_nodes(root):
@@ -117,6 +151,7 @@ class _Splitter:
             self.structs.setdefault(struct.name, struct)
             self.containers.setdefault(struct.name, container)
         self.stage_in_structs = {}
+        self.split_structs = set()
         self.program_names = None
 
     def builtin(self, member):
@@ -127,11 +162,22 @@ class _Splitter:
 
     def split_members(self, struct, stage):
         parameter_only = PARAMETER_ONLY_BUILTINS[stage]
+        computed = COMPUTED_BUILTINS.get(stage, {})
         return [
             member
             for member in getattr(struct, "members", None) or []
             if self.builtin(member) in parameter_only
+            or self.builtin(member) in computed
         ]
+
+    def computed_parameter(self, parameter, stage):
+        """The Metal function that returns ``parameter``, an entry-point input Metal has no attribute for, or None."""
+        qualifiers = {
+            str(q).lower() for q in getattr(parameter, "qualifiers", None) or []
+        }
+        if qualifiers & _OUTPUT_QUALIFIERS:
+            return None
+        return COMPUTED_BUILTINS.get(stage, {}).get(self.builtin(parameter))
 
     def entries(self):
         for _id, stage, function in collect_stage_entry_records(
@@ -148,8 +194,11 @@ class _Splitter:
         ):
             return True
         return any(
-            (struct := _input_struct(parameter, self.structs)) is not None
-            and self.split_members(struct, stage)
+            (
+                (struct := _input_struct(parameter, self.structs)) is not None
+                and self.split_members(struct, stage)
+            )
+            or self.computed_parameter(parameter, stage) is not None
             for stage, function in self.entries()
             for parameter in getattr(function, "parameters", None) or []
         )
@@ -184,8 +233,9 @@ class _Splitter:
         self.stage_in_structs[struct.name] = name
         return name
 
-    def split_parameter(self, function, index, struct, split):
+    def split_parameter(self, function, index, struct, split, stage):
         parameter = function.parameters[index]
+        self.split_structs.add(struct.name)
         used = {
             node.name
             for node in _iter_nodes(function)
@@ -214,7 +264,12 @@ class _Splitter:
                 sources[id(member)] = MemberAccessNode(
                     IdentifierNode(stage_in_name), member.name
                 )
+        computed = COMPUTED_BUILTINS.get(stage, {})
         for member in split:
+            query = computed.get(self.builtin(member))
+            if query is not None:
+                sources[id(member)] = _computed_value(query)
+                continue
             builtin_name = self.unique(f"{parameter.name}_{member.name}", used)
             replacements.append(
                 ParameterNode(
@@ -235,24 +290,33 @@ class _Splitter:
                     )
                 )
             )
-        body = function.body
-        if isinstance(body, BlockNode):
-            body.statements[0:0] = prologue
-        elif isinstance(body, list):
-            body[0:0] = prologue
-        else:
-            function.body = BlockNode(prologue)
+        _prepend(function, prologue)
         return len(replacements)
 
     def split_function(self, stage, function):
         index = 0
+        locals_ = []
         while index < len(function.parameters or []):
-            struct = _input_struct(function.parameters[index], self.structs)
+            parameter = function.parameters[index]
+            query = self.computed_parameter(parameter, stage)
+            if query is not None:
+                del function.parameters[index]
+                locals_.append(
+                    VariableNode(
+                        parameter.name,
+                        deepcopy(parameter.param_type),
+                        initial_value=_computed_value(query),
+                    )
+                )
+                continue
+            struct = _input_struct(parameter, self.structs)
             split = self.split_members(struct, stage) if struct is not None else []
             if not split:
                 index += 1
                 continue
-            index += self.split_parameter(function, index, struct, split)
+            index += self.split_parameter(function, index, struct, split, stage)
+        if locals_:
+            _prepend(function, locals_)
 
     def interface_struct_names(self):
         """Structures an entry point still takes or returns once the parameters are split."""
@@ -283,7 +347,7 @@ class _Splitter:
         A split structure that no entry point takes or returns any more is a plain value, whose members' stage
         attributes Metal rejects or ignores (``[[attribute(n)]]`` on an array member does not compile).
         """
-        plain = set(self.stage_in_structs) - self.interface_struct_names()
+        plain = self.split_structs - self.interface_struct_names()
         for _container, struct in _struct_containers(self.ast):
             for member in getattr(struct, "members", None) or []:
                 while (semantic := self.semantic_of(member)) is not None:
@@ -313,4 +377,56 @@ def split_metal_stage_input_builtins(ast, codegen):
         seen.add(id(function))
         splitter.split_function(stage, function)
     splitter.strip_member_attributes()
+    return ast
+
+
+def _builtin_identifier_slots(root):
+    """``(parent, field, key)`` for every ``gl_HelperInvocation`` identifier under ``root``, in source order."""
+    seen = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        children = []
+        for field, key in child_slots(node):
+            child = get_child(node, field, key)
+            if isinstance(child, IdentifierNode) and child.name == HELPER_INVOCATION:
+                yield node, field, key
+            else:
+                children.append(child)
+        stack.extend(reversed(children))
+
+
+def _declares_helper_invocation(ast):
+    return any(
+        isinstance(node, (VariableNode, ParameterNode))
+        and getattr(node, "name", None) == HELPER_INVOCATION
+        for node in _iter_nodes(ast)
+    )
+
+
+def lower_metal_helper_invocation_reads(ast, refuse):
+    """Return ``ast`` with every read of the built-in ``gl_HelperInvocation`` written as ``simd_is_helper_thread()``.
+
+    Metal has no helper-invocation input attribute or variable; the query is the only way a fragment function, or a
+    function it calls, learns whether it runs as a helper thread. The shared built-in check already refuses the
+    built-in outside the fragment stage. A program that declares its own ``gl_HelperInvocation`` keeps it, and an
+    assignment to the built-in is refused through ``refuse``, since the query cannot be written. Returns ``ast``
+    itself when nothing changes; the input AST is not modified.
+    """
+    if not any(True for _ in _builtin_identifier_slots(ast)):
+        return ast
+    if _declares_helper_invocation(ast):
+        return ast
+    ast = deepcopy(ast)
+    for parent, field, key in list(_builtin_identifier_slots(ast)):
+        if isinstance(parent, AssignmentNode) and field == "target":
+            refuse(
+                f"assignment to {HELPER_INVOCATION}: the fragment input is read-only, and Metal reads it "
+                f"through {HELPER_THREAD_QUERY}()"
+            )
+            continue
+        set_child(parent, field, key, _computed_value(HELPER_THREAD_QUERY))
     return ast

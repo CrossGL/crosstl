@@ -32,10 +32,8 @@ from crosstl.translator.codegen.stage_utils import (
     stage_matches,
 )
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import (
-    COOPERATIVE_MATRIX_FIELD_LABELS,
-    Parser,
-)
+from crosstl.translator.parser import Parser
+from crosstl.translator.parsing.vocabulary import COOPERATIVE_MATRIX_FIELD_LABELS
 from crosstl.translator.stage_utils import (
     UnknownShaderStageError,
     normalize_stage_name,

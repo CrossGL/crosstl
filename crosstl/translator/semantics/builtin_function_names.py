@@ -12,11 +12,11 @@ they stay equal. The other sets cite their sources below.
 
 from __future__ import annotations
 
-from .. import parser as _parser
 from .. import validation as _validation
 from .. import wave_operations as _wave_operations
 from ..codegen.cuda_library_functions import CUDA_LIBRARY_FUNCTIONS
 from ..codegen.generic_function_utils import RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES
+from ..parsing import vocabulary as _parser_vocabulary
 from .metal_math_spellings import PI_FUNCTIONS
 from .sampler_states import SAMPLER_STATE_CALL_ARGUMENTS
 from .sizeof_values import SIZEOF_LAYOUTS
@@ -332,7 +332,7 @@ CUDA_FUNCTION_NAMES = (
 _CROSSGL_OPERATION_NAMES = _names("""
 atomicLoad atomicStore atomicCompareExchange atomicCompareExchangeWeak atomicThreadFence workgroupBarrier
 workgroupExecutionBarrier subgroupExecutionBarrier deviceMemoryBarrier allMemoryBarrier textureResidency
-textureResident textureGatherCompareOffsets write_sampler_feedback write_sampler_feedback_bias
+textureResident textureGatherCompareOffsets textureSamplePosition write_sampler_feedback write_sampler_feedback_bias
 write_sampler_feedback_grad write_sampler_feedback_level fwidth_fine fwidth_coarse doubleBitsToLong longBitsToDouble
 printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some
 """) | frozenset(SIZEOF_LAYOUTS)
@@ -341,9 +341,9 @@ printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwr
 # :mod:`~crosstl.translator.wave_operations` define, the buffer, image and texture resource intrinsics, and the
 # operations above.
 CROSSGL_FUNCTION_NAMES = (
-    frozenset(_parser.WAVE_INTRINSICS)
-    | frozenset(_parser.RAYTRACING_INTRINSICS)
-    | frozenset(_parser.MESH_INTRINSICS)
+    frozenset(_parser_vocabulary.WAVE_INTRINSICS)
+    | frozenset(_parser_vocabulary.RAYTRACING_INTRINSICS)
+    | frozenset(_parser_vocabulary.MESH_INTRINSICS)
     | frozenset(_wave_operations.GLSL_SUBGROUP_FUNCTIONS)
     | frozenset(_wave_operations.WAVE_EXTENDED_OPERATIONS)
     | frozenset(_validation.IMAGE_RESOURCE_INTRINSIC_NAMES)

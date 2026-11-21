@@ -5,8 +5,14 @@ from __future__ import annotations
 
 import re
 
-from .dialect import Buffer, Dialect, ProbeError
-from .model import GENERIC_POINTER, Type
+from .dialect import Buffer, Dialect, Handle, ProbeError
+from .model import (
+    GENERIC_POINTER,
+    REDUCE_CLOSURE,
+    SCHEDULE_MASK,
+    SCHEDULE_MASK_VALUE,
+    Type,
+)
 
 
 class CUDA(Dialect):
@@ -177,12 +183,47 @@ class Mojo(Dialect):
         # An atomic operation takes a pointer to the output buffer's element.
         return "outp + i"
 
+    def atomic_argument(self, kind: Type) -> str:
+        # An Atomic's only field is the value it holds (std/atomic/atomic.mojo, Atomic._value), so the output
+        # buffer's element, viewed as an Atomic, is the receiver of an Atomic method.
+        return f"(outp + i).bitcast[Atomic[{self.type(kind)}]]()[]"
+
     def discard(self, expression: str) -> str:
         return f"_ = {expression}"
 
     def address(self, name: str) -> str:
         # A ``mut`` argument is passed by reference without an operator.
         return name
+
+    # The function a probe passes to a generic warp reduction: the addition of the example in warp.mojo's reduce.
+    _COMBINE = (
+        "def combine[dtype: DType, width: SIMDLength](",
+        "    x: SIMD[dtype, width], y: SIMD[dtype, width]",
+        ") -> SIMD[dtype, width]:",
+        "    return x + y",
+    )
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        if kind.opaque == REDUCE_CLOSURE:
+            return Handle("combine", declarations=self._COMBINE)
+        if kind.opaque != SCHEDULE_MASK:
+            return None
+        return Handle(
+            SCHEDULE_MASK_VALUE,
+            declarations=(f"from max.gpu.sync import {SCHEDULE_MASK}",),
+        )
+
+    def shared_pointer(self, kind: Type, name: str, value: str) -> Handle:
+        # Mojo has no global variables: a kernel allocates workgroup memory, and the allocation is its pointer.
+        allocation = f"stack_allocation[1, {self.type(kind)}, address_space=AddressSpace.SHARED]()"
+        return Handle(
+            name,
+            (f"var {name} = {allocation}", f"{name}[0] = {value}"),
+            (
+                "from std.memory import stack_allocation",
+                "from max.gpu.memory import AddressSpace",
+            ),
+        )
 
     def active(self, body: list[str], skipped: int) -> list[str]:
         return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]

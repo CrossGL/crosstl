@@ -161,3 +161,89 @@ def test_warp_size_is_the_subgroup_size_not_32():
     assert "% int(gl_SubgroupSize))" in crossgl
     body = crossgl[crossgl.index(") {") :]
     assert re.search(r"\b32\b", body) is None
+
+
+def _lanes_that_shuffle(expression, values, wave):
+    """The lanes that execute the WaveReadLaneAt in ``expression``."""
+    python = _python_expression(expression)
+    shuffled = []
+    for lane in range(wave):
+
+        def read_lane(value, index, lane=lane):
+            shuffled.append(lane)
+            return values[index]
+
+        scope = {
+            "WaveGetLaneIndex": lambda lane=lane: lane,
+            "WaveGetLaneCount": lambda: wave,
+            "WaveReadLaneAt": read_lane,
+            "gl_SubgroupSize": wave,
+            "int": int,
+            "value": values[lane],
+        }
+        eval(
+            python, scope
+        )  # noqa: S307 - expression built by the test from generated text
+    return shuffled
+
+
+@pytest.mark.parametrize("function", ["up", "down"])
+@pytest.mark.parametrize("width", ["", "16"])
+@pytest.mark.parametrize("wave", [32, 64])
+def test_up_and_down_shuffles_run_in_every_lane(function, width, wave):
+    # #4569: a shuffle inside one arm of ?: runs only in the lanes that take
+    # that arm, and reads source lanes that are inactive there.
+    call = SHUFFLES[function].format(operand=4, width=f", {width}" if width else "")
+    crossgl = _import(
+        f"__global__ void probe(int* out, int value) {{\n  int r = {call};\n  out[threadIdx.x] = r;\n}}\n"
+    )
+    expression = _assigned_expression(crossgl, "r")
+    values = [100 + lane for lane in range(wave)]
+    assert _lanes_that_shuffle(expression, values, wave) == list(range(wave))
+
+
+def _tile_reference(member, values, operand, tile, wave):
+    """cooperative_groups thread_block_tile shfl_down, shfl_up and shfl_xor for a
+    partner inside the tile; up/down read the caller's own value when the source
+    leaves the tile."""
+    results = []
+    for lane in range(wave):
+        local = lane % tile
+        if member == "shfl_down":
+            index = lane + operand if local + operand < tile else lane
+        elif member == "shfl_up":
+            index = lane - operand if local >= operand else lane
+        else:
+            partner = local ^ operand
+            index = lane - local + partner if partner < tile else lane
+        results.append(values[index])
+    return results
+
+
+@pytest.mark.parametrize("member", ["shfl_down", "shfl_up", "shfl_xor"])
+@pytest.mark.parametrize("tile", [4, 16, 32])
+@pytest.mark.parametrize("operand", [2, 5])
+def test_tile_shuffles_run_in_every_lane_and_stay_in_the_tile(member, tile, operand):
+    # With 5 the source leaves a 4-lane tile.
+    wave = 32
+    crossgl = _import(
+        "namespace cg = cooperative_groups;\n"
+        "__global__ void probe(int* out, int value) {\n"
+        "  auto block = cg::this_thread_block();\n"
+        f"  auto tile = cg::tiled_partition<{tile}>(block);\n"
+        f"  int r = tile.{member}(value, {operand});\n"
+        "  out[threadIdx.x] = r;\n"
+        "}\n"
+    )
+    expression = _assigned_expression(crossgl, "r")
+    values = [100 + lane for lane in range(wave)]
+    assert _lanes_that_shuffle(expression, values, wave) == list(range(wave))
+    if member == "shfl_xor" and operand >= tile:
+        # ROCm reads an xor partner in an earlier segment and keeps the
+        # caller's value only for a later one; the importer keeps it for both.
+        # That is a separate question from this issue, so only the lane
+        # execution is checked here.
+        return
+    assert _evaluate(expression, values, wave) == _tile_reference(
+        member, values, operand, tile, wave
+    )

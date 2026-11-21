@@ -1,10 +1,11 @@
 """CI tiering of the conformance, corpus and fuzz workflows.
 
-The conformance and corpus workflows run on every pull request and in the merge queue, so that their single
-``result`` check can be required; a planning job (``tests/conformance/ci_plan.py``) skips their work for changes
-outside their paths instead of a ``paths`` filter. macOS and Windows runners are scarce and shared, so a pull
-request runs only the Linux legs unless it is labelled ``ci:full``; the merge queue runs every conformance leg and
-the corpus Linux leg. Every job carries a timeout, and every workflow ends in one ``result`` job.
+The conformance and corpus workflows run on every pull request, so that their single ``result`` check can be
+required; a planning job (``tests/conformance/ci_plan.py``) skips their work for changes outside their paths
+instead of a ``paths`` filter. They do not run in the merge queue, where their result is not a required check.
+macOS and Windows runners are scarce and shared, so a pull request runs only the Linux legs unless it is labelled
+``ci:full``; pushes to main run every conformance leg. Every job carries a timeout, and every workflow ends in one
+``result`` job.
 """
 
 import json
@@ -114,10 +115,11 @@ def test_one_result_job_requires_every_other_job(name):
 
 
 @pytest.mark.parametrize("name", TIERED)
-def test_pull_requests_and_the_merge_queue_always_start_the_workflow(name):
+def test_pull_requests_always_start_the_workflow_and_the_merge_queue_never_does(name):
     trigger = load(name)["on"]
     assert trigger["pull_request"] is None, "no paths filter: the plan job skips work"
-    assert "merge_group" in trigger
+    # Neither result check is required, so a merge-group run could not gate the queue.
+    assert "merge_group" not in trigger
     assert "schedule" in trigger and "workflow_dispatch" in trigger
 
 
@@ -133,16 +135,14 @@ def test_every_job_waits_for_the_plan(name):
 
 
 @pytest.mark.parametrize("name", TIERED)
-def test_plan_inputs_cover_pull_requests_and_merge_groups(name):
+def test_plan_inputs_cover_pull_requests(name):
     workflow = load(name)
     environment = plan_step(workflow)["env"]
     assert environment["FULL"] == (
         "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
     )
-    assert "github.event.pull_request.base.sha" in environment["BASE"]
-    assert "github.event.merge_group.base_sha" in environment["BASE"]
-    assert "github.event.pull_request.head.sha" in environment["HEAD"]
-    assert "github.event.merge_group.head_sha" in environment["HEAD"]
+    assert environment["BASE"] == "${{ github.event.pull_request.base.sha }}"
+    assert environment["HEAD"] == "${{ github.event.pull_request.head.sha }}"
     checkout = workflow["jobs"]["legs"]["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["fetch-depth"] == 0, "the plan diffs against the base"
@@ -194,14 +194,15 @@ def test_legs_are_well_formed(name):
     ), "every leg defines the same matrix keys"
 
 
-def test_conformance_merge_queue_runs_the_held_out_kernels():
+def test_conformance_pushes_to_main_run_the_held_out_kernels():
     workflow = load("conformance.yml")
     tier = next(
         step
         for step in workflow["jobs"]["native"]["steps"]
         if step.get("name", "").startswith("Select tier")
     )
-    assert '"$GITHUB_EVENT_NAME" = merge_group' in tier["run"]
+    assert '"$GITHUB_EVENT_NAME" = push' in tier["run"]
+    assert "merge_group" not in tier["run"]
 
 
 def test_windows_leg_runs_the_reference_warp_library():
@@ -245,6 +246,22 @@ def test_harness_job_installs_the_fuzzing_dependency():
         if "pip install" in step.get("run", "")
     )
     assert "hypothesis==" in install
+
+
+def test_determinism_job_compares_hash_seeds_on_every_tier():
+    job = load("conformance.yml")["jobs"]["determinism"]
+    assert job["runs-on"].startswith("ubuntu-")
+    step = next(
+        step
+        for step in job["steps"]
+        if "tests.conformance.determinism" in step.get("run", "")
+    )
+    assert '--backends "$BACKENDS"' in step["run"] and '--seeds "$SEEDS"' in step["run"]
+    pull_request = "github.event_name == 'pull_request'"
+    assert step["env"]["BACKENDS"] == (
+        "${{ " + pull_request + " && 'cgl,metal,directx,opengl,vulkan' || 'all' }}"
+    )
+    assert step["env"]["SEEDS"] == "${{ " + pull_request + " && '0,1' || '0,1,4242' }}"
 
 
 # The plan.
@@ -302,19 +319,13 @@ HOSTED = [
         # Unrelated changes skip everything, even under ci:full.
         ("conformance", "pull_request", False, ["README.md"], []),
         ("conformance", "pull_request", True, ["README.md"], []),
-        ("conformance", "merge_group", False, ["docs/a.rst"], []),
-        ("corpus", "merge_group", False, ["README.md"], []),
         # Relevant pull requests run Linux only unless labelled.
         ("conformance", "pull_request", False, ["crosstl/x.py"], LINUX),
         ("conformance", "pull_request", True, ["crosstl/x.py"], LINUX + HOSTED),
         ("corpus", "pull_request", False, ["crosstl/x.py"], LINUX),
         ("corpus", "pull_request", True, ["crosstl/x.py"], LINUX + HOSTED),
-        # The merge queue runs every conformance leg and the corpus Linux leg.
-        ("conformance", "merge_group", False, ["crosstl/x.py"], LINUX + HOSTED),
-        ("corpus", "merge_group", False, ["crosstl/x.py"], LINUX),
         # Unknown changes count as relevant.
         ("conformance", "pull_request", False, None, LINUX),
-        ("conformance", "merge_group", False, None, LINUX + HOSTED),
         # Unfiltered events run every leg.
         ("conformance", "push", False, None, LINUX + HOSTED),
         ("conformance", "schedule", False, None, LINUX + HOSTED),

@@ -1,4 +1,5 @@
-"""Oracle of the CUDA warp-shuffle case (``x_warp_shuffle``), written from the CUDA C++ Programming Guide.
+"""Oracles of the CUDA warp cases (``x_warp_shuffle``, ``x_warp_vote``, ``x_warp_sync_memory``), written from the
+CUDA C++ Programming Guide.
 
 A warp is 32 threads of consecutive index. With ``width`` < 32 each group of ``width`` consecutive lanes behaves as
 a separate warp whose logical lanes start at 0 ("Warp Shuffle Functions"):
@@ -64,3 +65,64 @@ def shuffle_reference(inputs):
         )
         out.append(np.stack(columns, axis=1))
     return np.concatenate(out).reshape(-1).astype(np.int32)
+
+
+VOTE_GROUP = 48
+VOTE_RESULTS = 10
+
+
+def vote_reference(inputs, group=VOTE_GROUP):
+    """Oracle of ``x_warp_vote``: CUDA "Warp Vote Functions", "Warp Reduce Functions" and ``__match_any_sync``.
+
+    Each workgroup of ``group`` threads is cut into warps of 32 consecutive local indices; the last is partial and
+    has only the lanes that exist. A vote or reduction returns the same value to every lane of its warp; the sum
+    wraps modulo 2^32, and min/max compare as the operand's type (signed ``v``, unsigned ``uint(v)``).
+    """
+    values = inputs.astype(np.int64)
+    out = np.zeros((values.size, VOTE_RESULTS), np.uint64)
+    for start in range(0, values.size, group):
+        for base in range(start, min(start + group, values.size), WARP):
+            v = values[base : min(base + WARP, start + group, values.size)]
+            unsigned = v & 0xFFFFFFFF
+            lanes = np.arange(v.size, dtype=np.uint64)
+            ballot = int(np.sum(np.where(v > 0, np.uint64(1) << lanes, 0)))
+            and_all = 0xFFFFFFFF
+            for item in unsigned | 0xFFFFF800:
+                and_all &= int(item)
+            or_all, xor_all = 0, 0
+            for item in (v + 1000) & 0xFFFFFFFF:
+                or_all |= int(item)
+            for item in unsigned:
+                xor_all ^= int(item)
+            row = [
+                ballot,
+                int(np.any(v > 900)),
+                int(np.all(v > -990)),
+                int(np.sum(v * 1048576)) & 0xFFFFFFFF,
+                int(v.min()) & 0xFFFFFFFF,
+                int(unsigned.max()),
+                and_all,
+                or_all,
+                xor_all,
+            ]
+            for lane, item in enumerate(v):
+                matches = np.sum(
+                    np.where((v & 3) == (item & 3), np.uint64(1) << lanes, 0)
+                )
+                out[base + lane] = row + [int(matches)]
+    return out.reshape(-1).astype(np.uint32).view(np.int32)
+
+
+SYNC_MEMORY_RESULTS = 2
+
+
+def sync_memory_reference(inputs):
+    """Oracle of ``x_warp_sync_memory``: ``__syncwarp`` makes a lane's global writes visible to its warp.
+
+    Lane ``i`` stores ``3 inp[i] + 7``, then reads its neighbour's (``i ^ 1``, in the same warp) store after the
+    barrier, and keeps its own input in the second slot.
+    """
+    values = inputs.astype(np.int64)
+    lanes = np.arange(values.size)
+    out = np.stack(((values[lanes ^ 1] * 3 + 7), values), axis=1)
+    return out.reshape(-1).astype(np.int32)

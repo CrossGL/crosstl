@@ -1,8 +1,9 @@
 """What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
 bounded ``history.csv`` and the trend chart drawn from it.
 
-``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all five files. Only CI
-runs it; contributors never regenerate anything.
+``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes them all, with the
+report's feature rows in ``features/`` (see :func:`tools.coverage.report.site`). Only CI runs it; contributors never
+regenerate anything.
 """
 
 from __future__ import annotations
@@ -10,17 +11,20 @@ from __future__ import annotations
 import csv
 import io
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote
 
 from . import chart, ir, trend
 from .causes import cause, diagnostic, grouped, headline
 from .model import OUTCOMES
-from .report import dumps
+from .report import site
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
 HISTORY_RUNS = 400
 HISTORY_FIELDS = ("date", "commit", "language", "direction", "score", *OUTCOMES)
+# The most bytes a published file may have (ADR 0003, section 5).
+SIZE_LIMIT = 1_000_000
 DETAIL_LIMIT = 160
 # A cause in COVERAGE.md is longer, so that two causes do not read the same once cut.
 CAUSE_LIMIT = 400
@@ -51,6 +55,8 @@ def _executed_cell(row: dict) -> str:
         return "compile-only"
     if "executed" not in row:
         return "not run"
+    if len(row.get("executions", {})) > 1:
+        return ", ".join(f"{n} on {name}" for name, n in row["executions"].items())
     if row.get("runtime"):
         return f"{row['executed']} on {row['runtime']}"
     return str(row["executed"])
@@ -151,7 +157,9 @@ def _executed() -> list[str]:
         "on the GPU or on Mesa's software drivers. A supported compute probe whose translation reads the native "
         "probe's input buffers runs next to the native probe on the same inputs, and a translation that binds "
         "other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust probes run as the SPIR-V "
-        "their reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. The "
+        "their reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. HLSL probes "
+        "also run as HLSL on Direct3D 12 WARP, and a row that ran on more than one runtime counts its probes per "
+        "runtime; a probe that diverges on either is wrong. The "
         "harness has no runtime for the language of a compile-only row, so the reference tool alone decides its "
         "score; 0 means that no supported probe of the row could run.",
         "",
@@ -227,8 +235,31 @@ def _untested(row: dict) -> list[str]:
     return lines
 
 
+def _unrun(row: dict) -> tuple[int, list[str]]:
+    """How many supported probes of ``row`` a runtime did not run, and one list item per reason, most shared first.
+
+    A probe that two runtimes left out is listed under each one's reason.
+    """
+    found: dict[str, list[str]] = {}
+    count = 0
+    for feature in sorted(row["features"], key=lambda f: f["name"]):
+        if feature["outcome"] != "supported" or not feature.get("unrun"):
+            continue
+        count += 1
+        for reason in feature["unrun"]:
+            found.setdefault(reason.splitlines()[0].strip(), []).append(feature["name"])
+    lines = []
+    for reason, names in sorted(
+        found.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        tally = f" ({len(names)})" if len(names) > 1 else ""
+        lines.append(f"- {_code(reason)}{tally}: " + ", ".join(f"`{n}`" for n in names))
+    return count, lines
+
+
 def _gaps(row: dict, repository: str) -> list[str]:
-    """The refused and wrong features of one row grouped by cause, and the untested ones grouped by reason.
+    """The refused and wrong features of one row grouped by cause, the untested ones grouped by reason, and the
+    supported compute probes a runtime did not run, grouped by the reason it gave.
 
     The wrong results are grouped as the bug issues are (:func:`.causes.grouped`), so each item is one bug.
     """
@@ -237,7 +268,8 @@ def _gaps(row: dict, repository: str) -> list[str]:
     untested = Counter(
         f["category"] for f in row["features"] if f["outcome"] == "untested"
     )
-    if not counts["refused"] and not counts["wrong"] and not untested:
+    unrun, reasons = _unrun(row)
+    if not counts["refused"] and not counts["wrong"] and not untested and not unrun:
         return []
     lines = [f"### {language} {direction}", ""]
     if counts["refused"] or counts["wrong"]:
@@ -264,6 +296,16 @@ def _gaps(row: dict, repository: str) -> list[str]:
             f"<summary>{sum(untested.values())} untested: {tally}</summary>",
             "",
             *_untested(row),
+            "",
+            "</details>",
+            "",
+        ]
+    if unrun:
+        lines += [
+            "<details>",
+            f"<summary>{unrun} supported compute probe{'s' if unrun > 1 else ''} a runtime did not run</summary>",
+            "",
+            *reasons,
             "",
             "</details>",
             "",
@@ -332,8 +374,21 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _csv(rows: Iterable[dict], header: bool = True) -> str:
+    out = io.StringIO()
+    writer = csv.DictWriter(
+        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
+    )
+    if header:
+        writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def history(report: dict, previous: str = "") -> str:
-    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs."""
+    """``previous`` history plus this run's rows, keeping the newest :data:`HISTORY_RUNS` runs that fit in
+    :data:`SIZE_LIMIT` bytes, so that a growing number of rows shortens the history instead of stopping publication.
+    """
     rows = [r for r in csv.DictReader(io.StringIO(previous)) if r.get("date")]
     rows = [
         r
@@ -353,15 +408,18 @@ def history(report: dict, previous: str = "") -> str:
                 **{o: str(row["counts"][o]) for o in OUTCOMES},
             }
         )
-    runs = sorted({(r["date"], r["commit"]) for r in rows})[-HISTORY_RUNS:]
-    kept = set(runs)
-    out = io.StringIO()
-    writer = csv.DictWriter(
-        out, HISTORY_FIELDS, extrasaction="ignore", lineterminator="\n"
-    )
-    writer.writeheader()
-    writer.writerows(r for r in rows if (r["date"], r["commit"]) in kept)
-    return out.getvalue()
+    sizes: dict[tuple[str, str], int] = {}
+    for r in rows:
+        run = (r["date"], r["commit"])
+        sizes[run] = sizes.get(run, 0) + len(_csv([r], header=False).encode("utf-8"))
+    size = len(_csv([]).encode("utf-8"))
+    kept = set()
+    for run in sorted(sizes, reverse=True)[:HISTORY_RUNS]:
+        size += sizes[run]
+        if size > SIZE_LIMIT:
+            break
+        kept.add(run)
+    return _csv(r for r in rows if (r["date"], r["commit"]) in kept)
 
 
 def write_site(
@@ -370,19 +428,28 @@ def write_site(
     previous_history: str = "",
     repository: str = "CrossGL/crosstl",
 ) -> list[Path]:
-    """Write the five published files into ``directory`` and return their paths."""
-    directory.mkdir(parents=True, exist_ok=True)
+    """Write the published files into ``directory`` and return their paths.
+
+    Raises ``ValueError`` before writing anything if a file would exceed :data:`SIZE_LIMIT`.
+    """
     runs = history(report, previous_history)
     files = {
-        "coverage.json": dumps(report),
+        **site(report),
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
         "history.csv": runs,
         "trend.svg": trend.render(runs),
     }
+    for filename, text in files.items():
+        size = len(text.encode("utf-8"))
+        if size > SIZE_LIMIT:
+            raise ValueError(
+                f"{filename} would be {size} bytes, over the {SIZE_LIMIT}-byte limit for a published file"
+            )
     paths = []
     for filename, text in files.items():
         path = directory / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         paths.append(path)
     return paths

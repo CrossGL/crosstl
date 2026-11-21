@@ -2,7 +2,7 @@
 
 from tools.coverage import validators
 from tools.coverage.features import hlsl
-from tools.coverage.model import VOID, Param, Signature, Type
+from tools.coverage.model import STRING, VOID, Param, Signature, Type
 
 
 def by_name(features):
@@ -111,9 +111,9 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
-    # The probes compile to DXIL, where DXC has no printf.
-    assert features["printf"].signature is None
-    assert features["printf"].note.startswith("DXC compiles printf only to SPIR-V")
+    # DXIL has no printf, so its probe is checked as SPIR-V, with an empty format and no variable arguments.
+    assert features["printf"].target == validators.HLSL_SPIRV
+    assert features["printf"].signature == Signature(VOID, (Param(STRING, "const"),))
     # Ray-tracing intrinsics run in a closest-hit shader unless another stage alone has them.
     assert features["WorldRayOrigin"].stage == "closest-hit"
     assert features["IgnoreHit"].stage == "any-hit"
