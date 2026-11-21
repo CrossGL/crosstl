@@ -251,6 +251,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_residency_call,
     hlsl_texture_resident_call,
 )
+from .type_query_memo import scoped_type_query
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
@@ -5791,6 +5792,7 @@ class HLSLCodeGen(
             return True
         return str(getattr(attr, "name", "")).lower() in metadata
 
+    @scoped_type_query
     def expression_result_type(self, expr):
         if expr is None:
             return None
