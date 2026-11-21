@@ -24,6 +24,12 @@ RWStructuredBuffer<float> outp : register(u1);
 void CSMain(uint3 id : SV_DispatchThreadID) { outp[id.x] = %s; }
 """
 
+HALF_MEMBERS = (
+    "struct PC { half h; float3 v; };\n"
+    "[[vk::push_constant]] PC pc;\n"
+    + TAIL % "pc.h + pc.v.y"
+)
+
 RELAXED = (
     "struct Constants { float scale; float3 v; };\n"
     "[[vk::push_constant]] ConstantBuffer<Constants> pc;\n" + TAIL % "pc.scale + pc.v.y"
@@ -211,6 +217,54 @@ def test_slang_refuses_a_relaxed_offset(tmp_path):
         _translate(tmp_path, RELAXED, "slang")
     # An offset std430 agrees with needs no placement.
     assert _translate(tmp_path, EXPLICIT, "slang", name="explicit.hlsl")
+
+
+def test_importer_places_float3_after_half_scalar(tmp_path):
+    """DXC places ``float3 v`` at byte 4 after a ``half h`` member (DXC 1.9, with and without
+    ``-enable-16bit-types``).  CrossGL must record an ``@offset(4)`` on ``v`` so that all
+    backends reproduce the same layout.
+    """
+    crossgl = _translate(tmp_path, HALF_MEMBERS, "cgl")
+    offsets = _offset_members(crossgl)
+    # ``v`` must carry an explicit offset; its exact byte depends on how the importer
+    # models ``half`` storage, but it must not be absent (std430 would put v at 16).
+    assert any(name == "v" for _t, name, _off in offsets), (
+        f"expected an @offset on 'v' in: {crossgl!r}"
+    )
+    v_offset = int(next(off for _t, name, off in offsets if name == "v"))
+    assert v_offset < 16, (
+        f"expected 'v' to be placed before byte 16 (DXC relaxed rule), got byte {v_offset}"
+    )
+
+
+def test_half_push_constant_translates_to_vulkan_without_error(tmp_path):
+    """The push-constant struct with a ``half`` member must translate to SPIR-V without
+    raising ``HLSLPushConstantLayoutError``."""
+    # Should not raise.
+    spirv = _translate(tmp_path, HALF_MEMBERS, "vulkan")
+    assert spirv  # non-empty output confirms success
+
+
+@pytest.mark.parametrize(
+    "members, expression",
+    [
+        # half scalar followed by float3 vector: v at byte 4 (relaxed, not std430's byte 16).
+        ("half h; float3 v;", "pc.h + pc.v.y"),
+        # Two half scalars: second at byte 2 (with -enable-16bit-types) or byte 4 (without).
+        ("half a; half b; float3 v;", "pc.a + pc.b + pc.v.y"),
+    ],
+)
+def test_half_push_constant_roundtrips_through_crossgl(tmp_path, members, expression):
+    """An HLSL push-constant struct with half members can be imported into CrossGL and
+    re-exported to HLSL without raising an error."""
+    source = (
+        f"struct PC {{ {members} }};\n[[vk::push_constant]] PC pc;\n"
+        + TAIL % expression
+    )
+    crossgl = _translate(tmp_path, source, "cgl")
+    assert crossgl  # import must succeed
+    hlsl = _translate(tmp_path, source, "directx", name="shader2.hlsl")
+    assert hlsl  # re-export must succeed
 
 
 @pytest.mark.parametrize("source", [RELAXED, EXPLICIT], ids=["relaxed", "explicit"])

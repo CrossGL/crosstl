@@ -300,6 +300,68 @@ def test_scalar_array_stride_rounds_the_struct_to_its_alignment():
     assert block_array_stride(crossgl_layout_type("vec3[2]", {}.get), "scalar") == 12
     assert block_array_stride(crossgl_layout_type("vec3[2]", {}.get), "std430") == 16
     assert block_array_stride(crossgl_layout_type("float[2]", {}.get), "std430") == 4
+# 16-bit scalar and vector layout tests --------------------------------------------------
+
+
+def test_float16_scalar_has_two_byte_size_and_alignment():
+    """``float16`` (CrossGL's 16-bit float) has a 2-byte scalar size for std430 and scalar layouts."""
+    from crosstl.translator.codegen.glsl_block_layout import block_alignment, block_size
+
+    for spelling in ("float16", "float16_t", "half"):
+        lt = crossgl_layout_type(spelling, {}.get)
+        assert lt.kind == "scalar", f"{spelling!r} should resolve to a scalar"
+        assert lt.scalar == "float16", f"{spelling!r} scalar should be 'float16'"
+        assert block_size(lt, "std430") == 2, f"{spelling!r} std430 size should be 2"
+        assert block_alignment(lt, "std430") == 2, f"{spelling!r} std430 alignment should be 2"
+        assert block_size(lt, "scalar") == 2, f"{spelling!r} scalar layout size should be 2"
+
+
+def test_float16_vector_spellings_resolve():
+    """``half2``/``half3``/``half4`` and ``f16vec[2-4]`` produce 16-bit vector types."""
+    for spelling, components in [
+        ("half2", 2),
+        ("half3", 3),
+        ("half4", 4),
+        ("f16vec2", 2),
+        ("f16vec3", 3),
+        ("f16vec4", 4),
+        ("float162", 2),
+        ("float163", 3),
+        ("float164", 4),
+    ]:
+        lt = crossgl_layout_type(spelling, {}.get)
+        assert lt.kind == "vector", f"{spelling!r} should be a vector, got {lt.kind!r}"
+        assert lt.scalar == "float16", (
+            f"{spelling!r} scalar should be 'float16', got {lt.scalar!r}"
+        )
+        assert lt.components == components, (
+            f"{spelling!r} components should be {components}, got {lt.components}"
+        )
+
+
+def test_float16_struct_layout_does_not_raise():
+    """A struct with ``float16`` members can be laid out under std430 and scalar without error.
+
+    This is the core of the fix: before the fix, ``crossgl_layout_type`` raised
+    ``HlslLayoutError: type 'float16' has no uniform-block layout``.
+    """
+    from crosstl.translator.codegen.glsl_block_layout import block_struct_placements
+
+    lt = crossgl_layout_type(
+        "PC",
+        lambda name: (
+            [("h", "float16", False, None, None), ("v", "vec3", False, None, None)]
+            if name == "PC"
+            else None
+        ),
+    )
+    # std430: float16 scalar (2 bytes), then vec3 of float (align to 4*4=16). v is at byte 16.
+    placements, _size = block_struct_placements(lt, "std430", root=True)
+    assert {p.name: p.offset for p in placements} == {"h": 0, "v": 16}
+    # scalar layout: float16 scalar (2 bytes), then vec3 of float (align to 4). v is at byte 4.
+    placements, _size = block_struct_placements(lt, "scalar", root=True)
+    assert placements[0].offset == 0 and placements[1].offset == 4
+
 
 
 @pytest.mark.parametrize(
