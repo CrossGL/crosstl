@@ -18,6 +18,7 @@ systems-language targets.
    codegen-utilities
    backend-support
    backends/index
+   languages/index
    extending
    adr/index
 
