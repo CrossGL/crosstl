@@ -1,5 +1,7 @@
 """Which runtime each language's probes run on: GLSL on OpenGL or Vulkan, the others as SPIR-V."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -241,7 +243,11 @@ def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypat
         lambda language, source: "" if "CSMain" in source else ";",
     )
     probe = hlsl_result(hlsl_result().sources[0].replace("void main", "void CSMain"))
-    assert execution.run([probe])[0] == [probe]
+    [kept], _ = execution.run([probe])
+    assert kept == replace(
+        probe, unrun="on vulkan-lavapipe, dxc writes no SPIR-V for it"
+    )
+    # With no compiler to lower HLSL, no runtime was there to run it, so it gives no reason.
     monkeypatch.setattr(lowering, "can_lower", lambda language: False)
     assert execution.run([hlsl_result()]) == ([hlsl_result()], [])
     assert execution.idle([hlsl_result()]) == ["hlsl"]
@@ -305,3 +311,195 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
         path.write_text(execution.as_spirv(language, renamed))
         assert interface.interface(path, "spirv", 1)["entry"] == "CSMain"
     assert execution.as_spirv(language, "not a shader") == ""
+
+
+@pytest.mark.parametrize(
+    ("translated_outcome", "written", "expected", "detail"),
+    [
+        ("preserved", 0, "supported", ""),
+        (
+            "preserved",
+            1,
+            "wrong",
+            f"on d3d12-warp, the translation {execution.DIVERGED}",
+        ),
+    ],
+)
+def test_hlsl_probes_run_as_hlsl_where_d3d12_warp_is_selected(
+    monkeypatch, translated_outcome, written, expected, detail
+):
+    fake_harness(monkeypatch, translated_outcome, written, "d3d12-warp")
+    lowered, sources = [], []
+    monkeypatch.setattr(
+        execution, "as_spirv", lambda language, source: lowered.append(language)
+    )
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        sources.extend(case.src.suffix for case in cases)
+        return original(cases, *args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    [result], used = execution.run([hlsl_result()], "d3d12-warp")
+    assert lowered == [] and sources == [".hlsl", ".hlsl"]
+    assert used == ["d3d12-warp"] and result.runtime == "d3d12-warp"
+    assert result.outcome == expected
+    assert result.detail.startswith(detail)
+    assert "as SPIR-V" not in result.detail
+
+
+def test_hlsl_probes_run_as_spirv_where_no_hlsl_runtime_is_selected(monkeypatch):
+    # The harness offers d3d12-warp for HLSL, but this host cannot provide it, so the probes run on lavapipe.
+    class Provision:
+        def __init__(self, available):
+            self.available = available
+
+    on = {
+        "hlsl": runtimes.RUNTIMES["d3d12-warp"],
+        "spirv": runtimes.RUNTIMES["vulkan-lavapipe"],
+    }
+    monkeypatch.setattr(
+        harness,
+        "select_runtimes",
+        lambda spec, targets: {t: [(on[t], Provision(t == "spirv"))] for t in targets},
+    )
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        execution, "as_spirv", lambda language, source: f"; {language} as SPIR-V\n"
+    )
+
+    def run_suite(cases, targets, *args, **kwargs):
+        assert targets == ["spirv"]
+        for case in cases:
+            case.check(case.inputs, np.zeros(case.out_count, dtype=np.uint32))
+        return [
+            {"case": c.id, "runtime": "vulkan-lavapipe", "outcome": "preserved"}
+            for c in cases
+        ]
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    [result], used = execution.run([hlsl_result()])
+    assert used == ["vulkan-lavapipe"] and result.outcome == "supported"
+
+
+def test_an_hlsl_ray_query_probe_keeps_its_validation_result_on_d3d12(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 1, "d3d12-warp")
+    native = hlsl_result().sources[0]
+    query = native.replace("void main", "RayQuery<RAY_FLAG_NONE> q;\nvoid main", 1)
+    [result], used = execution.run([hlsl_result(query)], "d3d12-warp")
+    assert (result.outcome, result.runtime) == ("supported", "")
+    assert (
+        result.unrun
+        == "on d3d12-warp, it reads a ray query, which no second run repeats"
+    )
+
+
+def test_a_probe_the_runtime_would_not_compile_says_why_it_did_not_run(monkeypatch):
+    # A probe that needs a later shader model than the harness compiles for: DXC refuses the native probe.
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        records = original(cases, *args, **kwargs)
+        for record in records:
+            if record["case"].endswith("-native"):
+                record["outcome"] = "invalid"
+                record["execution"] = {
+                    "message": "error: opcode 'WaveSize' needs shader model 6.6\n"
+                }
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert (result.outcome, result.runtime) == ("supported", "")
+    assert result.unrun == (
+        "on d3d12-warp, its native probe did not run (invalid)\n"
+        "error: opcode 'WaveSize' needs shader model 6.6"
+    )
+
+
+def _native_records(monkeypatch, **fields):
+    """Make every native record the harness returns carry ``fields`` instead of an execution."""
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        records = original(cases, *args, **kwargs)
+        for record in records:
+            if record["case"].endswith("-native"):
+                record.pop("execution", None)
+                record.update(fields)
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+
+
+def test_a_harness_error_quotes_the_harness_message(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    _native_records(
+        monkeypatch,
+        outcome="harness-error",
+        message="resource 'B1' has no binding the D3D12 root signature can take",
+    )
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert result.unrun == (
+        "on d3d12-warp, its native probe did not run (harness-error)\n"
+        "resource 'B1' has no binding the D3D12 root signature can take"
+    )
+
+
+def test_a_probe_the_validator_rejected_quotes_the_failed_step(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    _native_records(
+        monkeypatch,
+        outcome="invalid",
+        validation=[
+            {"command": ["dxc"], "status": "accepted", "returncode": 0, "log": ""},
+            {
+                "command": ["dxv"],
+                "status": "rejected",
+                "returncode": 1,
+                "log": (
+                    "error: validation failed\nInstructions should not read uninitialized value.\n"
+                ),
+            },
+        ],
+    )
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert result.unrun == (
+        "on d3d12-warp, its native probe did not run (invalid)\n"
+        "error: validation failed\nInstructions should not read uninitialized value."
+    )
+
+
+def test_a_translation_the_runtime_skipped_says_why_it_did_not_run(monkeypatch):
+    fake_harness(
+        monkeypatch, "skipped", 0, "d3d12-warp", message="needs 64-bit atomics"
+    )
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert (result.outcome, result.runtime) == ("supported", "")
+    assert (
+        result.unrun
+        == "on d3d12-warp, the translation did not run (skipped)\nneeds 64-bit atomics"
+    )
+
+
+def test_a_probe_that_ran_has_no_reason(monkeypatch):
+    fake_harness(monkeypatch, "preserved", 0, "d3d12-warp")
+    [result], _ = execution.run([hlsl_result()], "d3d12-warp")
+    assert (result.runtime, result.unrun) == ("d3d12-warp", "")
+
+
+def test_the_coverage_hlsl_probes_keep_the_harness_hlsl_interface(tmp_path):
+    from tests.conformance import interface
+
+    name, result = CALLS["hlsl"]
+    path = tmp_path / "probe.hlsl"
+    for probe in (
+        _sine("hlsl"),
+        Feature("hlsl", "function", name, Signature(result, ())),
+    ):
+        source = probes.build(probe, "hlsl").source
+        path.write_text(source)
+        found = interface.interface(path, "hlsl", 1)
+        assert found["entry"] == validators.hlsl_entry(source, "compute")
+        assert found["bindings"] == (0, 1)
