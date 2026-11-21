@@ -81,6 +81,18 @@ def _parser() -> argparse.ArgumentParser:
         "native probe",
     )
     run.add_argument(
+        "--runtimes",
+        default="available",
+        help="with --execute, the conformance harness's runtimes to run probes on: available (the default), or a "
+        "comma-separated list of runtime ids, each of which must then be available",
+    )
+    run.add_argument(
+        "--execution-only",
+        action="store_true",
+        help="with --execute, write a report that merge reads only for its execution verdicts, which it adds to the "
+        "rows another report measures",
+    )
+    run.add_argument(
         "--strict",
         action="store_true",
         help="fail when a requested backend's validator is missing, instead of reporting its probes as untested, "
@@ -201,6 +213,12 @@ def _run_pairs(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.execution_only and not args.execute:
+        print("error: --execution-only needs --execute", file=sys.stderr)
+        return 2
+    if args.pairs and args.execution_only:
+        print("error: --execution-only measures rows, not --pairs", file=sys.stderr)
+        return 2
     if args.pairs:
         return _run_pairs(args)
     languages = args.backend or LANGUAGES
@@ -213,6 +231,8 @@ def _run(args: argparse.Namespace) -> int:
         f"{language} lowering to SPIR-V ({', '.join(_lowering_gaps(language))})"
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
+        # An execution-only run judges no static verdict, so it needs no SPIR-V where it runs a language natively.
+        and not (args.execution_only and language in execution.SUFFIXES)
     ]
     # Slang functions SPIR-V lacks compile for HLSL or CUDA, which DXC or nvcc then checks.
     if "slang" in languages:
@@ -221,9 +241,12 @@ def _run(args: argparse.Namespace) -> int:
             for target, tool in validators.SLANG_SOURCE_TARGETS.items()
             if not validators.command(tool)
         ]
-    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
-    if "hlsl" in languages and not validators.available(
-        "hlsl", validators.HLSL_PREVIEW
+    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview. An execution-only
+    # run gives no static verdict, and the runtimes compile with the pinned DXC, so it does not need the preview.
+    if (
+        "hlsl" in languages
+        and not args.execution_only
+        and not validators.available("hlsl", validators.HLSL_PREVIEW)
     ):
         missing.append("hlsl for shader model 6.10 (dxc-preview)")
     # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
@@ -253,14 +276,20 @@ def _run(args: argparse.Namespace) -> int:
             jobs += [(feature, direction, language) for feature in feature_list]
     results = runner.run(jobs, args.jobs or None, keep=args.keep)
     if args.execute:
-        results, used = execution.run(results)
+        results, used = execution.run(results, args.runtimes)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
         idle = execution.idle(results)
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
-    data = report.build(results, languages, directions, execute=args.execute)
+    data = report.build(
+        results,
+        languages,
+        directions,
+        execute=args.execute,
+        execution_only=args.execution_only,
+    )
     report.write(data, args.output)
     print(report.summary(data))
     if args.feature:
