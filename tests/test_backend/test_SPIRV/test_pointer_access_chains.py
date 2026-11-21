@@ -22,6 +22,7 @@ import crosstl
 from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
 from crosstl.backend.SPIRV.type_declaration_names import declarable_struct_name
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+from tests.spirv_friendly_names import translate_spirv
 
 POINTER_ARITHMETIC = """; SPIR-V
                OpCapability VariablePointersStorageBuffer
@@ -169,9 +170,7 @@ def test_pointer_to_a_whole_variable_cannot_move(tmp_path):
 
 
 def test_array_sample_mask_output_compiles_to_spirv(tmp_path):
-    assembly = crosstl.translate(
-        _write(tmp_path, SAMPLE_MASK, "probe.cgl"), backend="vulkan"
-    )
+    assembly = translate_spirv(_write(tmp_path, SAMPLE_MASK, "probe.cgl"))
     assert "BuiltIn SampleMask" in assembly
     assert re.search(r"OpTypeArray %int %(int|uint)_1\b", assembly)
     _validate(tmp_path, assembly)
@@ -193,7 +192,7 @@ POINTER_LOCALS = """shader Probe {
 
 def _emit(tmp_path, body):
     source = POINTER_LOCALS.replace("BODY", body)
-    return crosstl.translate(_write(tmp_path, source, "probe.cgl"), backend="vulkan")
+    return translate_spirv(_write(tmp_path, source, "probe.cgl"))
 
 
 @pytest.mark.parametrize(
