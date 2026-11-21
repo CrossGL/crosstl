@@ -7042,7 +7042,7 @@ class HLSLCodeGen(
             value = self.generate_expression(args[0])
             # Inclusive scan = exclusive scan combined with the lane's own value.
             return f"({exclusive_op}({value}) {combine} ({value}))"
-        args_str = ", ".join(self.generate_expression(arg) for arg in args)
+        args_str = self.generate_hlsl_wave_operands(operation, args)
         result = f"{operation}({args_str})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
