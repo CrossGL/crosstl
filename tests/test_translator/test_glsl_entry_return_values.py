@@ -138,7 +138,7 @@ def _glslang(tmp_path, code, stage, *options):
     path = tmp_path / f"out.{stage}"
     path.write_text(code, encoding="utf-8")
     result = subprocess.run(
-        ["glslangValidator", *options, "-S", stage, str(path)],
+        ["glslangValidator", *map(str, options), "-S", stage, str(path)],
         capture_output=True,
         text=True,
         check=False,
@@ -175,7 +175,9 @@ def test_intersection_entry_result_reports_its_hit(tmp_path, source):
 
     assert "reportIntersectionEXT(intersection_result.distance, 0u);" in glsl
     assert "if (intersection_result.accept)" in glsl
-    _glslang(tmp_path, glsl, "rint", "--target-env", "vulkan1.2")
+    _glslang(
+        tmp_path, glsl, "rint", "--target-env", "vulkan1.2", "-o", tmp_path / "out.spv"
+    )
 
 
 @pytest.mark.parametrize("backend", ["opengl", "webgl"])
