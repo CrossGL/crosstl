@@ -115,6 +115,10 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_fragment_depth_layout import (
+    entry_depth_redeclarations,
+    require_conservative_depth_extension,
+)
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
@@ -3780,6 +3784,7 @@ class GLSLCodeGen(
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
         code += invariant_builtin_redeclarations(self, target_stage)
+        code += entry_depth_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -4565,6 +4570,10 @@ class GLSLCodeGen(
         )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
+        code = require_conservative_depth_extension(
+            code,
+            self.glsl_version_is_es(getattr(self, "current_glsl_version_line", None)),
+        )
         code = self.ensure_glsl_version_supports_generated_layouts(code)
         if getattr(self, "glsl_shadow_lod_extension_used", False):
             code = require_shadow_lod_extension(code)
