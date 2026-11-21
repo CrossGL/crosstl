@@ -1324,20 +1324,25 @@ def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse()
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert isinstance(body[1].value, FunctionCallNode)
     assert body[1].value.name == "__syncthreads_count"
     assert body[2].value.name == "__syncthreads_and"
     assert body[3].value.name == "__syncthreads_or"
-    # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
-    for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
-        assert f"CUDA thread block sync vote {name}(pred)" in message
-    assert "__syncthreads_count(pred);" not in crossgl
-    assert "__syncthreads_and(pred);" not in crossgl
-    assert "__syncthreads_or(pred);" not in crossgl
+    # Each is a barrier that also reduces the predicate over the block, counted in one workgroup variable.
+    assert "var<workgroup> crossgl_block_votes: u32;" in crossgl
+    assert "i32(crossgl_block_count((pred != 0), gl_LocalInvocationIndex))" in crossgl
+    assert (
+        "i32(crossgl_block_count(!((pred != 0)), gl_LocalInvocationIndex) == 0u)"
+        in crossgl
+    )
+    assert (
+        "i32(crossgl_block_count((pred != 0), gl_LocalInvocationIndex) != 0u)"
+        in crossgl
+    )
+    assert "__syncthreads_" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
