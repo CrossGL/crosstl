@@ -1619,7 +1619,7 @@ class TestHipCodeGen:
         assert "__syncwarp" not in result
         assert "None" not in result
 
-    def test_rocm_docs_syncthreads_vote_intrinsics_emit_reparseable_diagnostic(self):
+    def test_rocm_docs_syncthreads_vote_intrinsics_count_in_a_workgroup_variable(self):
         # Source: ROCm HIP C++ language extensions, HIP 7.0.51831 docs.
         # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.2/how-to/hip_cpp_language_extensions.html#synchronization-functions
         code = """
@@ -1636,16 +1636,19 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
-        )
+        result = HipToCrossGLConverter().generate(ast)
 
-        # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
-        for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
-            assert f"HIP block-wide sync vote {name}((idx < n))" in message
-        assert "__syncthreads_count((idx < n))" not in result
-        assert "__syncthreads_and((idx < n))" not in result
-        assert "__syncthreads_or((idx < n))" not in result
+        # Each is a barrier that also reduces the predicate over the block, counted in one workgroup variable.
+        assert "var<workgroup> crossgl_block_votes: u32;" in result
+        assert (
+            "i32(crossgl_block_count(((idx < n) != 0), gl_LocalInvocationIndex))"
+            in result
+        )
+        assert (
+            "i32(crossgl_block_count(!(((idx < n) != 0)), gl_LocalInvocationIndex) == 0u)"
+            in result
+        )
+        assert "__syncthreads_" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_rocm_hip_ldg_address_load_codegen_reparse(self):

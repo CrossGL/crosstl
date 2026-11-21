@@ -1,8 +1,9 @@
 """Metal refuses the stages it cannot write as entry points, with a typed diagnostic.
 
-Metal has no geometry stage, and its tessellation pipeline (a compute kernel writing tessellation factors and a
-``[[patch]]`` post-tessellation vertex function) is not lowered yet, so these stages must not come out as plain
-functions that no Metal pipeline can call.
+Metal has no geometry stage, and the compute kernel that writes Metal's tessellation factors is not lowered from a
+hull stage yet, so these stages must not come out as plain functions that no Metal pipeline can call. A domain stage
+becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py``), except in the GLSL
+form that reads ``gl_in`` and ``gl_TessCoord``.
 """
 
 import pytest
@@ -76,19 +77,6 @@ shader TessControl {
 }
 """
 
-TESSELLATION_EVALUATION = """
-shader TessEval {
-    struct DomainInput { vec3 position @ POSITION; };
-
-    tessellation_evaluation {
-        vec4 main(OutputPatch<DomainInput, 3> patch, vec3 uvw @ SV_DomainLocation) @domain(tri) {
-            vec3 p = patch[0].position * uvw.x + patch[1].position * uvw.y + patch[2].position * uvw.z;
-            return vec4(p, 1.0);
-        }
-    }
-}
-"""
-
 HLSL_GEOMETRY = """
 struct VSOut { float4 pos : SV_Position; float3 color : COLOR0; };
 
@@ -111,7 +99,6 @@ def parse(code):
     [
         (GEOMETRY, "geometry", "Metal has no geometry stage"),
         (TESSELLATION_CONTROL, "tessellation_control", "compute kernel"),
-        (TESSELLATION_EVALUATION, "tessellation_evaluation", "[[patch]]"),
     ],
 )
 def test_metal_refuses_stage_without_metal_entry_point(code, stage, phrase):
