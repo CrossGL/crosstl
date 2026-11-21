@@ -32,6 +32,7 @@ from ..ast import (
 from ..float_limit_constants import float_limit_constant
 from ..standard_constants import standard_math_constant
 from .aggregate_constant_folding import AggregateConstant, AggregateConstantFolder
+from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .matrix_constant_folding import (
     MatrixConstant,
     convert_matrix_constant,
@@ -401,6 +402,15 @@ def spirv_folded_constant(generator, expr, target_type) -> object | None:
     """Return a constant id for a foldable initializer, or ``None``."""
     if not isinstance(expr, _EVALUATED_NODES):
         return None
+    if (
+        target_type is not None
+        and generator.normalize_primitive_name(target_type.type.base_type)
+        == generator.BFLOAT16_TYPE_NAME
+    ):
+        value = scalar_constant_value(expr)
+        if value is None:
+            return None
+        return generator.register_constant(bfloat16_constant_float(value), target_type)
     array_constant = _array_constructor_constant(generator, expr)
     if array_constant is not None:
         return array_constant
