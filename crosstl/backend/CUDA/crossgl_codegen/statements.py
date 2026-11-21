@@ -65,6 +65,11 @@ class CudaImportStatementMixin:
         target_type, is_array = self.unwrap_array_template_type(template_args[0])
         target_type = self.convert_cuda_type_to_crossgl(target_type)
         args_str = ", ".join(args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"CUDA {function_name}({args_str}): CrossGL has no device heap",
+                "0",
+            )
         if is_array:
             return f"new_array<{target_type}>({args_str})"
         return f"new<{target_type}>({args_str})"
@@ -84,9 +89,19 @@ class CudaImportStatementMixin:
         target_type = self.convert_cuda_type_to_crossgl(node.target_type)
         if node.is_array:
             size = self.visit(node.size) if node.size is not None else ""
+            if self.in_device_code:
+                return self.refuse_import(
+                    f"CUDA new[] {target_type}({size}): CrossGL has no device heap",
+                    "0",
+                )
             return f"new_array<{target_type}>({size})"
 
         args = ", ".join(self.visit(arg) for arg in node.args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"CUDA new {target_type}({args}): CrossGL has no device heap",
+                "0",
+            )
         return f"new<{target_type}>({args})"
 
     def visit_DeleteNode(self, node):

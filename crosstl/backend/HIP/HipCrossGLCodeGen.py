@@ -1888,9 +1888,19 @@ class HipToCrossGLConverter(
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         if node.is_array:
             size = self.visit(node.size) if node.size is not None else ""
+            if self.in_device_code:
+                return self.refuse_import(
+                    f"HIP new[] {target_type}({size}): CrossGL has no device heap",
+                    "0",
+                )
             return f"new_array<{target_type}>({size})"
 
         args = ", ".join(self.visit(arg) for arg in node.args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"HIP new {target_type}({args}): CrossGL has no device heap",
+                "0",
+            )
         return f"new<{target_type}>({args})"
 
     def get_member_query_path(self, node):

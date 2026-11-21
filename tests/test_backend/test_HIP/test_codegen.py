@@ -19,7 +19,7 @@ from crosstl.backend.import_refusals import HipImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
-from tests.lowering_refusal_helpers import hip_import_partial_output
+from tests.lowering_refusal_helpers import hip_import_partial_output, refused_hip_import
 
 # windows-latest ships an MSVC STL that refuses any Clang older than its own minimum (error STL1000) before
 # parsing a single declaration. _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is the STL's documented override; the
@@ -17255,6 +17255,53 @@ class TestHipCodeGen:
         assert "HIP delete[] h: CrossGL has no device heap" in message
         assert "HIP delete q: CrossGL has no device heap" in message
         assert "delete" not in result
+
+    def test_device_new_malloc_free_are_refused(self):
+        # Device-side heap allocation has no CrossGL form, so it is refused
+        # with the same typed diagnostic as `delete` (#4684) instead of
+        # being written as calls CrossGL does not define.
+        code = """
+        struct P { float x; __device__ P(float v) : x(v) {} };
+        __global__ void k(float* o) {
+            P* p = new P(o[0]);
+            float* a = new float(o[0]);
+            float* b = new float[4];
+            float* c = (float*)malloc(16);
+            free(c);
+            auto q = std::make_unique<float>(o[0]);
+            o[0] = p->x + a[0] + b[0] + *q;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        message = refused_hip_import(HipToCrossGLConverter().generate, ast)
+
+        assert "HIP new P(o[0]): CrossGL has no device heap" in message
+        assert "HIP new f32(o[0]): CrossGL has no device heap" in message
+        assert "HIP new[] f32(4): CrossGL has no device heap" in message
+        assert "HIP malloc(16): CrossGL has no device heap" in message
+        assert "HIP free(c): CrossGL has no device heap" in message
+        assert (
+            "HIP std::make_unique<float>(o[0]): CrossGL has no device heap" in message
+        )
+
+    def test_device_new_is_refused_through_translate(self, tmp_path):
+        # The import refusal fires before any target runs, so `--backend cgl`
+        # fails closed instead of emitting `new<P>(...)` (#4684).
+        source = tmp_path / "new.hip"
+        source.write_text(
+            "struct P { float x; __device__ P(float v) : x(v) {} };\n"
+            "__global__ void k(float* o) {\n"
+            "    P* p = new P(o[0]);\n"
+            "    o[1] = p->x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("cgl", "metal"):
+            with pytest.raises(HipImportRefused) as refusal:
+                translate(str(source), backend=backend)
+            assert refusal.value.code == HipImportRefused.code
+            assert "HIP new P(o[0]): CrossGL has no device heap" in str(refusal.value)
 
     def test_public_rocprim_placement_new_conversion_reparse(self):
         # Upstream: ROCm/rocPRIM
