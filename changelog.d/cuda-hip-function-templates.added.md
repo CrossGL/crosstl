@@ -1,0 +1,1 @@
+CUDA and HIP input translate function templates into CrossGL generic functions, with their default type arguments, and calls with explicit template arguments into generic calls. Array extents written with integer constants and constant expressions (`float tile[BLOCK * 2 + 1]`) are folded with C++ integer arithmetic. The importers refused both before.
