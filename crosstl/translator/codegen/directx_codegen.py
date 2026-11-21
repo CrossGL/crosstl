@@ -243,6 +243,7 @@ from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_ray_queries import hlsl_ray_query_expression, hlsl_ray_query_helpers
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_shader_records import HlslShaderRecords, is_shader_record_buffer
 from .hlsl_tall_matrix_rows import HlslTallMatrixRows
 from .hlsl_texel_buffers import HLSL_TEXEL_BUFFER_TYPES, HLSLTexelBuffers
 from .hlsl_texture_residency import (
@@ -1528,7 +1529,7 @@ class HLSLCodeGen(
         ) = collect_lowered_glsl_buffer_blocks(
             global_vars,
             structs_by_name=self.structs_by_name,
-            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
+            is_glsl_buffer_block_variable=self.is_glsl_storage_block_variable,
             resource_base_type=self.resource_base_type,
             glsl_buffer_block_layout=self.glsl_buffer_block_layout,
             convert_type_node_to_string=self.convert_type_node_to_string,
@@ -1825,6 +1826,7 @@ class HLSLCodeGen(
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers, cbuffers
         )
+        shader_records = HlslShaderRecords(self, ast, target_stage)
         for i, node in enumerate(global_vars):
             resource_count = 1
             if hasattr(node, "var_type"):
@@ -1896,6 +1898,10 @@ class HLSLCodeGen(
 
             if id(node) in self.directx_compile_time_global_node_ids:
                 code += self.generate_directx_compile_time_global_declaration(node)
+                continue
+
+            if is_shader_record_buffer(node):
+                code += shader_records.declaration(node)
                 continue
 
             attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
