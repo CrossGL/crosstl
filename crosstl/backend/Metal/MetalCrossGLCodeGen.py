@@ -99,6 +99,7 @@ from .crossgl_codegen.value_templates import MetalValueTemplateMixin
 from .crossgl_codegen.vector_types import MetalVectorTypeMixin
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
+from .function_constants import import_function_constant_defaults
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
 from .MetalAst import *
@@ -463,6 +464,7 @@ class MetalToCrossGLConverter(
         refuse_external_function_calls(ast)
         declare_referenced_library_structs(ast, parse_metal_structs)
         mark_const_cast_written_buffers(ast)
+        import_function_constant_defaults(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
