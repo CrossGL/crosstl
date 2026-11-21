@@ -25,6 +25,7 @@ from ..VulkanAst import (
     UnaryOpNode,
     VariableNode,
 )
+from ..type_declaration_names import declarable_struct_name
 from ..workgroup_size_import import workgroup_size_component
 
 
@@ -386,8 +387,9 @@ class VulkanGlobalMixin:
         for type_id, type_info in types.items():
             if type_info.get("kind") != "struct":
                 continue
-            name = names.get(type_id) or self.spirv_fallback_identifier(
-                type_id, "struct"
+            name = declarable_struct_name(
+                names.get(type_id) or self.spirv_fallback_identifier(type_id, "struct"),
+                used_names,
             )
             signature = (
                 tuple(type_info.get("member_types", [])),
