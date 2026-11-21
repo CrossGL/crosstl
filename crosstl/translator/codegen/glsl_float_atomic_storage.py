@@ -48,7 +48,17 @@ class FloatAtomicStorage:
     def __init__(self, generator, *, discover=False, roots=()):
         self.generator = generator
         self.discover = discover
-        self.roots = set(roots)
+        self.initial_roots = frozenset(roots)
+        self.restart()
+
+    def restart(self):
+        """Forget what an earlier rendering of the program declared and emitted.
+
+        The generator renders a program again, for example once a program identifier hides a built-in function the
+        rendering calls. Word types and helpers are emitted with the declaration that first needs them, so a
+        rendering that kept them from an earlier one would use word types it never defines.
+        """
+        self.roots = set(self.initial_roots)
         self.declared = set()
         self.raw_nodes = set()
         self.types = {}

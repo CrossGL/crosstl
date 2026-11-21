@@ -65,6 +65,7 @@ from .cuda_tables import (
     CUDA_WAVE_UINT_RESULT_OPS,
     CUDA_WAVE_UVEC4_RESULT_OPS,
 )
+from .cuda_texel_buffers import CudaTexelBufferMixin
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
 from .cuda_unions import NativeUnions
@@ -145,6 +146,7 @@ class CudaCodeGen(
     CudaResourceAccessMixin,
     CudaVectorTypeMixin,
     CudaTextureMixin,
+    CudaTexelBufferMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -1266,6 +1268,10 @@ class CudaCodeGen(
             "usamplerCubeArray": "cudaTextureObject_t",
             "usampler2DMS": "cudaTextureObject_t",
             "usampler2DMSArray": "cudaTextureObject_t",
+            # A texel buffer is a texture object bound to linear memory (cudaResourceTypeLinear).
+            "samplerBuffer": "cudaTextureObject_t",
+            "isamplerBuffer": "cudaTextureObject_t",
+            "usamplerBuffer": "cudaTextureObject_t",
             "image1D": "cudaSurfaceObject_t",
             "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
@@ -1558,6 +1564,10 @@ class CudaCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         handled = self.cuda_texture_query_call(func_name, raw_args, args)
         if handled is not UNHANDLED:
             return handled

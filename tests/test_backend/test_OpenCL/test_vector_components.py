@@ -68,13 +68,14 @@ def flat(code):
             "float r = u.lo + u.hi + u.even + u.odd;",
             "var r: f32 = (u.x + u.y + u.x + u.y);",
         ),
-        # A 3-component vector's halves treat it as 4 components with an undefined w, read here as z.
-        ("float2 r = t.lo + t.hi;", "var r: vec2<f32> = (t.xy + t.zz);"),
-        ("float2 r = t.even + t.odd;", "var r: vec2<f32> = (t.xz + t.yz);"),
+        # A 3-component vector's .lo and .even select defined components only.
+        ("float2 r = t.lo + t.even;", "var r: vec2<f32> = (t.xy + t.xz);"),
         # A selection of a selection is one swizzle of the vector.
         ("float r = v.odd.hi;", "var r: f32 = v.w;"),
         ("float r = v.hi.s0;", "var r: f32 = v.z;"),
-        ("float2 r = v.xyz.odd;", "var r: vec2<f32> = v.yz;"),
+        ("float r = v.xyz.odd.x;", "var r: f32 = v.y;"),
+        ("float r = t.odd.x + t.hi.x;", "var r: f32 = (t.y + t.z);"),
+        ("float2 r = (v * 2.0f).s13;", "var r: vec2<f32> = (v * 2.0f).yw;"),
         ("float r = (v + v).hi.y;", "var r: f32 = (v + v).w;"),
         (
             "float r = q[i].s3 + convert_float4(n[i]).hi.x;",
@@ -114,6 +115,8 @@ def test_structure_members_named_like_selections_keep_their_names():
     [
         ("t.hi = u;", "undefined w component"),
         ("t.odd = u;", "undefined w component"),
+        ("u = t.hi;", "undefined w component"),
+        ("u = v.xyz.odd;", "undefined w component"),
         ("a[i] = v.s4;", "reads past the 4 components"),
         ("a[i] = t.s3;", "reads past the 3 components"),
         ("v.s00 = u;", "selects a component more than once"),
@@ -192,7 +195,7 @@ void k(__global float* a, __global float4* q) {
     float s[N * 2];
     for (int j = 0; j < N * 2; j++) { s[j] = (float)j; }
     v.lo = v.odd;
-    v.s13 = t.hi;
+    v.s13 = t.lo;
     q[i] = cross(v, q[i]) + (float4)(v.s0, t.even, s[N * 2 - 1]);
 }
 """

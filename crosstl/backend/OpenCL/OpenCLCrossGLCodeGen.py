@@ -37,7 +37,10 @@ from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
-from .vector_components import OpenCLVectorComponentMixin
+from .vector_components import (  # noqa: F401 - re-exported diagnostic
+    OpenCLVectorComponentMixin,
+    OpenCLVectorComponentUnsupportedError,
+)
 from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
@@ -1360,6 +1363,37 @@ class OpenCLToCrossGLConverter(
         ):
             return "int"
         return None
+
+    def expression_declared_type(self, expression):
+        declared = super().expression_declared_type(expression)
+        if declared is not None or not isinstance(expression, BinaryOpNode):
+            return declared
+        if expression.op not in {"+", "-", "*", "/", "%"}:
+            return None
+
+        left = self.expression_declared_type(expression.left)
+        right = self.expression_declared_type(expression.right)
+        left_width = self.opencl_vector_type_width(left)
+        right_width = self.opencl_vector_type_width(right)
+        if left_width is not None and right_width is None:
+            return left
+        if right_width is not None and left_width is None:
+            return right
+        if left_width is not None and left_width == right_width:
+            return left
+        return None
+
+    def opencl_vector_type_width(self, type_name):
+        if not type_name:
+            return None
+        converted = self.convert_hip_type_to_crossgl(str(type_name))
+        match = re.fullmatch(
+            r"vec(\d+)(?:<[^>]+>)?|(?:char|short|int|long|half|float|double)(\d+)",
+            converted.strip(),
+        )
+        if match is None:
+            return None
+        return int(match.group(1) or match.group(2))
 
     def emit_statement(self, stmt):
         if self.emit_opencl_compare_exchanges(stmt):

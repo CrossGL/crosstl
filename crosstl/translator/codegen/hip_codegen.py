@@ -37,6 +37,11 @@ from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_subscripts import matrix_column_type
+from .cuda_texel_buffers import (
+    TEXEL_BUFFER_QUERY_SPEC,
+    CudaTexelBufferMixin,
+    sampled_texel_buffer_type,
+)
 from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
 from .float_remainder_assignment import float_remainder_assignment
@@ -158,6 +163,7 @@ class HipCodeGen(
     HipMathCallMixin,
     HipVectorTypeMixin,
     HipTextureMixin,
+    CudaTexelBufferMixin,
     HipBufferCallMixin,
     HipBufferMetadataMixin,
     HipTypeMixin,
@@ -732,6 +738,10 @@ class HipCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
 
@@ -982,6 +992,13 @@ class HipCodeGen(
     def dimension_query_spec(self, type_name):
         """Return HIP-specific resource metadata dimensions before shared specs."""
         base_type = self.resource_base_type(type_name)
+        if sampled_texel_buffer_type(base_type) is not None:
+            return dict(TEXEL_BUFFER_QUERY_SPEC)
+        if isinstance(base_type, str) and base_type.startswith(
+            ("isampler", "usampler")
+        ):
+            # An integer texture has the dimensions of the float texture of its shape.
+            base_type = self.sampled_texture_shape_type(base_type)
         hip_specs = {
             "image1D": (("width",), False, False),
             "iimage1D": (("width",), False, False),

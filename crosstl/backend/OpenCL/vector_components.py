@@ -9,8 +9,8 @@ with "invalid format for vector swizzle". The importer now writes each selection
 - For a vector of ``n`` components, ``.lo`` and ``.hi`` are its lower and upper halves and ``.even`` and ``.odd``
   its even- and odd-numbered components; a 2-component vector's halves are single components. A 3-component
   vector acts as a 4-component vector whose ``w`` is undefined, so its ``.hi`` reads ``(z, undefined)`` and its
-  ``.odd`` ``(y, undefined)``: the importer reads ``z`` for the undefined component, and refuses either
-  as an assignment target, because a CrossGL swizzle cannot write one component of a two-component selection.
+  ``.odd`` ``(y, undefined)``: CrossGL has no component for the undefined one, so the importer refuses a
+  selection that includes it, as a value or as an assignment target.
 - A selection of a selection, such as ``v.odd.hi``, becomes one swizzle of the vector, ``v.w``.
 - OpenCL's 8- and 16-component vectors import as CrossGL arrays, so a single numbered component becomes an index
   (``v.s7`` is ``v[7]``); a selection of several of their components raises
@@ -184,13 +184,11 @@ class OpenCLVectorComponentMixin:
                 f"{base_lanes} components, which CrossGL holds as an array and cannot swizzle"
             )
         if None in indices:
-            if is_target:
-                raise OpenCLVectorComponentUnsupportedError(
-                    f"assignment to '.{member}' of a 3-component vector: the selection includes the undefined w "
-                    "component, and a CrossGL swizzle cannot write one component of a two-component selection"
-                )
-            # The undefined w of a 3-component vector reads as its z.
-            indices = [2 if index is None else index for index in indices]
+            # OpenCL C 3.0 section 6.3.7: '.hi' and '.odd' of a 3-component vector include its undefined w.
+            raise OpenCLVectorComponentUnsupportedError(
+                f"component selection '.{member}' of a 3-component vector includes the undefined w component, "
+                "which CrossGL has no component for"
+            )
         if is_target and len(set(indices)) != len(indices):
             raise OpenCLVectorComponentUnsupportedError(
                 f"assignment to '.{member}', which selects a component more than once"
@@ -252,9 +250,9 @@ class OpenCLVectorComponentMixin:
             right = self.opencl_expression_crossgl_type(expression.right)
             left_lanes = self.opencl_crossgl_lanes(left)
             right_lanes = self.opencl_crossgl_lanes(right)
-            if left_lanes is None or right_lanes is None:
-                return None
-            return left if left_lanes >= right_lanes else right
+            if left_lanes is not None and right_lanes is not None:
+                return left if left_lanes >= right_lanes else right
+            # A vector with an operand of unknown type (a literal): the declared-type inference decides.
         if isinstance(expression, TernaryOpNode):
             return self.opencl_expression_crossgl_type(
                 expression.true_expr

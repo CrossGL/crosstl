@@ -10,10 +10,14 @@ and rust-gpu the ``Image!`` shapes. CUDA and HIP read texture objects through ``
 ``texCubemapLod``, ``tex2DLayeredLod``, ``texCubemapLayeredLod``, ``tex1DLayeredLod`` and ``tex1Dfetch``, and OpenCL
 C reads ``image1d_t``, ``image3d_t``, ``image2d_array_t``, ``image1d_array_t`` and ``image1d_buffer_t`` images.
 
-A buffer texture is read with a texel fetch, since it has no sampler. Metal has no level of detail for a 1D texture,
-and WGSL samples no 1D texture, so those probes read it without one and with ``textureLoad``. WGSL has no buffer
-textures or 1D array textures, OpenCL C no cube images, GLSL ES 3.00 none of 1D, 1D-array, cube-array or buffer
-textures, and Mojo's kernels take no textures.
+A buffer texture is read with a texel fetch, since it has no sampler, at the index ``int(fin[i]) & 7``. Direct3D
+reads zero outside the buffer, but Metal leaves such a fetch undefined, and so does Vulkan without robust buffer
+access. The float input is negative half the time, so the probe masks the index into the first 8 texels, and every
+runtime that binds the probe's texture binds at least 8.
+
+Metal has no level of detail for a 1D texture, and WGSL samples no 1D texture, so those probes read it without one
+and with ``textureLoad``. WGSL has no buffer textures or 1D array textures, OpenCL C no cube images, GLSL ES 3.00
+none of 1D, 1D-array, cube-array or buffer textures, and Mojo's kernels take no textures.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ _GLSL_SHAPES = {
     "texture-cube-array": ("samplerCubeArray", "vec4(fin[i], 0.5, 1.0, 1.0)"),
     "texture-1d-array": ("sampler1DArray", "vec2(fin[i], 1.0)"),
 }
-_FETCH = "outp[i] = texelFetch(tex, int(fin[i])).x;"
+_FETCH = "outp[i] = texelFetch(tex, int(fin[i]) & 7).x;"
 
 
 def _glsl(precision: str = "", binding: str = "layout(binding = 3) ") -> dict:
@@ -87,7 +91,7 @@ HLSL = {
         for name, (texture, coordinate) in _HLSL_SHAPES.items()
     },
     "texel-buffer": Template(
-        "outp[i] = tex.Load(int(fin[i])).x;", "Buffer<float4> tex : register(t1);"
+        "outp[i] = tex.Load(int(fin[i]) & 7).x;", "Buffer<float4> tex : register(t1);"
     ),
 }
 
@@ -111,10 +115,8 @@ METAL = {
         )
         for name, (texture, arguments) in _METAL_SHAPES.items()
     },
-    # The texel index converts the input as the CrossGL probe's texelFetch(tex, int(fin[i])) does: through int, so a
-    # negative input reads out of bounds instead of saturating to texel 0.
     "texel-buffer": Template(
-        "outp[i] = tex.read(uint(int(fin[i]))).x;",
+        "outp[i] = tex.read(uint(int(fin[i]) & 7)).x;",
         params="texture_buffer<float> tex [[texture(0)]]",
     ),
 }
@@ -153,7 +155,7 @@ _CUDA_READS = {
         "texCubemapLayeredLod<float4>(tex, fin[i], 0.5f, 1.0f, 1, 0.0f)"
     ),
     "texture-1d-array": "tex1DLayeredLod<float4>(tex, fin[i], 1, 0.0f)",
-    "texel-buffer": "tex1Dfetch<float4>(tex, int(fin[i]))",
+    "texel-buffer": "tex1Dfetch<float4>(tex, int(fin[i]) & 7)",
 }
 CUDA = {
     name: Template(f"outp[i] = {read}.x;", params="cudaTextureObject_t tex")
@@ -188,7 +190,7 @@ OPENCL = {
     "texture-cube": ABSENT,
     "texture-cube-array": ABSENT,
     "texel-buffer": Template(
-        "outp[i] = read_imagef(tex, (int)fin[i]).x;",
+        "outp[i] = read_imagef(tex, (int)fin[i] & 7).x;",
         params="__read_only image1d_buffer_t tex",
     ),
 }
@@ -211,7 +213,7 @@ _RUST_SHAPES = {
 }
 # spirv-std fetches a texel only with a level of detail, which a buffer image does not take, so the probe writes the
 # fetch in SPIR-V.
-_RUST_FETCH = """let coordinate = fin[i] as i32;
+_RUST_FETCH = """let coordinate = (fin[i] as i32) & 7;
 let mut color = Vec4::ZERO;
 unsafe {
     asm!(

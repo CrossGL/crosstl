@@ -35,6 +35,7 @@ from .wgsl_matrix_inverse import (
 from .wgsl_matrix_resize import (
     wgsl_matrix_resize_helpers,
 )
+from .wgsl_pointer_locals import addressable_module_names
 from .wgsl_primitive_index import (
     PRIMITIVE_INDEX_ENABLE_DIRECTIVE,
 )
@@ -72,6 +73,7 @@ class WGSLProgramSectionMixin:
         self._pointer_identifier_scopes = []
         self._parameter_plan_stack = []
         self._value_type_scopes = []
+        self._local_mutability_scopes = []
         self._resource_alias_scopes = []
         self._function_return_types = {}
         self._function_return_types_by_signature = {}
@@ -97,6 +99,7 @@ class WGSLProgramSectionMixin:
         self._module_storage_access_modes = {}
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
+        self._addressable_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -330,6 +333,9 @@ class WGSLProgramSectionMixin:
         )
         self._read_only_module_names = read_only_module_names(
             self, cbuffers, global_variable_nodes, stage_resource_parameters
+        )
+        self._addressable_module_names = addressable_module_names(
+            self, global_variable_nodes, stage_resource_parameters
         )
         self._inferred_storage_texture_access_modes = (
             self.inferred_storage_texture_access_modes(
