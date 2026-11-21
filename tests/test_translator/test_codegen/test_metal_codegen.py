@@ -18593,7 +18593,7 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "envMap.sample" in generated_code
 
 
-def test_metal_rejects_non_resource_shadow_of_global_resource():
+def test_metal_renames_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {
         sampler2D colorMap;
@@ -18616,14 +18616,13 @@ def test_metal_rejects_non_resource_shadow_of_global_resource():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Non-resource local declaration\\(s\\) shadow Metal global "
-            "resource\\(s\\): colorMap, linearSampler"
-        ),
-    ):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The parameter and the local keep their values under names that no longer hide the resources.
+    assert "float4 shade(float colorMap_, FSInput input)" in generated_code
+    assert "float linearSampler_ = 1.0;" in generated_code
+    assert "return float4(colorMap_ + linearSampler_);" in generated_code
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
 
 
 def test_metal_rejects_texture_call_with_non_resource_argument():
@@ -35244,7 +35243,11 @@ def test_metal_verbatim_issue_3925_bounded_stage_texture_array():
     }
     """
     code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    assert "array<texture2d<float>, 2> tex" in code
+    # A run-time index makes the array a runtime descriptor array, which Metal holds in an argument buffer.
+    assert "struct tex_slot {" in code
+    assert "const device tex_slot* tex [[buffer(2)]]" in code
+    assert "array<texture2d<float>" not in code
+    compile_with_metal_if_available(code)
 
 
 def stage_block_texture_array_shader(body):
@@ -35264,35 +35267,42 @@ def stage_block_texture_array_shader(body):
     """
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
-        "float acc = 0.0;"
-        " for (int j = 0; j < 4; j++) {"
-        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
-        " outp[i] = acc;",
-    ],
-    ids=["constant-index", "loop-index"],
-)
-def test_metal_stage_block_texture_array_is_sized_from_its_indices(body):
+def test_metal_stage_block_texture_array_is_sized_from_its_constant_indices():
     code = MetalCodeGen().generate(
-        crosstl.translator.parse(stage_block_texture_array_shader(body))
+        crosstl.translator.parse(
+            stage_block_texture_array_shader(
+                "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;"
+            )
+        )
     )
 
+    # GLSL sizes an array that only constant indices reach.
     assert "array<texture2d<float>, 4> tex" in code
     compile_with_metal_if_available(code)
 
 
-def test_metal_stage_block_texture_array_refuses_an_unbounded_index():
-    shader = stage_block_texture_array_shader(
+@pytest.mark.parametrize(
+    "body",
+    [
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
         "int k = int(fin[0]);"
-        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;",
+    ],
+    ids=["loop-index", "unbounded-index"],
+)
+def test_metal_stage_block_texture_array_with_run_time_indices_is_an_argument_buffer(
+    body,
+):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
     )
 
-    # As for a shader-scope array, no bound reaches the index.
-    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert "const device tex_slot* tex [[buffer(2)]]" in code
+    assert "array<texture2d<float>" not in code
+    compile_with_metal_if_available(code)
 
 
 if __name__ == "__main__":
