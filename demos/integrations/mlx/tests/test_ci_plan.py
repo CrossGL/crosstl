@@ -1,24 +1,48 @@
 """Exercise MLX workflow selection and its required numerical smoke coverage."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
-from demos.integrations.mlx import smoke_canary
+from demos.integrations.mlx import ci_legs, smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
     _without_plan_job,
+    changed_legs,
     changed_paths,
     classify_workflow_change,
     main,
     validation_plan,
 )
+from demos.integrations.mlx.tests.test_ci_legs import DEMO_WORKFLOW
+from demos.integrations.mlx.tests.test_ci_legs import TREE as DEMO_TREE
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
+EVERY_LEG = sorted(ci_legs.workflow_legs(yaml.safe_load(WORKFLOW.read_text())))
+
+
+@pytest.fixture(autouse=True)
+def _planned_workflow(monkeypatch):
+    # The temporary repositories hold no workflow, so plan the real one's legs.
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(WORKFLOW))
+
+
+def _outputs(path):
+    """Return the step outputs a plan wrote, with ``legs`` decoded."""
+    outputs = dict(line.split("=", 1) for line in path.read_text().splitlines())
+    outputs["legs"] = json.loads(outputs["legs"])
+    return outputs
+
+
+def _tier(heavy, smoke, legs=None):
+    if legs is None:
+        legs = EVERY_LEG if heavy == "true" else []
+    return {"heavy": heavy, "smoke": smoke, "legs": legs}
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -96,15 +120,19 @@ def test_pull_request_label_reaches_the_plan(tmp_path, monkeypatch, full, heavy)
         )
         == 0
     )
-    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+    assert _outputs(output) == _tier(heavy, "true")
 
 
 @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
 def test_full_events_do_not_require_changed_paths(tmp_path, event, capsys):
     output = tmp_path / "output"
     assert main(["--event", event, "--output", str(output)]) == 0
-    assert output.read_text() == "heavy=true\nsmoke=false\n"
-    assert json.loads(capsys.readouterr().out) == {"heavy": True, "smoke": False}
+    assert _outputs(output) == _tier("true", "false")
+    assert json.loads(capsys.readouterr().out) == {
+        "heavy": True,
+        "smoke": False,
+        "legs": len(EVERY_LEG),
+    }
 
 
 def test_diff_includes_both_paths_of_renamed_mlx_source(tmp_path, monkeypatch):
@@ -215,13 +243,13 @@ def test_push_whose_old_tip_is_absent_gets_full_validation(tmp_path, monkeypatch
         )
         == 0
     )
-    assert output.read_text() == "heavy=true\nsmoke=true\n"
+    assert _outputs(output) == _tier("true", "true")
 
 
 def test_new_branch_gets_full_validation(tmp_path):
     output = tmp_path / "output"
     assert main(["--event", "push", "--base", "0" * 40, "--output", str(output)]) == 0
-    assert output.read_text() == "heavy=true\nsmoke=true\n"
+    assert _outputs(output) == _tier("true", "true")
 
 
 @pytest.mark.parametrize("base,head", [("", "a" * 40), ("a" * 40, "--help")])
@@ -279,7 +307,7 @@ def test_merge_group_reads_the_diff_from_its_base(tmp_path, monkeypatch, path, h
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", base, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+    assert _outputs(output) == _tier(heavy, "true")
 
 
 def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch):
@@ -290,7 +318,7 @@ def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", "c" * 40, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert output.read_text() == "heavy=true\nsmoke=true\n"
+    assert _outputs(output) == _tier("true", "true")
 
 
 def test_merge_group_without_revisions_fails(tmp_path):
@@ -378,26 +406,36 @@ jobs:
     steps:
       - run: echo {plan}
   native:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: windows-2025
     steps:
       - run: echo {native}
+  host:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo host
 """
 
 
 @pytest.mark.parametrize(
-    "plan,native,trigger,heavy",
+    "plan,native,trigger,heavy,legs",
     [
-        ("planner-two", "native", "main", "false"),
-        ("planner", "native-two", "main", "true"),
-        ("planner", "native", "release", "true"),
+        ("planner-two", "native", "main", "false", []),
+        # A changed job runs alone; a changed trigger can alter every job.
+        ("planner", "native-two", "main", "true", ["native"]),
+        ("planner", "native", "release", "true", ["host", "native"]),
     ],
 )
 def test_workflow_change_confined_to_plan_job_skips_full_tier(
-    tmp_path, monkeypatch, plan, native, trigger, heavy
+    tmp_path, monkeypatch, plan, native, trigger, heavy, legs
 ):
     monkeypatch.chdir(tmp_path)
     subprocess.run(["git", "init", "-q"], check=True)
     workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(workflow))
     workflow.parent.mkdir(parents=True)
     workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
     base = _commit("Start")
@@ -411,7 +449,7 @@ def test_workflow_change_confined_to_plan_job_skips_full_tier(
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", base, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+    assert _outputs(output) == _tier(heavy, "true", legs)
 
 
 def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
@@ -459,7 +497,8 @@ def test_every_heavy_job_obeys_the_full_tier():
         "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
     )
     assert plan["runs-on"] == "ubuntu-24.04"
-    assert plan["outputs"].keys() == {"heavy", "smoke"}
+    assert plan["outputs"].keys() == {"heavy", "smoke", "legs"}
+    assert plan["outputs"]["legs"] == "${{ steps.plan.outputs.legs }}"
     checkout = next(
         step
         for step in plan["steps"]
@@ -517,3 +556,108 @@ def test_smoke_runs_the_complete_family_canary():
     assert "python -m demos.integrations.mlx.smoke_canary" in run
     assert "--junitxml=mlx-smoke-results/canary.xml" in run
     assert "continue-on-error" not in canary
+
+
+def _demo_repository(tmp_path, monkeypatch):
+    """Commit the leg tests' small MLX demo and its workflow; return the base."""
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(DEMO_WORKFLOW)
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(workflow))
+    for name, text in DEMO_TREE.items():
+        path = tmp_path / ci_legs.MLX / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return _commit("Start")
+
+
+def _plan_change(tmp_path, base, event="merge_group"):
+    head = _commit("Change")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", event, "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    return _outputs(output)
+
+
+@pytest.mark.parametrize("event", ["merge_group", "push"])
+@pytest.mark.parametrize(
+    "path,legs",
+    [
+        ("sort_helper.py", ["parity[sort]"]),
+        ("portable_host/runtime.py", ["host"]),
+        ("tests/kernels/conftest.py", ["parity[scan]", "parity[sort]"]),
+        ("orphan.py", ["host", "parity[scan]", "parity[sort]", "translator"]),
+        ("tests/kernels/test_unused.py", []),
+    ],
+)
+def test_queue_groups_and_pushes_select_the_legs_that_read_a_change(
+    tmp_path, monkeypatch, event, path, legs
+):
+    base = _demo_repository(tmp_path, monkeypatch)
+    changed = tmp_path / ci_legs.MLX / path
+    changed.write_text(changed.read_text() + "\n# changed\n")
+    assert _plan_change(tmp_path, base, event) == _tier("true", "true", legs)
+
+
+@pytest.mark.parametrize("path", ["ci_legs.py", "README.md"])
+def test_planner_and_prose_changes_select_no_leg(tmp_path, monkeypatch, path):
+    base = _demo_repository(tmp_path, monkeypatch)
+    changed = tmp_path / ci_legs.MLX / path
+    changed.write_text("change\n")
+    assert _plan_change(tmp_path, base) == _tier("false", "true", [])
+
+
+def test_new_mlx_file_that_no_leg_reaches_selects_every_leg(tmp_path, monkeypatch):
+    base = _demo_repository(tmp_path, monkeypatch)
+    (tmp_path / ci_legs.MLX / "new_module.py").write_text("")
+    every = ["host", "parity[scan]", "parity[sort]", "translator"]
+    assert _plan_change(tmp_path, base) == _tier("true", "true", every)
+
+
+def test_workflow_and_file_changes_select_the_union_of_their_legs(
+    tmp_path, monkeypatch
+):
+    base = _demo_repository(tmp_path, monkeypatch)
+    workflow = Path(os.environ["MLX_CI_WORKFLOW"])
+    workflow.write_text(DEMO_WORKFLOW.replace("tests/test_translator", "tests/x"))
+    (tmp_path / ci_legs.MLX / "sort_helper.py").write_text("# changed\n")
+    legs = ["parity[sort]", "translator"]
+    assert _plan_change(tmp_path, base) == _tier("true", "true", legs)
+
+
+def test_pull_request_with_full_label_runs_every_leg(tmp_path, monkeypatch):
+    base = _demo_repository(tmp_path, monkeypatch)
+    (tmp_path / ci_legs.MLX / "sort_helper.py").write_text("# changed\n")
+    monkeypatch.setenv("MLX_CI_FULL", "true")
+    every = ["host", "parity[scan]", "parity[sort]", "translator"]
+    assert _plan_change(tmp_path, base, "pull_request") == _tier("true", "true", every)
+
+
+def test_a_failed_leg_selection_runs_every_leg_with_a_warning(
+    tmp_path, monkeypatch, capsys
+):
+    base = _demo_repository(tmp_path, monkeypatch)
+    (tmp_path / ci_legs.MLX / "sort_helper.py").write_text("# changed\n")
+
+    def fail(*_):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(ci_legs, "affected_legs", fail)
+    every = ["host", "parity[scan]", "parity[sort]", "translator"]
+    assert _plan_change(tmp_path, base) == _tier("true", "true", every)
+    assert (
+        "::warning title=MLX leg plan::RuntimeError: scan failed; "
+        "running every heavy leg" in capsys.readouterr().err
+    )
+
+
+def test_real_tree_harness_change_selects_only_the_job_that_runs_it(monkeypatch):
+    # The planner reads the checkout it runs in, as the ci-plan job does.
+    monkeypatch.chdir(ROOT)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    legs = ci_legs.workflow_legs(workflow)
+    path = f"{ci_legs.MLX}/run_porting.py"
+    assert changed_legs(workflow, legs, head, head, [path]) == {"mlx-metal-porting"}
