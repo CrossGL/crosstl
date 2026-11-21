@@ -177,11 +177,27 @@ class RustFunctionSignatureMixin:
             for name, bounds in inferred.items():
                 for bound in bounds:
                     self.add_generic_constraint(constraints, name, bound)
+
+            # CrossGL values are plain data. A generic parameter used by value more
+            # than once moves without Copy (assignment, call arguments, operators),
+            # so every value type parameter gets the bound. Callable parameters keep
+            # their Fn/FnMut/FnOnce bounds without Copy.
+            for name in list(constraints):
+                if self.generic_constraints_include_callable(constraints[name]):
+                    continue
+                self.add_generic_constraint(constraints, name, "Copy")
         finally:
             self.active_generic_constraint_functions.remove(cache_key)
 
         self.user_function_generic_constraint_cache[cache_key] = constraints
         return constraints
+
+    def generic_constraints_include_callable(self, bounds):
+        """True when a bound list is for a callable (Fn/FnMut/FnOnce) parameter."""
+        for bound in bounds or []:
+            if self.callable_signature_parts(bound) is not None:
+                return True
+        return False
 
     def infer_function_generic_operator_constraints(self, func):
         """Infer Rust operator trait bounds needed by generic function bodies."""
@@ -603,7 +619,6 @@ class RustFunctionSignatureMixin:
                     operand_type,
                     f"std::ops::Neg<Output = {operand_type}>",
                 )
-                self.add_generic_constraint(constraints, operand_type, "Copy")
             return
 
         if isinstance(node, TernaryOpNode):
@@ -810,8 +825,6 @@ class RustFunctionSignatureMixin:
             bound = self.generic_operator_bound(operator, generic_type)
             if bound is not None:
                 self.add_generic_constraint(constraints, generic_type, bound)
-            if operator in {"+", "-", "*", "/", "%"}:
-                self.add_generic_constraint(constraints, generic_type, "Copy")
 
     def generic_operator_bound(self, operator, generic_name):
         if operator in {"==", "!="}:

@@ -15849,7 +15849,7 @@ def test_legacy_generic_wrappers_emit_rust_generic_params():
     assert "pub struct Wrapper<T>" in generated_code
     assert "pub item: Option<i32>," in generated_code
     assert "pub result: Result<T, i32>," in generated_code
-    assert "pub fn identity<T>(value: T) -> T" in generated_code
+    assert "pub fn identity<T: Copy>(value: T) -> T" in generated_code
 
 
 def test_traits_and_generic_constraints_emit_rust_and_smoke_compile(tmp_path):
@@ -15908,7 +15908,8 @@ def test_traits_and_generic_constraints_emit_rust_and_smoke_compile(tmp_path):
     assert "pub fn add_zero<T: Numeric + Copy>(value: T) -> T" in generated_code
     assert "return Numeric::add(value, T::zero());" in generated_code
     assert (
-        "pub fn is_same<T: Numeric + PartialEq>(a: T, b: T) -> bool" in generated_code
+        "pub fn is_same<T: Numeric + PartialEq + Copy>(a: T, b: T) -> bool"
+        in generated_code
     )
     assert (
         "pub fn operator_mix<T: Numeric + Copy + "
@@ -15988,7 +15989,10 @@ def test_generic_sqrt_adds_trait_bound_and_smoke_compiles(tmp_path):
     assert "pub trait CglSqrt" in generated_code
     assert "impl CglSqrt for f32" in generated_code
     assert "impl CglSqrt for i32" in generated_code
-    assert "pub fn root_energy<T: Numeric + CglSqrt>(value: T) -> T" in generated_code
+    assert (
+        "pub fn root_energy<T: Numeric + CglSqrt + Copy>(value: T) -> T"
+        in generated_code
+    )
     assert "return CglSqrt::cgl_sqrt(value);" in generated_code
     assert "pub fn root_float(value: f32) -> f32" in generated_code
     assert "return sqrt(value);" in generated_code
@@ -27175,6 +27179,56 @@ def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
         "pub fn twice<T: std::ops::Add<Output = T> + Copy>(x: T) -> T" in generated_code
     )
     assert "return (x + x);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_multi_use_by_value_emits_copy_bound_and_compiles(tmp_path):
+    """Generic values used by value more than once need Copy even without operators (#4748)."""
+    code = """
+    shader MultiUse {
+        generic<T> T f(T x) {
+            T y = x;
+            T z = x;
+            return z;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_repeated_call_argument_emits_copy_bound_and_compiles(tmp_path):
+    """Passing the same generic value twice by value needs a Copy bound (#4748)."""
+    code = """
+    shader RepeatedArg {
+        generic<T> T g(T a, T b) {
+            return a;
+        }
+        generic<T> T f(T x) {
+            return g(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn g<T: Copy>(a: T, b: T) -> T" in generated_code
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
