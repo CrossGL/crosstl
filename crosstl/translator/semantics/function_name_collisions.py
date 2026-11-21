@@ -106,6 +106,13 @@ def _call_roots(program, functions):
     return [function for function, _ in functions] + [program, *_stages(program)]
 
 
+def _callee_parts(node):
+    """The called function's name and its explicit type arguments: ``("quad", "<float>")`` for ``quad<float>(x)``."""
+    name = call_name(node)
+    head, bracket, arguments = name.partition("<")
+    return head.strip(), bracket + arguments
+
+
 def _rename_call(node, old_name, new_name):
     for field in ("function", "name"):
         callee = getattr(node, field, None)
@@ -183,7 +190,7 @@ def names_called_with_other_arity(program) -> set:
     for root in _call_roots(program, functions):
         for node in _walk(root, seen):
             if isinstance(node, A.FunctionCallNode):
-                name = call_name(node)
+                name, _ = _callee_parts(node)
                 if name in arities and _call_arity(node) not in arities[name]:
                     found.add(name)
     return found
@@ -212,8 +219,10 @@ def rename_functions(program, names, *, by_arity=False, keep_calls=frozenset()) 
     seen = set()
     for root in _call_roots(program, functions):
         for node in _walk(root, seen):
-            if isinstance(node, A.FunctionCallNode) and call_name(node) in renamed:
-                old_name = call_name(node)
+            if not isinstance(node, A.FunctionCallNode):
+                continue
+            old_name, type_arguments = _callee_parts(node)
+            if old_name in renamed:
                 if by_arity and (
                     _call_arity(node) not in arities[old_name]
                     or id(node) in builtin_calls
@@ -221,5 +230,9 @@ def rename_functions(program, names, *, by_arity=False, keep_calls=frozenset()) 
                     continue
                 if id(node) in keep_calls:
                     continue
-                _rename_call(node, old_name, renamed[old_name])
+                _rename_call(
+                    node,
+                    call_name(node),
+                    renamed[old_name] + type_arguments,
+                )
     return renamed
