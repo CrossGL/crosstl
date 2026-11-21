@@ -84,6 +84,17 @@ class CrossGL(Dialect):
         layout = f"layout({qualifier}) " if qualifier else ""
         return f"{layout}uniform {spelling} {name};"
 
+    @staticmethod
+    def _buffers(buffers: list[Buffer], layouts: dict[str, str]) -> list[str]:
+        """The declarations of storage buffers in a stage block; ``layouts`` maps the name of a buffer to the
+        ``@buffer_layout`` rule it is marked with, where it is not CrossGL's default."""
+        return [
+            "        "
+            + (f"@buffer_layout({layouts[name]}) " if name in layouts else "")
+            + f"buffer {kind}* {name};"
+            for kind, name in buffers
+        ]
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
@@ -91,7 +102,7 @@ class CrossGL(Dialect):
             "    compute {",
             f"        layout(local_size_x = {parts.get('lanes', 1)}, local_size_y = 1, local_size_z = 1) in;",
         ]
-        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += self._buffers(buffers, parts.get("layouts", {}))
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
             "        void main() {",
@@ -117,7 +128,7 @@ class CrossGL(Dialect):
             "    }",
             "    fragment {",
         ]
-        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += self._buffers(buffers, parts.get("layouts", {}))
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
             "        FragmentOutput main(FragmentInput input) {",

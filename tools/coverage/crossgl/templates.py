@@ -396,3 +396,14 @@ CONSTRUCTS: dict[str, Template] = {
         )
     ),
 }
+
+# The CrossGL probes of one language's constructs that differ from :data:`CONSTRUCTS`, as ``{language: {name:
+# template}}``. Direct3D rounds a float converted to a 16-bit float toward zero, where CrossGL rounds it to nearest, so
+# HLSL's half probe converts a value binary16 holds exactly (:data:`..templates.hlsl.HALF`).
+FOR_LANGUAGE: dict[str, dict[str, Template]] = {
+    "hlsl": {
+        "half": Template(
+            "half v = half(float(int(fin[i] * 256.0)) * 0.00390625);\noutp[i] = float(v * v);"
+        ),
+    },
+}

@@ -501,8 +501,8 @@ PAREN_HLSL = textwrap.dedent("""
     """).strip()
 
 
-def generate_crossgl(code: str) -> str:
-    tokens = HLSLLexer(code).tokenize()
+def generate_crossgl(code: str, **lexer_options) -> str:
+    tokens = HLSLLexer(code, **lexer_options).tokenize()
     ast = HLSLParser(tokens).parse()
     converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter()
     return converter.generate(ast)
@@ -2240,7 +2240,8 @@ def test_codegen_sizeof_vector_array_operands_from_dxc_unary_sizeof():
     # Source URL: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # Path: tools/clang/test/HLSLFileCheck/hlsl/operators/unary/sizeof.hlsl
-    output = generate_crossgl("""
+    output = generate_crossgl(
+        """
         AppendStructuredBuffer<int> buf;
 
         void main() {
@@ -2248,7 +2249,9 @@ def test_codegen_sizeof_vector_array_operands_from_dxc_unary_sizeof():
             buf.Append(sizeof(half3[2]));
             buf.Append(sizeof(int64_t3[2]));
         }
-    """)
+    """,
+        enable_16bit_types=True,
+    )  # The test's RUN line passes -enable-16bit-types: half is 2 bytes.
 
     assert "buffer_append(buf, 24);" in output
     assert "buffer_append(buf, 12);" in output
@@ -3441,11 +3444,12 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
         }
     """)
 
-    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes.
+    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes. DXC's linalg tests compile with
+    # -enable-16bit-types.
     with pytest.raises(
         DirectXImportRefused, match=r"vector<half, 16> has 16 components"
     ):
-        generate_crossgl(hlsl)
+        generate_crossgl(hlsl, enable_16bit_types=True)
 
 
 def test_codegen_block_scope_type_aliases_stay_typedefs():

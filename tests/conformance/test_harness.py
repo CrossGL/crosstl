@@ -330,8 +330,19 @@ def test_metal_slots_come_from_buffer_indices_not_names(tmp_path):
             32,
         )
     extra = kernel.replace(") {}", ", texture2d<float> t [[texture(0)]]) {}")
-    with pytest.raises(InterfaceChanged, match="resource kinds"):
-        interface(write(tmp_path, "c.metal", extra), "metal", 32)
+    assert interface(write(tmp_path, "c.metal", extra), "metal", 32)["resources"] == [
+        {
+            "kind": "texture",
+            "slot": 0,
+            "count": 1,
+            "type": "texture2d",
+            "element": "float",
+            "access": "sample",
+        }
+    ]
+    depth = kernel.replace(") {}", ", depth2d<float> t [[texture(0)]]) {}")
+    with pytest.raises(InterfaceChanged, match="Unexpected Metal texture type"):
+        interface(write(tmp_path, "e.metal", depth), "metal", 32)
     with pytest.raises(InterfaceChanged, match="one compute entry"):
         interface(write(tmp_path, "d.metal", kernel + "\n" + kernel), "metal", 32)
 
