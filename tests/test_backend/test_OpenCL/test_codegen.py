@@ -2040,7 +2040,7 @@ def test_opencl_four_component_cross_infers_swizzle_arguments():
         }
         """)
 
-    assert "o[0] = vec4<f32>(cross(x.wzyx.xyz, y.s1032.xyz), 0.0);" in crossgl
+    assert "o[0] = vec4<f32>(cross(x.wzyx.xyz, y.yxwz.xyz), 0.0);" in crossgl
     assert "t[0] = cross(x.xyz, y.zyx);" in crossgl
 
 
