@@ -725,6 +725,8 @@ class MetalCodeGen(
         # Locals of the current function that must be ``array<T, N>`` values
         # because the function returns them as its array result.
         self.current_metal_value_array_locals = frozenset()
+        # Locals of the current function declared as ``array<T, N>`` values.
+        self.current_metal_value_array_names = set()
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
@@ -2185,8 +2187,10 @@ class MetalCodeGen(
             local_name = self.metal_local_identifier_name(stmt.name)
             value_array_type = self.metal_local_value_array_type(stmt, var_type)
             if value_array_type is not None:
+                self.current_metal_value_array_names.add(stmt.name)
                 declaration = f"{value_array_type} {local_name}"
             else:
+                self.current_metal_value_array_names.discard(stmt.name)
                 declaration = format_c_style_array_declaration(
                     self.metal_local_storage_declaration_type(stmt, var_type),
                     local_name,
@@ -2226,6 +2230,10 @@ class MetalCodeGen(
                 if value_array_type is None and not is_atomic_local:
                     array_initializer = generate_metal_array_initializer(
                         self, initial_value, var_type
+                    )
+                elif value_array_type is not None:
+                    array_initializer = self.metal_value_array_initializer(
+                        initial_value, var_type
                     )
                 if array_initializer is not None:
                     init_expr = array_initializer
@@ -2333,6 +2341,8 @@ class MetalCodeGen(
                         f"{{{value}}};\n"
                     )
                 array_return = self.metal_glsl_buffer_array_return(stmt.value)
+                if array_return is None:
+                    array_return = self.metal_c_array_return(stmt.value)
                 if array_return is not None:
                     return f"{indent_str}return {array_return};\n"
                 value = self.generate_expression_with_expected(
