@@ -43,6 +43,9 @@ DIRECTION = PAIR
 # The stages a target cannot hold a program of, and why. Every WebGL probe is a fragment shader because GLSL ES 3.00
 # has no compute stage (:class:`.languages.WebGL`), so another language's compute probe has no translation to it.
 _MISSING_STAGES = {"webgl": {"compute": "GLSL ES 3.00 has no compute stage"}}
+# The stage a source language's probe of a feature is a program of, when it differs from the feature's stage: a WebGL
+# probe of a compute-stage feature is a fragment shader, so its translation is checked as one.
+_PROBE_STAGES = {"webgl": {"compute": "fragment"}}
 # How a dialect says that its language has no such type at all ("Metal has no double type", "WGSL has no int
 # matrices"), as opposed to having no probe for it yet.
 _ABSENT_TYPE = re.compile(r"\bhas no \S+ (type|matrices)\b")
@@ -361,7 +364,7 @@ def run_pair(feature: Feature, source: str, target: str, partner: Feature) -> Re
         return result("refused", str(error))
     except runner.Broken as error:
         return result("wrong", str(error))
-    stage = feature.stage
+    stage = _PROBE_STAGES.get(source, {}).get(feature.stage, feature.stage)
     runner._keep(
         feature,
         folder,
