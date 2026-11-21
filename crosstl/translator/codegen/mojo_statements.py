@@ -1,11 +1,10 @@
 """Statements in the Mojo generator: assignments, dimension queries, increments, switches, branches and loops."""
 
-import re
-
 from ..ast import (
     ArrayAccessNode,
     ArrayNode,
     AssignmentNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ContinueNode,
@@ -508,25 +507,12 @@ class MojoStatementMixin:
 
         if isinstance(stmt, VariableNode):
             var_type = self.variable_declared_type(stmt)
-            if getattr(stmt, "vtype", None) and var_type is not None:
-                # Old AST structure - check if this is actually an array declaration disguised as a variable
-                vtype_str = str(stmt.vtype)
-                if (
-                    "ArrayAccessNode" in vtype_str
-                    and "array=" in vtype_str
-                    and "index=" in vtype_str
-                ):
-                    # This is likely an array declaration
-                    array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
-                    if array_match:
-                        array_match.group(1)
-                        size = array_match.group(2)
-                        base_type = "Float32"  # Default, could be improved
-                        return (
-                            f"{indent_str}var {self.mojo_identifier(stmt.name)} = "
-                            f"InlineArray[{base_type}, {size}]"
-                            "(unsafe_uninitialized=True)\n"
-                        )
+            if "ArrayAccessNode(" in str(getattr(stmt, "vtype", "")):
+                # A declared type that is an AST node has no Mojo spelling; guessing an element type from its
+                # repr would write a different program.
+                raise MojoRefusal(
+                    f"Mojo variable '{stmt.name}' has an unresolved array type expression as its type"
+                )
 
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 effective_type = var_type or self.expression_result_type(
@@ -582,8 +568,12 @@ class MojoStatementMixin:
                     f"{indent_str}var {var_name} = "
                     f"{self.zero_value_for_type(var_type)}\n"
                 )
-            else:
-                return f"{indent_str}var {var_name}: {self.map_type(var_type)}\n"
+            # Mojo rejects a read, or a pass to a mut parameter, of a variable it cannot prove initialized, so a
+            # declaration without an initializer starts at zero; reading it before a store is undefined in C.
+            return (
+                f"{indent_str}var {var_name}: {self.map_type(var_type)} = "
+                f"{self.zero_value_for_type(var_type)}\n"
+            )
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
@@ -640,6 +630,8 @@ class MojoStatementMixin:
                 update = self.generate_for_update_statement(context["update"], indent)
                 return f"{update}{indent_str}continue\n"
             return f"{indent_str}continue\n"
+        elif isinstance(stmt, BlockNode):
+            return self.generate_block_statement(stmt, indent)
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_node(stmt, indent)
         elif self.is_increment_or_decrement_node(stmt):
@@ -809,6 +801,17 @@ class MojoStatementMixin:
         )
 
     def generate_assignment(self, node):
+        """An assignment used as a value, as in ``a = b = c`` or ``(b = c + 1.0) * 2.0``.
+
+        Mojo assignment is a statement, so inside a statement the assignment is written to that statement's
+        prelude and its value is read back from the assigned target.
+        """
+        if self.expression_prelude_stack:
+            context = self.expression_prelude_stack[-1]
+            context["lines"].append(
+                self.generate_assignment_statement(node, context["indent"])
+            )
+            return self.generate_expression(node.left)
         self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
@@ -823,7 +826,14 @@ class MojoStatementMixin:
         return f"{left} {op} {right}"
 
     def generate_branch_statements(self, branch, indent):
+        """The statements of a C block, scoped like one, with ``pass`` for an empty block.
+
+        A Mojo ``var`` is local to the indented suite that declares it, as a C declaration is local to its block,
+        so the types of the block's own declarations are forgotten when it ends and an outer variable of the same
+        name keeps its type.
+        """
         code = ""
+        outer_variable_types = self.variable_types.copy()
         if hasattr(branch, "statements"):
             for stmt in branch.statements:
                 code += self.generate_statement(stmt, indent)
@@ -832,7 +842,16 @@ class MojoStatementMixin:
                 code += self.generate_statement(stmt, indent)
         elif branch is not None:
             code += self.generate_statement(branch, indent)
+        self.variable_types = outer_variable_types
+        if not code.strip():
+            code += f"{'    ' * indent}pass\n"
         return code
+
+    def generate_block_statement(self, block, indent):
+        """A nested C block ``{ ... }`` as ``if True:``, which gives its declarations their own scope."""
+        return f"{'    ' * indent}if True:\n" + self.generate_branch_statements(
+            block, indent + 1
+        )
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
@@ -873,22 +892,30 @@ class MojoStatementMixin:
         return code
 
     def generate_for(self, node, indent):
-        indent_str = "    " * indent
+        """A C ``for`` loop as its init statements and a ``while`` loop.
 
-        if isinstance(node.init, list):
-            # ``int i = 0, j = 10`` and ``k = 0, m = 3`` run in source order before the loop.
-            code = "".join(
-                f"{indent_str}{self.generate_statement(item, 0).strip()}\n"
-                for item in node.init
-                if item is not None
-            )
-        elif node.init is None:
-            code = ""
-        else:
-            init = self.generate_statement(node.init, 0).strip()
-            code = f"{indent_str}{init}\n"
+        A loop whose init declares a variable is nested in ``if True:``, so the variable is local to the loop as in
+        C, and a later loop or declaration may declare the same name again.
+        """
+        inits = node.init if isinstance(node.init, list) else [node.init]
+        inits = [item for item in inits if item is not None]
+        if not any(isinstance(item, VariableNode) for item in inits):
+            return self.generate_for_loop(node, inits, indent)
+        outer_variable_types = self.variable_types.copy()
+        try:
+            code = f"{'    ' * indent}if True:\n"
+            return code + self.generate_for_loop(node, inits, indent + 1)
+        finally:
+            self.variable_types = outer_variable_types
+
+    def generate_for_loop(self, node, inits, indent):
+        indent_str = "    " * indent
+        # ``int i = 0, j = 10`` and ``k = 0, m = 3`` run in source order before the loop.
+        code = "".join(
+            f"{indent_str}{self.generate_statement(item, 0).strip()}\n"
+            for item in inits
+        )
         if node.condition is None:
-            # ``for (init;; update)`` runs until a ``break``, like ``while (true)``.
             condition = "True"
         else:
             condition = self.generate_expression(node.condition)
@@ -902,14 +929,18 @@ class MojoStatementMixin:
         self.push_loop_exit_alias_state_scope()
         loop_exit_alias_states = []
         try:
-            for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+            body = self.generate_branch_statements(
+                self.statement_list(node.body), indent + 1
+            )
         finally:
             loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.for_contexts.pop()
             self.loop_depth -= 1
 
-        code += self.generate_for_update_statement(node.update, indent + 1)
+        update = self.generate_for_update_statement(node.update, indent + 1)
+        if update and body.strip() == "pass":
+            body = ""
+        code += body + update
         update_alias_state = self.resource_access_alias_state()
         self.restore_resource_access_alias_state(
             self.merge_resource_access_alias_states(
@@ -1006,8 +1037,9 @@ class MojoStatementMixin:
         body_alias_state = entry_alias_state
         loop_exit_alias_states = []
         try:
-            for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+            code += self.generate_branch_statements(
+                self.statement_list(node.body), indent + 1
+            )
             body_alias_state = self.resource_access_alias_state()
         finally:
             loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
@@ -1032,8 +1064,9 @@ class MojoStatementMixin:
         body_alias_state = self.resource_access_alias_state()
         loop_exit_alias_states = []
         try:
-            for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+            code += self.generate_branch_statements(
+                self.statement_list(node.body), indent + 1
+            )
             body_alias_state = self.resource_access_alias_state()
         finally:
             loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()

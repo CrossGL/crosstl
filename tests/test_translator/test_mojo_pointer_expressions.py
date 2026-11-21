@@ -179,33 +179,14 @@ def test_statements_with_an_absent_expression_print_no_none():
     assert "return None" not in lines
 
 
-MOJO_KERNEL = """\
-@fieldwise_init
-struct S(Copyable):
-    var a: Float32
-    var b: Float32
-
-def kernel(x: UnsafePointer[Float32, MutAnyOrigin], s: UnsafePointer[S, MutAnyOrigin], \
-o: UnsafePointer[Float32, MutAnyOrigin]):
-{body}
-"""
-
-
-def test_generated_pointer_lines_build_with_mojo(tmp_path):
-    """The generated statements build in a Mojo kernel whose parameters are the shader's buffers.
-
-    The rest of the generated program declares its buffers at module scope, which Mojo does not accept yet, so the
-    statements are checked in a kernel that takes the same buffers as parameters.
-    """
+def test_generated_pointer_program_builds_with_mojo(tmp_path):
+    """The whole generated program, whose kernel takes the shader's buffers as pointer arguments, builds."""
     mojo = find_mojo_compiler()
-    lines = _body_lines(_generate(POINTERS))
-    body = [line for line in lines if line in EXPECTED_LINES]
-    assert len(body) == len(EXPECTED_LINES)
+    code = _generate(POINTERS)
+    assert "def compute_main(x: UnsafePointer[Float32, MutAnyOrigin], " in code
 
     source = tmp_path / "pointers.mojo"
-    source.write_text(
-        MOJO_KERNEL.format(body="\n".join(f"    {line}" for line in body))
-    )
+    source.write_text(code)
     result = subprocess.run(
         [
             mojo,
