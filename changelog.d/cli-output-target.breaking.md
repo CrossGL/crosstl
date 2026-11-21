@@ -1,0 +1,1 @@
+Without `--backend`, the single-file command refuses an output file name whose extension names no language CrossTL writes, such as `shader.spv`, `shader.txt` or `kernel.cl`, and lists the extensions it accepts. It used to write CrossGL into that file; pass `--backend cgl` for that.

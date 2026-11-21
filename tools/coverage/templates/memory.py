@@ -4,8 +4,9 @@ every launch shares.
 OpenCL C declares it ``__global`` (OpenCL C 3.0, "Program Scope Global Variables", the
 ``__opencl_c_program_scope_global_variables`` feature), and CUDA and HIP ``__device__``. The probe initializes the
 first three elements of an array, and each invocation reads and rewrites only its own element, so the result does
-not depend on the order in which invocations run. CrossGL's probe qualifies the variable with the ``device`` address
-space.
+not depend on the order in which invocations run. A copy of the array per invocation or per workgroup computes the
+same result, so a translation is also checked for the storage it keeps the array in (:func:`..decorations.copied`).
+CrossGL's probe qualifies the variable with the ``device`` address space.
 
 The other languages have no such variable. Metal declares program-scope variables only in the constant address
 space. An unqualified global is a uniform in HLSL and Slang, and with ``static`` one copy per invocation, as a private

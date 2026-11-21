@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = {
     "bug",
     "enhancement",
-    "documentation",
     "question",
     "good first issue",
     "help wanted",
@@ -57,7 +56,7 @@ def _many(count=labels.MINIMUM):
 def test_the_label_file_defines_the_taxonomy_and_little_else():
     names = {label.name for label in load()}
     assert TAXONOMY <= names
-    assert len(names) <= 31
+    assert len(names) <= 30
 
 
 def test_labels_that_workflows_and_dependabot_apply_are_defined():
@@ -189,6 +188,13 @@ def test_every_path_pattern_matches_a_tracked_file():
         (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),
         ([".github/workflows/coverage.yml", "tools/coverage/run.py"], ["area:ci"]),
         (["tools/pytest_shard.py", "tests/test_pytest_shard.py"], ["area:ci"]),
+        (
+            [
+                "tests/conformance/fail_closed.py",
+                "tests/conformance/docker/mesa/Dockerfile",
+            ],
+            ["area:ci"],
+        ),
         ([".github/dependabot.yml"], ["area:ci"]),
         (["pyproject.toml"], ["area:ci"]),
         (["conftest.py", "tests/test_ci_workflows.py"], ["area:ci"]),
@@ -259,15 +265,10 @@ def _workflow(name):
 
 def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
     workflow = _workflow("pull-request-labels.yml")
-    # Scheduled runs start hours late here, so a pull request's Coverage run and
-    # pushes to main do most of the work. Only events whose code is main's may hold
-    # the write token: a workflow_run workflow runs main's version of itself.
-    assert set(workflow[True]) == {
-        "workflow_run",
-        "push",
-        "schedule",
-        "workflow_dispatch",
-    }
+    # Scheduled runs start hours late here, so a pull request's Coverage run does
+    # the work. Only events whose code is main's may hold the write token: a
+    # workflow_run workflow runs main's version of itself.
+    assert set(workflow[True]) == {"workflow_run", "schedule", "workflow_dispatch"}
     # A merge-queue rebuild requests one Coverage run per group. Those would each
     # take the concurrency group's pending place and drop a pull request's run.
     assert workflow[True]["workflow_run"] == {
@@ -275,7 +276,6 @@ def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
         "types": ["requested"],
         "branches-ignore": ["gh-readonly-queue/**"],
     }
-    assert workflow[True]["push"] == {"branches": ["main"]}
     assert workflow[True]["schedule"]
     (job,) = workflow["jobs"].values()
     # Coverage also runs on pushes to main; only a pull request's run can bring a
@@ -284,6 +284,14 @@ def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
         "github.event_name != 'workflow_run'"
         " || github.event.workflow_run.event == 'pull_request'"
     )
+    # Coverage runs on main skip the job. They get a concurrency group of their
+    # own, so they cannot take the pending place of a run that labels.
+    group = workflow["concurrency"]["group"]
+    assert group == (
+        f"${{{{ ({job['if']}) && 'pull-request-labels'"
+        " || format('pull-request-labels-skip-{0}', github.run_id) }}"
+    )
+    assert workflow["concurrency"]["cancel-in-progress"] is False
     assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
     checkout = job["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")

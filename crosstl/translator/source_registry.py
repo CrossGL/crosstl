@@ -370,8 +370,9 @@ WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
     "registered CrossGL or native backend source file first."
 )
 WEBGL_SOURCE_UNSUPPORTED_MESSAGE = (
-    "WebGL target files (.webgl.glsl) are not supported as native source input; "
-    "provide OpenGL GLSL source (.glsl) or CrossGL source first."
+    "WebGL target files (.webgl.glsl) are not read as source by their extension; "
+    "pass source_backend='webgl' (--source-backend webgl) to read GLSL ES 3.00 "
+    "source, or use a GLSL extension such as .vert or .frag."
 )
 
 _COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES = {
@@ -795,7 +796,9 @@ def register_default_sources() -> None:
             ),
             load_lexer_parser=_load_glsl,
             reverse_codegen_factory=_reverse_glsl,
-            aliases=("glsl", "ogl"),
+            # GLSL ES 3.00, the shading language of WebGL 2, is a GLSL profile the GLSL frontend reads; its
+            # ``#version 300 es`` line defines GL_ES and is kept for the GLSL and WebGL generators.
+            aliases=("glsl", "ogl", "webgl", "webgl2", "essl", "glsl-es"),
             shader_type_from_path=_glsl_shader_type_from_path,
         )
     )

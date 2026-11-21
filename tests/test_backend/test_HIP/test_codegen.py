@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +20,13 @@ from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import hip_import_partial_output
+
+# windows-latest ships an MSVC STL that refuses any Clang older than its own minimum (error STL1000) before
+# parsing a single declaration. _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is the STL's documented override; the
+# syntax check of the generated HIP source still runs in full.
+HOST_STL_FLAGS = (
+    ["-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"] if sys.platform == "win32" else []
+)
 
 ROCM_BIT_EXTRACT_HIP = """
 #include <hip/hip_runtime.h>
@@ -1154,22 +1162,21 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "overlapping storage is not modeled" not in result
         assert (
-            "// HIP union compute_type_interface represented as struct-like layout; "
-            "overlapping storage is not modeled"
-        ) in result
-        assert "struct compute_type_interface {" in result
-        assert "f32 f32;" in result
-        assert "f64 f64;" in result
-        assert "i32 i32;" in result
+            "@union_layout(8, 8, little_endian, hip) struct compute_type_interface {"
+            in result
+        )
+        assert "@union_member_layout(0, 4, 4) f32 f32;" in result
+        assert "@union_member_layout(0, 8, 8) f64 f64;" in result
+        assert "@union_member_layout(0, 4, 4) i32 i32;" in result
         local_union = re.search(
-            r"// HIP union (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) "
-            r"represented as struct-like layout; overlapping storage is not modeled",
+            r"@union_layout\(4, 4, little_endian, hip\) "
+            r"struct (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) \{",
             result,
         )
         assert local_union is not None
         local_union_name = local_union.group(1)
-        assert f"struct {local_union_name} {{" in result
         assert f"var ua: {local_union_name} = {{a}};" in result
         assert "consume(ua.f);" in result
         assert "union compute_type_interface {" not in result
@@ -1612,7 +1619,7 @@ class TestHipCodeGen:
         assert "__syncwarp" not in result
         assert "None" not in result
 
-    def test_rocm_docs_syncthreads_vote_intrinsics_emit_reparseable_diagnostic(self):
+    def test_rocm_docs_syncthreads_vote_intrinsics_count_in_a_workgroup_variable(self):
         # Source: ROCm HIP C++ language extensions, HIP 7.0.51831 docs.
         # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.2/how-to/hip_cpp_language_extensions.html#synchronization-functions
         code = """
@@ -1629,16 +1636,19 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
-        )
+        result = HipToCrossGLConverter().generate(ast)
 
-        # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
-        for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
-            assert f"HIP block-wide sync vote {name}((idx < n))" in message
-        assert "__syncthreads_count((idx < n))" not in result
-        assert "__syncthreads_and((idx < n))" not in result
-        assert "__syncthreads_or((idx < n))" not in result
+        # Each is a barrier that also reduces the predicate over the block, counted in one workgroup variable.
+        assert "var<workgroup> crossgl_block_votes: u32;" in result
+        assert (
+            "i32(crossgl_block_count(((idx < n) != 0), gl_LocalInvocationIndex))"
+            in result
+        )
+        assert (
+            "i32(crossgl_block_count(!(((idx < n) != 0)), gl_LocalInvocationIndex) == 0u)"
+            in result
+        )
+        assert "__syncthreads_" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_rocm_hip_ldg_address_load_codegen_reparse(self):
@@ -17680,9 +17690,13 @@ class TestHipCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The HIP importer binds the plain value as a uniform; the pointers are storage-buffer slices.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &[i32], "
+            "#[spirv(uniform, descriptor_set = 0, binding = 2)] value: &f32)" in result
         )
+        assert "let value: f32 = *value;" in result
         assert "data[indices[0] as usize] = value;" in result
 
     def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(
@@ -18217,12 +18231,17 @@ class TestHipCodeGen:
         result = HipToCrossGLConverter().generate(ast)
         assert result == HipToCrossGLConverter().generate(ast)
         definitions = {
-            line.split()[1]: line
+            match.group(1): line
             for line in result.splitlines()
-            if line.startswith("struct CrossGLFunctionLocal_host_")
+            if (
+                match := re.search(r"\bstruct (CrossGLFunctionLocal_host_\w+) \{", line)
+            )
         }
         struct_name = next(name for name in definitions if "_left_struct_" in name)
         union_name = next(name for name in definitions if "_payloads_union_" in name)
+        assert definitions[union_name].startswith(
+            "@union_layout(4, 4, little_endian, hip) struct "
+        )
         assert result.index(f"struct {struct_name} {{") < result.index("void host(")
         assert result.index(f"struct {union_name} {{") < result.index("void host(")
         assert f"var left: {struct_name};" in result
@@ -18513,14 +18532,6 @@ class TestHipCodeGen:
                 "derived-to-base value",
             ),
             (
-                "named-union-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; };",
-                "",
-                "Bits bits; bits.signed_value=input[0]; "
-                "output[0]=int(bits.unsigned_value);",
-                "union overlapping storage",
-            ),
-            (
                 "anonymous-union-overlap",
                 "struct State { union { int signed_value; "
                 "unsigned unsigned_value; }; };",
@@ -18568,6 +18579,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -18918,6 +18930,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19089,13 +19102,6 @@ class TestHipCodeGen:
                 "state.value=1; output[0]=int(state); }",
                 "conversion operator",
             ),
-            (
-                "union-pointer-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; }; "
-                "__global__ void probe(int* output) { Bits bits; Bits* ptr=&bits; "
-                "ptr->signed_value=1; output[0]=int(ptr->unsigned_value); }",
-                "union indirect object access",
-            ),
         ],
     )
     def test_native_valid_adjacent_record_semantics_fail_closed(
@@ -19113,6 +19119,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19165,6 +19172,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19226,7 +19234,8 @@ class TestHipCodeGen:
         ) in compact
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_dynamic_union_array_object_fails_closed(self):
+    def test_dynamic_union_array_object_keeps_its_layout_contract(self):
+        # A named union carries the union layout contract, so no member needs to be shown active.
         code = """
         union Bits { int value; unsigned bits; };
         __global__ void probe(int* output, int index) {
@@ -19237,8 +19246,11 @@ class TestHipCodeGen:
         """
         ast = HipParser(HipLexer(code).tokenize()).parse()
 
-        with pytest.raises(HipRecordSemanticError, match="unprovable active storage"):
-            HipToCrossGLConverter().generate(ast)
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in result
+        assert "values[index].value = 1;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_inherited_fields_remain_translatable_without_base_aggregate_init(self):
         code = """
@@ -19275,37 +19287,43 @@ class TestHipCodeGen:
         assert "state.inner.value" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_native_valid_union_reference_alias_fails_closed(self, tmp_path):
+        source_path = tmp_path / "union-reference-alias.hip"
+        source_path.write_text(
+            "union Bits { int value; unsigned bits; }; "
+            "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
+            "alias.value=1; output[0]=int(value.bits); }",
+            encoding="utf-8",
+        )
+        with pytest.raises(HipRecordSemanticError, match="non-const record reference"):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
     @pytest.mark.parametrize(
-        ("name", "source", "feature"),
+        ("name", "source"),
         [
-            (
-                "union-reference-alias",
-                "union Bits { int value; unsigned bits; }; "
-                "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
-                "alias.value=1; output[0]=int(value.bits); }",
-                "union indirect object access",
-            ),
             (
                 "union-helper-value-flow",
                 "union Bits { int value; unsigned bits; }; "
                 "int read(Bits value) { return int(value.bits); } "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "output[0]=read(value); }",
-                "union function argument active storage",
             ),
             (
                 "union-copy",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy=value; output[0]=int(copy.bits); }",
-                "union-containing copy construction",
             ),
             (
                 "union-assignment",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy; copy.bits=2u; copy=value; output[0]=int(copy.bits); }",
-                "union-containing assignment",
             ),
             (
                 "union-return",
@@ -19313,7 +19331,6 @@ class TestHipCodeGen:
                 "Bits make() { Bits value; value.value=1; return value; } "
                 "__global__ void probe(int* output) { Bits value=make(); "
                 "output[0]=int(value.bits); }",
-                "union-containing value flow",
             ),
             (
                 "union-ternary-copy",
@@ -19321,7 +19338,6 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output, int condition) { "
                 "Bits left; left.value=1; Bits right; right.bits=2u; "
                 "Bits value=condition?left:right; output[0]=value.value; }",
-                "union-containing copy construction",
             ),
             (
                 "nested-union-copy",
@@ -19330,12 +19346,11 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output) { Outer left; "
                 "left.bits.value=1; Outer right=left; "
                 "output[0]=int(right.bits.bits); }",
-                "union-containing copy construction",
             ),
         ],
     )
-    def test_native_valid_union_alias_and_value_flows_fail_closed(
-        self, tmp_path, name, source, feature
+    def test_native_valid_union_value_flows_keep_the_layout_contract(
+        self, tmp_path, name, source
     ):
         source_path = tmp_path / f"{name}.hip"
         source_path.write_text(source, encoding="utf-8")
@@ -19349,6 +19364,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19358,13 +19374,17 @@ class TestHipCodeGen:
             )
             assert native.returncode == 0, native.stderr
 
-        with pytest.raises(HipRecordSemanticError, match=feature):
-            translate(
-                str(source_path),
-                backend="directx",
-                source_backend="hip",
-                format_output=False,
-            )
+        crossgl = translate(
+            str(source_path), backend="cgl", source_backend="hip", format_output=False
+        )
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in crossgl
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "CrossGLUnionStorage" in hlsl
 
     @pytest.mark.parametrize(
         ("name", "source", "feature"),
@@ -19582,6 +19602,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19832,6 +19853,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19911,6 +19933,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],

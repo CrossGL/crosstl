@@ -14,8 +14,13 @@ anywhere else generators emitted the GLSL spelling or refused it.
   with the constructor's elements as its initializer list just before the statement that uses it, and the
   constructor is replaced with the local.
 
-The aggregate initializer of a shader-scope constant gets the first rewrite too. It has no statement to declare a
-local before, so any other array constructor in it is refused.
+The initializer of a shader-scope constant or variable, at program scope or in a stage block, gets the first
+rewrite too, and a named structure constructor such as ``W{m: float[2](1.0, 2.0), s: 3.0}`` is an aggregate there.
+An initializer has no statement to declare a local before, so a constructor indexed with an integer literal and
+holding pure elements is replaced with the element it selects, ``float[2](1.0, 2.0)[1]`` with ``2.0``, and any other
+array constructor in it is refused.
+
+An unsized constructor, ``float[](1.0, 2.0)``, has as many elements as arguments (GLSL 4.60 section 5.4.4).
 
 The local is evaluated where its statement starts, so it is introduced only when nothing the statement evaluates
 before the constructor has effects, and only when the constructor's own elements are pure if the constructor sits
@@ -40,12 +45,14 @@ __all__ = [
     "hoist_array_constructors",
 ]
 
-_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\d+)\s*\]\s*")
+_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\d*)\s*\]\s*")
 # Targets whose generators build arrays only in aggregate initializers.
 _DECLARATION_ONLY_TARGETS = frozenset(
     {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "vulkan", "spirv"}
 )
 _TEMPORARY_PREFIX = "cgl_array_value"
+# Targets whose generators write a named structure constructor as an aggregate initializer.
+_BRACED_CONSTRUCTOR_TARGETS = frozenset({"metal"})
 
 
 class ArrayConstructorUnsupportedError(TranslationDiagnostic):
@@ -69,7 +76,10 @@ def hoist_array_constructors(program, target) -> int:
         return 0
     hoister = _Hoister(program, target)
     for constant in getattr(program, "constants", None) or []:
-        hoister.constant(constant)
+        if isinstance(constant, A.ConstantNode):
+            hoister.initializer(constant, "value", "constant")
+    for variable in _shader_scope_variables(program):
+        hoister.initializer(variable, "initial_value", "variable")
     for function in iter_functions(program):
         body = getattr(function, "body", None)
         if isinstance(body, A.BlockNode):
@@ -80,13 +90,56 @@ def hoist_array_constructors(program, target) -> int:
 
 
 def array_constructor_shape(expr):
-    """``(element spelling, size)`` of an array constructor call such as ``vec3[2](a, b)``, or ``None``."""
+    """``(element spelling, size)`` of an array constructor call such as ``vec3[2](a, b)``, or ``None``.
+
+    An unsized constructor, ``vec3[](a, b)``, has as many elements as arguments.
+    """
     if not isinstance(expr, A.FunctionCallNode):
         return None
     match = _ARRAY_CONSTRUCTOR.fullmatch(call_name(expr) or "")
     if match is None:
         return None
-    return match.group(1), int(match.group(2))
+    size = match.group(2)
+    return match.group(1), int(size) if size else len(expr.arguments or [])
+
+
+def _shader_scope_variables(program):
+    """The initialized variables declared at program scope or in a stage block, in declaration order."""
+    variables = list(getattr(program, "global_variables", None) or [])
+    stages = getattr(program, "stages", None) or {}
+    for stage in list(stages.values()) if isinstance(stages, dict) else list(stages):
+        variables.extend(getattr(stage, "local_variables", None) or [])
+    return [
+        variable
+        for variable in variables
+        if isinstance(variable, A.VariableNode)
+        and isinstance(getattr(variable, "initial_value", None), A.ASTNode)
+    ]
+
+
+def _selected_element(node):
+    """The element ``node`` selects when it indexes an array constructor of pure elements with an in-range integer
+    literal, as ``float[2](1.0, 2.0)[1]`` selects ``2.0``; otherwise ``None``."""
+    if not isinstance(node, A.ArrayAccessNode):
+        return None
+    constructor = node.array_expr
+    shape = array_constructor_shape(constructor)
+    index = getattr(node.index_expr, "value", None)
+    if shape is None or not isinstance(node.index_expr, A.LiteralNode):
+        return None
+    if isinstance(index, str):
+        index = index.rstrip("uU")
+        index = int(index) if index.isdigit() else None
+    elements = list(constructor.arguments or [])
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or len(elements) != shape[1]
+        or not 0 <= index < len(elements)
+        or not all(is_pure(element) for element in elements)
+    ):
+        return None
+    return elements[index]
 
 
 def _element_type(spelling):
@@ -108,6 +161,7 @@ class _Hoister:
     def __init__(self, program, target):
         self.target = target
         self.count = 0
+        self._shader_scope = False
         self.structs = set(struct_member_types(program))
         self.names = _declared_names(program)
 
@@ -181,20 +235,43 @@ class _Hoister:
             self._walk(node, hoisted, once, effects)
         return hoisted
 
-    def constant(self, node):
-        """Turn the array constructors that are members of a shader-scope constant's aggregate into lists."""
-        value = getattr(node, "value", None)
-        if not isinstance(node, A.ConstantNode) or not self._is_aggregate(value):
-            return
+    def initializer(self, node, field, kind):
+        """Rewrite the array constructors in a shader-scope constant's or variable's initializer: members of its
+        aggregate become lists, and an indexed constructor becomes the element it selects.
+        """
+        value = getattr(node, field, None)
+        if array_constructor_shape(value) is not None:
+            value = A.ArrayLiteralNode(list(value.arguments or []))
+            setattr(node, field, value)
+            self.count += 1
+        value = self._select_elements(node, field)
         hoisted = []
-        self._walk(value, hoisted, _Slot(), [False])
+        self._shader_scope = True
+        try:
+            self._walk(value, hoisted, _Slot(), [False])
+        finally:
+            self._shader_scope = False
         if hoisted:
             self._refuse(
-                f"an array constructor in the initializer of shader-scope constant '{node.name}' is not a member "
-                "of its aggregate",
+                f"an array constructor in the initializer of shader-scope {kind} '{node.name}' is not a member "
+                "of an aggregate",
                 "array-constructor-at-shader-scope",
                 getattr(node, "source_location", None),
             )
+
+    def _select_elements(self, owner, field, key=None):
+        """Replace each indexed constructor under ``owner.field`` with the element it selects, innermost first,
+        so ``float[2](a, float[2](b, c)[0])[1]`` becomes ``b``; returns the new child.
+        """
+        node = get_child(owner, field, key)
+        for child_field, child_key in list(child_slots(node)):
+            self._select_elements(node, child_field, child_key)
+        element = _selected_element(node)
+        while element is not None:
+            set_child(owner, field, key, element)
+            self.count += 1
+            node, element = element, _selected_element(element)
+        return node
 
     # Expressions ---------------------------------------------------------------------------------------------
     def expression(self, owner, field, hoisted, slot, effects):
@@ -240,6 +317,16 @@ class _Hoister:
             return True
         if array_constructor_shape(node) is not None:
             return True
+        if isinstance(node, A.ConstructorNode):
+            # Metal writes a named structure constructor, ``W{m: ..., s: ...}``, as the aggregate initializer
+            # ``W{...}``, so in a shader-scope initializer its members are initialized in place. HLSL writes it as
+            # a call, whose arguments cannot be lists, and in a function body array members get locals as other
+            # call arguments do.
+            return (
+                self._shader_scope
+                and self.target in _BRACED_CONSTRUCTOR_TARGETS
+                and _type_spelling(node) in self.structs
+            )
         return isinstance(node, A.FunctionCallNode) and call_name(node) in self.structs
 
     def _hoist(self, constructor, shape, hoisted, slot, effects_before):
@@ -299,6 +386,11 @@ class _Hoister:
         name = f"{_TEMPORARY_PREFIX}_{index}"
         self.names.add(name)
         return name
+
+
+def _type_spelling(node):
+    constructed = getattr(node, "constructor_type", None)
+    return getattr(constructed, "name", None)
 
 
 def _is_conditional_operand(node, field):

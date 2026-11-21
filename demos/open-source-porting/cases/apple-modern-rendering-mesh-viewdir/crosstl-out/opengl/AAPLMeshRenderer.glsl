@@ -1,6 +1,14 @@
 #version 450 core
+#if defined(GL_SPIRV) || defined(VULKAN)
+#if !defined(GL_ES) && __VERSION__ < 410
+#extension GL_ARB_separate_shader_objects : require
+#endif
+#define CROSSGL_LOCATION(n) layout(location = n)
+#else
+#define CROSSGL_LOCATION(n)
+#endif
 layout(location = 0) in vec3 position;
-out vec3 viewDir;
+CROSSGL_LOCATION(0) out vec3 viewDir;
 layout(std140, binding = 0) uniform Camera {
     mat4 invViewMatrix;
 } camera;

@@ -51,7 +51,7 @@ def test_fabs_lowers_to_fabs_on_scalars_and_vectors(tmp_path):
         "}\n",
     )
     assert len(_ext(spv, "FAbs")) == 3
-    fmax = re.search(r"OpExtInst %\w+ %\w+ FMax %(\w+) %(\w+)", spv)
+    fmax = re.search(r"OpExtInst %\w+ %\w+ NMax %(\w+) %(\w+)", spv)
     assert fmax is not None
     for operand in fmax.groups():
         assert re.search(rf"%{operand} = OpExtInst %\w+ %\w+ FAbs\b", spv)

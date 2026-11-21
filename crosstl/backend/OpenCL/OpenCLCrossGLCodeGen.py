@@ -29,9 +29,14 @@ from ..no_contraction import (
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
+from .enumerations import OpenCLEnumerationMixin
+from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
@@ -114,7 +119,13 @@ class OpenCLVectorComponentUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-vector-component-unsupported"
 
 
-class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
+class OpenCLToCrossGLConverter(
+    OpenCLEnumerationMixin,
+    OpenCLSizeofScopeMixin,
+    OpenCLPointerResultMixin,
+    OpenCLCompareExchangeMixin,
+    HipToCrossGLConverter,
+):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
@@ -389,7 +400,19 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         self.opencl_sdk_reduce_materialize_op = False
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
-        return super().generate(ast_node)
+        self.reset_opencl_pointer_results()
+        self.reset_opencl_compare_exchanges()
+        text = super().generate(ast_node)
+        helpers = self.opencl_pointer_result_helper_text()
+        if helpers:
+            # The helpers use only scalar and vector types, so they can precede every declaration.
+            marker = "// OpenCL to CrossGL conversion\n"
+            text = (
+                text.replace(marker, marker + helpers + "\n", 1)
+                if marker in text
+                else helpers + text
+            )
+        return text
 
     def generic_visit(self, node):
         if isinstance(node, str):
@@ -468,7 +491,17 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.emit(f"// Function: {stmt.name}")
                 self.visit(stmt)
                 self.emit("")
-            elif isinstance(stmt, (StructNode, VariableNode, TypeAliasNode, EnumNode)):
+            elif isinstance(stmt, VariableNode):
+                # A program-scope `const` variable with a constant initializer
+                # imports as a CrossGL constant, as a C++ namespace-scope one
+                # does, so device code on every target reads its value.
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
+                self.emit("")
+            elif isinstance(stmt, (StructNode, TypeAliasNode, EnumNode)):
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, OpenCLMacroBlockNode):
@@ -778,37 +811,6 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         else:
             self.emit(f"// {node.directive}")
 
-    def visit_EnumNode(self, node):
-        if getattr(node, "name", None):
-            enum_type = getattr(node, "underlying_type", None) or "uint"
-            self.register_type_alias(
-                node.name, self.convert_hip_type_to_crossgl(enum_type)
-            )
-            return super().visit_EnumNode(node)
-
-        next_value = 0
-        members = getattr(node, "members", None) or getattr(node, "variants", [])
-        for member in members:
-            if isinstance(member, tuple):
-                member_name, member_value = member
-            else:
-                member_name = getattr(member, "name", str(member))
-                member_value = getattr(member, "value", None)
-
-            if member_value is None:
-                value = str(next_value if next_value is not None else 0)
-            else:
-                value = self.visit(member_value)
-
-            self.emit(f"const i32 {member_name} = {value};")
-            next_value = self.next_anonymous_enum_value(value)
-
-    def next_anonymous_enum_value(self, value):
-        try:
-            return int(str(value), 0) + 1
-        except ValueError:
-            return None
-
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
             for statement in self.format_opencl_barrier_statements(node.args or []):
@@ -847,6 +849,7 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
+        refuse_writable_global_variable(node, program_scope=self.indent_level == 0)
         if self.is_opencl_function_scope_constant(node):
             # In `__constant float *p = table;` __constant is the address space
             # p points into. p itself is a private local, like a `__global
@@ -1003,6 +1006,9 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            pointer_result = self.format_opencl_pointer_result_call(func_name, raw_args)
+            if pointer_result is not None:
+                return pointer_result
             fence = self.format_opencl_fence_call(func_name, raw_args)
             if fence is not None:
                 return fence
@@ -1441,6 +1447,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         return "".join(components[index] for index in indices)
 
     def emit_statement(self, stmt):
+        if self.emit_opencl_compare_exchanges(stmt):
+            return
         if self.is_opencl_prefetch_call(stmt):
             for arg in stmt.args:
                 self.emit_opencl_discarded_expression_effects(arg)
@@ -1815,6 +1823,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     )
 
     def visit_AtomicOperationNode(self, node):
+        if is_compare_exchange(node):
+            return self.format_opencl_compare_exchange_value(node)
         node_args = list(node.args)
         if node.operation.endswith("_explicit"):
             node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
@@ -1900,13 +1910,11 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
             return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
-        if base is None or len(args) != 1:
-            return None
-        component = self.opencl_dimension_component(args[0])
-        if component is None:
-            rendered = self.visit(args[0])
-            return f"{func_name}({rendered})"
-        return f"{base}.{component}"
+        if base is not None and len(args) == 1:
+            component = self.opencl_dimension_component(args[0])
+            if component is not None:
+                return f"{base}.{component}"
+        return format_work_item_query(self, func_name, args)
 
     def opencl_dimension_component(self, arg):
         if isinstance(arg, int):

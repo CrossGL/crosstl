@@ -55,11 +55,12 @@ SPIR-V is compiler output rather than a language people write, so its input prob
 feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
-compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V
-(Slang), the Mojo compiler with MAX's GPU package (Mojo), rustc with the rust-gpu
-backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
-validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
-OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
+compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V,
+or to CUDA that nvcc checks for a function SPIR-V and HLSL lack (Slang), the Mojo compiler with MAX's GPU package (Mojo),
+rustc with the rust-gpu backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile.
+Input probes are validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C
+generator, so an OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked
+by DXC.
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
@@ -79,6 +80,10 @@ alone. The two outputs must match bit for bit, so a probe must compute a result 
 cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
 fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
 reassociates additions that the SPIR-V does not mark `NoContraction`.
+The remainder is the one exception. CrossGL's `fmod` is the exact remainder of C and MSL, while the Vulkan precision
+table gives SPIR-V's `OpFRem` the error inherited from `x - y * trunc(x / y)`, which lavapipe computes. So where the
+native probe of an `fmod` runs as SPIR-V that uses `OpFRem`, a translated word also matches when it is the exact
+remainder of the probe's arguments.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
@@ -98,7 +103,9 @@ reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), mi
 same arguments without the call. rust-gpu removes unused values, so a Rust baseline branches on each boolean argument
 to keep the comparison that makes it. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
-the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
+the id of the GLSL function CrossGL spells the same way. CrossGL spells Metal's SIMD-group and quad-group functions as
+Metal does, so each of those takes the id of the GLSL function that SPIRV-Cross writes it for: Metal `simd_sum` and
+GLSL `subgroupAdd` count once. A function that still has no id takes the id of the other
 functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. Functions that
 have no id at all count once per CrossGL spelling, because their CrossGL probes call the same CrossGL function: CUDA and
 HIP `__clz` are the one feature `crossgl/__clz`. A feature SPIR-V cannot express is listed by hand in
@@ -112,15 +119,18 @@ generator, such as Rust output's missing `#![no_std]`, then stays a gap of that 
 as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
 translation that computes the operation with other instructions does not count. CrossGL probes come from a small
 template layer, `tools/coverage/crossgl/`, and the
-spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
+spelling tables in `tools/coverage/spellings.py` and `tools/coverage/rust_spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.
 
 ### 5. Generated data stays out of `main`
 
 A `coverage` workflow runs on every push to `main` and nightly. It publishes `coverage.json`, `coverage.svg`,
-`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history,
-to an orphan `coverage` branch as a single replaced commit. Only that job has `contents: write`. The README embeds
+`COVERAGE.md`, a bounded `history.csv` and `trend.svg`, a chart of each row's score over the runs in that history, to
+an orphan `coverage` branch as a single replaced commit. No published file may exceed 1 MB, so `coverage.json` keeps
+each row's score and counts, and the row's features go to `features/<language>-<direction>.json`; the publish step
+fails rather than write a larger file. `history.csv` keeps the newest 400 runs that fit in that limit, so more rows
+shorten the history instead of stopping publication. Only that job has `contents: write`. The README embeds
 `coverage.svg` from the `coverage` branch and `COVERAGE.md` embeds the trend. Both charts are plain SVG written by
 small scripts with no plotting dependency. Contributors never run a regeneration step.
 

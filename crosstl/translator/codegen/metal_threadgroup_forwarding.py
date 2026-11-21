@@ -23,7 +23,16 @@ from __future__ import annotations
 from ..ast import ArrayType
 from .stage_utils import normalize_stage_name, stage_matches
 
-__all__ = ["collect_metal_forwarded_threadgroup_storage"]
+__all__ = [
+    "METAL_GROUPSHARED_ENTRY_STAGES",
+    "collect_metal_forwarded_threadgroup_storage",
+]
+
+# Entry stages whose threadgroup memory Metal declares inside the entry function, so a
+# program-scope groupshared value used only by such entries becomes an entry local.
+METAL_GROUPSHARED_ENTRY_STAGES = frozenset(
+    {"compute", "task", "amplification", "object", "mesh"}
+)
 
 _THREADGROUP_QUALIFIERS = frozenset(
     {"shared", "groupshared", "threadgroup", "workgroup"}

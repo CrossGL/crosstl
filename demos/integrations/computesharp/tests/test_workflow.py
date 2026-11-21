@@ -1,7 +1,7 @@
 """Checks for the ComputeSharp workflow triggers, plan, result and artifacts.
 
-Every pull request, merge-queue group and push to main starts the workflow so
-that its single result check can be required; ``ci_plan.py`` skips the port's
+Every pull request and push to main starts the workflow, which ends in one
+result check; ``ci_plan.py`` skips the port's
 jobs when nothing the port depends on changed. The import test translates
 actual generated ComputeSharp HLSL in a fresh interpreter and requires every
 loaded CrossTL module to match a relevant path, so a new dependency of the
@@ -172,9 +172,11 @@ def test_published_records_are_read_only_by_the_contract_tests():
             assert _record_names(text) == [], path.relative_to(ROOT)
 
 
-def test_every_pull_request_and_merge_group_starts_the_workflow():
+def test_every_pull_request_and_push_to_main_starts_the_workflow():
     triggers = load_workflow()[True]
-    assert set(triggers) == {"pull_request", "push", "merge_group", "workflow_dispatch"}
+    # The result check is not required, so the merge queue does not run it; the
+    # push to main tests the commit that landed.
+    assert set(triggers) == {"pull_request", "push", "workflow_dispatch"}
     assert triggers["pull_request"] == {"branches": ["main"]}
     assert triggers["push"] == {"branches": ["main"]}
     # Path filters would leave the required result check unreported.
@@ -186,7 +188,6 @@ def test_every_pull_request_and_merge_group_starts_the_workflow():
 def test_plan_job_selects_the_port_from_the_event_diff():
     plan = load_workflow()["jobs"]["plan"]
     assert plan["outputs"] == {
-        "tested": "${{ steps.queue.outputs.tested }}",
         "execute": "${{ steps.plan.outputs.execute }}",
         "run": "${{ steps.plan.outputs.run }}",
     }
@@ -205,12 +206,10 @@ def test_plan_job_selects_the_port_from_the_event_diff():
     assert step["env"] == {
         "COMPUTESHARP_CI_EVENT": "${{ github.event_name }}",
         "COMPUTESHARP_CI_BASE": (
-            "${{ github.event.pull_request.base.sha || "
-            "github.event.merge_group.base_sha || github.event.before }}"
+            "${{ github.event.pull_request.base.sha || github.event.before }}"
         ),
         "COMPUTESHARP_CI_HEAD": (
-            "${{ github.event.pull_request.head.sha || "
-            "github.event.merge_group.head_sha || github.sha }}"
+            "${{ github.event.pull_request.head.sha || github.sha }}"
         ),
     }
 
@@ -277,8 +276,8 @@ RECORDS = (
         ("pull_request", ("docs/source/project-porting.rst",), False, False),
         ("pull_request", ("demos/integrations/mlx/run_mlx_porting.py",), False, False),
         ("pull_request", ("crosstl/translator/codegen/GLSL_codegen.py",), True, True),
-        ("merge_group", ("crosstl/project/pipeline.py",), False, False),
-        ("merge_group", ("README.md", "crosstl/_crosstl.py"), True, True),
+        ("push", ("crosstl/project/pipeline.py",), False, False),
+        ("push", ("README.md", "crosstl/_crosstl.py"), True, True),
         ("push", ("demos/integrations/computesharp/results.json",), True, False),
         ("pull_request", RECORDS, True, False),
         ("pull_request", (*RECORDS, "docs/source/index.rst"), True, False),
@@ -354,7 +353,7 @@ def test_plan_reads_the_diff_from_the_merge_base(tmp_path, monkeypatch):
     everything = {"execute": True, "run": True}
     assert PLAN.plan_for_event("pull_request", base, head) == nothing
     moved = _commit(repo, "demos/integrations/computesharp/run_tests.py", "port")
-    assert PLAN.plan_for_event("merge_group", root, moved) == everything
+    assert PLAN.plan_for_event("push", root, moved) == everything
     cited = _commit(repo, "demos/integrations/computesharp/README.md", "cite")
     assert PLAN.plan_for_event("pull_request", moved, cited) == {
         "execute": False,

@@ -9,6 +9,7 @@ from crosstl.backend.Metal.call_result_types import (
     infer_call_result_type,
 )
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from tests.stage_entry_helpers import joined_entries
 
 PRELUDE = """#include <metal_stdlib>
 using namespace metal;
@@ -172,7 +173,7 @@ def test_constrained_call_with_helper_call_argument_selects_each_overload(
 ):
     path = tmp_path / "cast.metal"
     path.write_text(CONSTRAINED)
-    output = crosstl.translate(str(path), backend=backend, format_output=False)
+    output = joined_entries(path, backend, format_output=False)
     # float to float is the identity overload; float to half converts.
     assert "cast_to_float_float" in output
     assert "cast_to_half_float" in output

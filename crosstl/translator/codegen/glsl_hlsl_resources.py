@@ -160,7 +160,28 @@ class GLSLHlslResourceMixin:
         }
         if of is not None:
             record["of"] = of
+        if self.glsl_binding_written_by_source(node, binding):
+            # Read by :mod:`.glsl_vulkan_binding_classes`; resource_binding_records leaves it out.
+            record[self.GLSL_SOURCE_BINDING_KEY] = True
         self.glsl_resource_binding_records.append(record)
+
+    GLSL_SOURCE_BINDING_KEY = "_sourceBinding"
+
+    def glsl_binding_written_by_source(self, node, binding):
+        """Whether ``binding`` is the binding, register or ``@binding`` that the source wrote for ``node``."""
+        if node is None or not getattr(node, "attributes", None):
+            return False
+        if not self.explicit_resource_binding_choices(node):
+            return False
+        return self.explicit_resource_binding_index(node) == int(binding)
+
+    def glsl_source_written_bindings(self):
+        """``(OpenGL binding table, binding)`` of each recorded resource whose binding the source wrote."""
+        return frozenset(
+            (record["namespace"], record["binding"])
+            for record in self.glsl_resource_binding_records
+            if record.get(self.GLSL_SOURCE_BINDING_KEY)
+        )
 
     def record_glsl_combined_sampler_use(self, texture_arg, sampler_arg):
         texture_name = self.expression_name(texture_arg)
@@ -183,7 +204,14 @@ class GLSLHlslResourceMixin:
         reported once per texture unit it must be bound to, with ``texture``
         naming that texture.
         """
-        records = [dict(record) for record in self.glsl_resource_binding_records]
+        records = [
+            {
+                key: value
+                for key, value in record.items()
+                if key != self.GLSL_SOURCE_BINDING_KEY
+            }
+            for record in self.glsl_resource_binding_records
+        ]
         textures = {}
         for record in records:
             if record["kind"] == "texture":

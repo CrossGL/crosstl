@@ -5,13 +5,20 @@ The Slang emitter lowers std140 and std430 GLSL buffer blocks to byte-address bu
 array's length is its declared size. A runtime array's length is the number of whole elements that the bound buffer
 holds after the array's offset (GLSL 4.60 section 4.1.9). As in DirectX output (``buffer_length``), it is computed
 from ``ByteAddressBuffer.GetDimensions`` through a helper function: ``int((cgl_buffer_bytes(b) - offset) / stride)``.
+
+A CrossGL ``buffer T* b`` is a Slang structured buffer, and ``b.length()`` is the number of elements bound, which
+``GetDimensions`` writes as its count. Slang's structured buffers have no ``length`` member, so slangc refused the
+call as written; it is rendered as ``int`` of the element-count helper that ``buffer_dimensions(b)`` calls.
 """
 
 from __future__ import annotations
 
 from ..ast import MemberAccessNode
 
-__all__ = ["slang_glsl_buffer_block_length"]
+__all__ = [
+    "slang_glsl_buffer_block_length",
+    "slang_structured_buffer_length",
+]
 
 
 def slang_glsl_buffer_block_length(codegen, func_expr, args):
@@ -40,3 +47,19 @@ def slang_glsl_buffer_block_length(codegen, func_expr, args):
             "0",
         )
     return rendered
+
+
+def slang_structured_buffer_length(codegen, func_expr, args):
+    """Slang for ``b.length()`` when ``b`` is a structured buffer, or ``None``."""
+    if not (
+        isinstance(func_expr, MemberAccessNode)
+        and getattr(func_expr, "member", None) == "length"
+        and not args
+    ):
+        return None
+    object_expr = getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
+    buffer_type = codegen.structured_buffer_resource_type(object_expr)
+    if not codegen.is_structured_buffer_resource_type(buffer_type):
+        return None
+    helper = codegen.buffer_dimensions_helper_name(buffer_type)
+    return f"int({helper}({codegen.generate_expression(object_expr)}))"

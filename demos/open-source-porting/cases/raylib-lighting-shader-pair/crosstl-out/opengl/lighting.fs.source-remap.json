@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 56,
-        "endOffset": 1657,
+        "endLine": 64,
+        "endOffset": 1968,
         "file": "crosstl-out/opengl/lighting.fs.glsl",
-        "length": 1657,
+        "length": 1968,
         "line": 1,
         "offset": 0
       },
