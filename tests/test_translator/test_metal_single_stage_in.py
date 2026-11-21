@@ -124,7 +124,7 @@ def test_two_structure_inputs_share_one_stage_in(tmp_path):
     assert _signature(metal, "vertex") == (
         "vertex_main_Input _crossglInput [[stage_in]]"
     )
-    assert "struct vertex_main_Input {\n  PosIn p;\n  ColorIn c;\n};" in metal
+    assert "struct vertex_main_Input {\n    PosIn p;\n    ColorIn c;\n};" in metal
     assert "PosIn p = _crossglInput.p;" in metal
     assert "ColorIn c = _crossglInput.c;" in metal
     # The nested structures keep the attributes the host binds.
