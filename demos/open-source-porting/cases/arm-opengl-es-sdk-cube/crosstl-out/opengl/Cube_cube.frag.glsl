@@ -1,4 +1,4 @@
-#version 450 core
+#version 330 core
 precision lowp float;
 #if defined(GL_SPIRV) || defined(VULKAN)
 #if !defined(GL_ES) && __VERSION__ < 410

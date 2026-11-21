@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 layout(std430, binding = 0) buffer xBuffer { float x[]; };
 layout(std430, binding = 1) buffer yBuffer { float y[]; };
 // Constant Buffers

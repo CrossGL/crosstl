@@ -1,4 +1,4 @@
-#version 450 core
+#version 330 core
 #if defined(GL_SPIRV) || defined(VULKAN)
 #if !defined(GL_ES) && __VERSION__ < 410
 #extension GL_ARB_separate_shader_objects : require

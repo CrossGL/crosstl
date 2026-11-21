@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 #ifdef VULKAN
 #define CROSSGL_BINDING(s, vulkan, opengl) set = s, binding = vulkan
 #else

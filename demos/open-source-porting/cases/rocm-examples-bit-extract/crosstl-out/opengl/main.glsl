@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 #extension GL_ARB_gpu_shader_int64 : require
 layout(std430, binding = 0) buffer d_outputBuffer { uint d_output[]; };
 layout(std430, binding = 1) readonly buffer d_inputBuffer { uint d_input[]; };
