@@ -119,6 +119,10 @@ from .interface_block_instances import (
     InterfaceBlockInstanceUnsupportedError,
     declare_interface_block_instances,
 )
+from .intersection_results import (
+    IntersectionResultUnsupportedError,
+    lower_intersection_results,
+)
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
@@ -283,6 +287,7 @@ __all__ = [
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "InterfaceBlockInstanceUnsupportedError",
+    "IntersectionResultUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "LocalStructUnsupportedError",
     "MetalBarycentricsUnsupportedError",
@@ -383,7 +388,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
+    (:mod:`.type_aliases`). For targets other than Metal, an intersection entry that returns Metal's result
+    structure becomes a ``void`` entry that calls ``ReportHit`` (:mod:`.intersection_results`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
     refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
     (:mod:`.static_assertions`). Scalar brace initializers become zero or their single converted value,
     and excess scalar values are refused (:mod:`.scalar_brace_values`). GLSL's
@@ -530,6 +536,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    lower_intersection_results(program, report.target)
     lower_storage_variables(program, report.target)
     lower_uniform_variables(program, report.target)
     orient_row_major_struct_members(program, report.target)
