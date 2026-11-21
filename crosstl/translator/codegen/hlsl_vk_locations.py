@@ -32,12 +32,33 @@ def is_hlsl_semantic_name(semantic):
     return base in HLSL_SEMANTIC_METADATA_BASE_NAMES
 
 
+def declared_hlsl_semantic(node):
+    """The HLSL semantic ``node`` declares itself, else ``None``.
+
+    ``semantic_from_node`` derives ``TEXCOORD<N>`` from ``@location(N)`` for an entry parameter, so it cannot tell a
+    declared semantic from a location; this reads only the ``semantic`` field and the attributes other than
+    ``@location``.
+    """
+    semantic = getattr(node, "semantic", None)
+    if is_hlsl_semantic_name(semantic):
+        return str(semantic).strip()
+    for attr in getattr(node, "attributes", None) or []:
+        name = getattr(attr, "name", None)
+        if str(name).lower() == "location":
+            continue
+        if getattr(attr, "arguments", None) or getattr(attr, "args", None):
+            continue
+        if is_hlsl_semantic_name(name):
+            return str(name)
+    return None
+
+
 def hlsl_location_with_declared_semantic(codegen, node):
     """``N`` when ``node`` has ``@location(N)`` and a declared HLSL semantic, else ``None``."""
     index = codegen.hlsl_location_attribute_index(node)
     if index is None:
         return None
-    if not is_hlsl_semantic_name(codegen.semantic_from_node(node)):
+    if declared_hlsl_semantic(node) is None:
         return None
     return index
 

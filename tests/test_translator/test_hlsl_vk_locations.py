@@ -65,7 +65,7 @@ PLACED_ONLY = """shader main {
 def _hlsl(tmp_path, program):
     path = tmp_path / "shader.cgl"
     path.write_text(program, encoding="utf-8")
-    return crosstl.translate(str(path), backend="directx")
+    return crosstl.translate(str(path), backend="directx", format_output=False)
 
 
 def _guarded(index):
@@ -93,9 +93,9 @@ def _dxc(tmp_path, code, profile, entry, *flags):
 def test_struct_members_keep_their_semantic_and_write_the_location(tmp_path):
     code = _hlsl(tmp_path, VERTEX)
 
-    assert re.search(_guarded(0).pattern + r"\s*float3 Pos : Position;", code)
-    assert re.search(_guarded(2).pattern + r"\s*float2 UV : TexCoord0;", code)
-    assert re.search(_guarded(1).pattern + r"\s*float2 UV : TexCoord0;", code)
+    assert re.search(_guarded(0).pattern + r"\s*float3 Pos\s*:\s*Position;", code)
+    assert re.search(_guarded(2).pattern + r"\s*float2 UV\s*:\s*TexCoord0;", code)
+    assert re.search(_guarded(1).pattern + r"\s*float2 UV\s*:\s*TexCoord0;", code)
     assert "TEXCOORD2" not in code
 
 
@@ -112,7 +112,7 @@ def test_struct_members_compile_to_dxil_and_to_their_spirv_locations(tmp_path):
 def test_entry_parameters_compile_to_their_spirv_locations(tmp_path):
     code = _hlsl(tmp_path, FRAGMENT)
 
-    assert re.search(_guarded(1).pattern + r"\s*float2 uv : TexCoord0", code)
+    assert re.search(_guarded(1).pattern + r"\s*float2 uv\s*:\s*TexCoord0", code)
     _dxc(tmp_path, code, "ps_6_0", "PSMain")
     spirv = _dxc(tmp_path, code, "ps_6_0", "PSMain", "-spirv")
     assert re.search(r"OpDecorate %in_var_TexCoord0 Location 1\b", spirv)
@@ -122,5 +122,5 @@ def test_entry_parameters_compile_to_their_spirv_locations(tmp_path):
 def test_a_location_without_a_semantic_still_chooses_texcoord(tmp_path):
     code = _hlsl(tmp_path, PLACED_ONLY)
 
-    assert "float2 UV : TEXCOORD2;" in code
+    assert re.search(r"float2 UV\s*:\s*TEXCOORD2;", code)
     assert "vk::location" not in code
