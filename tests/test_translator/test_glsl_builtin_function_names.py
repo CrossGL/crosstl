@@ -1,7 +1,9 @@
 """GLSL and WebGL output rename program identifiers that spell a GLSL built-in function.
 
 A global named ``texture`` hides the built-in in desktop GLSL, so ``texture(texture, uv)`` fails with "can't use
-function syntax on variable", and GLSL ES 3.00 rejects the declaration itself as a redefinition.
+function syntax on variable", and GLSL ES 3.00 rejects the declaration itself as a redefinition. WebGL output
+renames every such identifier; desktop GLSL output renames the ones whose built-in the program calls, and every
+user function, and keeps the others, such as a uniform the host looks up by name.
 """
 
 import re
@@ -139,9 +141,11 @@ def test_texture_named_texture_is_renamed_and_sampled(tmp_path, backend):
 @pytest.mark.parametrize("backend", TARGETS)
 def test_block_members_and_locals_keep_the_builtins_callable(tmp_path, backend):
     glsl = _translate(tmp_path, BLOCK_MEMBERS_AND_LOCALS, backend)
-    assert "float mix_;" in glsl and "vec3 normalize_;" in glsl
+    # No normalize() call meets the member normalize, so desktop GLSL keeps its name.
+    normalize = "normalize_" if backend == "webgl" else "normalize"
+    assert "float mix_;" in glsl and f"vec3 {normalize};" in glsl
     assert "float length_ = 2.0;" in glsl
-    assert "mix(c.rgb, normalize_, m)" in glsl and "length(c)" in glsl
+    assert f"mix(c.rgb, {normalize}, m)" in glsl and "length(c)" in glsl
     _assert_glslang_accepts(tmp_path, glsl, "frag")
 
 
@@ -151,9 +155,11 @@ def test_user_function_named_like_a_builtin_is_renamed_with_its_calls(
 ):
     # GLSL ES 3.00 rejects any user function named like a built-in ("redeclaration of existing name").
     glsl = _translate(tmp_path, USER_FUNCTION, backend)
+    distance = "distance_" if backend == "webgl" else "distance"
     assert "float mix_(float a, float b)" in glsl
     assert "mix_(uv.x, uv.y)" in glsl
-    assert "float distance_ = 0.5;" in glsl and "clamp(distance_, 0.0, 1.0)" in glsl
+    assert f"float {distance} = 0.5;" in glsl
+    assert f"clamp({distance}, 0.0, 1.0)" in glsl
     assert "mix(" not in glsl.replace("mix_(", "")
     _assert_glslang_accepts(tmp_path, glsl, "frag")
 
@@ -161,33 +167,86 @@ def test_user_function_named_like_a_builtin_is_renamed_with_its_calls(
 @pytest.mark.parametrize("backend", TARGETS)
 def test_stage_interface_members_are_declared_and_read_with_one_name(tmp_path, backend):
     glsl = _translate(tmp_path, STAGE_INTERFACE, backend)
-    assert "in vec3 normalize_;" in glsl and "in vec2 distance_;" in glsl
+    distance, transpose = (
+        ("distance_", "transpose_") if backend == "webgl" else ("distance", "transpose")
+    )
+    assert "in vec3 normalize_;" in glsl and f"in vec2 {distance};" in glsl
     assert "normalize(normalize_)" in glsl
-    assert "length_ = (distance_ * length(normalize_));" in glsl
-    assert "mat4 transpose_;" in glsl and "(transpose_ * " in glsl
+    assert f"length_ = ({distance} * length(normalize_));" in glsl
+    assert f"mat4 {transpose};" in glsl and f"({transpose} * " in glsl
     _assert_glslang_accepts(tmp_path, glsl, "vert", "frag")
 
 
 def test_compute_program_names_do_not_hide_builtins(tmp_path):
     glsl = _translate(tmp_path, COMPUTE, "opengl")
     tokens = _identifier_tokens(glsl)
-    for renamed in ("sign_", "step_", "round_", "clamp_", "floor_", "dot_"):
-        assert renamed in tokens, renamed
-    assert "struct step_ {" in glsl
-    assert "float floor_(float exp_, float pow_)" in glsl
-    assert "(floor_(s.min_, s.max_) + abs(round_[dot_]))" in glsl
-    assert "max(s.min_, 0.0)" in glsl
+    # The user floor() and the member max meet calls; sign, step, round, clamp, dot, exp, pow and min do not.
+    assert {"floor_", "max_"} <= tokens
+    for kept in ("sign", "step", "round", "clamp", "dot", "exp", "pow", "min"):
+        assert f"{kept}_" not in tokens, kept
+    assert "struct step {" in glsl and "float max_;" in glsl
+    assert "float floor_(float exp, float pow)" in glsl
+    assert "(floor_(s.min, s.max_) + abs(round[dot]))" in glsl
+    assert "max(s.min, 0.0)" in glsl
     _assert_glslang_accepts(tmp_path, glsl, "comp")
 
 
 @pytest.mark.parametrize("backend", TARGETS)
 def test_hlsl_texture_named_texture(tmp_path, backend):
     glsl = _translate(tmp_path, HLSL_TEXTURE, backend, suffix=".hlsl")
+    # The host sets the uniform step by name; desktop GLSL keeps it, since no step() call meets it.
+    step = "step_" if backend == "webgl" else "step"
     assert "uniform sampler2D texture_;" in glsl
     assert "texture(texture_, uv)" in glsl
-    assert "float mix_;" in glsl and "float step_;" in glsl
-    assert "mix(mix_, step_, uv.x)" in glsl
+    assert "float mix_;" in glsl and f"float {step};" in glsl
+    assert f"mix(mix_, {step}, uv.x)" in glsl
     _assert_glslang_accepts(tmp_path, glsl, "frag")
+
+
+QUALIFIER_OVERLOAD = """shader main {
+    float frexp(float x, int e) { return x * float(e); }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* values;
+        void main() {
+            int e = 2;
+            float step = values[1];
+            values[0] = frexp(values[0], e) + step;
+        }
+    }
+}
+"""
+
+
+def test_user_overload_that_differs_by_qualifiers_is_renamed(tmp_path):
+    # frexp(float, int) beside the built-in frexp(float, out int): "overloaded functions must have the same
+    # parameter storage qualifiers" (GLSL 4.60 section 6.1). The local step meets no step() call and keeps its name.
+    glsl = _translate(tmp_path, QUALIFIER_OVERLOAD, "opengl")
+    assert "float frexp_(float x, int e)" in glsl
+    assert "(frexp_(values[0], e) + step)" in glsl
+    assert "float step = values[1];" in glsl
+    _assert_glslang_accepts(tmp_path, glsl, "comp")
+
+
+def test_rendering_again_reserves_only_called_names():
+    from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+    from crosstl.translator.codegen.glsl_builtin_functions import (
+        called_builtin_spellings,
+        glsl_builtin_name_reserved,
+        reset_builtin_spellings,
+    )
+
+    codegen = GLSLCodeGen()
+    reset_builtin_spellings(codegen)
+    assert not glsl_builtin_name_reserved(codegen, "texture")
+    assert not glsl_builtin_name_reserved(codegen, "length")
+    assert not glsl_builtin_name_reserved(codegen, "values")
+    code = "vec4 c = texture (texture, uv); int n = values.length();"
+    assert called_builtin_spellings(codegen, code) == {"texture"}
+    codegen.glsl_shadowed_builtin_names = frozenset({"texture"})
+    assert glsl_builtin_name_reserved(codegen, "texture")
+    assert not glsl_builtin_name_reserved(codegen, "length")
+    assert called_builtin_spellings(codegen, code) == frozenset()
 
 
 def test_core_names_cover_the_pinned_specification():

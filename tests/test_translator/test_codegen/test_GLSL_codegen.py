@@ -20598,9 +20598,8 @@ def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
     assert "complex64_t product = crossgl_complex64_mul(left, right);" in generated
     assert "complex64_t quotient = crossgl_complex64_div(left, right);" in generated
     assert "complex64_t negated = crossgl_complex64_negate(left);" in generated
-    # GLSL output renames locals named like the built-ins equal() and notEqual().
-    assert "bool equal_ = crossgl_complex64_equal(left, right);" in generated
-    assert "bool notEqual_ = crossgl_complex64_not_equal(left, right);" in generated
+    assert "bool equal = crossgl_complex64_equal(left, right);" in generated
+    assert "bool notEqual = crossgl_complex64_not_equal(left, right);" in generated
     assert (
         "complex64_t promoted = crossgl_complex64_add("
         "complex64_t(float(2.0), 0.0), left);" in generated
@@ -44982,7 +44981,7 @@ def _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path):
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "if (((int(exp_) & 1) != 0))" in generated_code
+    assert "if (((int(exp) & 1) != 0))" in generated_code
     assert "int cgl_bool_compound_lhs = int(result);" in generated_code
     assert "int cgl_bool_compound_rhs = int(base);" in generated_code
     assert (
@@ -44990,9 +44989,9 @@ def _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path):
         in generated_code
     )
     assert re.search(
-        r"int (cgl_bool_compound_lhs_\d+) = int\(exp_\);\n"
+        r"int (cgl_bool_compound_lhs_\d+) = int\(exp\);\n"
         r"\s+int (cgl_bool_compound_rhs_\d+) = 1;\n"
-        r"\s+exp_ = \(\(\1 >> \2\) != 0\);",
+        r"\s+exp = \(\(\1 >> \2\) != 0\);",
         generated_code,
     )
     assert re.search(
@@ -45609,15 +45608,15 @@ def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
     normalized = re.sub(r"\s+", " ", generated_code)
 
     assert (
-        "return bitfieldExtract(int((uint(start) + (index * uint(step_)))), 0, 8);"
+        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 8);"
         in normalized
     )
     assert (
-        "return bitfieldExtract(int((uint(start) + (index * uint(step_)))), 0, 16);"
+        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 16);"
         in normalized
     )
-    assert "return int((uint(start) + (index * uint(step_))));" in normalized
-    assert "return (start + (int64_t(index) * step_));" in normalized
+    assert "return int((uint(start) + (index * uint(step))));" in normalized
+    assert "return (start + (int64_t(index) * step));" in normalized
     assert "return (value + float(offset));" in normalized
     assert "double(value)" not in normalized
     assert "double(offset)" not in normalized

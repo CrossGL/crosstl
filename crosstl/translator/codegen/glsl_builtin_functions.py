@@ -2,12 +2,19 @@
 
 Built-in functions live in a scope outside the shader's global scope. A program variable named ``texture`` hides
 the built-in ``texture`` for the rest of its scope, so the ``texture(texture, uv)`` that GLSL output writes for a
-sampled read fails with "can't use function syntax on variable" (GLSL 4.60 section 4.2, Scoping). GLSL ES 3.00 goes further:
-a global declaration or a user function with a built-in function's name is a redefinition error (GLSL ES 3.00
-section 4.2, Scoping, and section 6.1, Function Definitions), whether or not the program calls the built-in. HLSL, MSL and CrossGL
-treat these names as ordinary identifiers, so GLSL and WebGL output rename program identifiers that spell one, as
-they rename GLSL keywords. Structure members are renamed too, because a stage interface structure's members become
-global inputs and outputs.
+sampled read fails with "can't use function syntax on variable" (GLSL 4.60 section 4.2, Scoping). A user function
+named like a built-in overloads it, and an overload whose parameters differ from a built-in's only in their
+qualifiers, such as ``float frexp(float, int)`` beside ``frexp(float, out int)``, is an error (section 6.1,
+Function Definitions). GLSL ES 3.00 goes further: a global declaration or a user function with a built-in
+function's name is a redefinition error (GLSL ES 3.00 section 4.2, Scoping, and section 6.1), whether or not the
+program calls the built-in. HLSL, MSL and CrossGL treat these names as ordinary identifiers.
+
+So WebGL output renames every program identifier that spells a built-in function, as it renames GLSL keywords.
+Desktop GLSL output renames one only when the program it writes calls that name: a local ``step`` that no
+``step(...)`` call meets keeps its name, and so does a uniform the host looks up by name, while a user function is
+always renamed because its own definition is such a call. :meth:`GLSLCodeGen._generate_program_with_vulkan_forms`
+renders the program again with the called names reserved. Structure members are renamed too, because a stage
+interface structure's members become global inputs and outputs.
 
 :data:`GLSL_CORE_BUILTIN_FUNCTIONS` is chapter 8 of the GLSL 4.60 specification, the source that
 ``tools.coverage.features.glsl`` reads. :data:`GLSL_EXTENSION_BUILTIN_FUNCTIONS` lists the extension functions and
@@ -16,10 +23,15 @@ statement keywords that GLSL output can write.
 
 from __future__ import annotations
 
+import re
+
 __all__ = [
     "GLSL_BUILTIN_FUNCTION_NAMES",
     "GLSL_CORE_BUILTIN_FUNCTIONS",
     "GLSL_EXTENSION_BUILTIN_FUNCTIONS",
+    "called_builtin_spellings",
+    "glsl_builtin_name_reserved",
+    "reset_builtin_spellings",
 ]
 
 GLSL_CORE_BUILTIN_FUNCTIONS = frozenset("""
@@ -109,3 +121,41 @@ GLSL_EXTENSION_BUILTIN_FUNCTIONS = frozenset(
 GLSL_BUILTIN_FUNCTION_NAMES = (
     GLSL_CORE_BUILTIN_FUNCTIONS | GLSL_EXTENSION_BUILTIN_FUNCTIONS
 )
+
+# A name followed by an argument list, and not a member call such as ``values.length()``.
+_CALLED_NAME = re.compile(r"(?<![\w.])([A-Za-z_]\w*)\s*\(")
+
+
+def reset_builtin_spellings(codegen):
+    """Forget the built-in spellings of an earlier program before ``codegen`` renders a new one."""
+    codegen.glsl_builtin_spelled_identifiers = set()
+    codegen.glsl_shadowed_builtin_names = frozenset()
+
+
+def glsl_builtin_name_reserved(codegen, name):
+    """Whether ``codegen`` renames a program identifier ``name`` because it spells a GLSL built-in function.
+
+    Output that reserves every built-in name (``GLSL_RESERVES_BUILTIN_FUNCTION_NAMES``, GLSL ES) renames it at once.
+    Otherwise the name is recorded, and it is renamed once a rendering of the program has called it.
+    """
+    if name not in GLSL_BUILTIN_FUNCTION_NAMES:
+        return False
+    if getattr(codegen, "GLSL_RESERVES_BUILTIN_FUNCTION_NAMES", True):
+        return True
+    spelled = getattr(codegen, "glsl_builtin_spelled_identifiers", None)
+    if spelled is None:
+        # Rendered outside a program pass, where no later rendering can rename it: keep the strict rule.
+        return True
+    spelled.add(name)
+    return name in codegen.glsl_shadowed_builtin_names
+
+
+def called_builtin_spellings(codegen, code):
+    """The built-in names that program identifiers spelled and that ``code`` calls, not reserved yet."""
+    spelled = getattr(codegen, "glsl_builtin_spelled_identifiers", None) or set()
+    pending = spelled - codegen.glsl_shadowed_builtin_names
+    if not pending:
+        return frozenset()
+    return frozenset(
+        pending & {match.group(1) for match in _CALLED_NAME.finditer(code)}
+    )
