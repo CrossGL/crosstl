@@ -166,36 +166,52 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
 
 def test_current_attention_runs_in_the_native_jobs_and_retains_evidence():
     workflow = _workflow_texts()["demo-project-testing.yml"]
-    job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    job = jobs["mlx-current-gemm-parity"]
     names = [step.get("name") for step in job["steps"]]
-    step = job["steps"][names.index("Prove current MLX attention native execution")]
+    step = job["steps"][names.index("Prove current MLX steel attention native parity")]
     path = "demos/integrations/mlx/tests/kernels/test_current_attention.py"
     assert workflow.count(path) == 1
     assert path in step["run"]
-    assert "if" not in step and "continue-on-error" not in step
-    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
-        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
-        " || 'metal' }}"
-    )
+    porting = [step.get("name") for step in jobs["mlx-metal-porting"]["steps"]]
+    assert not [name for name in porting if "attention native" in name]
+    assert step["if"] == "matrix.family == 'steel-attention'"
+    assert "continue-on-error" not in step
+    for target, runner in (
+        ("opengl", "Linux"),
+        ("directx", "Windows"),
+        ("metal", "macOS"),
+    ):
+        assert f"{runner}) export CROSTL_MLX_CURRENT_TARGET={target} ;;" in step["run"]
     assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_ATTENTION"] == "1"
     assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
+    assert (
+        step["env"]["CROSTL_MLX_CURRENT_ATTENTION_SHARD_INDEX"] == "${{ matrix.shard }}"
+    )
+    assert step["env"]["CROSTL_MLX_CURRENT_ATTENTION_SHARD_COUNT"] == "3"
     assert step["env"]["EGL_PLATFORM"] == "surfaceless"
     assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
     assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
-    # Entries translate in parallel groups; Windows runners take several
-    # minutes for each one.
-    assert "--timeout-seconds 1800" in step["run"]
+    # Each worker translates the entries of its xdist groups once.
     assert "-n auto --dist loadgroup" in step["run"]
-    assert "--junitxml=mlx-attention-results/results.xml" in step["run"]
-    upload = job["steps"][names.index("Upload current MLX attention native evidence")]
-    assert names.index("Upload current MLX attention native evidence") == (
-        names.index("Prove current MLX attention native execution") + 1
-    )
-    assert upload["if"] == "always()"
-    assert upload["with"]["name"] == "mlx-attention-${{ runner.os }}"
-    assert upload["with"]["path"] == "mlx-attention-results"
-    assert upload["with"]["if-no-files-found"] == "error"
-    assert upload["with"]["include-hidden-files"] is True
+    assert "--junitxml=mlx-current-results/${{ matrix.group }}.xml" in step["run"]
+    groups = [
+        item
+        for item in job["strategy"]["matrix"]["include"]
+        if item["family"] == "steel-attention"
+    ]
+    assert groups == [
+        {
+            "group": f"steel-attention-{index}",
+            "family": "steel-attention",
+            "shard": index,
+        }
+        for index in range(3)
+    ]
+    # The job's last step retains every group's results.
+    from tests.ci_helpers import CURRENT_PARITY_UPLOAD
+
+    assert names[-1] == CURRENT_PARITY_UPLOAD
     _assert_workflow_triggers(workflow, path)
 
 
@@ -353,9 +369,8 @@ def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failure
         "steps.platform-host-abi.outcome == 'success' }}"
     )
     assert (
-        "matrix.warp_qualification == '1.0.13'" in identity["env"][
-            "EXPECTED_WARP_SHA256"
-        ]
+        "matrix.warp_qualification == '1.0.13'"
+        in identity["env"]["EXPECTED_WARP_SHA256"]
     )
     for digest in (
         "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
@@ -384,9 +399,8 @@ def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failure
     )
     assert "--timeout-seconds 4000" in execute["run"]
     assert (
-        "--cast-batches --large-copies --binary-batches --unary-batches" in execute[
-            "run"
-        ]
+        "--cast-batches --large-copies --binary-batches --unary-batches"
+        in execute["run"]
     )
     assert job["steps"].index(steps["Validate collective helper arguments"]) < job[
         "steps"
@@ -1143,6 +1157,9 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "gemm-segmented-4",
         "gemm-segmented-5",
         "gemm-segmented-6",
+        "steel-attention-0",
+        "steel-attention-1",
+        "steel-attention-2",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
