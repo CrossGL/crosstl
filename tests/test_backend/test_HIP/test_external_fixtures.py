@@ -926,7 +926,12 @@ def test_external_rocm_stb_image_write_function_type_typedef_codegen_reparse():
     assert alias.alias_type == "void"
     assert function.params[0]["type"] == "stbi_write_func *"
     assert "typedef void stbi_write_func;" in crossgl
-    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in crossgl
+    # A prototype adds no CrossGL function; a definition with the same parameters keeps the pointer type.
+    assert "stbi_write_png_to_func" not in crossgl
+    _ast, defined = assert_crossgl_reparses(
+        source.replace("int h);", "int h) { return 0; }")
+    )
+    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in defined
 
 
 def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
@@ -947,7 +952,7 @@ def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
 
     assert isinstance(function, FunctionNode)
     assert function.params[1]["type"] == "std::ios_base & (*)"
-    assert "std::string toString(T t, ptr<std::ios_base> r)" in crossgl
+    assert "std::string toString(T t, ptr<std::ios_base> r = std::dec)" in crossgl
     assert "ptr<std::ios_base ()>" not in crossgl
     assert "var output: std::ostringstream;" in crossgl
 
@@ -2447,8 +2452,8 @@ def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
     # as __fdividef, rounded arithmetic aliases, and __saturatef.
-    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) have no CrossGL
-    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
+    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) call CrossGL
+    # functions that compute the directed result exactly (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float normalized_weight(float weight, float normalizer, float bias) {
         float scaled = __fdividef(weight, normalizer);
@@ -2495,10 +2500,18 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
         "__fmul_ru(a, b)",
         "__fadd_rz(a, b)",
     ):
-        with pytest.raises(DirectedRoundingUnsupportedError):
-            assert_crossgl_reparses(
-                f"__device__ float f(float a, float b) {{ return {directed}; }}"
-            )
+        _ast, crossgl = assert_crossgl_reparses(
+            f"__device__ float f(float a, float b) {{ return {directed}; }}"
+        )
+        wrapper = directed.split("(")[0][2:]
+        assert f"return {wrapper}(f32(a), f32(b));" in crossgl
+        assert directed.split("(")[0] not in crossgl
+
+    with pytest.raises(DirectedRoundingUnsupportedError):
+        assert_crossgl_reparses(
+            "#include <hip/hip_fp16.h>\n"
+            "__device__ __half f(float a) { return __float2half_rd(a); }"
+        )
 
 
 def test_external_hip_fp16_scalar_conversion_codegen_reparse():
@@ -2872,6 +2885,6 @@ def test_external_llvm_amdgpu_numeric_template_kernel_name_codegen_reparse():
 
     assert ast.statements[0].name == "template_flat_work_group_size_32_64"
     assert ast.statements[1].name == "template_flat_work_group_size_32_64<32, 64>"
-    assert "fn template_flat_work_group_size_32_64(" in crossgl
-    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 2
+    # The explicit instantiation has no body, so it adds no second entry point of the same name.
+    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 1
     assert "fn template_flat_work_group_size_32_64<32, 64>" not in crossgl

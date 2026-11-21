@@ -10,6 +10,11 @@ from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
 from .c_wide_integer_vectors import wide_integer_vector_constructor
 from .cuda_pointer_operands import hip_pointer_operand_call
+from .cuda_type_reinterpretation import (
+    as_type_result_type,
+    is_as_type_call,
+    lower_as_type,
+)
 from .enum_utils import generate_enum_constructor_call
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -336,6 +341,8 @@ class HipFunctionCallMixin:
         return func_name
 
     def hip_bitcast_result_type(self, func_name, raw_args):
+        if is_as_type_call(func_name):
+            return as_type_result_type(self, func_name)
         wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
         if (
             wide_bitcast is not None
@@ -368,6 +375,15 @@ class HipFunctionCallMixin:
         return None
 
     def generate_hip_bitcast_call(self, func_name, raw_args, args):
+        if is_as_type_call(func_name) and not self.is_user_defined_function(func_name):
+            return lower_as_type(
+                self,
+                func_name,
+                raw_args,
+                args,
+                HipLoweringRefused,
+                self.require_hip_vector_bitcast_helper,
+            )
         result_type = self.hip_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None

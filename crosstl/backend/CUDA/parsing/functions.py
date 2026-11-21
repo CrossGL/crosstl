@@ -5,6 +5,7 @@ from ..CudaAst import (
     KernelNode,
     VariableNode,
 )
+from ..parameter_defaults import UnparsedParameterDefault
 
 
 class CudaFunctionMixin:
@@ -248,8 +249,32 @@ class CudaFunctionMixin:
         if self.is_cpp_attribute_specifier_start():
             self.skip_cpp_attribute_specifiers()
         param_type += self.parse_array_suffix()
+        default = self.parse_parameter_default()
+        return VariableNode(param_type, param_name, default_value=default)
+
+    def parse_parameter_default(self):
+        """Parse a parameter's ``= value`` default argument, or return ``None`` when it has none.
+
+        A default the expression parser cannot read up to the next ``,`` or ``)`` is skipped and returned as an
+        :class:`UnparsedParameterDefault` that keeps its text, so the importer refuses it instead of dropping it.
+        """
+        if self.current_token[0] != "ASSIGN":
+            return None
+        start = self.current_index
+        self.eat("ASSIGN")
+        try:
+            value = self.parse_assignment_expression()
+        except SyntaxError:
+            value = None
+        if value is not None and self.current_token[0] in {"COMMA", "RPAREN"}:
+            return value
+        self.current_index = start
+        self.current_token = self.tokens[start]
         self.skip_parameter_default()
-        return VariableNode(param_type, param_name)
+        text = " ".join(
+            str(token[1]) for token in self.tokens[start + 1 : self.current_index]
+        )
+        return UnparsedParameterDefault(text)
 
     def skip_cuda_parameter_attributes(self):
         while self.current_token[0] in self.CUDA_PARAMETER_ATTRIBUTE_TOKENS or (
