@@ -282,7 +282,7 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
     upload = next(
         step
         for step in job["steps"]
-        if step.get("uses", "").startswith("actions/upload-artifact@")
+        if step.get("uses") == "./demos/integrations/mlx/actions/upload-evidence"
     )
     assert upload["if"] == "always()" and upload["with"]["include-hidden-files"] is True
     assert upload["with"]["path"] == ".mlx-portable-slice-update"

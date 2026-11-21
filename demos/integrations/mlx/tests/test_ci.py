@@ -1740,7 +1740,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always()\n" in runtime_upload
     assert "runner.os" not in runtime_upload
     assert "path: mlx-current-results" in runtime_upload
-    assert "actions/upload-artifact@" in runtime_upload
+    assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in runtime_upload
     assert '-k "$entry"' in current_arg_reduce
     assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
@@ -3576,7 +3576,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     ):
         step = workflow_text.workflow_step_section(sources, name)
         assert "if: always()" in step
-        assert "uses: actions/upload-artifact@" in step
+        assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in step
         assert f"name: {artifact}" in step
         assert "include-hidden-files: true" in step
         assert "if-no-files-found: error" in step
@@ -3619,7 +3619,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         native, "Retain binary Metal native compilation evidence"
     )
     assert "if: always()" in evidence
-    assert "uses: actions/upload-artifact@" in evidence
+    assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in evidence
     assert "path: .binary-metal-native" in evidence
     assert "include-hidden-files: true" in evidence
     assert "if-no-files-found: error" in evidence
