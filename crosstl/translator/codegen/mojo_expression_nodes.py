@@ -1,5 +1,7 @@
 """Mojo rendering of the CrossGL expression nodes that need more than one step: raw strings, variables, binary operators, member accesses, ternary operators and identifier-like nodes."""
 
+from ..ast import LiteralNode, UnaryOpNode
+from ..float_limit_constants import float_limit_constant
 from .mojo_integer_promotion import (
     C_PROMOTING_BINARY_OPERATORS,
     promoted_operand,
@@ -92,6 +94,7 @@ class MojoExpressionNodeMixin:
         if op in C_PROMOTING_BINARY_OPERATORS:
             left = promoted_operand(self, expr.left, left)
             right = promoted_operand(self, expr.right, right)
+            left, right = self.mojo_converted_binary_operands(expr, op, left, right)
         return f"({left} {op} {right})"
 
     def generate_mojo_member_access_expression(
@@ -138,7 +141,41 @@ class MojoExpressionNodeMixin:
         false_expr = self.generate_expression(
             expr.false_expr, target_type, f"{branch_context} false branch"
         )
+        true_expr = self.mojo_typed_literal_branch(expr.true_expr, true_expr)
+        false_expr = self.mojo_typed_literal_branch(expr.false_expr, false_expr)
         return f"({true_expr} if {condition} else {false_expr})"
+
+    def mojo_typed_literal_branch(self, branch, text):
+        """Give a numeric literal branch of a conditional expression its CrossGL type.
+
+        Mojo materializes ``1.0 if c else 0.0`` as ``Float64`` and ``1 if c else 0`` as ``Int``, so a literal
+        branch is written as a constructor call of the scalar type CrossGL gives it.
+        """
+        if isinstance(branch, UnaryOpNode) and branch.op == "-":
+            branch = branch.operand
+        if not isinstance(branch, LiteralNode) or isinstance(branch.value, (bool, str)):
+            return text
+        type_name = getattr(getattr(branch, "literal_type", None), "name", None)
+        if type_name is None:
+            type_name = self.expression_result_type(branch)
+        mojo_type = self.map_type(type_name) if type_name else None
+        if not mojo_type or not mojo_type.isidentifier():
+            return text
+        return f"{mojo_type}({text})"
+
+    def mojo_float_limit_constant(self, name):
+        """A C or Metal float limit such as ``INFINITY`` or ``FLT_MAX`` as its exact binary32 value.
+
+        Mojo defines none of these names. A finite limit keeps the exact decimal of the C macro and a non-finite one
+        is a bit cast of its IEEE 754 encoding. A program variable of the same name is left alone.
+        """
+        constant = float_limit_constant(name)
+        if constant is None or name in self.variable_types:
+            return None
+        if constant.is_finite:
+            return f"Float32({constant.decimal})"
+        self.requires_bitcast_import = True
+        return f"bitcast[DType.float32](UInt32(0x{constant.bits:08X}))"
 
     def generate_mojo_identifier_like_expression(
         self,
@@ -149,6 +186,9 @@ class MojoExpressionNodeMixin:
         name = getattr(expr, "name", str(expr))
         if name in self.expression_identifier_replacements:
             return self.expression_identifier_replacements[name]
+        float_limit = self.mojo_float_limit_constant(name)
+        if float_limit is not None:
+            return float_limit
         ray_builtin = self.mojo_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin

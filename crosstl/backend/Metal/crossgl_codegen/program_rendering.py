@@ -28,6 +28,7 @@ from ..unused_generic_definitions import (
     raise_referenced_deferred_definitions,
     render_generic_definition,
 )
+from ..vote_masks import generate_vote_mask_support_code
 
 
 class MetalProgramRenderingMixin:
@@ -47,6 +48,7 @@ class MetalProgramRenderingMixin:
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
         self.metal_precise_math_helper_names = {}
+        self.required_metal_vote_masks = set()
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
@@ -653,7 +655,8 @@ class MetalProgramRenderingMixin:
             + self.generate_metal_remainder_support_code(indent=1)
             + self.generate_metal_additive_support_code(indent=1)
             + self.generate_metal_multiplication_support_code(indent=1)
-            + self.generate_metal_precise_math_support_code(indent=1),
+            + self.generate_metal_precise_math_support_code(indent=1)
+            + generate_vote_mask_support_code(self, indent=1),
             1,
         )
         code = code.replace(

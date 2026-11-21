@@ -9,6 +9,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .mojo_kernel_arguments import mojo_referenced_names
 from .mojo_tables import (
     MOJO_GPU_BUILTIN_ALIASES,
     MOJO_GPU_BUILTIN_PARAMETER_ORDER,
@@ -59,21 +60,25 @@ class MojoFunctionMixin:
                 getattr(func, "name", None), []
             )
             if name not in {getattr(param, "name", None) for param, _ in param_infos}
+            # An entry point declares the private variables as its own locals.
+            and not (shader_type is not None and self.is_mojo_private_global_name(name))
         ]
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
 
-        synthetic_compute_builtin_params = []
-        if shader_type == "compute":
-            existing_param_names = {
-                getattr(param, "name", None) for param, _ in param_infos
-            }
-            existing_param_names.update(name for name, _ in extra_param_infos)
-            synthetic_compute_builtin_params = self.compute_gpu_builtin_parameter_infos(
-                getattr(func, "body", []), existing_param_names
-            )
-            for name, type_name in synthetic_compute_builtin_params:
+        if shader_type is not None:
+            # An entry point is the Mojo kernel: it takes every buffer and uniform value as an argument.
+            known_names = {getattr(param, "name", None) for param, _ in param_infos}
+            known_names.update(name for name, _ in extra_param_infos)
+            extra_param_infos += [
+                (name, type_name)
+                for name, type_name in self.mojo_entry_kernel_arguments()
+                if name not in known_names
+            ]
+            for name, type_name in extra_param_infos:
                 self.register_variable_type(name, type_name)
+        # Mojo reads the GPU indices anywhere in device code, so they are locals, not kernel parameters.
+        synthetic_compute_builtin_params = []
 
         if hasattr(func, "return_type"):
             return_type = self.convert_type_node_to_string(func.return_type)
@@ -146,11 +151,30 @@ class MojoFunctionMixin:
                             shader_type, p.name, semantic
                         )
                     )
-                params.append(f"{param_name}: {self.map_type(native_type)}")
+                local_alias_declarations.append(
+                    self.mojo_gpu_index_local(param_name, native_type, "global_idx")
+                )
                 local_alias_declarations.append(local_alias)
                 emitted_param_names.add(param_name)
                 continue
+            index_local = (
+                self.mojo_compute_entry_parameter_local(p.name, param_type, semantic)
+                if shader_type == "compute"
+                else None
+            )
+            if index_local is not None:
+                self.register_variable_type(p.name, param_type)
+                if semantic:
+                    parameter_semantic_comments.append(
+                        self.generate_parameter_semantic_comment(
+                            shader_type, p.name, semantic
+                        )
+                    )
+                local_alias_declarations.append(index_local)
+                emitted_param_names.add(p.name)
+                continue
 
+            param_type = self.mojo_storage_parameter_type(p, param_type)
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
             if semantic:
@@ -159,12 +183,29 @@ class MojoFunctionMixin:
                         shader_type, p.name, semantic
                     )
                 )
-            ownership = "owned " if p.name in mutated_params else ""
+            if {"out", "inout"} & set(getattr(p, "qualifiers", None) or []):
+                # A CrossGL out or inout parameter writes the caller's variable, as a Mojo mut argument does.
+                ownership = "mut "
+            elif self.parse_pointer_type_name(str(param_type)) is not None:
+                # Storing through a pointer argument does not change the argument itself.
+                ownership = ""
+            else:
+                ownership = "var " if p.name in mutated_params else ""
             params.append(
                 f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
             )
         for name, param_type in extra_param_infos:
-            ownership = "owned " if name in mutated_params else ""
+            if self.is_mojo_private_global_name(name):
+                # A private variable is the kernel's local, which a helper reads and writes by reference.
+                ownership = "mut "
+            elif (
+                name in mutated_params
+                and self.parse_pointer_type_name(str(param_type)) is None
+            ):
+                ownership = "var "
+            else:
+                # Storing through a pointer argument does not change the argument itself.
+                ownership = ""
             params.append(
                 f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
             )
@@ -176,7 +217,7 @@ class MojoFunctionMixin:
         function_name = self.shader_entry_function_name(
             func,
             shader_type,
-            [*param_infos, *synthetic_compute_builtin_params],
+            [*param_infos, *extra_param_infos, *synthetic_compute_builtin_params],
             return_type,
         )
         self.function_return_types[func.name] = return_type
@@ -205,13 +246,15 @@ class MojoFunctionMixin:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
         code += (
-            f"fn {self.mojo_identifier(function_name)}({params_str}) -> "
+            f"def {self.mojo_identifier(function_name)}({params_str}) -> "
             f"{self.map_type(return_type)}:\n"
         )
         if stage_node is not None:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
             )
+        if shader_type is not None:
+            code += self.mojo_private_global_declarations(indent + 1)
         if fragment_output_info is not None:
             output_param, output_type, _semantic = fragment_output_info
             output_name = getattr(output_param, "name", None)
@@ -222,6 +265,12 @@ class MojoFunctionMixin:
             )
         for declaration in local_alias_declarations:
             code += "    " * (indent + 1) + declaration + "\n"
+        code += self.mojo_function_local_builtin_declarations(
+            getattr(func, "body", []), indent + 1
+        )
+        code += self.mojo_builtin_input_declarations(
+            mojo_referenced_names(getattr(func, "body", [])), indent + 1
+        )
 
         body = getattr(func, "body", [])
         statements = None
@@ -288,11 +337,8 @@ class MojoFunctionMixin:
         return name
 
     def compute_entry_can_remain_main(self, param_infos, return_type):
-        return (
-            not (param_infos or [])
-            and self.type_name(return_type) == "void"
-            and self.current_shader_stage_count <= 1
-        )
+        # Mojo runs a module's main on the host as the program's entry point, so a GPU kernel never takes the name.
+        return False
 
     def compute_gpu_builtin_parameter_infos(self, body, existing_names):
         required_builtins = self.collect_compute_gpu_builtin_aliases(body)

@@ -20,11 +20,18 @@ Translate a CrossGL shader from Python. ``save_shader`` is optional:
        save_shader="SimpleShader.metal",
    )
 
-Or from the command line:
+Or from the command line, where the target comes from the output file's
+extension, as the source language comes from the input file's:
 
 .. code-block:: bash
 
+   crosstl examples/graphics/SimpleShader.cgl -o SimpleShader.hlsl
    python -m crosstl translate examples/graphics/SimpleShader.cgl --backend directx
+
+``--backend`` chooses the target explicitly; without it and without ``-o``,
+the command writes CrossGL next to the input. An output file name whose
+extension names no language CrossTL writes, such as ``shader.spv``, is refused
+with the list of extensions it accepts.
 
 Native source inputs are selected by file extension. When the source frontend
 has a reverse generator, the translator imports the native shader into CrossGL

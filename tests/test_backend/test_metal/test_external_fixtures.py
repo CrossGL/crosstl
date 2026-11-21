@@ -2276,13 +2276,16 @@ EXTERNAL_FIXTURES = [
         "source_path": "simd_partition.metal",
         "roundtrip": True,
         "contains": [
-            "uint unvisited = uint((uint64)simd_active_threads_mask());",
-            "const uint v = uint((uint64)vote);",
+            "uint unvisited = uint(__crossgl_metal_simd_vote_bits(WaveActiveBallot(true)));",
+            "const uvec4 vote = WaveActiveBallot(activeValue == value);",
+            "const uint v = uint(__crossgl_metal_simd_vote_bits(vote));",
         ],
         "not_contains": [
-            "simd_active_threads_mask().operator",
+            "simd_active_threads_mask",
             "vote.operator",
             "operator, unsigned",
+            "bool vote",
+            "(uint64)vote",
         ],
         "source": (
             """
