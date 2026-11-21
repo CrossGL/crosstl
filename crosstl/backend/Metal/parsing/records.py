@@ -3,6 +3,11 @@
 from crosstl.translator.refusals import MetalSyntaxError
 
 from ..local_aggregate_declarators import unnamed_aggregate_name
+from ..member_aggregates import (
+    anonymous_member_declaration,
+    parse_unnamed_member_aggregate,
+    unnamed_member_aggregate_kind,
+)
 from ..member_enums import (
     is_anonymous_member_enum_start,
     parse_anonymous_member_enum,
@@ -26,7 +31,7 @@ from .parser_tables import (
 class MetalRecordParsingMixin:
     """Record members of ``MetalParser``."""
 
-    def parse_struct(self, pre_alignas=None, allow_unnamed=False):
+    def parse_struct(self, pre_alignas=None, allow_unnamed=False, anonymous=False):
         start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
@@ -88,7 +93,7 @@ class MetalRecordParsingMixin:
             name
         )
         if unnamed:
-            self.require_unnamed_aggregate_declarators(struct_node, "struct")
+            self.require_unnamed_aggregate_declarators(struct_node, "struct", anonymous)
         struct_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
@@ -195,7 +200,7 @@ class MetalRecordParsingMixin:
             bases.append(self.format_generic_type_tokens(parts))
         return bases
 
-    def parse_union(self, allow_unnamed=False):
+    def parse_union(self, allow_unnamed=False, anonymous=False):
         start_token = self.current_token
         self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
@@ -242,7 +247,7 @@ class MetalRecordParsingMixin:
             name
         )
         if unnamed:
-            self.require_unnamed_aggregate_declarators(union_node, "union")
+            self.require_unnamed_aggregate_declarators(union_node, "union", anonymous)
         union_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
@@ -255,8 +260,15 @@ class MetalRecordParsingMixin:
         self.register_known_type(name)
         return name
 
-    def require_unnamed_aggregate_declarators(self, aggregate, kind):
+    def require_unnamed_aggregate_declarators(self, aggregate, kind, anonymous=False):
         aggregate.unnamed_aggregate_kind = kind
+        if anonymous and not aggregate.trailing_declarations:
+            # An anonymous member of a class: its members are reached through a reserved member name
+            # (member_aggregates.py).
+            aggregate.trailing_declarations = [
+                anonymous_member_declaration(self, aggregate)
+            ]
+            return
         if not aggregate.trailing_declarations:
             # [class.union.anon]: the members of an anonymous union join the
             # enclosing scope, which hoisting cannot represent.
@@ -822,6 +834,8 @@ class MetalRecordParsingMixin:
             name_index = self.skip_leading_attribute_tokens_at(declaration_start + 1)
             name_index = self.skip_alignas_specifier_tokens_at(name_index)
             if name_index >= len(self.tokens) or not self.is_name_token_at(name_index):
+                if unnamed_member_aggregate_kind(self) is not None:
+                    return parse_unnamed_member_aggregate(self, pre_alignas)
                 self.skip_nested_aggregate_declaration()
                 return None
 

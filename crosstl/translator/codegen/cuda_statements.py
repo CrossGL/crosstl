@@ -16,8 +16,18 @@ from ..refusals import (
 )
 from .assignment_values import assignment_value_expression
 from .c_float_literals import c_float_literal_text
+from .cuda_constant_folding import (
+    device_constant_declaration,
+    device_variable_declaration,
+    is_device_variable,
+)
+from .cuda_hip_array_copies import generate_cpp_array_copy
 from .for_initializers import join_for_initializer
-from .gpu_device_globals import file_scope_placement
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
+)
 from .gpu_subgroup_builtins import (
     reserved_builtin_reason,
     subgroup_builtin_expression,
@@ -46,6 +56,14 @@ class CudaStatementMixin:
             self.emit(metadata_comment)
         place = file_scope_placement(self, node, metadata_comment)
         declaration = self.format_variable_declaration(node)
+        if place is constant_in_device_memory and declaration != node.name:
+            declaration = device_constant_declaration(
+                self, node.name, var_type, initial_value, declaration, CudaRefusal
+            )
+        elif at_file_scope(self) and is_device_variable(node):
+            declaration = device_variable_declaration(
+                self, node.name, var_type, initial_value, declaration, CudaRefusal
+            )
         if declaration != node.name:
             self.emit(f"{place(declaration)};")
             initial_value = getattr(
@@ -123,6 +141,18 @@ class CudaStatementMixin:
             self.emit(f"{expr};")
 
     def emit_assignment_statement(self, node):
+        operator = getattr(node, "operator", getattr(node, "op", "="))
+        if operator == "=":
+            target = getattr(node, "target", getattr(node, "left", None))
+            value = getattr(node, "value", getattr(node, "right", None))
+            array_copy = generate_cpp_array_copy(self, target, value)
+            if array_copy is not None:
+                self.emit_generated_code(array_copy)
+                metadata_assignment = self.format_query_metadata_assignment(node)
+                if metadata_assignment:
+                    self.emit(f"{metadata_assignment};")
+                return
+
         assignment = self.format_assignment_expression(node)
         if assignment and assignment.strip():
             self.emit(f"{assignment};")

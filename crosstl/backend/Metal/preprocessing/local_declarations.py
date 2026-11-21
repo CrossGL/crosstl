@@ -1069,6 +1069,22 @@ class MetalLocalDeclarationMixin:
                 declaration = body[i:decl_semicolon]
                 declaration_prefix = body[i:brace].strip()
                 trailing_declarator = body[brace_end:decl_semicolon].strip()
+                if (
+                    declaration_prefix in {"struct", "union"}
+                    and not trailing_declarator
+                ):
+                    # An anonymous union or struct: its members are members of this class ([class.union.anon]),
+                    # so a method names them unqualified. Its storage is not one of the ordered members.
+                    anonymous_names, anonymous_types, *_rest = self._split_struct_body(
+                        struct_name,
+                        body[brace + 1 : brace_end - 1],
+                        body_offset + brace + 1,
+                    )
+                    data_member_names.update(anonymous_names)
+                    data_member_types.update(anonymous_types)
+                    layout_supported = False
+                    i = decl_semicolon + 1
+                    continue
                 nested_type = re.match(
                     r"^(?:struct|class|union|enum)\s+[A-Za-z_]\w*\b",
                     declaration_prefix,

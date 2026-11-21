@@ -160,6 +160,7 @@ class CudaRecordMixin:
         return node
 
     def parse_struct(self):
+        struct_index = self.current_index
         aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
         name = self.parse_name_component()
@@ -174,13 +175,16 @@ class CudaRecordMixin:
         if self.current_token[0] == "COLON":
             self.skip_struct_inheritance_clause()
         self.eat("LBRACE")
-        members = self.parse_struct_members()
+        self.begin_struct_methods(name, struct_index)
+        try:
+            members = self.parse_struct_members()
+        finally:
+            node = self.end_struct_methods(StructNode(name, [], attributes=attributes))
+        node.members = members
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
-        return self.mark_union(
-            StructNode(name, members, attributes=attributes), aggregate_type
-        )
+        return self.mark_union(node, aggregate_type)
 
     def skip_struct_inheritance_clause(self):
         self.eat("COLON")
@@ -377,7 +381,7 @@ class CudaRecordMixin:
                 self.parse_enum()
                 continue
             if self.is_struct_method_start():
-                self.skip_struct_method()
+                self.parse_or_skip_struct_method()
                 continue
             if self.is_type_alias_start():
                 self.parse_type_alias()
@@ -594,6 +598,16 @@ class CudaRecordMixin:
             return [VariableNode(vtype, name, attributes=attributes)]
 
         self.eat("SEMICOLON")
+        for member in members:
+            # The members join the enclosing record; whether they overlapped or followed each other is kept here,
+            # and so is the alignment the anonymous aggregate declared.
+            if getattr(member, "anonymous_aggregate", None) is None:
+                member.anonymous_aggregate = str(aggregate_type)
+            if attributes:
+                member.layout_specifiers = (
+                    *getattr(member, "layout_specifiers", ()),
+                    *attributes,
+                )
         return members
 
     def skip_struct_method(self):

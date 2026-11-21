@@ -41,7 +41,9 @@ def assert_compiles(tmp_path, code, stage):
 
 def user_varyings(code, direction):
     return re.findall(
-        rf"^\s*(?:layout\([^)]*\)\s*)?(?:flat\s+)?{direction}\s+\w+\s+(\w+)", code, re.M
+        rf"^\s*(?:(?:layout\([^)]*\)|CROSSGL_LOCATION\(\d+\))\s*)?(?:flat\s+)?{direction}\s+\w+\s+(\w+)",
+        code,
+        re.M,
     )
 
 

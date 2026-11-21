@@ -119,6 +119,45 @@ def test_features_whose_diagnostics_name_them_share_a_cause():
     ) == ('after the round trip: probe.cu(N): error: identifier "f64" is undefined')
 
 
+def test_constructs_that_read_a_built_in_share_a_cause_with_its_functions():
+    undefined = "error[E30015]: undefined identifier '{}'"
+    row = backend_row(
+        "slang",
+        "output",
+        [
+            feature_entry(
+                "subgroup-size", "wrong", "compute", undefined.format("gl_SubgroupSize")
+            ),
+            feature_entry(
+                "num-subgroups", "wrong", "compute", undefined.format("gl_NumSubgroups")
+            ),
+            feature_entry(
+                "WaveGetLaneEqMask",
+                "wrong",
+                detail=undefined.format("gl_SubgroupEqMask"),
+            )
+            | {"crossgl": "gl_SubgroupEqMask"},
+            feature_entry(
+                "max", "wrong", detail=undefined.format("crossgl_gl_max_value")
+            ),
+        ],
+    )
+    assert [
+        (text, [f["name"] for f in group]) for text, group in causes.grouped(row)
+    ] == [
+        (
+            undefined.format("<feature>"),
+            ["WaveGetLaneEqMask", "num-subgroups", "subgroup-size"],
+        ),
+        (undefined.format("crossgl_gl_max_value"), ["max"]),
+    ]
+    # A member or a name that only contains the prefix is not a built-in of its own.
+    detail = "ERROR: 0:4: 'gl_in' : undeclared identifier, reading v.gl_Position"
+    assert causes.cause({"name": "geometry", "detail": detail}) == (
+        "ERROR: N:N: '<feature>' : undeclared identifier, reading v.gl_Position"
+    )
+
+
 def test_a_shared_diagnostic_that_names_a_feature_stays_one_cause():
     detail = "ValueError: Rust geometry stage requires maxvertexcount attribute"
     features = [

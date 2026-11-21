@@ -36,6 +36,7 @@ from .image_access_contracts import (
     supported_image_formats,
 )
 from .metal_buffer_resource_types import metal_buffer_resource_scope_type
+from .metal_reference_parameters import binds_buffer_reference, is_program_scope_object
 from .metal_render_walks import (
     names_identifier_class,
     names_resource_reference_class,
@@ -1098,7 +1099,20 @@ class MetalFunctionDependencyMixin:
                 if index < len(parameters)
                 else set()
             )
-            if (
+            if native_type is not None and binds_buffer_reference(
+                self, func_name, index
+            ):
+                # A `constant uchar&` parameter binds the stored object itself.
+                rendered = (
+                    self.refuse_lowering(
+                        f"argument {index + 1} of '{func_name}' is a program-scope "
+                        f"{native_type} object in the widened representation, which "
+                        f"cannot bind to the {native_type}& buffer reference parameter"
+                    )
+                    if is_program_scope_object(self, arg)
+                    else self.generate_expression(arg)
+                )
+            elif (
                 native_type is not None
                 and not qualifiers.intersection({"out", "inout"})
                 and len(self.function_overloads_by_name.get(func_name, [])) <= 1

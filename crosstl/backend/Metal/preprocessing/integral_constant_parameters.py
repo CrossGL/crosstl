@@ -10,6 +10,10 @@ from typing import (
     Tuple,
 )
 
+from ..integral_constant_locals import (
+    is_integral_constant_operand,
+    resolve_const_for_loop_bound_constants,
+)
 from ..static_member_constants import canonicalize_materialized_template_id_owners
 from .support import (
     MetalTemplateSpecializationError,
@@ -415,6 +419,8 @@ class MetalIntegralConstantParameterMixin:
         """
         if not self._const_for_loop_contract_verified:
             return source
+        if depth == 0:
+            source = resolve_const_for_loop_bound_constants(self, source)
         result: List[str] = []
         i = 0
         while i < len(source):
@@ -1032,7 +1038,9 @@ class MetalIntegralConstantParameterMixin:
                         result.append(self._static_integral_literal_text(value))
                         i = member_name_start + member_consumed
                         continue
-                if self._const_for_loop_integral_conversion_use_is_safe(
+                if not is_integral_constant_operand(
+                    self, source, i, identifier_end
+                ) and self._const_for_loop_integral_conversion_use_is_safe(
                     source,
                     i,
                     identifier_end,

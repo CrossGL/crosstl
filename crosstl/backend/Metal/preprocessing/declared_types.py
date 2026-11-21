@@ -1124,6 +1124,11 @@ class MetalDeclaredTypeMixin:
                     resolved = self._canonicalize_qualified_struct_type_aliases(
                         resolved, list(structs)
                     )
+                    # `typename Owner::template alias<U>` names a member
+                    # alias template; expand it to the type it denotes.
+                    resolved = self._canonicalize_qualified_struct_alias_templates(
+                        resolved, list(structs)
+                    )
                 if resolved != raw_type:
                     raw_type = resolved
                     normalized = self._normalize_inferred_type(resolved)

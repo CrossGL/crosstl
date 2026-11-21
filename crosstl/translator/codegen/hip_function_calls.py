@@ -9,6 +9,12 @@ from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
 from .c_wide_integer_vectors import wide_integer_vector_constructor
+from .cuda_pointer_operands import hip_pointer_operand_call
+from .cuda_type_reinterpretation import (
+    as_type_result_type,
+    is_as_type_call,
+    lower_as_type,
+)
 from .enum_utils import generate_enum_constructor_call
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -102,6 +108,11 @@ class HipFunctionCallMixin:
             )
             if warp_sync_builtin_call is not None:
                 return warp_sync_builtin_call
+            pointer_operand_call = hip_pointer_operand_call(
+                self, func_name, raw_args, args, HipRefusal
+            )
+            if pointer_operand_call is not None:
+                return pointer_operand_call
         if not is_user_function:
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, raw_args
@@ -167,6 +178,9 @@ class HipFunctionCallMixin:
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
+        union_constructor = self.native_unions.constructor(func_name, raw_args, None)
+        if union_constructor is not None:
+            return union_constructor
         if func_name in self.structs_by_name:
             # The structure has no constructor; aggregate initialization sets its members in order.
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
@@ -327,6 +341,8 @@ class HipFunctionCallMixin:
         return func_name
 
     def hip_bitcast_result_type(self, func_name, raw_args):
+        if is_as_type_call(func_name):
+            return as_type_result_type(self, func_name)
         wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
         if (
             wide_bitcast is not None
@@ -359,6 +375,15 @@ class HipFunctionCallMixin:
         return None
 
     def generate_hip_bitcast_call(self, func_name, raw_args, args):
+        if is_as_type_call(func_name) and not self.is_user_defined_function(func_name):
+            return lower_as_type(
+                self,
+                func_name,
+                raw_args,
+                args,
+                HipLoweringRefused,
+                self.require_hip_vector_bitcast_helper,
+            )
         result_type = self.hip_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None

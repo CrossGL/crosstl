@@ -6,7 +6,9 @@ word, -1.75, is 0xBFE00000, which is -1075838976 as a signed integer and 3219128
 shifts such a word right, so a translation that declares a member with the other signedness shifts in zeros or sign
 bits where the native probe does not, and one that converts the words to integers instead of reinterpreting them
 reads other values. The scalar members share one 16-byte row and the vectors fill one row each, so every language
-lays the block out alike. As in :mod:`.records`, each probe multiplies its input once.
+lays the block out alike. As in :mod:`.records`, each probe multiplies its input once. It adds the members' terms
+before it multiplies, since a compiler may fuse a product and a later sum into one rounding where the program does
+not forbid it (DXC does outside ``precise``), and the native probe and its translation need not fuse alike.
 """
 
 from __future__ import annotations
@@ -21,14 +23,14 @@ NAMES = ("uniform-integer", "uniform-unsigned", "uniform-integer-vector")
 # {0} is the prefix that names a member of the block.
 _BODIES = {
     "uniform-integer": (
-        "outp[i] = fin[i] * float(({0}n0 >> 20) - ({0}n2 >> 22)) + float(({0}n1 >> 20) + {0}n3 / 1000000);"
+        "outp[i] = fin[i] * (float(({0}n0 >> 20) - ({0}n2 >> 22)) + float(({0}n1 >> 20) + {0}n3 / 1000000));"
     ),
     "uniform-unsigned": (
-        "outp[i] = fin[i] * float(({0}u1 >> 20) - ({0}u0 >> 20)) + float({0}u2 % 1000u + ({0}u3 >> 24));"
+        "outp[i] = fin[i] * (float(({0}u1 >> 20) - ({0}u0 >> 20)) + float({0}u2 % 1000u + ({0}u3 >> 24)));"
     ),
     "uniform-integer-vector": (
         "$ivec4 v = {0}iv;\n$uvec4 u = {0}uv;\n"
-        "outp[i] = fin[i] * float((v.x >> 20) + (v.y >> 20) + (v.w >> 24)) + float((u.y >> 24) - (u.z >> 24));"
+        "outp[i] = fin[i] * (float((v.x >> 20) + (v.y >> 20) + (v.w >> 24)) + float((u.y >> 24) - (u.z >> 24)));"
     ),
 }
 # Each block's members in C-family declaration syntax.

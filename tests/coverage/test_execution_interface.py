@@ -197,6 +197,12 @@ def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
         1,
     )
     assert "| 1 | 0 | 0 | 0 | 1 on metal-apple |" in publish.markdown(data)
+    # Each probe that ran names its runtime, and the row counts them per runtime.
+    assert row["executions"] == {"metal-apple": 1}
+    assert row["features"][0]["runtime"] == "metal-apple"
+    assert "execution_only" not in data
+    only = report.build([ran], ["metal"], ["output"], execute=True, execution_only=True)
+    assert only["execution_only"] is True
     # Measured without --execute, a language that has a runtime says so instead of claiming that none could run.
     plain = report.build([Result(SIN, "output", "supported")], ["metal"], ["output"])
     [row] = [b for b in plain["backends"] if b["language"] == "metal"]

@@ -10,6 +10,7 @@ from .slang_declaration_modifiers import (
     slang_member_modifier_prefix,
     slang_packoffset_suffix,
 )
+from .slang_hlsl_cbuffer_layout import slang_hlsl_cbuffer_packoffsets
 
 
 class SlangResourceBindingsMixin:
@@ -778,6 +779,7 @@ class SlangResourceBindingsMixin:
             auto_assign=True,
         )
         result = f"{declaration} {{\n"
+        hlsl_packoffsets = slang_hlsl_cbuffer_packoffsets(self, node) or {}
         for member in node.members:
             if hasattr(member, "member_type"):
                 member_type_name = self.convert_type_node_to_string(member.member_type)
@@ -793,7 +795,10 @@ class SlangResourceBindingsMixin:
                 f"constant buffer member '{name}.{member.name}'",
             )
             declaration = self.format_declaration(member_type, member.name)
-            result += f"    {modifiers}{declaration}{slang_packoffset_suffix(self, member)};\n"
+            placement = hlsl_packoffsets.get(member.name) or slang_packoffset_suffix(
+                self, member
+            )
+            result += f"    {modifiers}{declaration}{placement};\n"
         result += "};"
         return result
 

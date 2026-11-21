@@ -22,12 +22,28 @@ the divisor when ``r`` is non-zero and its sign differs from the divisor's; the 
 cannot overflow because the two have opposite signs.  The condition is computed with
 bit operations, ``((r ^ y) & (r | -r)) >> (width - 1)``, so it applies per component
 to vectors; ``-r`` cannot overflow because ``|r| < |y| <= 2^(width - 1)``.
+
+The lowering reads ``r`` four times and ``y`` three times. Written out inline, an ``OpSMod`` whose operand is
+itself an inlined ``OpSMod`` (``(a + b % 2) % 2``) repeats the inner one four times per level, so the CrossGL grows
+exponentially with the nesting depth and later passes rewrite every copy. The importer therefore passes a ``bind``
+callback that declares ``r``, and ``y`` unless it is a variable, a literal or a member or reinterpretation of one, as
+locals where the instruction is defined, which is also where SPIR-V evaluates them. Every read is a separate node, so
+the expression is a tree rather than a graph that shares one node between reads.
 """
 
-from .VulkanAst import BinaryOpNode, FunctionCallNode, UnaryOpNode
+from copy import deepcopy
+
+from .VulkanAst import (
+    BinaryOpNode,
+    FunctionCallNode,
+    MemberAccessNode,
+    UnaryOpNode,
+    VariableNode,
+)
 
 __all__ = [
     "spirv_integer_binary_expression",
+    "spirv_integer_bitcast_expression",
     "spirv_integer_conversion_expression",
     "spirv_integer_type_name",
 ]
@@ -146,11 +162,14 @@ def spirv_integer_binary_expression(
     rhs_type_id,
     types,
     vector_type_name,
+    bind=None,
 ):
     """Lower a binary integer instruction whose operand types disagree with its opcode.
 
     Returns ``None`` when the operands already agree (the caller emits the plain
-    operator) or when the operands are not integers.
+    operator) or when the operands are not integers. ``bind(role, type_name, expression)``, when given, declares
+    ``expression`` as a local of ``type_name`` and returns the expression that reads it; ``OpSMod`` binds the values
+    its lowering reads more than once.
     """
     lhs_shape = _integer_shape(lhs_type_id, types)
     rhs_shape = _integer_shape(rhs_type_id, types)
@@ -160,7 +179,7 @@ def spirv_integer_binary_expression(
 
     if operation == "SMod":
         return _signed_modulus(
-            lhs, lhs_shape, rhs, rhs_shape, result_shape, vector_type_name
+            lhs, lhs_shape, rhs, rhs_shape, result_shape, vector_type_name, bind
         )
 
     if operation in _SIGNED_OPERAND_OPS or operation in _UNSIGNED_OPERAND_OPS:
@@ -232,19 +251,67 @@ def spirv_integer_binary_expression(
     return None
 
 
-def _signed_modulus(lhs, lhs_shape, rhs, rhs_shape, result_shape, vector_type_name):
+def spirv_integer_bitcast_expression(
+    operand, source_type_id, result_type_id, types, vector_type_name
+):
+    """``OpBitcast`` between integer types of one width and component count, else ``None``.
+
+    The bits are kept, so the bit cast is the same-width constructor of the result type, which converts modulo 2^N
+    in every target (GLSL 4.60 section 5.4.1, C++ [conv.integral]). It covers the 8-, 16- and 64-bit integers, for
+    which CrossGL has no ``asint``/``asuint`` spelling.
+    """
+    source = _integer_shape(source_type_id, types)
+    result = _integer_shape(result_type_id, types)
+    if source is None or result is None or source[1:] != result[1:]:
+        return None
+    if source[0] == result[0]:
+        return operand
+    return _reinterpret(operand, source, result[0], vector_type_name)
+
+
+def _is_simple_operand(expression):
+    """Whether ``expression`` is a variable or literal, possibly read through members or one reinterpretation."""
+    while True:
+        if isinstance(expression, (str, int, float, VariableNode)):
+            return True
+        if isinstance(expression, MemberAccessNode):
+            expression = expression.object
+        elif isinstance(expression, FunctionCallNode) and len(expression.args) == 1:
+            expression = expression.args[0]
+        else:
+            return False
+
+
+def _signed_modulus(
+    lhs, lhs_shape, rhs, rhs_shape, result_shape, vector_type_name, bind=None
+):
     """``OpSMod`` as the truncated remainder corrected toward the sign of the divisor."""
     dividend = _reinterpret(lhs, lhs_shape, True, vector_type_name)
     divisor = _reinterpret(rhs, rhs_shape, True, vector_type_name)
     if dividend is None or divisor is None:
         return None
+    if bind is not None and not _is_simple_operand(divisor):
+        divisor = bind(
+            "divisor",
+            _shape_name(True, rhs_shape[1], rhs_shape[2], vector_type_name),
+            divisor,
+        )
     remainder = BinaryOpNode(dividend, "%", divisor)
-    signs_differ = BinaryOpNode(remainder, "^", divisor)
-    nonzero = BinaryOpNode(remainder, "|", UnaryOpNode("-", remainder))
+    if bind is not None:
+        remainder = bind(
+            "remainder",
+            _shape_name(True, lhs_shape[1], lhs_shape[2], vector_type_name),
+            remainder,
+        )
+    # Each read gets its own node, so a pass that rewrites one occurrence in place leaves the others alone.
+    signs_differ = BinaryOpNode(deepcopy(remainder), "^", deepcopy(divisor))
+    nonzero = BinaryOpNode(
+        deepcopy(remainder), "|", UnaryOpNode("-", deepcopy(remainder))
+    )
     mask = BinaryOpNode(
         BinaryOpNode(signs_differ, "&", nonzero), ">>", str(int(lhs_shape[1]) - 1)
     )
-    corrected = BinaryOpNode(remainder, "+", BinaryOpNode(divisor, "&", mask))
+    corrected = BinaryOpNode(remainder, "+", BinaryOpNode(deepcopy(divisor), "&", mask))
     return _wrap_result(
         corrected,
         _computed_shape(lhs_shape, True),

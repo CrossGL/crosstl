@@ -173,6 +173,15 @@ class MetalResourceArgumentMixin:
                 return binding_index
             binding_index = conflict_end + 1
 
+    def lowest_free_resource_binding(self, used_bindings, namespace, count):
+        """The lowest index at which ``count`` consecutive slots of ``namespace`` are free.
+
+        A resource the source gives no binding takes the lowest free slots, in declaration order, so an explicit
+        binding elsewhere in the program does not move the unbound ones past it: a kernel whose constants block is
+        bound at buffer 3 still takes its unbound storage buffers at buffers 0 and 1.
+        """
+        return self.next_available_resource_binding(used_bindings, namespace, 0, count)
+
     def collect_stage_local_resource_stage_scopes(
         self, ast, target_stage, stage_local_resource_variables
     ):
@@ -221,18 +230,12 @@ class MetalResourceArgumentMixin:
             )
 
     def reserve_cbuffer_bindings(self, used_bindings, source_bindings):
-        buffer_index = 0
         for cbuffer in self.cbuffer_variables:
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
-                    used_bindings,
-                    "buffer",
-                    buffer_index,
-                    1,
-                )
+                binding = self.lowest_free_resource_binding(used_bindings, "buffer", 1)
             binding = self.reserve_or_remap_resource_binding(
                 used_bindings,
                 source_bindings,
@@ -241,11 +244,8 @@ class MetalResourceArgumentMixin:
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
                 cbuffer,
-                buffer_index,
             )
             self.cbuffer_binding_indices[id(cbuffer)] = binding
-            buffer_index = max(buffer_index, binding + 1)
-        return buffer_index
 
     def pre_reserve_explicit_resource_binding(
         self, used_bindings, source_bindings, namespace, binding, count, name, node
@@ -301,7 +301,6 @@ class MetalResourceArgumentMixin:
         count,
         name,
         node,
-        cursor,
     ):
         cached = self.metal_resource_binding_indices_by_id.get(id(node))
         if cached is not None:
@@ -318,12 +317,7 @@ class MetalResourceArgumentMixin:
         requested_binding = binding
         descriptor_set = self.explicit_resource_set_index(node)
         if binding is None:
-            binding = self.next_available_resource_binding(
-                used_bindings,
-                namespace,
-                cursor,
-                count,
-            )
+            binding = self.lowest_free_resource_binding(used_bindings, namespace, count)
 
         if descriptor_set is not None:
             if requested_binding is not None:

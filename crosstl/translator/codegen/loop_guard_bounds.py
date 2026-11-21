@@ -15,6 +15,252 @@ from ..ast import (
 )
 
 
+class _AdditiveLoopFrames:
+    """Interval reasoning over one loop iteration's frame.
+
+    Covers overflow-free integer arithmetic, affine forms of guarded expressions,
+    condition refinement and recomputation of the loop-invariant definitions.
+    """
+
+    def __init__(
+        self,
+        *,
+        checked_components,
+        checked_integer,
+        constants,
+        generator,
+        definitions,
+        budget,
+    ):
+        self.checked_components = checked_components
+        self.checked_integer = checked_integer
+        self.constants = constants
+        self.generator = generator
+        self.definitions = definitions
+        self.budget = budget
+
+    def preserving_operands(self, expression, frame):
+        plan = self.generator.glsl_arithmetic_conversion_plan(
+            self.generator.glsl_source_expression_type(expression.left),
+            self.generator.glsl_source_expression_type(expression.right),
+            self.generator.map_operator(expression.op),
+        )
+        if plan is None:
+            return False
+        for operand, target in (
+            (expression.left, plan.left_target_type),
+            (expression.right, plan.right_target_type),
+        ):
+            bounds = self.checked_integer(operand, frame)
+            info = target_arithmetic_type(target)
+            if bounds is None or info is None or info.lanes != 1:
+                return False
+            if info.kind not in {
+                ArithmeticScalarKind.SIGNED_INTEGER,
+                ArithmeticScalarKind.UNSIGNED_INTEGER,
+            }:
+                return False
+            signed = info.kind == ArithmeticScalarKind.SIGNED_INTEGER
+            minimum = -(1 << (info.bits - 1)) if signed else 0
+            maximum = (1 << (info.bits - int(signed))) - 1
+            if not minimum <= bounds[0] <= bounds[1] <= maximum:
+                return False
+        return True
+
+    def preserving_arithmetic(self, expression, frame):
+        operator = self.generator.map_operator(expression.op)
+        if operator not in {"+", "-", "*"} or not self.preserving_operands(
+            expression, frame
+        ):
+            return False
+        left = self.checked_integer(expression.left, frame)
+        right = self.checked_integer(expression.right, frame)
+        if operator == "+":
+            bounds = left[0] + right[0], left[1] + right[1]
+        elif operator == "-":
+            bounds = left[0] - right[1], left[1] - right[0]
+        else:
+            products = [a * b for a in left for b in right]
+            bounds = min(products), max(products)
+        domain = self.generator.glsl_integer_type_domain(expression, allow_wide=True)
+        return (
+            domain is not None
+            and domain.minimum <= bounds[0] <= bounds[1] <= domain.maximum
+        )
+
+    def affine(self, expression, frame, active=(), depth=0):
+        self.budget[0] -= 1
+        if self.budget[0] < 0 or depth > 32:
+            return None
+        bounds = self.checked_integer(expression, frame)
+        if bounds is None:
+            return None
+        if bounds[0] == bounds[1]:
+            return bounds[0], {}
+        if (
+            isinstance(expression, IdentifierNode)
+            and expression.name in self.definitions
+        ):
+            name = expression.name
+            if name in active:
+                return None
+            initial = self.definitions[name].initial_value
+            if self.checked_integer(initial, frame) != bounds:
+                return None
+            return self.affine(initial, frame, (*active, name), depth + 1)
+        if isinstance(expression, (IdentifierNode, MemberAccessNode)):
+            key = self.generator.glsl_private_pointer_interval_key(
+                expression, frame, self.constants
+            )
+            return (0, {key: 1}) if key in frame else None
+        cast = self.generator.glsl_integer_scalar_cast_call(expression)
+        if cast is not None:
+            operand = cast[1][0]
+            return (
+                self.affine(operand, frame, active, depth + 1)
+                if self.checked_integer(operand, frame) == bounds
+                else None
+            )
+        if isinstance(expression, UnaryOpNode):
+            operator = self.generator.map_operator(expression.op)
+            operand = self.affine(expression.operand, frame, active, depth + 1)
+            if operand is None or operator not in {"+", "-"}:
+                return None
+            sign = -1 if operator == "-" else 1
+            source = self.checked_integer(expression.operand, frame)
+            if source is None:
+                return None
+            domain = self.generator.glsl_integer_type_domain(
+                expression, allow_wide=True
+            )
+            endpoints = [sign * value for value in source]
+            if (
+                domain is None
+                or not domain.minimum
+                <= min(endpoints)
+                <= max(endpoints)
+                <= domain.maximum
+            ):
+                return None
+            return sign * operand[0], {
+                key: sign * value for key, value in operand[1].items()
+            }
+        if not isinstance(expression, BinaryOpNode) or not self.preserving_arithmetic(
+            expression, frame
+        ):
+            return None
+        operator = self.generator.map_operator(expression.op)
+        left, right = self.affine(
+            expression.left, frame, active, depth + 1
+        ), self.affine(expression.right, frame, active, depth + 1)
+        if left is None or right is None:
+            return None
+        if operator == "*":
+            if not left[1]:
+                left, right = right, left
+            if right[1]:
+                return None
+            return left[0] * right[0], {
+                key: value * right[0] for key, value in left[1].items()
+            }
+        if operator not in {"+", "-"}:
+            return None
+        sign = -1 if operator == "-" else 1
+        terms = dict(left[1])
+        for key, coefficient in right[1].items():
+            terms[key] = terms.get(key, 0) + sign * coefficient
+        return left[0] + sign * right[0], {
+            key: value for key, value in terms.items() if value
+        }
+
+    def refine(self, condition, frame):
+        if not isinstance(condition, BinaryOpNode):
+            return True
+        operator = self.generator.map_operator(condition.op)
+        if operator == "&&":
+            return self.refine(condition.left, frame) and self.refine(
+                condition.right, frame
+            )
+        if operator not in {"<", "<=", ">", ">="} or not self.preserving_operands(
+            condition, frame
+        ):
+            return True
+        left, right = self.affine(condition.left, frame), self.affine(
+            condition.right, frame
+        )
+        if left is None or right is None:
+            return True
+        if operator in {">", ">="}:
+            left, right = right, left
+        constant = left[0] - right[0] + int(operator in {"<", ">"})
+        terms = dict(left[1])
+        for key, coefficient in right[1].items():
+            terms[key] = terms.get(key, 0) - coefficient
+        terms = {key: value for key, value in terms.items() if value}
+        if not terms:
+            return constant <= 0
+        if len(terms) != 1:
+            return True
+        ((key, coefficient),) = terms.items()
+        lower, upper = frame[key]
+        if coefficient > 0:
+            upper = min(upper, -constant // coefficient)
+        else:
+            lower = max(lower, -(constant // coefficient))
+        frame[key] = lower, upper
+        return lower <= upper
+
+    def recompute(self, frame):
+        def retain(key, value):
+            if value is not None and key in frame:
+                value = max(frame[key][0], value[0]), min(frame[key][1], value[1])
+                if value[0] > value[1]:
+                    return False
+            frame.pop(key, None)
+            if value is not None:
+                frame[key] = value
+            return True
+
+        for name, definition in self.definitions.items():
+            self.budget[0] -= 1
+            if self.budget[0] < 0:
+                return False
+            info = self.generator.glsl_value_type_info(definition.var_type)
+            if info["width"] == 1:
+                value = self.checked_integer(definition.initial_value, frame)
+                domain = self.generator.glsl_integer_type_domain(
+                    IdentifierNode(name), allow_wide=True
+                )
+                if value is not None and (
+                    domain is None
+                    or not domain.minimum <= value[0] <= value[1] <= domain.maximum
+                ):
+                    value = None
+                if not retain(name, value):
+                    return False
+            else:
+                values = self.checked_components(
+                    definition.initial_value, definition.var_type, frame
+                )
+                for component in range(info["width"]):
+                    key = self.generator.glsl_index_component_interval_key(
+                        name, component
+                    )
+                    value = values[component] if values is not None else None
+                    domain = self.generator.glsl_integer_type_domain(
+                        MemberAccessNode(IdentifierNode(name), "xyzw"[component]),
+                        allow_wide=True,
+                    )
+                    if value is not None and (
+                        domain is None
+                        or not domain.minimum <= value[0] <= value[1] <= domain.maximum
+                    ):
+                        value = None
+                    if not retain(key, value):
+                        return False
+        return True
+
+
 def guarded_additive_loop_entries(
     generator,
     function,
@@ -123,218 +369,18 @@ def guarded_additive_loop_entries(
         name: value for name, value in definitions.items() if name in required
     }
 
-    def preserving_operands(expression, frame):
-        plan = generator.glsl_arithmetic_conversion_plan(
-            generator.glsl_source_expression_type(expression.left),
-            generator.glsl_source_expression_type(expression.right),
-            generator.map_operator(expression.op),
-        )
-        if plan is None:
-            return False
-        for operand, target in (
-            (expression.left, plan.left_target_type),
-            (expression.right, plan.right_target_type),
-        ):
-            bounds = checked_integer(operand, frame)
-            info = target_arithmetic_type(target)
-            if bounds is None or info is None or info.lanes != 1:
-                return False
-            if info.kind not in {
-                ArithmeticScalarKind.SIGNED_INTEGER,
-                ArithmeticScalarKind.UNSIGNED_INTEGER,
-            }:
-                return False
-            signed = info.kind == ArithmeticScalarKind.SIGNED_INTEGER
-            minimum = -(1 << (info.bits - 1)) if signed else 0
-            maximum = (1 << (info.bits - int(signed))) - 1
-            if not minimum <= bounds[0] <= bounds[1] <= maximum:
-                return False
-        return True
-
-    def preserving_arithmetic(expression, frame):
-        operator = generator.map_operator(expression.op)
-        if operator not in {"+", "-", "*"} or not preserving_operands(
-            expression, frame
-        ):
-            return False
-        left = checked_integer(expression.left, frame)
-        right = checked_integer(expression.right, frame)
-        if operator == "+":
-            bounds = left[0] + right[0], left[1] + right[1]
-        elif operator == "-":
-            bounds = left[0] - right[1], left[1] - right[0]
-        else:
-            products = [a * b for a in left for b in right]
-            bounds = min(products), max(products)
-        domain = generator.glsl_integer_type_domain(expression, allow_wide=True)
-        return (
-            domain is not None
-            and domain.minimum <= bounds[0] <= bounds[1] <= domain.maximum
-        )
-
     budget = [4096]
 
-    def affine(expression, frame, active=(), depth=0):
-        budget[0] -= 1
-        if budget[0] < 0 or depth > 32:
-            return None
-        bounds = checked_integer(expression, frame)
-        if bounds is None:
-            return None
-        if bounds[0] == bounds[1]:
-            return bounds[0], {}
-        if isinstance(expression, IdentifierNode) and expression.name in definitions:
-            name = expression.name
-            if name in active:
-                return None
-            initial = definitions[name].initial_value
-            if checked_integer(initial, frame) != bounds:
-                return None
-            return affine(initial, frame, (*active, name), depth + 1)
-        if isinstance(expression, (IdentifierNode, MemberAccessNode)):
-            key = generator.glsl_private_pointer_interval_key(
-                expression, frame, constants
-            )
-            return (0, {key: 1}) if key in frame else None
-        cast = generator.glsl_integer_scalar_cast_call(expression)
-        if cast is not None:
-            operand = cast[1][0]
-            return (
-                affine(operand, frame, active, depth + 1)
-                if checked_integer(operand, frame) == bounds
-                else None
-            )
-        if isinstance(expression, UnaryOpNode):
-            operator = generator.map_operator(expression.op)
-            operand = affine(expression.operand, frame, active, depth + 1)
-            if operand is None or operator not in {"+", "-"}:
-                return None
-            sign = -1 if operator == "-" else 1
-            source = checked_integer(expression.operand, frame)
-            if source is None:
-                return None
-            domain = generator.glsl_integer_type_domain(expression, allow_wide=True)
-            endpoints = [sign * value for value in source]
-            if (
-                domain is None
-                or not domain.minimum
-                <= min(endpoints)
-                <= max(endpoints)
-                <= domain.maximum
-            ):
-                return None
-            return sign * operand[0], {
-                key: sign * value for key, value in operand[1].items()
-            }
-        if not isinstance(expression, BinaryOpNode) or not preserving_arithmetic(
-            expression, frame
-        ):
-            return None
-        operator = generator.map_operator(expression.op)
-        left, right = affine(expression.left, frame, active, depth + 1), affine(
-            expression.right, frame, active, depth + 1
-        )
-        if left is None or right is None:
-            return None
-        if operator == "*":
-            if not left[1]:
-                left, right = right, left
-            if right[1]:
-                return None
-            return left[0] * right[0], {
-                key: value * right[0] for key, value in left[1].items()
-            }
-        if operator not in {"+", "-"}:
-            return None
-        sign = -1 if operator == "-" else 1
-        terms = dict(left[1])
-        for key, coefficient in right[1].items():
-            terms[key] = terms.get(key, 0) + sign * coefficient
-        return left[0] + sign * right[0], {
-            key: value for key, value in terms.items() if value
-        }
-
-    def refine(condition, frame):
-        if not isinstance(condition, BinaryOpNode):
-            return True
-        operator = generator.map_operator(condition.op)
-        if operator == "&&":
-            return refine(condition.left, frame) and refine(condition.right, frame)
-        if operator not in {"<", "<=", ">", ">="} or not preserving_operands(
-            condition, frame
-        ):
-            return True
-        left, right = affine(condition.left, frame), affine(condition.right, frame)
-        if left is None or right is None:
-            return True
-        if operator in {">", ">="}:
-            left, right = right, left
-        constant = left[0] - right[0] + int(operator in {"<", ">"})
-        terms = dict(left[1])
-        for key, coefficient in right[1].items():
-            terms[key] = terms.get(key, 0) - coefficient
-        terms = {key: value for key, value in terms.items() if value}
-        if not terms:
-            return constant <= 0
-        if len(terms) != 1:
-            return True
-        ((key, coefficient),) = terms.items()
-        lower, upper = frame[key]
-        if coefficient > 0:
-            upper = min(upper, -constant // coefficient)
-        else:
-            lower = max(lower, -(constant // coefficient))
-        frame[key] = lower, upper
-        return lower <= upper
-
-    def recompute(frame):
-        def retain(key, value):
-            if value is not None and key in frame:
-                value = max(frame[key][0], value[0]), min(frame[key][1], value[1])
-                if value[0] > value[1]:
-                    return False
-            frame.pop(key, None)
-            if value is not None:
-                frame[key] = value
-            return True
-
-        for name, definition in definitions.items():
-            budget[0] -= 1
-            if budget[0] < 0:
-                return False
-            info = generator.glsl_value_type_info(definition.var_type)
-            if info["width"] == 1:
-                value = checked_integer(definition.initial_value, frame)
-                domain = generator.glsl_integer_type_domain(
-                    IdentifierNode(name), allow_wide=True
-                )
-                if value is not None and (
-                    domain is None
-                    or not domain.minimum <= value[0] <= value[1] <= domain.maximum
-                ):
-                    value = None
-                if not retain(name, value):
-                    return False
-            else:
-                values = checked_components(
-                    definition.initial_value, definition.var_type, frame
-                )
-                for component in range(info["width"]):
-                    key = generator.glsl_index_component_interval_key(name, component)
-                    value = values[component] if values is not None else None
-                    domain = generator.glsl_integer_type_domain(
-                        MemberAccessNode(IdentifierNode(name), "xyzw"[component]),
-                        allow_wide=True,
-                    )
-                    if value is not None and (
-                        domain is None
-                        or not domain.minimum <= value[0] <= value[1] <= domain.maximum
-                    ):
-                        value = None
-                    if not retain(key, value):
-                        return False
-        return True
-
+    frames = _AdditiveLoopFrames(
+        checked_components=checked_components,
+        checked_integer=checked_integer,
+        constants=constants,
+        generator=generator,
+        definitions=definitions,
+        budget=budget,
+    )
+    refine = frames.refine
+    recompute = frames.recompute
     result = {}
     rejected = set()
     start = checked_integer(loop.init.initial_value, incoming)

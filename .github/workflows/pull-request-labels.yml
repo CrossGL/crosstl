@@ -6,17 +6,16 @@ env:
 # Open pull requests without labels get the labels whose `paths` in .github/labels.yml match their files
 # (tools/labels.py). The job runs main's code and reads only file names through the API, so it can hold a write token
 # for pull requests from forks too. It runs when a pull request's Coverage run is requested, which every push to a
-# pull request does, so a new pull request is labelled within minutes. It also runs on every push to main, and hourly
-# as a backstop, since GitHub starts scheduled runs on this repository hours late. Runs share one concurrency group:
-# the newest waits for the running one and the others are dropped. Coverage runs in the merge queue start no run,
-# since a queue rebuild would start one per group and they would drop the pending run of a pull request.
+# pull request does, so a new pull request is labelled within minutes. The hourly schedule is only a backstop,
+# because GitHub starts scheduled runs on this repository hours late. Runs that label share one concurrency group: the newest waits
+# for the running one and the others are dropped, which loses nothing because each run labels every open pull
+# request. Coverage runs on main skip the job and get a group of their own, so they never drop a pending run. Coverage
+# runs in the merge queue start no run, since a queue rebuild would start one per group.
 on:
   workflow_run:
     workflows: [Coverage]
     types: [requested]
     branches-ignore: ["gh-readonly-queue/**"]
-  push:
-    branches: [main]
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
@@ -25,7 +24,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: pull-request-labels
+  group: >-
+    ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+    && 'pull-request-labels' || format('pull-request-labels-skip-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

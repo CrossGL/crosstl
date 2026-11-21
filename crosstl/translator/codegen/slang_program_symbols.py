@@ -22,6 +22,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
 )
 from .slang_projected_compare import SLANG_PROJECTED_COMPARE_FORMS
+from .slang_texture_arguments import link_texture_arguments
 from .stage_utils import normalize_stage_name
 
 
@@ -738,6 +739,17 @@ class SlangProgramSymbolsMixin:
             if callee in compare_calls and sampler_name:
                 explicit_comparison_pairs.append((texture_name, sampler_name))
 
+        explicit_texture_names, implicit_texture_names = link_texture_arguments(
+            self.walk_ast(node),
+            self.expression_root_identifier_name,
+            lambda name: bool(declared_types.get(name))
+            and self.separated_slang_texture_type(
+                self.resource_base_type(declared_types[name])
+            )
+            is not None,
+            explicit_texture_names,
+            implicit_texture_names,
+        )
         separated_texture_names = explicit_texture_names - implicit_texture_names
         comparison_sampler_names = {
             sampler_name

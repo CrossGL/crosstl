@@ -42,6 +42,7 @@ from .metal_array_copies import (
     generate_metal_array_initializer,
     render_metal_split_member_constructor_arguments,
 )
+from .metal_grid_quads import metal_grid_quad_lane_requirements
 from .metal_library_structs import is_metal_library_struct
 from .metal_member_attributes import attach_member_attributes
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
@@ -1284,7 +1285,7 @@ class MetalStageIOStructMixin:
                 continue
             direct_dependencies[func_name] = self.used_wave_stage_builtin_operations(
                 getattr(func, "body", [])
-            )
+            ) | metal_grid_quad_lane_requirements(self, func)
             function_calls[func_name] = self.called_user_function_names(func)
 
         dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}

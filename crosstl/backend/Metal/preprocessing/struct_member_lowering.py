@@ -11,7 +11,11 @@ from typing import (
     Tuple,
 )
 
+from ..alias_template_owners import expose_alias_template_owners
 from ..declarator_lists import split_struct_declarator_lists
+from ..integral_constant_locals import (
+    fold_concrete_function_integral_constant_arithmetic,
+)
 from ..qualified_member_types import resolve_qualified_struct_member_types
 from ..static_member_constants import resolve_retained_static_member_owners
 from .support import (
@@ -87,6 +91,10 @@ class MetalStructMemberLoweringMixin:
         # member method call (MetalStructMethodError) is re-raised so the
         # pipeline reports the kernel as a translation FAILURE instead of leaving
         # a dangling call.
+        # Lowered calls type their arguments. A value computed from a compile-time loop index exists only once the
+        # loop is expanded, and `auto m = mm * Int<4>{};` must already read `Int<4>{}`.
+        code = self._lower_concrete_const_for_loop_callbacks(code)
+        code = fold_concrete_function_integral_constant_arithmetic(self, code)
         evaluated = (
             self._evaluate_static_assertions(code)
             if self._fail_closed_static_assertions
@@ -117,10 +125,20 @@ class MetalStructMemberLoweringMixin:
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        struct_names = {struct.name for struct in structs}
+        alias_bindings = self._source_type_alias_bindings
         split_code = split_struct_declarator_lists(
             code,
-            (struct.name for struct in structs),
+            struct_names
+            | {
+                name
+                for name, bindings in alias_bindings.items()
+                if any(binding.target in struct_names for binding in bindings)
+            },
             self._find_comment_and_literal_spans(code),
+            lambda name, position: name in struct_names
+            or self._resolve_struct_type_alias_at(alias_bindings, name, position)
+            in struct_names,
         )
         if split_code != code:
             # Every receiver of a declarator list now has its own declaration.
@@ -188,7 +206,9 @@ class MetalStructMemberLoweringMixin:
             and self._containing_span(struct.span[0], local_owner_spans) is None
         ]
         if not structs_with_methods:
-            return self._canonicalize_qualified_struct_alias_templates(code, structs)
+            return self._canonicalize_qualified_struct_alias_templates(
+                expose_alias_template_owners(self, code, structs), structs
+            )
 
         # Structs with device/threadgroup pointer members cannot be lowered by
         # passing `self` by value (a pointer cannot live in a Function-storage
@@ -354,7 +374,7 @@ class MetalStructMemberLoweringMixin:
             if not rewritten.endswith("\n"):
                 rewritten += "\n"
         rewritten = self._canonicalize_qualified_struct_alias_templates(
-            rewritten, structs
+            expose_alias_template_owners(self, rewritten, structs), structs
         )
         return self._elide_used_resolved_static_data_members(
             resolve_retained_static_member_owners(self, rewritten),
@@ -750,7 +770,8 @@ class MetalStructMemberLoweringMixin:
                 cursor = ignored[1]
                 continue
             if not (code[cursor].isalpha() or code[cursor] == "_"):
-                cursor += 1
+                # Only identifiers and ignored-span boundaries matter here.
+                cursor = self._next_scan_stop(code, cursor + 1, ignored_spans)
                 continue
             ident, consumed = self._read_identifier(code, cursor)
             ident_end = cursor + consumed

@@ -61,7 +61,6 @@ TINYGRAD_REPO = "https://github.com/tinygrad/tinygrad"
 TINYGRAD_THUNDER_COMMIT = "623b66e0e4e8e519038f9f5cd86a8ab6976032c8"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
-LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
 LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
 LLAMA_CPP_METAL_CONTEXT_COMMIT = "d6d0ce8215a1c324e8de04b52f9dd65c5edc129f"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
@@ -1864,49 +1863,6 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
-        "name": "llama_cpp_ggml_extension_anonymous_union_member",
-        "repo_url": LLAMA_CPP_REPO,
-        "commit": LLAMA_CPP_GGML_COMMON_COMMIT,
-        "source_path": "ggml/src/ggml-common.h included by ggml-metal.metal",
-        "roundtrip": True,
-        "contains": [
-            "// Metal union iq1m_scale_t retains overlapping storage through "
-            "layout metadata",
-            "@union_layout(2, 2, little_endian, metal)",
-            "struct iq1m_scale_t {",
-            "struct block_q4_1 {",
-            "uint8[32 / 2] qs;",
-        ],
-        "not_contains": ["__extension__", "GGML_EXTENSION"],
-        "source": (
-            """
-            #define GGML_EXTENSION __extension__
-            #define GGML_COMMON_AGGR_S
-            #define GGML_COMMON_AGGR_U
-            #define QK4_1 32
-
-            typedef half ggml_half;
-            typedef half2 ggml_half2;
-
-            typedef struct {
-                GGML_EXTENSION union {
-                    struct {
-                        ggml_half d;
-                        ggml_half m;
-                    } GGML_COMMON_AGGR_S;
-                    ggml_half2 dm;
-                } GGML_COMMON_AGGR_U;
-                uint8_t qs[QK4_1 / 2];
-            } block_q4_1;
-
-            typedef union {
-                ggml_half f16;
-                uint16_t u16;
-            } iq1m_scale_t;
-        """
-        ),
-    },
-    {
         "name": "llama_cpp_range_designated_array_initializer",
         "repo_url": LLAMA_CPP_REPO,
         "commit": LLAMA_CPP_COMMIT,
@@ -2320,13 +2276,16 @@ EXTERNAL_FIXTURES = [
         "source_path": "simd_partition.metal",
         "roundtrip": True,
         "contains": [
-            "uint unvisited = uint((uint64)simd_active_threads_mask());",
-            "const uint v = uint((uint64)vote);",
+            "uint unvisited = uint(__crossgl_metal_simd_vote_bits(WaveActiveBallot(true)));",
+            "const uvec4 vote = WaveActiveBallot(activeValue == value);",
+            "const uint v = uint(__crossgl_metal_simd_vote_bits(vote));",
         ],
         "not_contains": [
-            "simd_active_threads_mask().operator",
+            "simd_active_threads_mask",
             "vote.operator",
             "operator, unsigned",
+            "bool vote",
+            "(uint64)vote",
         ],
         "source": (
             """
