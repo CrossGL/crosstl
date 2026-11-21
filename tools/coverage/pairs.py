@@ -15,11 +15,14 @@ untested in A's cells too (:func:`plan`). Where both ends lower to SPIR-V, :mod:
 the translation on the same runtime, and a translation that computes something else is wrong.
 
 ``python -m tools.coverage run --pairs REPORT --backend B`` measures the cells into B that a merged report of every
-row defines, and ``merge`` adds them to the rows as the report's ``pairs``.
+row defines, and ``merge`` adds them to the rows as the report's ``pairs``, made to agree with the rows measured
+beside them (:func:`reconcile`). CI measures cells only in its nightly run, so ``publish`` carries the last measured
+matrix into the reports of the runs between, with the commit it was measured at.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 
@@ -34,12 +37,15 @@ from . import (
     spirv_input,
     validators,
 )
-from .model import PAIR, ROUND_TRIPS, Feature, Result
+from .model import PAIR, ROUND_TRIPS, Feature, Result, Score, Type
 
 DIRECTION = PAIR
 # The stages a target cannot hold a program of, and why. Every WebGL probe is a fragment shader because GLSL ES 3.00
 # has no compute stage (:class:`.languages.WebGL`), so another language's compute probe has no translation to it.
 _MISSING_STAGES = {"webgl": {"compute": "GLSL ES 3.00 has no compute stage"}}
+# How a dialect says that its language has no such type at all ("Metal has no double type", "WGSL has no int
+# matrices"), as opposed to having no probe for it yet.
+_ABSENT_TYPE = re.compile(r"\bhas no \S+ (type|matrices)\b")
 
 
 @dataclass(frozen=True, order=True)
@@ -138,8 +144,31 @@ def choose_partner(candidates: list[Feature]) -> Feature:
 
 
 def outside(feature: Feature, target: str) -> str:
-    """Why ``target`` cannot hold the program of ``feature``'s native probe at all; empty when it can."""
-    return _MISSING_STAGES.get(target, {}).get(feature.stage, "")
+    """Why ``target`` cannot hold the program of ``feature``'s native probe at all; empty when it can.
+
+    The probe runs in a stage the target lacks, or its signature has a value type the target has none of, as Metal
+    has no double: the target's dialect says so when asked to spell the type (:data:`_ABSENT_TYPE`). A type the
+    dialect cannot spell only for want of a probe is no reason, since the target's own feature has its own probe.
+    """
+    missing = _MISSING_STAGES.get(target, {}).get(feature.stage, "")
+    dialect = probes.DIALECTS.get(target)
+    if missing or feature.signature is None or dialect is None:
+        return missing
+    signature = feature.signature
+    for kind in (signature.result, *(param.type for param in signature.params)):
+        if kind.opaque:
+            continue
+        try:
+            dialect.type(Type(kind.scalar, kind.shape))
+        except probes.ProbeError as error:
+            if _ABSENT_TYPE.search(str(error)):
+                return str(error)
+    return ""
+
+
+def _untested_in_row(source: str, reason: str) -> str:
+    """Why a cell leaves untested a feature that its source's input row leaves untested for ``reason``."""
+    return f"untested in the {source} input row" + (f": {reason}" if reason else "")
 
 
 @dataclass
@@ -193,10 +222,7 @@ def plan(
                 continue
             row = rows[source][entry]
             if row["outcome"] == "untested":
-                reason = row.get("detail", "")
-                detail = f"untested in the {source} input row" + (
-                    f": {reason}" if reason else ""
-                )
+                detail = _untested_in_row(source, row.get("detail", ""))
                 measured.results.append(
                     Result(feature, DIRECTION, "untested", detail, into=target)
                 )
@@ -211,6 +237,67 @@ def plan(
                     (feature, DIRECTION, target, choose_partner(candidates))
                 )
     return measured
+
+
+def _scored(features: list[dict]) -> dict:
+    score = Score()
+    for feature in features:
+        score.add(feature["outcome"])
+    return {
+        "score": None if score.percent is None else round(score.percent, 1),
+        "counts": score.counts,
+    }
+
+
+def reconcile(report: dict, previous: dict | None = None) -> dict:
+    """``report`` with a translation matrix that agrees with its rows, stamped with where the matrix was measured.
+
+    The cells are the report's own when its runners measured them, as the nightly run's do, and otherwise those of
+    ``previous``, the report published before it, so that a run that measures only rows still publishes the latest
+    matrix. ``matrix`` names the commit and date the cells were measured at. Either way, each cell keeps only the
+    features that the report's rows put in it (:func:`cells`), a feature that the source's input row now leaves
+    untested is untested in the cell too, and every cell is scored again; a cell the rows no longer define is dropped.
+    A report without cells and without ``previous`` cells is returned as it is.
+    """
+    if "pairs" in report:
+        measured = report["pairs"]
+        stamp = {"commit": report.get("commit", ""), "date": report.get("date", "")}
+    elif previous and previous.get("pairs"):
+        measured = previous["pairs"]
+        stamp = previous.get("matrix") or {
+            "commit": previous.get("commit", ""),
+            "date": previous.get("date", ""),
+        }
+    else:
+        return report
+    current = cells(report["backends"])
+    untested = {
+        (b["language"], f["category"], f["name"]): f.get("detail", "")
+        for b in _offered(report["backends"], "input")
+        for f in b["features"]
+        if f["outcome"] == "untested"
+    }
+    kept = []
+    for cell in measured:
+        source, target = cell["source"], cell["target"]
+        if (source, target) not in current:
+            continue
+        members = {(m.category, m.name) for m in current[source, target]}
+        features = []
+        for feature in cell["features"]:
+            entry = (feature["category"], feature["name"])
+            if entry not in members:
+                continue
+            reason = untested.get((source, *entry))
+            if reason is not None and feature["outcome"] != "untested":
+                feature = {
+                    **feature,
+                    "outcome": "untested",
+                    "detail": _untested_in_row(source, reason),
+                }
+            features.append(feature)
+        kept.append({**cell, **_scored(features), "features": features})
+    return {**report, "pairs": kept, "matrix": stamp}
 
 
 def _partner_rejection(
