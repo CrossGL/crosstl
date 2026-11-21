@@ -1787,17 +1787,8 @@ class GLSLCodeGen(
             invocation_count + self.software_subgroup_width - 1
         ) // self.software_subgroup_width
 
-        if any(
-            self.glsl_wave_size_attribute(attribute)
-            for attribute in getattr(entry_function, "attributes", []) or []
-        ):
-            raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup lowering cannot be combined with a "
-                "hardware WaveSize contract",
-                workgroup_size=concrete_workgroup_size,
-                reason="hardware-contract-conflict",
-                source_location=getattr(entry_function, "source_location", None),
-            )
+        # Refuses a WaveSize other than the software subgroup width.
+        self.glsl_exact_subgroup_width(entry_function, "compute")
 
         all_records = self.glsl_software_subgroup_operation_records(
             ast,

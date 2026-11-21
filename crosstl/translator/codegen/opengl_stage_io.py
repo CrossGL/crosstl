@@ -14,6 +14,11 @@ from .array_utils import (
 )
 from .clip_position_defaults import default_clip_position_member
 from .glsl_refusals import patch_parameter_refusal_reason
+from .glsl_spirv_varying_locations import (
+    spirv_entry_input_locations,
+    spirv_entry_output_locations,
+    spirv_location_prefixed,
+)
 from .glsl_stage_builtin_members import note_vertex_builtin_output
 from .glsl_stage_distances import distance_private_output_declaration
 from .glsl_vertex_inputs import vertex_parameter_layouts
@@ -631,7 +636,7 @@ class OpenGLStageIoMixin:
                 return False
             return not self.is_stage_builtin_semantic(self.semantic_from_node(param))
 
-        def add_parameter(param, stage_name, layouts=None):
+        def add_parameter(param, stage_name, layouts=None, spirv_locations=None):
             if not is_input(param, stage_name):
                 return
             patch_refusal = patch_parameter_refusal_reason(
@@ -662,7 +667,11 @@ class OpenGLStageIoMixin:
             parameter_declaration = format_c_style_array_declaration(
                 param_type, input_name
             )
-            declaration = f"{prefix} {parameter_declaration};"
+            declaration = spirv_location_prefixed(
+                self,
+                f"{prefix} {parameter_declaration};",
+                (spirv_locations or {}).get(id(param)),
+            )
             if self.reserve_stage_io_declaration(
                 stage_name, "input", input_name, declaration
             ):
@@ -680,6 +689,11 @@ class OpenGLStageIoMixin:
                 self, parameters, lambda param: is_input(param, stage_name)
             )
 
+        def spirv_input_locations(parameters, stage_name):
+            return spirv_entry_input_locations(
+                self, parameters, stage_name, lambda param: is_input(param, stage_name)
+            )
+
         for func in getattr(ast, "functions", []) or []:
             qualifier_name = function_stage_name(func)
             if qualifier_name not in graphics_stages:
@@ -688,8 +702,9 @@ class OpenGLStageIoMixin:
                 continue
             parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
             layouts = vertex_input_parameter_layouts(parameters, qualifier_name)
+            locations = spirv_input_locations(parameters, qualifier_name)
             for param in parameters:
-                add_parameter(param, qualifier_name, layouts)
+                add_parameter(param, qualifier_name, layouts, locations)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
             stage_name = normalize_stage_name(stage_type)
@@ -705,8 +720,9 @@ class OpenGLStageIoMixin:
                 or []
             )
             layouts = vertex_input_parameter_layouts(parameters, stage_name)
+            locations = spirv_input_locations(parameters, stage_name)
             for param in parameters:
-                add_parameter(param, stage_name, layouts)
+                add_parameter(param, stage_name, layouts, locations)
 
         if target_stage is None:
             return "".join(declarations)
@@ -716,7 +732,26 @@ class OpenGLStageIoMixin:
         declarations = []
         graphics_stages = {"vertex", "fragment"}
 
-        def add_parameter(func, param, stage_name):
+        def is_vertex_user_output(param):
+            # A vertex output parameter whose semantic is not a built-in (stage_output_parameter_name).
+            if not self.is_graphics_stage_output_parameter(param, "vertex"):
+                return False
+            if not self.is_stage_entry_value_parameter(param):
+                return False
+            semantic = self.map_semantic(self.semantic_from_node(param))
+            return not self.is_vertex_stage_builtin_output(semantic)
+
+        def spirv_output_locations(func, parameters, stage_name):
+            if stage_name != "vertex":
+                return {}
+            return spirv_entry_output_locations(
+                self,
+                func,
+                [param for param in parameters if is_vertex_user_output(param)],
+                stage_name,
+            )
+
+        def add_parameter(func, param, stage_name, spirv_locations=None):
             if not self.is_graphics_stage_output_parameter(param, stage_name):
                 return
             if not self.is_stage_entry_value_parameter(param):
@@ -748,7 +783,11 @@ class OpenGLStageIoMixin:
             parameter_declaration = format_c_style_array_declaration(
                 param_type, output_name
             )
-            declaration = f"{prefix} {parameter_declaration};"
+            declaration = spirv_location_prefixed(
+                self,
+                f"{prefix} {parameter_declaration};",
+                (spirv_locations or {}).get(id(param)),
+            )
             if self.reserve_stage_io_declaration(
                 stage_name, "output", output_name, declaration
             ):
@@ -765,8 +804,10 @@ class OpenGLStageIoMixin:
                 continue
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
-            for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
-                add_parameter(func, param, qualifier_name)
+            parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+            locations = spirv_output_locations(func, parameters, qualifier_name)
+            for param in parameters:
+                add_parameter(func, param, qualifier_name, locations)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
             stage_name = normalize_stage_name(stage_type)
@@ -777,11 +818,13 @@ class OpenGLStageIoMixin:
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is None:
                 continue
-            for param in (
+            parameters = (
                 getattr(entry_point, "parameters", getattr(entry_point, "params", []))
                 or []
-            ):
-                add_parameter(entry_point, param, stage_name)
+            )
+            locations = spirv_output_locations(entry_point, parameters, stage_name)
+            for param in parameters:
+                add_parameter(entry_point, param, stage_name, locations)
 
         if target_stage is None:
             return "".join(declarations)

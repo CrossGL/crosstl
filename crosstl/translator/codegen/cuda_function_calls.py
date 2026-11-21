@@ -4,6 +4,7 @@ from ..ast import FunctionCallNode
 from ..refusals import CudaRefusal
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
+from .cuda_pointer_operands import cuda_pointer_operand_call
 from .cuda_refusals import CudaLoweringRefused
 from .cuda_tables import (
     CUDA_64BIT_BITCAST_FUNCTIONS,
@@ -120,6 +121,12 @@ class CudaFunctionCallMixin:
             )
             if warp_sync_call is not None:
                 return warp_sync_call
+
+            pointer_operand_call = cuda_pointer_operand_call(
+                self, func_name, raw_args, args, CudaRefusal
+            )
+            if pointer_operand_call is not None:
+                return pointer_operand_call
 
             shader_clock_call = self.generate_cuda_shader_clock_call(
                 func_name, raw_args
@@ -255,6 +262,9 @@ class CudaFunctionCallMixin:
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
+        union_constructor = self.native_unions.constructor(func_name, raw_args, None)
+        if union_constructor is not None:
+            return union_constructor
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
             if func_name in self.structs_by_name:

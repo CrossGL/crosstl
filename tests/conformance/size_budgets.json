@@ -2,7 +2,6 @@
  "functions": {
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.__init__": 553,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.generate_shader": 534,
-  "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.format_hip_graph_runtime_call": 528,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._elide_used_resolved_static_data_members": 367,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._find_explicit_template_function_calls": 344,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._find_explicit_template_struct_instantiations": 602,

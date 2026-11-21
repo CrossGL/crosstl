@@ -44,6 +44,9 @@ from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
 )
+from .glsl_spirv_varying_locations import (
+    spirv_location_macro_definition,
+)
 from .glsl_vulkan_descriptor_sets import (
     descriptor_binding_macro_definition,
 )
@@ -98,6 +101,7 @@ class OpenGLProgramEmissionMixin:
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
+        self.glsl_spirv_location_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -804,6 +808,12 @@ class OpenGLProgramEmissionMixin:
             code = (
                 code[:cooperative_matrix_support_insertion_index]
                 + descriptor_binding_macro_definition()
+                + code[cooperative_matrix_support_insertion_index:]
+            )
+        if self.glsl_spirv_location_macro_used:
+            code = (
+                code[:cooperative_matrix_support_insertion_index]
+                + spirv_location_macro_definition()
                 + code[cooperative_matrix_support_insertion_index:]
             )
         code = self.finish_generic_resource_helper_refusals(code)

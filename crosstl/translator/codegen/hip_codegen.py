@@ -35,6 +35,7 @@ from .comma_expressions import (
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
 from .float_remainder_assignment import float_remainder_assignment
 from .generic_function_utils import (
@@ -261,6 +262,7 @@ class HipCodeGen(
         self.current_expression_expected_type = None
         self.structs_by_name = {}
         self.generic_enum_struct_definitions = {}
+        self.native_unions = NativeUnions(self, HipRefusal, "HIP")
         self.generic_enum_specializations = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -324,6 +326,7 @@ class HipCodeGen(
         self.hip_used_resource_bindings = {}
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
+        self.native_unions = NativeUnions(self, HipRefusal, "HIP")
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(node)
@@ -332,6 +335,10 @@ class HipCodeGen(
         )
         self.value_array_struct_names = collect_struct_names(node)
         self.helper_functions = {}
+        # File-scope constants already folded, by name (cuda_constant_folding).
+        self.folded_constants = {}
+        # Workgroup variables declared at file scope because a stage function uses them (cuda_shared_memory).
+        self.file_scope_shared_variable_ids = set()
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
