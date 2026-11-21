@@ -1162,22 +1162,21 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "overlapping storage is not modeled" not in result
         assert (
-            "// HIP union compute_type_interface represented as struct-like layout; "
-            "overlapping storage is not modeled"
-        ) in result
-        assert "struct compute_type_interface {" in result
-        assert "f32 f32;" in result
-        assert "f64 f64;" in result
-        assert "i32 i32;" in result
+            "@union_layout(8, 8, little_endian, hip) struct compute_type_interface {"
+            in result
+        )
+        assert "@union_member_layout(0, 4, 4) f32 f32;" in result
+        assert "@union_member_layout(0, 8, 8) f64 f64;" in result
+        assert "@union_member_layout(0, 4, 4) i32 i32;" in result
         local_union = re.search(
-            r"// HIP union (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) "
-            r"represented as struct-like layout; overlapping storage is not modeled",
+            r"@union_layout\(4, 4, little_endian, hip\) "
+            r"struct (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) \{",
             result,
         )
         assert local_union is not None
         local_union_name = local_union.group(1)
-        assert f"struct {local_union_name} {{" in result
         assert f"var ua: {local_union_name} = {{a}};" in result
         assert "consume(ua.f);" in result
         assert "union compute_type_interface {" not in result
@@ -18225,12 +18224,17 @@ class TestHipCodeGen:
         result = HipToCrossGLConverter().generate(ast)
         assert result == HipToCrossGLConverter().generate(ast)
         definitions = {
-            line.split()[1]: line
+            match.group(1): line
             for line in result.splitlines()
-            if line.startswith("struct CrossGLFunctionLocal_host_")
+            if (
+                match := re.search(r"\bstruct (CrossGLFunctionLocal_host_\w+) \{", line)
+            )
         }
         struct_name = next(name for name in definitions if "_left_struct_" in name)
         union_name = next(name for name in definitions if "_payloads_union_" in name)
+        assert definitions[union_name].startswith(
+            "@union_layout(4, 4, little_endian, hip) struct "
+        )
         assert result.index(f"struct {struct_name} {{") < result.index("void host(")
         assert result.index(f"struct {union_name} {{") < result.index("void host(")
         assert f"var left: {struct_name};" in result
@@ -18519,14 +18523,6 @@ class TestHipCodeGen:
                 "Derived state; state.value=input[0]; state.extra=input[1]; "
                 "Base base=state; output[0]=base.value;",
                 "derived-to-base value",
-            ),
-            (
-                "named-union-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; };",
-                "",
-                "Bits bits; bits.signed_value=input[0]; "
-                "output[0]=int(bits.unsigned_value);",
-                "union overlapping storage",
             ),
             (
                 "anonymous-union-overlap",
@@ -19099,13 +19095,6 @@ class TestHipCodeGen:
                 "state.value=1; output[0]=int(state); }",
                 "conversion operator",
             ),
-            (
-                "union-pointer-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; }; "
-                "__global__ void probe(int* output) { Bits bits; Bits* ptr=&bits; "
-                "ptr->signed_value=1; output[0]=int(ptr->unsigned_value); }",
-                "union indirect object access",
-            ),
         ],
     )
     def test_native_valid_adjacent_record_semantics_fail_closed(
@@ -19238,7 +19227,8 @@ class TestHipCodeGen:
         ) in compact
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_dynamic_union_array_object_fails_closed(self):
+    def test_dynamic_union_array_object_keeps_its_layout_contract(self):
+        # A named union carries the union layout contract, so no member needs to be shown active.
         code = """
         union Bits { int value; unsigned bits; };
         __global__ void probe(int* output, int index) {
@@ -19249,8 +19239,11 @@ class TestHipCodeGen:
         """
         ast = HipParser(HipLexer(code).tokenize()).parse()
 
-        with pytest.raises(HipRecordSemanticError, match="unprovable active storage"):
-            HipToCrossGLConverter().generate(ast)
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in result
+        assert "values[index].value = 1;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_inherited_fields_remain_translatable_without_base_aggregate_init(self):
         code = """
@@ -19287,37 +19280,43 @@ class TestHipCodeGen:
         assert "state.inner.value" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_native_valid_union_reference_alias_fails_closed(self, tmp_path):
+        source_path = tmp_path / "union-reference-alias.hip"
+        source_path.write_text(
+            "union Bits { int value; unsigned bits; }; "
+            "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
+            "alias.value=1; output[0]=int(value.bits); }",
+            encoding="utf-8",
+        )
+        with pytest.raises(HipRecordSemanticError, match="non-const record reference"):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
     @pytest.mark.parametrize(
-        ("name", "source", "feature"),
+        ("name", "source"),
         [
-            (
-                "union-reference-alias",
-                "union Bits { int value; unsigned bits; }; "
-                "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
-                "alias.value=1; output[0]=int(value.bits); }",
-                "union indirect object access",
-            ),
             (
                 "union-helper-value-flow",
                 "union Bits { int value; unsigned bits; }; "
                 "int read(Bits value) { return int(value.bits); } "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "output[0]=read(value); }",
-                "union function argument active storage",
             ),
             (
                 "union-copy",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy=value; output[0]=int(copy.bits); }",
-                "union-containing copy construction",
             ),
             (
                 "union-assignment",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy; copy.bits=2u; copy=value; output[0]=int(copy.bits); }",
-                "union-containing assignment",
             ),
             (
                 "union-return",
@@ -19325,7 +19324,6 @@ class TestHipCodeGen:
                 "Bits make() { Bits value; value.value=1; return value; } "
                 "__global__ void probe(int* output) { Bits value=make(); "
                 "output[0]=int(value.bits); }",
-                "union-containing value flow",
             ),
             (
                 "union-ternary-copy",
@@ -19333,7 +19331,6 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output, int condition) { "
                 "Bits left; left.value=1; Bits right; right.bits=2u; "
                 "Bits value=condition?left:right; output[0]=value.value; }",
-                "union-containing copy construction",
             ),
             (
                 "nested-union-copy",
@@ -19342,12 +19339,11 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output) { Outer left; "
                 "left.bits.value=1; Outer right=left; "
                 "output[0]=int(right.bits.bits); }",
-                "union-containing copy construction",
             ),
         ],
     )
-    def test_native_valid_union_alias_and_value_flows_fail_closed(
-        self, tmp_path, name, source, feature
+    def test_native_valid_union_value_flows_keep_the_layout_contract(
+        self, tmp_path, name, source
     ):
         source_path = tmp_path / f"{name}.hip"
         source_path.write_text(source, encoding="utf-8")
@@ -19371,13 +19367,17 @@ class TestHipCodeGen:
             )
             assert native.returncode == 0, native.stderr
 
-        with pytest.raises(HipRecordSemanticError, match=feature):
-            translate(
-                str(source_path),
-                backend="directx",
-                source_backend="hip",
-                format_output=False,
-            )
+        crossgl = translate(
+            str(source_path), backend="cgl", source_backend="hip", format_output=False
+        )
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in crossgl
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "CrossGLUnionStorage" in hlsl
 
     @pytest.mark.parametrize(
         ("name", "source", "feature"),
