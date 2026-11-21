@@ -21318,9 +21318,9 @@ def test_glsl_hlsl_double_aliases_map_to_glsl_names():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "dmat2 makePrecise(dvec2 uv, dmat2 input_)" in generated_code
-    assert "dvec2 p = dvec2(1.0, 2.0);" in generated_code
-    assert "dmat3x4 jacobian = dmat3x4(1.0);" in generated_code
-    assert "dmat2 m = dmat2(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "dvec2 p = dvec2(1.0lf, 2.0lf);" in generated_code
+    assert "dmat3x4 jacobian = dmat3x4(1.0lf);" in generated_code
+    assert "dmat2 m = dmat2(1.0lf, 0.0lf, 0.0lf, 1.0lf);" in generated_code
     assert "return (input_ * m);" in generated_code
     assert "double2" not in generated_code
     assert "double2x2" not in generated_code
