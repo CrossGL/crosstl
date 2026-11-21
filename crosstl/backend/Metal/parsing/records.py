@@ -8,7 +8,10 @@ from ..member_aggregates import (
     parse_unnamed_member_aggregate,
     unnamed_member_aggregate_kind,
 )
-from ..member_enums import is_anonymous_member_enum_start, parse_anonymous_member_enum
+from ..member_enums import (
+    is_anonymous_member_enum_start,
+    parse_anonymous_member_enum,
+)
 from ..MetalAst import (
     AssignmentNode,
     ConstantBufferNode,
@@ -559,8 +562,7 @@ class MetalRecordParsingMixin:
                 continue
             if self.is_qualifier_token_at(idx) or (
                 token_type == "IDENTIFIER"
-                and token_value
-                in {
+                and token_value in {
                     "explicit",
                     "inline",
                     "constexpr",

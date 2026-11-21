@@ -675,8 +675,7 @@ class MetalDeclarationMixin:
             and "threadgroup" in qualifiers
             and pointee_qualifiers is not None
             and "const" in pointee_qualifier_names
-            and "const"
-            not in {
+            and "const" not in {
                 str(qualifier).lower()
                 for qualifier in getattr(var, "indirection_qualifiers", None) or ()
             }

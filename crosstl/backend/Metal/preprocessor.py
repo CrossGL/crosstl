@@ -1242,8 +1242,7 @@ class MetalPreprocessor(
                     if (
                         other is member
                         or other.default is None
-                        or member.name
-                        not in self._static_initializer_dependencies(
+                        or member.name not in self._static_initializer_dependencies(
                             other.default,
                             [member.name],
                         )

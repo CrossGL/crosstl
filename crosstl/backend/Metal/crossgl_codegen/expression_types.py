@@ -9,7 +9,10 @@ from ..generic_call_return_types import (
     expression_call_return_type,
     same_arity_overloads,
 )
-from ..matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
+from ..matrix_arithmetic import (
+    NOT_MATRIX,
+    matrix_arithmetic_shape,
+)
 from ..matrix_columns import matrix_columns_object
 from ..member_aggregates import promoted_member_access
 from ..MetalAst import (
@@ -28,7 +31,10 @@ from ..MetalAst import (
     VectorConstructorNode,
 )
 from ..narrow_float_constants import narrow_float_constant
-from ..texture_method_results import is_depth_texture_name, texture_method_result_shape
+from ..texture_method_results import (
+    is_depth_texture_name,
+    texture_method_result_shape,
+)
 from ..vote_masks import vote_mask_call_metal_type
 from .support import (
     MetalAddressProvenanceError,
@@ -1084,8 +1090,7 @@ class MetalExpressionTypeMixin:
             if atomic_name.startswith("metal::"):
                 atomic_name = atomic_name[len("metal::") :]
             if (
-                atomic_name
-                in {
+                atomic_name in {
                     "atomic_load_explicit",
                     "atomic_fetch_sub_explicit",
                     *self.metal_atomic_intrinsics,

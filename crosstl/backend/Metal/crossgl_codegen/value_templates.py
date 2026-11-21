@@ -295,8 +295,9 @@ class MetalValueTemplateMixin:
             value_candidates = [
                 function
                 for function in value_candidates
-                if explicit_count
-                <= len(getattr(function, "template_parameters", None) or [])
+                if explicit_count <= len(
+                    getattr(function, "template_parameters", None) or []
+                )
             ]
             overloads = value_candidates
         else:

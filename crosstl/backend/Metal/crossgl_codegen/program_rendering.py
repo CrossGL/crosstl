@@ -1,8 +1,15 @@
 """Phases of ``MetalToCrossGLConverter.render_program``: per-program state, declaration preparation, the shader header, types, globals, functions and the final support-code substitution."""
 
-from ..color_attachments import enumerator_index_values, framebuffer_fetch_struct_names
-from ..floating_point import contraction_directive_requires_precise
-from ..local_enums import hoist_local_enums
+from ..color_attachments import (
+    enumerator_index_values,
+    framebuffer_fetch_struct_names,
+)
+from ..floating_point import (
+    contraction_directive_requires_precise,
+)
+from ..local_enums import (
+    hoist_local_enums,
+)
 from ..member_aggregates import anonymous_member_paths
 from ..MetalParser import (
     AssignmentNode,
@@ -15,7 +22,9 @@ from ..MetalParser import (
     TypeAliasNode,
     VariableNode,
 )
-from ..unscoped_enums import unscoped_enumerator_owners
+from ..unscoped_enums import (
+    unscoped_enumerator_owners,
+)
 from ..unused_generic_definitions import (
     raise_referenced_deferred_definitions,
     render_generic_definition,
@@ -376,8 +385,9 @@ class MetalProgramRenderingMixin:
                         static_member_types=static_member_types,
                         semantic_context=(
                             {"kind": "fetched_member"}
-                            if struct_node.name
-                            in getattr(self, "metal_fetched_struct_names", ())
+                            if struct_node.name in getattr(
+                                self, "metal_fetched_struct_names", ()
+                            )
                             else None
                         ),
                     )
@@ -425,8 +435,9 @@ class MetalProgramRenderingMixin:
 
         globals_list = [
             glob
-            for glob in getattr(ast, "global_variables", [])
-            or getattr(ast, "global_vars", [])
+            for glob in getattr(ast, "global_variables", []) or getattr(
+                ast, "global_vars", []
+            )
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
         if globals_list:
