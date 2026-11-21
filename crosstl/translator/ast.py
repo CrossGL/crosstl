@@ -553,6 +553,7 @@ class ShaderStage(Enum):
     RAY_MISS = "ray_miss"
     RAY_ANY_HIT = "ray_any_hit"
     RAY_CALLABLE = "ray_callable"
+    NODE = "node"
 
 
 class ExecutionModel(Enum):

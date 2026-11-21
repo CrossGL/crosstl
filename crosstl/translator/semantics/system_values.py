@@ -103,6 +103,7 @@ SYSTEM_VALUES = {
         SystemValue("SV_GroupID", 0, "gl_WorkGroupID"),
         SystemValue("SV_GroupIndex", 0, "gl_LocalInvocationIndex"),
         SystemValue("SV_GroupThreadID", 0, "gl_LocalInvocationID"),
+        SystemValue("SV_DispatchGrid", 0, _KEEP),
         SystemValue("SV_TessFactor", 0, _KEEP),
         SystemValue("SV_InsideTessFactor", 0, _KEEP),
         SystemValue("SV_ViewID", 0, "gl_ViewIndex"),

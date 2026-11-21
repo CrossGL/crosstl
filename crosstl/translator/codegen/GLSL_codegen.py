@@ -108,6 +108,7 @@ from .glsl_stage_output_values import (
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
+from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     image_access_satisfies_requirement,
     is_image_atomic_operation,
@@ -397,6 +398,8 @@ class GLSLCodeGen(
         self.glsl_float_remainder_types = set()
         self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
+        self.glsl_vulkan_resources = VulkanResourceForms()
+        self.glsl_vulkan_resource_exclusions = frozenset()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
         self.reset_glsl_hlsl_cbuffers()
@@ -2685,9 +2688,10 @@ class GLSLCodeGen(
         for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
             if operation not in operations:
                 continue
-            line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
-            if line and line not in lines:
-                lines.append(line)
+            required = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation) or ""
+            for line in required.splitlines():
+                if line not in lines:
+                    lines.append(line)
             if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
                 shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
                 if shuffle_line not in lines:
@@ -3015,6 +3019,7 @@ class GLSLCodeGen(
                 node,
                 declaration,
                 mapped_type,
+                array_suffix,
                 resource_count,
                 source_var_name,
                 var_name,
@@ -6756,6 +6761,9 @@ class GLSLCodeGen(
             texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         else:
             self.record_glsl_combined_sampler_use(args[0], args[1])
+            texture_name = self.glsl_vulkan_resources.sampled(
+                args, texture_name, sampler_name
+            )
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]

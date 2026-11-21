@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import signal
 import sys
 import threading
@@ -56,8 +57,14 @@ for line in sys.stdin:
 
 @pytest.fixture
 def worker(tmp_path):
+    # A shebang line ends at the first space, so an interpreter path with a
+    # space in it cannot follow "#!". The shell execs Python in place, which
+    # keeps the worker's process id and process group.
+    script = tmp_path / "worker.py"
+    script.write_text(FAKE_WORKER, encoding="utf-8")
     path = tmp_path / "worker"
-    path.write_text(f"#!{sys.executable}\n{FAKE_WORKER}", encoding="utf-8")
+    command = f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"'
+    path.write_text(f"#!/bin/sh\n{command}\n", encoding="utf-8")
     path.chmod(0o700)
     return path
 

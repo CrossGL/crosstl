@@ -405,7 +405,8 @@ def test_opengl_evaluates_precise_functions_as_written(tmp_path):
         r"\(results\[gl_GlobalInvocationID\.x\]\.w \+ \(p\.x \* p\.y\)\)\)",
         # Selections from computed values capture the value first.
         r"\((\w+) = \(b - a\)\)\.yx",
-        r"\((\w+) = textureLod\(source, \(\(p\.xy \* scale\) \+ bias\), 0\)\)\.zyxw",
+        r"\((\w+) = textureLod\(CROSSGL_SAMPLED\(sampler2D\(source, linearSampler\), source\), "
+        r"\(\(p\.xy \* scale\) \+ bias\), 0\)\)\.zyxw",
         r"\((\w+) = \(\(p \* scale\) \+ bias\)\)\[1\]",
         r"\((\w+) = max\(p\.xy, \(\(p\.zw \* scale\) \+ bias\)\)\)\.y",
     ):

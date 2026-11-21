@@ -43,6 +43,7 @@ from .glsl_stage_entries import (
 from .glsl_union_storage import (
     UnionStorage,
 )
+from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -91,12 +92,14 @@ class OpenGLProgramPreparationMixin:
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        separate_ast = ast
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
         )
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_vulkan_resources = VulkanResourceForms.plan(self, separate_ast, ast)
         self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:

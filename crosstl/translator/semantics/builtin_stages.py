@@ -60,6 +60,7 @@ _STAGE_CODES = {
     "CH": ("ray_closest_hit",),
     "MS": ("ray_miss",),
     "CA": ("ray_callable",),
+    "NODE": ("node",),
 }
 _ALL = " ".join(_STAGE_CODES)
 
@@ -125,11 +126,17 @@ _RULE_TEXT = (
     ),
     ("gl_ViewIndex", "V TC TE G F TASK MESH", ""),
     # Compute inputs, section 7.1.6, which GL_EXT_mesh_shader also gives task and mesh shaders;
-    # GL_KHR_shader_subgroup_basic. Metal's quad-group indices exist in kernels and fragment functions.
+    # GL_KHR_shader_subgroup_basic. Metal's quad-group indices exist in kernels and fragment functions. A work-graph
+    # node reads the thread's group, position and index as HLSL's SV_GroupID, SV_GroupThreadID, SV_DispatchThreadID
+    # and SV_GroupIndex; which of them a node has depends on its launch mode (:mod:`.work_graph_nodes`).
     (
-        "gl_NumWorkGroups gl_WorkGroupSize gl_WorkGroupID gl_LocalInvocationID gl_GlobalInvocationID "
-        "gl_LocalInvocationIndex gl_NumSubgroups gl_SubgroupID",
+        "gl_NumWorkGroups gl_WorkGroupSize gl_NumSubgroups gl_SubgroupID",
         "C TASK MESH",
+        "",
+    ),
+    (
+        "gl_WorkGroupID gl_LocalInvocationID gl_GlobalInvocationID gl_LocalInvocationIndex",
+        "C TASK MESH NODE",
         "",
     ),
     ("gl_QuadGroupID gl_QuadGroupInvocationID", "C F TASK MESH", ""),

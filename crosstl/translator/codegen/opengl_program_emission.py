@@ -44,12 +44,6 @@ from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
 )
-from .glsl_spirv_varying_locations import (
-    spirv_location_macro_definition,
-)
-from .glsl_vulkan_descriptor_sets import (
-    descriptor_binding_macro_definition,
-)
 from .stage_utils import (
     collect_stage_local_variables,
     function_entry_execution_config,
@@ -116,6 +110,7 @@ class OpenGLProgramEmissionMixin:
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
+        self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
         code += f"{version_line}\n"
@@ -453,6 +448,7 @@ class OpenGLProgramEmissionMixin:
             self.prepare_glsl_resource_function_specializations(ast, target_stage)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
+        code += self.glsl_vulkan_resources.sampler_declarations(self)
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         helper_stage_macros = glsl_helper_stage_macros(self, ast)
@@ -804,18 +800,12 @@ class OpenGLProgramEmissionMixin:
                 + cooperative_matrix_support
                 + code[cooperative_matrix_support_insertion_index:]
             )
-        if self.glsl_descriptor_binding_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + descriptor_binding_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
-        if self.glsl_spirv_location_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + spirv_location_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
+        code = self.glsl_vulkan_resources.with_prelude(
+            code,
+            cooperative_matrix_support_insertion_index,
+            self.glsl_descriptor_binding_macro_used,
+            self.glsl_spirv_location_macro_used,
+        )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)

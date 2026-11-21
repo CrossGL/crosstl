@@ -291,6 +291,7 @@ class OpenGLGlobalResourceMixin:
         node,
         declaration,
         mapped_type,
+        array_suffix,
         resource_count,
         source_var_name,
         var_name,
@@ -333,7 +334,14 @@ class OpenGLGlobalResourceMixin:
         qualifier_parts.append("uniform")
         if precision_qualifiers:
             qualifier_parts.append(precision_qualifiers)
-        emission.code += f"{' '.join(qualifier_parts)} {declaration};\n"
+        emission.code += self.glsl_vulkan_resources.declaration(
+            source_var_name,
+            var_name,
+            " ".join(qualifier_parts),
+            declaration,
+            mapped_type,
+            array_suffix,
+        )
         self.record_glsl_resource_binding(
             node,
             source_var_name,
