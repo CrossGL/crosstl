@@ -251,7 +251,6 @@ from .hlsl_texture_residency import (
     hlsl_texture_residency_call,
     hlsl_texture_resident_call,
 )
-from .type_query_memo import scoped_type_query
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
@@ -352,6 +351,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .type_query_memo import scoped_type_query
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .union_lanes import hlsl_lane_helpers
 

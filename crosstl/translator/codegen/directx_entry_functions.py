@@ -20,12 +20,12 @@ from .array_utils import (
 from .directx_values import DirectXMappedOverloadError
 from .enum_utils import sanitize_type_name
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
-from .type_query_memo import scoped_type_query
 from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     stage_matches,
 )
+from .type_query_memo import scoped_type_query
 
 
 class DirectXEntryFunctionMixin:
