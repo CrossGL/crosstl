@@ -26,6 +26,9 @@ from ..ast import (
     WhileNode,
 )
 from ..refusals import RustRefusal
+from .host_workgroup_size_ids import is_host_sized_workgroup
+from .specialized_workgroup_size import require_fixed_workgroup_size
+from .stage_utils import compute_local_size
 from .rust_exact_lookups import call_names_resolving_to
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 
@@ -44,16 +47,21 @@ class RustFunctionSignatureMixin:
         """Render a host-compatible Rust shader stage attribute."""
         return f'#[cfg_attr(feature = "crossgl_gpu", {attribute_name})]\n'
 
-    def generate_rust_compute_stage_attribute(self, func):
-        """Render a Rust GPU compute entry attribute, including workgroup size."""
+    def generate_rust_compute_stage_attribute(self, func, stage_node=None):
+        """The rust-gpu compute entry attribute with the workgroup size (``@numthreads`` or the stage layout)."""
         numthreads = self.rust_compute_stage_numthreads(func)
         if numthreads is None:
-            return self.generate_rust_stage_attribute("compute_shader")
-        threads = ", ".join(numthreads)
-        return (
-            '#[cfg_attr(feature = "crossgl_gpu", '
-            f"spirv(compute(threads({threads}))))]\n"
-        )
+            config = getattr(stage_node, "execution_config", None)
+            require_fixed_workgroup_size(
+                config, "Rust", "rust-gpu takes the workgroup size as literals"
+            )
+            if is_host_sized_workgroup(config):
+                raise RustRefusal(
+                    "Rust compute stage needs a workgroup size: rust-gpu takes it as literals"
+                )
+            numthreads = compute_local_size(config)
+        threads = ", ".join(str(value) for value in numthreads)
+        return f"#[spirv(compute(threads({threads})))]\n"
 
     def rust_compute_stage_numthreads(self, func):
         """Return CrossGL compute @numthreads dimensions for rust-gpu."""
@@ -235,6 +243,8 @@ class RustFunctionSignatureMixin:
                 root_name = self.assignment_target_root_name(current.target)
                 if root_name:
                     names.add(root_name)
+                # The target's indices can mutate too: a[k++] = v, a[f(k)] += v with an inout parameter.
+                collect(current.target)
                 collect(current.value)
                 return
 
@@ -601,7 +611,7 @@ class RustFunctionSignatureMixin:
                 self.add_generic_constraint(
                     constraints,
                     operand_type,
-                    f"std::ops::Neg<Output = {operand_type}>",
+                    f"core::ops::Neg<Output = {operand_type}>",
                 )
             return
 
@@ -796,7 +806,7 @@ class RustFunctionSignatureMixin:
         trait = operator_traits.get(operator)
         if trait is None:
             return None
-        return f"std::ops::{trait}<Output = {generic_name}>"
+        return f"core::ops::{trait}<Output = {generic_name}>"
 
     def add_generic_constraint(self, constraints, generic_name, bound):
         if generic_name not in constraints:

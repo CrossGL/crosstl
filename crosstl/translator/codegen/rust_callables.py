@@ -2,6 +2,7 @@
 
 import re
 
+from .rust_gpu_spelling import GLAM_AXES
 from ..ast import (
     BlockNode,
     IdentifierNode,
@@ -783,6 +784,11 @@ class RustCallableMixin:
             zero_literal = "0.0" if arg_type in {"float", "double", "half"} else "0"
             return f"({arg_expr} != {zero_literal})"
 
+        if rust_type in {"f16", "f32", "f64"} and self.normalize_scalar_type(
+            self.expression_result_type(arg)
+        ) == "bool":
+            # Rust casts bool only to integers (E0606), and true becomes 1.
+            return f"(({arg_expr} as u32) as {rust_type})"
         return f"({arg_expr} as {rust_type})"
 
     def generate_vector_constructor_call(self, func_name, vector_info, args):
@@ -798,7 +804,17 @@ class RustCallableMixin:
         generated_args, temp_bindings = self.generate_matrix_constructor_args(
             matrix_info, args
         )
-        return self.generate_constructor_call(rust_type, generated_args, temp_bindings)
+        # glam builds a matrix from its components in column order (Mat3::from_cols_array).
+        constructor = (
+            f"{self.rust_constructor_path(rust_type)}::from_cols_array("
+            f"&[{', '.join(generated_args)}])"
+        )
+        if not temp_bindings:
+            return constructor
+        bindings = " ".join(
+            self.generate_temp_binding_statement(binding) for binding in temp_bindings
+        )
+        return f"{{ {bindings} {constructor} }}"
 
     def generate_constructor_call(self, rust_type, generated_args, temp_bindings):
         args_str = ", ".join(generated_args)
@@ -891,7 +907,7 @@ class RustCallableMixin:
                     generated_args.append(
                         self.normalize_constructor_scalar_lane(
                             None,
-                            f"{source_expr}.c{column}.{components[row]}",
+                            f"{source_expr}.{GLAM_AXES[column]}.{components[row]}",
                             source_info["component_type"],
                             component_type,
                         )
@@ -1005,7 +1021,7 @@ class RustCallableMixin:
                 lanes.append(
                     self.normalize_constructor_scalar_lane(
                         None,
-                        f"{arg_expr}.c{column}.{component}",
+                        f"{arg_expr}.{GLAM_AXES[column]}.{component}",
                         matrix_info["component_type"],
                         target_component_type,
                     )

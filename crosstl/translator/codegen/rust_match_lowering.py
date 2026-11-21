@@ -43,37 +43,6 @@ from ..refusals import RustRefusal
 class RustMatchMixin:
     """Switch and match members of ``RustCodeGen``."""
 
-    def generate_switch(self, node, indent):
-        indent_str = "    " * indent
-        arm_indent = "    " * (indent + 1)
-        expression = self.generate_expression(getattr(node, "expression", ""))
-
-        code = f"{indent_str}match {expression} {{\n"
-        has_default = False
-        for case in getattr(node, "cases", []) or []:
-            if not isinstance(case, CaseNode):
-                continue
-            value = getattr(case, "value", None)
-            pattern = "_" if value is None else self.generate_expression(value)
-            has_default = has_default or value is None
-            code += f"{arm_indent}{pattern} => {{\n"
-            code += self.generate_switch_case_body(
-                getattr(case, "statements", []), indent + 2
-            )
-            code += f"{arm_indent}}},\n"
-
-        default_case = getattr(node, "default_case", None)
-        if default_case is not None:
-            has_default = True
-            code += f"{arm_indent}_ => {{\n"
-            code += self.generate_switch_case_body(default_case, indent + 2)
-            code += f"{arm_indent}}},\n"
-        elif not has_default:
-            code += f"{arm_indent}_ => {{}},\n"
-
-        code += f"{indent_str}}}\n"
-        return code
-
     def generate_match(
         self,
         node,
@@ -811,15 +780,6 @@ class RustMatchMixin:
                 fields.append("..")
             return f"{pattern.type_name} {{ {', '.join(fields)} }}"
         raise RustRefusal(f"Unsupported match pattern for Rust codegen: {pattern!r}")
-
-    def generate_switch_case_body(self, body, indent):
-        statements = self.statement_list(body)
-        code = ""
-        for stmt in statements:
-            if isinstance(stmt, BreakNode):
-                continue
-            code += self.generate_statement(stmt, indent)
-        return code
 
     def generate_match_arm_body(
         self,

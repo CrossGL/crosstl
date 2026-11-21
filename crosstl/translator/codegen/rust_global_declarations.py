@@ -6,6 +6,7 @@ from ..ast import (
     ConstantNode,
     StructNode,
 )
+from .rust_gpu_constants import rust_const_initializer_reason
 from .rust_resource_bindings import refuse_unbound_rust_resource
 
 
@@ -227,16 +228,14 @@ class RustGlobalDeclarationMixin:
                 "=",
             )
 
-        if self.rust_constant_initializer_is_const(rust_type):
-            symbol = self.static_symbol_name(name)
-            return f"const {symbol}: {rust_type} = {initializer};\n"
-
-        return self.generate_static_declaration(
-            name,
-            rust_type,
-            initializer,
-            lazy_lock=True,
-        )
+        reason = rust_const_initializer_reason(self, value, initializer)
+        if reason is not None or str(initializer).strip() == "Default::default()":
+            return self.generate_static_declaration(
+                name, rust_type, initializer, lazy_lock=True
+            )
+        self.lazy_static_names.discard(name)
+        symbol = self.static_symbol_name(name)
+        return f"const {symbol}: {rust_type} = {initializer};\n"
 
     def rust_constant_initializer_is_const(self, rust_type):
         return self.rust_scalar_default_literal(rust_type) is not None
@@ -254,10 +253,13 @@ class RustGlobalDeclarationMixin:
             initializer,
         )
         if lazy_lock:
+            # A #![no_std] rust-gpu crate has no LazyLock, and a static needs a constant initializer, so a read-only
+            # global whose initializer Rust cannot evaluate at compile time is a function every read calls. CrossGL
+            # initializers of read-only globals are pure, so each call yields the same value.
             self.lazy_static_names.add(name)
             return (
-                f"static {symbol}: std::sync::LazyLock<{rust_type}> = "
-                f"std::sync::LazyLock::new(|| {initializer});\n"
+                f"#[inline]\n#[allow(non_snake_case)]\nfn {symbol}() -> {rust_type} {{\n"
+                f"    {initializer}\n}}\n"
             )
         self.lazy_static_names.discard(name)
         return f"static {symbol}: {rust_type} = {initializer};\n"
@@ -271,8 +273,8 @@ class RustGlobalDeclarationMixin:
             "",
             "0",
             "Default::default()",
-            "std::ptr::null()",
-            "std::ptr::null_mut()",
+            "core::ptr::null()",
+            "core::ptr::null_mut()",
         }:
             return "0"
         return f"({initializer} as usize)"
@@ -291,47 +293,45 @@ class RustGlobalDeclarationMixin:
         return self.is_rust_shader_pod_value_type(self.map_type(base_type))
 
     def rust_static_default_initializer(self, rust_type):
+        return self.rust_gpu_default_value(rust_type)
+
+    def rust_gpu_default_value(self, rust_type):
+        """A no_std default value of ``rust_type``: an array repeats its element's default, which every generated
+        value type has, since they are all ``Copy``."""
         rust_type = str(rust_type)
-
-        if rust_type.startswith("Vec<"):
-            return "Vec::new()"
-
         array_type = self.parse_rust_array_type(rust_type)
         if array_type is not None:
             element_type, size = array_type
-            element_initializer = self.rust_scalar_default_literal(element_type)
-            if element_initializer is not None:
-                return f"[{element_initializer}; {size}]"
-            if self.rust_type_is_zeroable(element_type):
-                return "unsafe { std::mem::zeroed() }"
-            if self.is_rust_shader_pod_value_type(element_type):
-                return "unsafe { std::mem::zeroed() }"
-            return "Default::default()"
-
+            element = self.rust_gpu_default_value(element_type)
+            if self.rust_array_innermost_type(element_type) == "bool" and size.isdigit():
+                # rust-gpu lowers [false; N] to a memset, which SPIR-V cannot apply to bool ("memset invalid on
+                # bool pattern"), so bool arrays list their elements.
+                return f"[{', '.join([element] * int(size))}]"
+            return f"[{element}; {size}]"
         scalar_initializer = self.rust_scalar_default_literal(rust_type)
         if scalar_initializer is not None:
             return scalar_initializer
-
         return "Default::default()"
 
+    def rust_array_innermost_type(self, rust_type):
+        array_type = self.parse_rust_array_type(str(rust_type))
+        while array_type is not None:
+            rust_type = array_type[0]
+            array_type = self.parse_rust_array_type(rust_type)
+        return str(rust_type)
+
     def rust_runtime_default_initializer(self, type_name):
-        rust_type = self.map_type(type_name)
-        if self.parse_rust_array_type(
-            rust_type
-        ) is not None and self.rust_type_is_zeroable(rust_type):
-            return "unsafe { std::mem::zeroed() }"
-        return self.rust_static_default_initializer(rust_type)
+        return self.rust_gpu_default_value(self.map_type(type_name))
 
     def local_array_default_initializer(self, rust_type):
         rust_type = str(rust_type)
         if rust_type.startswith("Vec<"):
-            return "Vec::new()"
+            return self.refuse_lowering(
+                f"type: {rust_type} is a heap vector, which a no_std rust-gpu shader cannot allocate",
+                "Default::default()",
+            )
         if self.parse_rust_array_type(rust_type) is not None:
-            if not self.rust_type_default_derive_supported(
-                rust_type
-            ) and self.rust_type_is_zeroable(rust_type):
-                return "unsafe { std::mem::zeroed() }"
-            return "std::array::from_fn(|_| Default::default())"
+            return self.rust_gpu_default_value(rust_type)
         return None
 
     def parse_rust_array_type(self, rust_type):
