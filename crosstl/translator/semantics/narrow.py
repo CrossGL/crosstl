@@ -19,7 +19,10 @@ every narrow register a 32-bit ``int`` and keeps the invariant that it holds a v
 
 Registers, private and workgroup arrays and struct members become 32-bit; narrow pointees in device, constant or
 unqualified memory are left to the emitters, which lay that storage out one 32-bit word per element as they do for
-every target (a layout change for the host that the reflection metadata does not report yet). A narrow increment
+every target (a layout change for the host that the reflection metadata does not report yet). Members of a
+``@union_layout`` struct keep their narrow types too: they overlap the other members' bytes, so a 32-bit element
+would change the union's size and member offsets, and the emitters' union-storage lowering reads or refuses each
+byte view. A narrow increment
 used as a value and a compound assignment to an lvalue with side effects are refused with
 :class:`NarrowIntegerUnsupportedError`. ``min16int`` and ``min16uint`` are
 minimum-precision types that may compute in 32 bits, and are not narrow here.
@@ -182,6 +185,13 @@ def narrow_of(node) -> HubType | None:
     return None
 
 
+def _is_union_layout(struct) -> bool:
+    return any(
+        str(getattr(attribute, "name", "")).lower() == "union_layout"
+        for attribute in getattr(struct, "attributes", None) or []
+    )
+
+
 def _int_type(lanes):
     scalar = A.PrimitiveType("int")
     return scalar if lanes == 1 else A.VectorType(scalar, lanes)
@@ -300,6 +310,12 @@ class NarrowLegalizer:
             struct.name: struct
             for struct in iter_structs(program)
             if getattr(struct, "name", None)
+        }
+        self.union_members = {
+            id(member)
+            for struct in iter_structs(program)
+            if _is_union_layout(struct)
+            for member in getattr(struct, "members", None) or []
         }
         self.functions = {}
         for function in self._functions():
@@ -717,6 +733,8 @@ class NarrowLegalizer:
     # Retyping ---------------------------------------------------------------------------------------------------
     def retype(self):
         for node in self.program.walk():
+            if id(node) in self.union_members:
+                continue
             for field in (
                 "var_type",
                 "param_type",
@@ -736,6 +754,8 @@ class NarrowLegalizer:
     def verify(self):
         """No narrow register type is left; one that remains sits where the pass does not reach, so it is refused."""
         for node in self.program.walk():
+            if id(node) in self.union_members:
+                continue
             left = [
                 field
                 for field in (

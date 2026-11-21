@@ -19,15 +19,15 @@ class MojoMathHelperMixin:
     def generate_math_helper(self, helper_name):
         if helper_name == "clamp":
             return (
-                "fn clamp(value: Float32, min_value: Float32, max_value: Float32) -> Float32:\n"
+                "def clamp(value: Float32, min_value: Float32, max_value: Float32) -> Float32:\n"
                 "    return min(max(value, min_value), max_value)\n\n"
-                "fn clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:\n"
+                "def clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value))\n\n"
-                "fn clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]))\n\n"
-                "fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:\n"
+                "def clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
-                "fn clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]), clamp(value[2], min_value[2], max_value[2]), clamp(value[3], min_value[3], max_value[3]))\n\n"
             )
         if helper_name == "max":
@@ -36,26 +36,26 @@ class MojoMathHelperMixin:
             return self.generate_min_max_helper("min", "<=")
         if helper_name == "dot_product":
             return (
-                "fn dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
+                "def dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
                 "    return a[0] * b[0] + a[1] * b[1]\n\n"
-                "fn dot_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> Float32:\n"
+                "def dot_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> Float32:\n"
                 "    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]\n\n"
             )
         if helper_name == "magnitude":
             return (
-                "fn magnitude(v: SIMD[DType.float32, 2]) -> Float32:\n"
+                "def magnitude(v: SIMD[DType.float32, 2]) -> Float32:\n"
                 "    return sqrt(dot_product(v, v))\n\n"
-                "fn magnitude(v: SIMD[DType.float32, 4]) -> Float32:\n"
+                "def magnitude(v: SIMD[DType.float32, 4]) -> Float32:\n"
                 "    return sqrt(dot_product(v, v))\n\n"
             )
         if helper_name == "normalize":
             return (
-                "fn normalize(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def normalize(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    var len = magnitude(v)\n"
                 "    if len == 0.0:\n"
                 "        return v\n"
                 "    return v / len\n\n"
-                "fn normalize(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def normalize(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    var len = magnitude(v)\n"
                 "    if len == 0.0:\n"
                 "        return v\n"
@@ -63,46 +63,46 @@ class MojoMathHelperMixin:
             )
         if helper_name == "lerp":
             return (
-                "fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:\n"
+                "def lerp(a: Float32, b: Float32, t: Float32) -> Float32:\n"
                 "    return a + (b - a) * t\n\n"
-                "fn lerp(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2], t: Float32) -> SIMD[DType.float32, 2]:\n"
+                "def lerp(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2], t: Float32) -> SIMD[DType.float32, 2]:\n"
                 "    return a + (b - a) * t\n\n"
-                "fn lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], t: Float32) -> SIMD[DType.float32, 4]:\n"
+                "def lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], t: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    return a + (b - a) * t\n\n"
             )
         if helper_name == "power":
             return (
-                "fn power(a: Float32, b: Float32) -> Float32:\n"
+                "def power(a: Float32, b: Float32) -> Float32:\n"
                 "    return pow(a, b)\n\n"
-                "fn power(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def power(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](pow(a[0], b[0]), pow(a[1], b[1]))\n\n"
-                "fn power(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def power(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](pow(a[0], b[0]), pow(a[1], b[1]), pow(a[2], b[2]), pow(a[3], b[3]))\n\n"
             )
         if helper_name == "fmod":
             return (
-                "fn fmod(a: Float32, b: Float32) -> Float32:\n"
+                "def fmod(a: Float32, b: Float32) -> Float32:\n"
                 "    return a - floor(a / b) * b\n\n"
-                "fn fmod(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def fmod(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](fmod(a[0], b[0]), fmod(a[1], b[1]))\n\n"
-                "fn fmod(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def fmod(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
         if helper_name == "round_even":
             return self.generate_round_even_helper()
         if helper_name == "cross_product":
             return (
-                "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0], 0.0)\n\n"
             )
         if helper_name == "reflect":
             return (
-                "fn reflect(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def reflect(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return i - n * (2.0 * dot_product(n, i))\n\n"
             )
         if helper_name == "refract":
             return (
-                "fn refract(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4], eta: Float32) -> SIMD[DType.float32, 4]:\n"
+                "def refract(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4], eta: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    var ndoti = dot_product(n, i)\n"
                 "    var k = 1.0 - eta * eta * (1.0 - ndoti * ndoti)\n"
                 "    if k < 0.0:\n"
@@ -111,37 +111,37 @@ class MojoMathHelperMixin:
             )
         if helper_name == "step":
             return (
-                "fn step(edge: Float32, x: Float32) -> Float32:\n"
+                "def step(edge: Float32, x: Float32) -> Float32:\n"
                 "    return 0.0 if x < edge else 1.0\n\n"
-                "fn step(edge: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def step(edge: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](step(edge, x[0]), step(edge, x[1]))\n\n"
-                "fn step(edge: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "def step(edge: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](step(edge[0], x), step(edge[1], x))\n\n"
-                "fn step(edge: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def step(edge: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](step(edge[0], x[0]), step(edge[1], x[1]))\n\n"
-                "fn step(edge: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def step(edge: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](step(edge, x[0]), step(edge, x[1]), step(edge, x[2]), step(edge, x[3]))\n\n"
-                "fn step(edge: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "def step(edge: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](step(edge[0], x), step(edge[1], x), step(edge[2], x), step(edge[3], x))\n\n"
-                "fn step(edge: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def step(edge: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](step(edge[0], x[0]), step(edge[1], x[1]), step(edge[2], x[2]), step(edge[3], x[3]))\n\n"
             )
         if helper_name == "smoothstep":
             return (
-                "fn smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
+                "def smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
                 "    var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)\n"
                 "    return t * t * (3.0 - 2.0 * t)\n\n"
-                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))\n\n"
-                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "def smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x))\n\n"
-                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "def smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]))\n\n"
-                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]), smoothstep(edge0, edge1, x[2]), smoothstep(edge0, edge1, x[3]))\n\n"
-                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "def smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x), smoothstep(edge0[2], edge1[2], x), smoothstep(edge0[3], edge1[3], x))\n\n"
-                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "def smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
@@ -151,7 +151,7 @@ class MojoMathHelperMixin:
         code = ""
         for dtype, scalar_type in ROUND_EVEN_FLOAT_DTYPES.items():
             code += (
-                f"fn round_even(x: {scalar_type}) -> {scalar_type}:\n"
+                f"def round_even(x: {scalar_type}) -> {scalar_type}:\n"
                 "    var lower = floor(x)\n"
                 "    var fraction = x - lower\n"
                 "    if fraction < 0.5:\n"
@@ -169,7 +169,7 @@ class MojoMathHelperMixin:
                     f"round_even(v[{index}])" for index in range(width)
                 )
                 code += (
-                    f"fn round_even(v: {vector_type}) -> {vector_type}:\n"
+                    f"def round_even(v: {vector_type}) -> {vector_type}:\n"
                     f"    return {vector_type}({components})\n\n"
                 )
         return code
@@ -181,7 +181,7 @@ class MojoMathHelperMixin:
             return f"{left} if {left} {comparator} {right} else {right}"
 
         code = (
-            f"fn {helper_name}(a: Float32, b: Float32) -> Float32:\n"
+            f"def {helper_name}(a: Float32, b: Float32) -> Float32:\n"
             f"    return {selector}\n\n"
         )
         for scalar_type in (
@@ -195,7 +195,7 @@ class MojoMathHelperMixin:
             "UInt64",
         ):
             code += (
-                f"fn {helper_name}(a: {scalar_type}, b: {scalar_type}) -> "
+                f"def {helper_name}(a: {scalar_type}, b: {scalar_type}) -> "
                 f"{scalar_type}:\n"
                 f"    return {selector}\n\n"
             )
@@ -205,7 +205,7 @@ class MojoMathHelperMixin:
                 lane_selector(f"a[{index}]", f"b[{index}]") for index in range(width)
             )
             code += (
-                f"fn {helper_name}(a: {vector_type}, b: {vector_type}) -> "
+                f"def {helper_name}(a: {vector_type}, b: {vector_type}) -> "
                 f"{vector_type}:\n"
                 f"    return {vector_type}({components})\n\n"
             )
@@ -213,7 +213,7 @@ class MojoMathHelperMixin:
                 lane_selector(f"a[{index}]", "b") for index in range(width)
             )
             code += (
-                f"fn {helper_name}(a: {vector_type}, b: Float32) -> "
+                f"def {helper_name}(a: {vector_type}, b: Float32) -> "
                 f"{vector_type}:\n"
                 f"    return {vector_type}({components})\n\n"
             )
@@ -221,7 +221,7 @@ class MojoMathHelperMixin:
                 lane_selector("a", f"b[{index}]") for index in range(width)
             )
             code += (
-                f"fn {helper_name}(a: Float32, b: {vector_type}) -> "
+                f"def {helper_name}(a: Float32, b: {vector_type}) -> "
                 f"{vector_type}:\n"
                 f"    return {vector_type}({components})\n\n"
             )
@@ -234,7 +234,7 @@ class MojoMathHelperMixin:
 
         if kind == "scalar":
             helper_name = self.fract_scalar_helper_name(dtype)
-            code = f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+            code = f"def {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
             code += "    return x - floor(x)\n\n"
             return code
 
@@ -246,7 +246,7 @@ class MojoMathHelperMixin:
         if storage_width > source_width:
             components.append(pad_literal)
 
-        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code = f"def {helper_name}(v: {vector_type}) -> {vector_type}:\n"
         code += f"    return {vector_type}({', '.join(components)})\n\n"
         return code
 
@@ -265,7 +265,7 @@ class MojoMathHelperMixin:
 
         if kind == "ss":
             return (
-                f"fn {helper_name}(a: {mojo_scalar_type}, "
+                f"def {helper_name}(a: {mojo_scalar_type}, "
                 f"b: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
                 "    return a - floor(a / b) * b\n\n"
             )
@@ -293,7 +293,7 @@ class MojoMathHelperMixin:
             components.append(pad_literal)
 
         return (
-            f"fn {helper_name}({params}) -> {vector_type}:\n"
+            f"def {helper_name}({params}) -> {vector_type}:\n"
             f"    return {vector_type}({', '.join(components)})\n\n"
         )
 
@@ -312,7 +312,7 @@ class MojoMathHelperMixin:
             helper_name = self.saturate_scalar_helper_name(dtype)
             value = self.saturate_value_expression("x")
             return (
-                f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                f"def {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
                 f"    return {value}\n\n"
             )
 
@@ -334,7 +334,7 @@ class MojoMathHelperMixin:
                 column_args.append(f"{column_type}({', '.join(components)})")
 
             helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
-            code = f"fn {helper_name}(m: {matrix_type}) -> {matrix_type}:\n"
+            code = f"def {helper_name}(m: {matrix_type}) -> {matrix_type}:\n"
             code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
             return code
 
@@ -351,7 +351,7 @@ class MojoMathHelperMixin:
         helper_name = self.saturate_vector_helper_name(
             dtype, source_width, storage_width
         )
-        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code = f"def {helper_name}(v: {vector_type}) -> {vector_type}:\n"
         code += f"    return {vector_type}({', '.join(components)})\n\n"
         return code
 
@@ -387,7 +387,7 @@ class MojoMathHelperMixin:
 
         components.append(pad_literal)
         args = ", ".join(components)
-        code = f"fn {helper_name}({params}) -> {vector_type}:\n"
+        code = f"def {helper_name}({params}) -> {vector_type}:\n"
         code += f"    return {vector_type}({args})\n\n"
         return code
 
@@ -410,7 +410,7 @@ class MojoMathHelperMixin:
 
         helper_name = self.select_helper_name(dtype, source_width, storage_width)
         code = (
-            f"fn {helper_name}(mask: {mask_type}, true_value: {vector_type}, "
+            f"def {helper_name}(mask: {mask_type}, true_value: {vector_type}, "
             f"false_value: {vector_type}) -> {vector_type}:\n"
         )
         code += f"    return {vector_type}({', '.join(components)})\n\n"
@@ -425,7 +425,7 @@ class MojoMathHelperMixin:
         mojo_scalar_type = self.map_type(scalar_type)
         vector_type = f"SIMD[{dtype}, 4]"
         helper_name = self.vec3_splat_helper_name(dtype)
-        code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {vector_type}:\n"
+        code = f"def {helper_name}(s: {mojo_scalar_type}) -> {vector_type}:\n"
         code += f"    return {vector_type}(s, s, s, {pad_literal})\n\n"
         return code
 
@@ -443,7 +443,7 @@ class MojoMathHelperMixin:
         if len(swizzle_indices) == 3:
             components.append(pad_literal)
 
-        code = f"fn {helper_name}(v: {source_type}) -> {result_type}:\n"
+        code = f"def {helper_name}(v: {source_type}) -> {result_type}:\n"
         code += f"    return {result_type}({', '.join(components)})\n\n"
         return code
 
@@ -578,7 +578,8 @@ class MojoMathHelperMixin:
             expr, target_dtype, force_scalar_target=True
         )
         self.validate_expression_target_shape(expr, target_type, context)
-        return self.generate_expression(expr, target_type, context)
+        # The constructor converts its argument, so the argument is not converted to target_type first.
+        return self.generate_expression_value(expr, target_type, context)
 
     def constructor_helper_argument_target_type(self, piece, target_dtype):
         if piece["kind"] == "scalar" and self.image_result_target_types_in_expression(
@@ -806,7 +807,7 @@ class MojoMathHelperMixin:
             components.append(helper["pad_literal"])
 
         helper_name = self.constructor_helper_name(helper["key"])
-        code = f"fn {helper_name}({', '.join(params)}) -> {result_type}:\n"
+        code = f"def {helper_name}({', '.join(params)}) -> {result_type}:\n"
         code += "".join(prelude)
         code += f"    return {result_type}({', '.join(components)})\n\n"
         return code

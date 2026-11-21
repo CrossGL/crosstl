@@ -210,6 +210,14 @@ def test_intersection_without_attributes_reports_a_placeholder(tmp_path):
     _validate(tmp_path, hlsl)
 
 
+def test_intersection_reading_no_built_in_reports_a_placeholder(tmp_path):
+    # Only the two-argument report says the stage is spelled the GLSL way.
+    source = INTERSECTION.replace("gl_RayTminEXT + 1.0", "1.0")
+    hlsl = _hlsl(tmp_path, "shader.rint", source)
+    assert "ReportHit(1.0, 0u, crossgl_hit_attributes);" in hlsl
+    _validate(tmp_path, hlsl)
+
+
 def test_glsl_targets_keep_the_glsl_spelling(tmp_path):
     path = tmp_path / "shader.rchit"
     path.write_text(CLOSEST_HIT)

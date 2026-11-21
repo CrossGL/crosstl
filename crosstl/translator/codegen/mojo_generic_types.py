@@ -23,6 +23,7 @@ from .generic_function_utils import (
 from .mojo_tables import (
     MOJO_DTYPE_INFO,
     MOJO_SCALAR_DTYPES,
+    MOJO_VALUE_STRUCT_TRAITS,
 )
 
 
@@ -270,7 +271,9 @@ class MojoGenericTypeMixin:
         code = ""
         for specialization in self.generic_enum_specializations.values():
             struct_name = specialization["struct_name"]
-            code += f"@value\nstruct {struct_name}:\n"
+            code += (
+                f"@fieldwise_init\nstruct {struct_name}({MOJO_VALUE_STRUCT_TRAITS}):\n"
+            )
             code += "    var variant: Int32\n"
             for field_name, field_type in generic_enum_specialized_fields(
                 self, specialization
@@ -304,7 +307,7 @@ class MojoGenericTypeMixin:
                     for index, (_field_name, field_type) in enumerate(variant_fields)
                 )
                 code += (
-                    f"fn {constructor_name}({params}) -> "
+                    f"def {constructor_name}({params}) -> "
                     f"{specialization['struct_name']}:\n"
                 )
                 rendered_fields = {

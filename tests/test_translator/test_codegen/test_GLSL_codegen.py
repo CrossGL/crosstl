@@ -18326,7 +18326,7 @@ def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_part
 @pytest.mark.parametrize(
     ("domain", "topology", "message"),
     [
-        ("isoline", "triangle_cw", "triangle_cw requires triangles domain"),
+        ("isoline", "triangle_cw", "triangle_cw requires a triangles or quads domain"),
         ("triangle", "line", "line requires isolines domain"),
         (
             "triangle",
@@ -30697,9 +30697,18 @@ def test_opengl_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
+            output.position = vec4(input.position, 1.0);
 
             // Array access in various forms
             float value = weights[2];
@@ -31448,10 +31457,10 @@ def test_opengl_rejects_fixed_resource_call_with_too_many_arguments(
             5,
         ),
         (
-            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias, input.bias))",
             "textureCompare",
-            4,
             5,
+            6,
         ),
         (
             "textureGather(colorMap, input.uv, input.component, input.component)",
@@ -31460,10 +31469,10 @@ def test_opengl_rejects_fixed_resource_call_with_too_many_arguments(
             4,
         ),
         (
-            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component, input.component)",
             "textureGatherCompareOffset",
-            5,
             6,
+            7,
         ),
     ],
 )

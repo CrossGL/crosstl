@@ -59,7 +59,10 @@ def refuse_unbound_metal_vertex_inputs(ast, codegen):
     """Refuse every vertex-entry input whose ``gl_`` built-in Metal would bind as a vertex-buffer attribute."""
     structs = _structs(ast)
     refused = set()
-    for _id, _stage, function in collect_stage_entry_records(ast, None, {"vertex"}):
+    for _id, stage, function in collect_stage_entry_records(ast, None, {"vertex"}):
+        # The records also hold every stage block's entry point, whatever its stage.
+        if stage != "vertex":
+            continue
         for parameter in getattr(function, "parameters", None) or []:
             if not _is_input(parameter):
                 continue

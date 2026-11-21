@@ -228,7 +228,7 @@ class CudaStageCheckMixin:
                     type_name = matrix_type(scalar, columns, rows)
                     count = columns * rows
                     params = ", ".join(f"{scalar} v{i}" for i in range(count))
-                    assignments = " ".join(f"m[{i}] = v{i};" for i in range(count))
+                    component_values = ", ".join(f"v{i}" for i in range(count))
                     zero = f"{scalar}(0)"
                     add_args = ", ".join(f"m[{i}] + rhs.m[{i}]" for i in range(count))
                     sub_args = ", ".join(f"m[{i}] - rhs.m[{i}]" for i in range(count))
@@ -279,7 +279,11 @@ class CudaStageCheckMixin:
                             "            }",
                             "        }",
                             "    }",
-                            f"    __host__ __device__ {type_name}({params}) {{ {assignments} }}",
+                            # constexpr, so that a file-scope __device__ matrix constant is statically initialized.
+                            (
+                                f"    __host__ __device__ constexpr {type_name}({params})"
+                                f" : m{{{component_values}}} {{ }}"
+                            ),
                             f"    __host__ __device__ {scalar}& operator[](int index) {{ return m[index]; }}",
                             f"    __host__ __device__ const {scalar}& operator[](int index) const {{ return m[index]; }}",
                             f"    __host__ __device__ {type_name} operator+(const {type_name}& rhs) const {{",

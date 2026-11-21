@@ -366,7 +366,9 @@ class MetalBuiltinTableMixin:
     # Each Metal call carries a trailing memory_order argument that the CrossGL
     # intrinsics (and the DirectX/GLSL/SPIR-V backends) do not take; it is dropped
     # during lowering. Only the read-modify-write operations with a direct CrossGL
-    # counterpart are mapped here.
+    # counterpart are mapped here. Metal's 64-bit atomic_max_explicit and
+    # atomic_min_explicit (atomic_ulong only) return nothing, so their CrossGL
+    # atomicMax and atomicMin results are never used.
     metal_atomic_intrinsics = {
         "atomic_fetch_add_explicit": "atomicAdd",
         "atomic_fetch_min_explicit": "atomicMin",
@@ -375,6 +377,8 @@ class MetalBuiltinTableMixin:
         "atomic_fetch_or_explicit": "atomicOr",
         "atomic_fetch_xor_explicit": "atomicXor",
         "atomic_exchange_explicit": "atomicExchange",
+        "atomic_max_explicit": "atomicMax",
+        "atomic_min_explicit": "atomicMin",
     }
 
     metal_atomic_fence_memory_flags = frozenset(

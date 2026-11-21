@@ -8,6 +8,7 @@ from ..ast import (
 from ..matrix_shape import matrix_type_spelling
 from ..refusals import RustRefusal
 from .array_utils import prepend_array_dimension
+from .union_layout import UnionLayoutCollector
 
 
 class RustTypeDefinitionMixin:
@@ -132,6 +133,13 @@ class RustTypeDefinitionMixin:
         )
 
     def generate_struct(self, node):
+        if UnionLayoutCollector.attribute(node, "union_layout") is not None:
+            # A Rust struct gives every field its own storage, so writing one member of a union and reading
+            # another would read a field that was never written.
+            raise RustRefusal(
+                f"Rust struct '{node.name}' has a @union_layout: the Rust generator has no union lowering, "
+                "and a struct would give its overlapping members separate storage"
+            )
         wrapper_enum = self.struct_enum_wrapper(node)
         if wrapper_enum is not None:
             self.struct_member_types[node.name] = {}

@@ -68,25 +68,34 @@ GLSL_STAGES = {
     "miss": "rmiss",
     "callable": "rcall",
 }
-# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
+# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one, except
+# those the Shader Model 6.10 preview compiler checks.
 HLSL_SHADER_MODEL = (6, 9)
+# HLSL probes of features that need shader model 6.10 are checked for this target, by DXC's Shader Model 6.10 preview
+# (v1.10.2605.37), which CI installs next to the pinned release and :func:`command` finds as ``dxc-preview``.
+HLSL_PREVIEW = "sm6.10"
+HLSL_PREVIEW_SHADER_MODEL = (6, 10)
+# HLSL probes of features DXC compiles only to SPIR-V, such as printf, are checked for this target.
+HLSL_SPIRV = "spirv"
 # Ray-tracing and work-graph node shaders compile as a library, whose ``[shader(...)]`` attributes name the entry
 # points.
+HLSL_PREFIXES = {
+    "compute": "cs",
+    "fragment": "ps",
+    "vertex": "vs",
+    "geometry": "gs",
+    "tessellation-control": "hs",
+    "tessellation-evaluation": "ds",
+    "task": "as",
+    "mesh": "ms",
+    **dict.fromkeys(RAYTRACING_STAGES, "lib"),
+    "node": "lib",
+}
 HLSL_PROFILES = {
     stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
-    for stage, prefix in {
-        "compute": "cs",
-        "fragment": "ps",
-        "vertex": "vs",
-        "geometry": "gs",
-        "tessellation-control": "hs",
-        "tessellation-evaluation": "ds",
-        "task": "as",
-        "mesh": "ms",
-        **dict.fromkeys(RAYTRACING_STAGES, "lib"),
-        "node": "lib",
-    }.items()
+    for stage, prefix in HLSL_PREFIXES.items()
 }
+
 # The ``[shader(...)]`` kind of each stage a library holds.
 HLSL_LIBRARY_KINDS = {**RAYTRACING_STAGES, "node": "node"}
 # slangc's names for the stages it does not spell as the report does.
@@ -206,6 +215,8 @@ def toolchain(language: str, target: str = "") -> tuple[str, ...]:
     """The tools that checking ``language`` probes for ``target`` runs."""
     if language == "slang" and target in SLANG_SOURCE_TARGETS:
         return ("slangc", SLANG_SOURCE_TARGETS[target])
+    if language == "hlsl" and target == HLSL_PREVIEW:
+        return ("dxc-preview",)
     return {
         "spirv": ("spirv-as", "spirv-val"),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
@@ -362,19 +373,31 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
 _UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\*/")
 
 
-def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdict:
-    """Compile an HLSL probe. A library must also declare an entry point of ``stage``: DXC accepts a library of plain
-    functions, which no pipeline can run."""
-    profile = HLSL_PROFILES[stage]
+def hlsl_profile(stage: str, target: str = "") -> str:
+    """The DXC profile an HLSL probe of ``stage`` compiles with for ``target``."""
+    model = HLSL_PREVIEW_SHADER_MODEL if target == HLSL_PREVIEW else HLSL_SHADER_MODEL
+    return f"{HLSL_PREFIXES[stage]}_{model[0]}_{model[1]}"
+
+
+def _dxc(
+    name: str, source: str, stage: str, entry: str, scratch: str, target: str = ""
+) -> Verdict:
+    """Compile an HLSL probe for ``target``: DXIL by default, DXIL at shader model 6.10 with the preview compiler for
+    :data:`HLSL_PREVIEW`, and Vulkan SPIR-V, which DXC validates as it writes it, for :data:`HLSL_SPIRV`. A library
+    must also declare an entry point of ``stage``: DXC accepts a library of plain functions, which no pipeline can
+    run."""
+    profile = hlsl_profile(stage, target)
     library = profile.startswith("lib_")
     entry_point = [] if library else ["-E", entry or hlsl_entry(source, stage)]
     kind = HLSL_LIBRARY_KINDS.get(stage, "")
     attribute = rf'\[\s*shader\s*\(\s*"{kind}"\s*\)\s*\]'
     if library and not re.search(attribute, source, re.IGNORECASE):
         return Verdict(False, f"error: the library has no {stage} entry point")
+    spirv = ["-spirv", f"-fspv-target-env={SPIRV_ENVIRONMENT}"]
     return run(
         [
-            *command("dxc"),
+            *command(toolchain("hlsl", target)[0]),
+            *(spirv if target == HLSL_SPIRV else []),
             "-T",
             profile,
             *entry_point,
@@ -526,7 +549,7 @@ def validate(
         if language == "glsl":
             return _glsl(name, stage, target, scratch)
         if language == "hlsl":
-            return _dxc(name, source, stage, entry, scratch)
+            return _dxc(name, source, stage, entry, scratch, target)
         if language == "metal":
             return _metal(name, stage, scratch)
         if language == "rust":

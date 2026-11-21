@@ -107,9 +107,23 @@ def test_half_double_rounding_is_rejected(body):
 def test_half_shadowed_intrinsics_are_rejected(name):
     with pytest.raises(DirectXContextualConversionError) as error:
         HLSLCodeGen().generate(
-            _shader("half value = output[0];", f"float {name}(float x) {{ return x; }}")
+            _shader("half value = output[0];", f"float {name} = 1.0;")
         )
     assert error.value.reason == "half-target-intrinsic-shadowed"
+
+
+@pytest.mark.parametrize("name", ["asuint", "asfloat16"])
+def test_half_rounding_beside_intrinsic_named_helpers_compiles(name, tmp_path):
+    # The helper is renamed, so the rounding helper's own asuint/asfloat16 calls reach the intrinsics.
+    generated = HLSLCodeGen().generate(
+        _shader(
+            f"half value = output[0]; output[0] = float(value) + {name}(2.0);",
+            f"float {name}(float x) {{ return x; }}",
+        )
+    )
+    assert f"float {name}_fn(float x)" in generated
+    assert f"{name}_fn(2.0)" in generated
+    _compile_half(generated, tmp_path)
 
 
 def test_half_bitcasts_are_not_numeric_conversions(tmp_path):
@@ -148,17 +162,37 @@ def test_half_mixed_vector_widening_decodes_each_payload(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "name", ["asuint16", "asuint", "asfloat", "__crossgl_binary16_to_float"]
+    "name,declaration",
+    [
+        ("asuint16", "float asuint16 = 1.0;"),
+        ("asuint", "float asuint = 1.0;"),
+        ("asfloat", "float asfloat = 1.0;"),
+        (
+            "__crossgl_binary16_to_float",
+            "float __crossgl_binary16_to_float(float x) { return x; }",
+        ),
+    ],
 )
-def test_half_widening_rejects_shadowed_helpers(name):
+def test_half_widening_rejects_shadowed_helpers(name, declaration):
     with pytest.raises(DirectXContextualConversionError) as error:
         HLSLCodeGen().generate(
-            _shader(
-                "half value = half(1.0); output[0] = float(value);",
-                f"float {name}(float x) {{ return x; }}",
-            )
+            _shader("half value = half(1.0); output[0] = float(value);", declaration)
         )
     assert error.value.reason == "half-widening-intrinsic-shadowed"
+    assert f"'{name}' is shadowed" in str(error.value)
+
+
+@pytest.mark.parametrize("name", ["asuint16", "asuint", "asfloat"])
+def test_half_widening_beside_intrinsic_named_helpers_compiles(name, tmp_path):
+    generated = HLSLCodeGen().generate(
+        _shader(
+            f"half value = half(1.0); output[0] = float(value) + {name}(2.0);",
+            f"float {name}(float x) {{ return x; }}",
+        )
+    )
+    assert f"float {name}_fn(float x)" in generated
+    assert "__crossgl_binary16_to_float(uint(asuint16(" in generated
+    _compile_half(generated, tmp_path)
 
 
 @pytest.mark.parametrize("mode", ["rounding", "boundaries", "vectors"])

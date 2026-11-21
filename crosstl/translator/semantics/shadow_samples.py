@@ -31,9 +31,11 @@ The coordinate is split by swizzling when evaluating it twice is equivalent to e
 vector constructor's operands apart when they meet at the split. Any other coordinate (one that calls a function, for
 example) is refused with :class:`ShadowSampleUnsupportedError` rather than evaluated twice.
 
-A bias operand has no compare form in CrossGL. The Metal emitter lowers ``texture`` and ``textureOffset`` with a bias
-to ``sample_compare`` with ``bias()`` (MSL 2.3 and later), so those calls are left to it; every other biased shadow
-sample is refused, as are operand counts and sampler kinds for which GLSL defines no overload.
+A bias operand stays the last operand of the compare form (:mod:`.texture_operands`) for a target whose generator
+lowers biased comparisons (:func:`~.texture_operands.register_texture_operand_target`). For any other target the
+Metal emitter lowers ``texture`` and ``textureOffset`` with a bias to ``sample_compare`` with ``bias()`` (MSL 2.3 and
+later), so those calls are left to it; every other biased shadow sample is refused, as are operand counts and
+sampler kinds for which GLSL defines no overload.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from ..codegen.call_graph import _stage_functions
 from ..diagnostics import CODE_PREFIX, SourceSpan, TranslationDiagnostic
 from .hub_types import TypeScope, call_name, element_type_node, iter_structs
 from .rewrite import child_slots, clone, get_child, is_pure
+from .texture_operands import COMPARE_BIAS, texture_operand_targets
 
 __all__ = [
     "GLSL_SHADOW_TARGETS",
@@ -367,7 +370,8 @@ class _ShadowSampleRewriter:
                 )
             _rename(node, form.compare, arguments)
             return
-        if len(operands) == form.operands + 1 and form.accepts_bias:
+        biased = len(operands) == form.operands + 1 and form.accepts_bias
+        if biased and self.target not in texture_operand_targets(COMPARE_BIAS):
             if (
                 self.target == "metal"
                 and form.kind == "sample"
@@ -375,7 +379,7 @@ class _ShadowSampleRewriter:
             ):
                 return
             self._refuse(node, operation, sampler_type, _BIAS_REASON)
-        if len(operands) != form.operands:
+        if len(operands) != form.operands + (1 if biased else 0):
             self._refuse(
                 node, operation, sampler_type, self._arity_reason(form, len(operands))
             )

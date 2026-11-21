@@ -35,7 +35,9 @@ from ..MetalAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from ..ordered_atomics import fenced_atomic_statement
 from ..sparse_color import import_sparse_color_assignment
+from ..vote_masks import vote_mask_default_initializer
 
 
 class MetalFunctionMixin:
@@ -462,6 +464,10 @@ class MetalFunctionMixin:
         code = ""
         for stmt in body:
             code += "    " * indent
+            fenced_atomic = fenced_atomic_statement(self, stmt, indent, is_main)
+            if fenced_atomic is not None:
+                code += fenced_atomic
+                continue
             if isinstance(stmt, TypeAliasNode):
                 # Register a block-local ``using`` or ``typedef`` so later
                 # declarations and expressions resolve it in lexical order. The
@@ -504,9 +510,9 @@ class MetalFunctionMixin:
                     code += f"const {decl} = sampler();\n"
                     continue
                 if not getattr(stmt, "is_metal_constructor_storage", False):
-                    initializer = self.generate_default_constructor_initializer(
-                        stmt, is_main
-                    )
+                    initializer = vote_mask_default_initializer(
+                        self, stmt
+                    ) or self.generate_default_constructor_initializer(stmt, is_main)
                     if initializer is not None:
                         decl += f" = {initializer}"
                 code += f"{decl};\n"

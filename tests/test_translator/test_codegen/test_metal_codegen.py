@@ -3286,8 +3286,16 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "uint quadLane = quad_broadcast(quadDiagonal, ushort(0u));" in (
         generated_code
     )
-    assert "bool quadAny = quad_any(anyLane);" in generated_code
-    assert "bool quadAll = quad_all(allLane);" in generated_code
+    # Compute quad votes count the active threads of four consecutive lanes.
+    quad_lanes = "(simd_vote::vote_t(15u) << (crossglWaveLaneIndex & ~3u))"
+    assert (
+        f"bool quadAny = ((simd_vote::vote_t(simd_ballot(anyLane)) & {quad_lanes}) "
+        "!= simd_vote::vote_t(0u));"
+    ) in generated_code
+    assert (
+        f"bool quadAll = ((simd_vote::vote_t(simd_ballot(allLane)) & {quad_lanes}) "
+        f"== (simd_vote::vote_t(simd_active_threads_mask()) & {quad_lanes}));"
+    ) in generated_code
     assert "uint lane = crossglWaveLaneIndex;" in generated_code
     assert "uint laneCount = crossglWaveLaneCount;" in generated_code
     assert (
@@ -4233,8 +4241,16 @@ def test_metal_quad_operations_lower_to_quad_shuffle():
     assert "float quadY = quad_shuffle_xor(quadX, ushort(2));" in generated_code
     assert "float quadDiag = quad_shuffle_xor(quadY, ushort(3));" in generated_code
     assert "float quadLane = quad_broadcast(value, ushort(2u));" in generated_code
-    assert "bool anyQuad = quad_any(predicate);" in generated_code
-    assert "bool allQuad = quad_all(predicate);" in generated_code
+    # Compute quad votes count the active threads of four consecutive lanes.
+    quad_lanes = "(simd_vote::vote_t(15u) << (crossglWaveLaneIndex & ~3u))"
+    assert (
+        f"bool anyQuad = ((simd_vote::vote_t(simd_ballot(predicate)) & {quad_lanes}) "
+        "!= simd_vote::vote_t(0u));"
+    ) in generated_code
+    assert (
+        f"bool allQuad = ((simd_vote::vote_t(simd_ballot(predicate)) & {quad_lanes}) "
+        f"== (simd_vote::vote_t(simd_active_threads_mask()) & {quad_lanes}));"
+    ) in generated_code
     assert "QuadReadAcrossX(" not in generated_code
     assert "QuadReadAcrossY(" not in generated_code
     assert "QuadReadAcrossDiagonal(" not in generated_code
@@ -6586,7 +6602,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     assert "uint64_t offsets[2];" in generated_code
     assert "constant int globalBytes[2] = {};" in generated_code
     assert "constant uint64_t globalCounters[2] = {};" in generated_code
-    assert "int smalls[2];" in generated_code
+    # The unmarked cbuffer takes std140: each array element fills a 16-byte slot.
+    assert "int4 smalls[2];" in generated_code
     assert "uint count;" in generated_code
     assert "int64_t delta;" in generated_code
     assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
@@ -6808,13 +6825,14 @@ def test_metal_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "struct AliasNestedConstants" in generated_code
-    assert "int64_t signedGrid[2][3];" in generated_code
-    assert "uint unsignedGrid[2][3];" in generated_code
-    assert "uint64_t offsets[2][3];" in generated_code
+    # std140 gives every element of these arrays a 16-byte slot.
+    assert "long2 signedGrid[2][3];" in generated_code
+    assert "uint4 unsignedGrid[2][3];" in generated_code
+    assert "ulong2 offsets[2][3];" in generated_code
     assert "constant AliasNestedConstants& aliasNestedConstants" in generated_code
     assert "uint64_t readConstant(int row, int col" in generated_code
-    assert "uint64_t(aliasNestedConstants.offsets[row][col])" in generated_code
-    assert "uint64_t(aliasNestedConstants.unsignedGrid[row][col])" in generated_code
+    assert "uint64_t(aliasNestedConstants.offsets[row][col].x)" in generated_code
+    assert "uint64_t(aliasNestedConstants.unsignedGrid[row][col].x)" in generated_code
     assert "int64_t[2] signedGrid[3]" not in generated_code
     assert "uint[2] unsignedGrid[3]" not in generated_code
     for invalid_token in (
@@ -17628,11 +17646,13 @@ def test_metal_array_handling(array_test_data):
         generated_code = generate_code(ast)
         print(generated_code)
 
-        for expected in array_test_data["metal"]["array_type_declarations"]:
+        # The unmarked cbuffer takes std140, which gives each element of ``weights`` a 16-byte slot.
+        for expected in ("float values[4]", "float4 weights[8]", "int4 indices[10]"):
             assert expected in generated_code
 
         for expected in array_test_data["metal"]["array_access"]:
             assert expected in generated_code
+        assert "float value = constants.weights[2].x;" in generated_code
 
     except SyntaxError as e:
         pytest.fail(f"Metal array codegen failed: {e}")
@@ -17661,11 +17681,12 @@ def test_metal_cbuffer_members_are_bound_as_constant_buffer_parameters():
     assert [buffer.name for buffer in getattr(ast, "cbuffers", [])] == ["Constants"]
     assert [var.name for var in ast.global_variables] == []
     assert "struct Constants" in generated_code
-    assert "float weights[8];" in generated_code
-    assert "float3 colors[2];" in generated_code
+    # std140 gives each array element a 16-byte slot; reads select the element's components.
+    assert "float4 weights[8];" in generated_code
+    assert "float4 colors[2];" in generated_code
     assert "constant Constants& constants [[buffer(0)]]" in generated_code
-    assert "float value = constants.weights[2];" in generated_code
-    assert "float3 color = constants.colors[1];" in generated_code
+    assert "float value = constants.weights[2].x;" in generated_code
+    assert "float3 color = constants.colors[1].xyz;" in generated_code
 
 
 def test_metal_cbuffer_parameter_names_are_unique():
@@ -18572,7 +18593,7 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "envMap.sample" in generated_code
 
 
-def test_metal_rejects_non_resource_shadow_of_global_resource():
+def test_metal_renames_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {
         sampler2D colorMap;
@@ -18595,14 +18616,13 @@ def test_metal_rejects_non_resource_shadow_of_global_resource():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Non-resource local declaration\\(s\\) shadow Metal global "
-            "resource\\(s\\): colorMap, linearSampler"
-        ),
-    ):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The parameter and the local keep their values under names that no longer hide the resources.
+    assert "float4 shade(float colorMap_, FSInput input)" in generated_code
+    assert "float linearSampler_ = 1.0;" in generated_code
+    assert "return float4(colorMap_ + linearSampler_);" in generated_code
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
 
 
 def test_metal_rejects_texture_call_with_non_resource_argument():
@@ -18849,10 +18869,10 @@ def test_metal_rejects_fixed_resource_call_with_too_many_arguments(
             5,
         ),
         (
-            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias, input.bias))",
             "textureCompare",
-            4,
             5,
+            6,
         ),
         (
             "textureGather(colorMap, input.uv, input.component, input.component)",
@@ -18861,10 +18881,10 @@ def test_metal_rejects_fixed_resource_call_with_too_many_arguments(
             4,
         ),
         (
-            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component, input.component)",
             "textureGatherCompareOffset",
-            5,
             6,
+            7,
         ),
     ],
 )
@@ -34378,13 +34398,14 @@ def test_metal_cbuffer_struct_member_access_via_parameter():
     assert "struct Transform" in generated_code
     assert "float4x4 modelMatrix;" in generated_code
     assert "float4x4 viewProjection;" in generated_code
-    assert "float3 cameraPos;" in generated_code
+    # std140 puts nothing after a trailing vec3, so packed storage keeps its 12 bytes.
+    assert "packed_float3 cameraPos;" in generated_code
     assert "constant Transform& transform [[buffer(0)]]" in generated_code
     assert (
         "float3 worldToView(float3 worldPos, constant Transform& transform)"
         in generated_code
     )
-    assert "return worldPos - transform.cameraPos;" in generated_code
+    assert "return worldPos - float3(transform.cameraPos);" in generated_code
     assert (
         "float3 viewDir = worldToView(float3(1.0, 0.0, 0.0), transform);"
         in generated_code
@@ -34423,15 +34444,18 @@ def test_metal_cbuffer_mixed_scalar_vector_matrix_members():
     assert "float time;" in generated_code
     assert "int frameIndex;" in generated_code
     assert "float2 resolution;" in generated_code
-    assert "float3 ambient;" in generated_code
-    assert "float4 fogColor;" in generated_code
+    # std140 offsets: ambient at byte 16 in packed storage, padded to fogColor at byte 32.
+    assert (
+        "packed_float3 ambient;\n    char _pad4[4];\n    float4 fogColor;"
+        in generated_code
+    )
     assert "float3x3 normalMatrix;" in generated_code
     assert "float4x4 projection;" in generated_code
     assert "constant PerFrame& perFrame [[buffer(0)]]" in generated_code
     assert "float t = perFrame.time;" in generated_code
     assert "int idx = perFrame.frameIndex;" in generated_code
     assert "float2 res = perFrame.resolution;" in generated_code
-    assert "float3 amb = perFrame.ambient;" in generated_code
+    assert "float3 amb = float3(perFrame.ambient);" in generated_code
     assert "float4 fog = perFrame.fogColor;" in generated_code
 
 
@@ -34459,11 +34483,12 @@ def test_metal_cbuffer_with_array_members():
 
     assert "struct LightData" in generated_code
     assert "float4 lightPositions[4];" in generated_code
-    assert "float lightRadii[4];" in generated_code
+    # std140 gives each element of a float array a 16-byte slot.
+    assert "float4 lightRadii[4];" in generated_code
     assert "int activeLightCount;" in generated_code
     assert "constant LightData& lightData [[buffer(0)]]" in generated_code
     assert "float4 firstLight = lightData.lightPositions[0];" in generated_code
-    assert "float radius = lightData.lightRadii[0];" in generated_code
+    assert "float radius = lightData.lightRadii[0].x;" in generated_code
     assert "int count = lightData.activeLightCount;" in generated_code
 
 
@@ -34657,14 +34682,15 @@ def test_metal_cbuffer_with_nested_array_members():
 
     assert "struct ParticleConfig" in generated_code
     assert "float4 emitterPositions[8];" in generated_code
-    assert "float emitterRadii[8];" in generated_code
-    assert "float3 velocityOffsets[4];" in generated_code
+    # std140 gives each element of a float or vec3 array a 16-byte slot.
+    assert "float4 emitterRadii[8];" in generated_code
+    assert "float4 velocityOffsets[4];" in generated_code
     assert "float4x4 emitterTransforms[2];" in generated_code
     assert "int activeEmitterCount;" in generated_code
     assert "constant ParticleConfig& particleConfig [[buffer(0)]]" in generated_code
     assert "float4 pos = particleConfig.emitterPositions[2];" in generated_code
-    assert "float r = particleConfig.emitterRadii[2];" in generated_code
-    assert "float3 vel = particleConfig.velocityOffsets[1];" in generated_code
+    assert "float r = particleConfig.emitterRadii[2].x;" in generated_code
+    assert "float3 vel = particleConfig.velocityOffsets[1].xyz;" in generated_code
     assert "float4x4 xform = particleConfig.emitterTransforms[0];" in generated_code
     assert "int count = particleConfig.activeEmitterCount;" in generated_code
 

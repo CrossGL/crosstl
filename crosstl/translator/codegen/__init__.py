@@ -105,7 +105,7 @@ register_backend(
         aliases=("webgl2", "essl", "glsl-es"),
         file_extensions=(".webgl.glsl",),
         format_backend="opengl",
-        has_source_frontend=False,
+        source_name="opengl",
     )
 )
 register_backend(

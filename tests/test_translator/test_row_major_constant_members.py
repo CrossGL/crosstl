@@ -60,16 +60,19 @@ def _flat(code):
 
 def test_metal_declares_the_transpose_and_rewrites_every_read(tmp_path):
     code = _flat(_translate(tmp_path, PROBE, "metal"))
+    # An unmarked block is laid out by std140, which pads each row of the float3x2 transpose to 16 bytes.
     assert (
-        "struct Params { float3x3 m; float3x2 n; float3x3 ms[2]; float4 v; };" in code
+        "struct Params { float3x3 m; crosstl_hlsl_cbuffer_float3x2_padded n; "
+        "float3x3 ms[2]; float4 v; };" in code
     )
+    n = "crosstl_hlsl_cbuffer_float3x2_padded_load(params.n)"
     assert "float3 t = transpose(params.m) * params.v.xyz;" in code
     assert "float3 u = params.v.xyz * transpose(params.m);" in code
-    assert "float3 w = transpose(params.n) * params.v.xy;" in code
+    assert f"float3 w = transpose({n}) * params.v.xy;" in code
     assert "float3 c = transpose(params.ms[1])[i];" in code
     assert "float3x3 copy = transpose(params.m);" in code
     assert "params.m[1][2] * 64.0" in code
-    assert "params.n[2][1] * 128.0" in code
+    assert f"{n}[2][1] * 128.0" in code
     assert "params.ms[0][2][1] * 256.0" in code
     assert "pick(transpose(params.m)) * 512.0" in code
     # A local that shadows the member is an ordinary column-major matrix.
@@ -108,16 +111,17 @@ def test_refuses_an_array_member_used_without_selecting_one_matrix(tmp_path):
 
 
 def _block():
-    """``Params`` in MSL's layout of the transposed members: rows of ``m`` and ``ms`` 16 bytes apart, of ``n`` 8."""
-    words = [0.0] * 48
+    """``Params`` in std140 (GLSL 4.60 section 7.6.2.2): every row of a row-major matrix starts 16 bytes after the
+    previous one."""
+    words = [0.0] * 52
     for row in range(3):
-        words[4 * row : 4 * row + 3] = M[row]  # float3x3 at byte 0
-        words[12 + 2 * row : 14 + 2 * row] = N[row]  # float3x2 at byte 48
-        for index in range(2):  # float3x3[2] at byte 80
-            start = 20 + 12 * index + 4 * row
+        words[4 * row : 4 * row + 3] = M[row]  # mat3 at byte 0
+        words[12 + 4 * row : 14 + 4 * row] = N[row]  # mat2x3 at byte 48
+        for index in range(2):  # mat3[2] at byte 96
+            start = 24 + 12 * index + 4 * row
             words[start : start + 3] = MS[index][row]
-    words[44:48] = V  # float4 at byte 176
-    return struct.pack("<48f", *words)
+    words[48:52] = V  # vec4 at byte 192
+    return struct.pack("<52f", *words)
 
 
 def _expected(i):

@@ -5054,8 +5054,8 @@ class TestHipCodeGen:
         assert ")[1]" not in hip_code
         assert ")[2]" not in hip_code
 
-    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
-        non_constant_source = """
+    def test_compute_builtin_subscripts_read_runtime_index_and_refuse_writes(self):
+        runtime_index_source = """
         shader TestShader {
             compute {
                 void main(uint i) {
@@ -5064,8 +5064,16 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(HipLoweringRefused, match="non-constant index"):
-            HipCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+        code = HipCodeGen().generate(Parser(Lexer(runtime_index_source).tokens).parse())
+        assert (
+            "cgl_builtin_component(i, (blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z))"
+        ) in code
+
+        out_of_range_source = runtime_index_source.replace("[i]", "[3]")
+        with pytest.raises(HipLoweringRefused, match="with index 3"):
+            HipCodeGen().generate(Parser(Lexer(out_of_range_source).tokens).parse())
 
         write_source = """
         shader TestShader {

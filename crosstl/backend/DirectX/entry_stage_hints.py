@@ -19,6 +19,11 @@ decide when the function could be that stage's entry point at all:
   members carry semantics;
 * an entry point is not called by another function of the translation unit.
 
+A function with a semantic on a parameter that discards its pixel (``discard`` or ``clip``) is a pixel entry point
+even when it returns nothing: DXC accepts both only in pixel shaders, and a depth-only pass writes no render target.
+The rule applies only when no parameter is ``out`` or ``inout``; an entry that writes outputs takes its stage from
+them.
+
 A function that fails these checks keeps the stage its attributes and
 semantics give it, which for an ordinary helper is none.
 """
@@ -73,6 +78,35 @@ def entry_name_stage_hint(name, attribute_names):
     if required is not None and not (required & set(attribute_names)):
         return None
     return stage
+
+
+def discards_pixels(body):
+    """Whether ``body`` holds a ``discard`` statement or a ``clip`` call, which only pixel shaders may run."""
+    return _discards(body, set())
+
+
+def _discards(node, visited):
+    if node is None or isinstance(node, (int, float, bool)):
+        return False
+    if isinstance(node, str):
+        return node == "discard"
+    node_id = id(node)
+    if node_id in visited:
+        return False
+    visited.add(node_id)
+    if isinstance(node, FunctionCallNode):
+        callee = getattr(node, "name", None)
+        if isinstance(callee, str) and callee == "clip":
+            return True
+    if isinstance(node, dict):
+        children = node.values()
+    elif isinstance(node, (list, tuple, set)):
+        children = node
+    elif hasattr(node, "__dict__"):
+        children = (value for name, value in vars(node).items() if name != "name")
+    else:
+        return False
+    return any(_discards(child, visited) for child in children)
 
 
 def called_function_names(functions):
