@@ -18854,10 +18854,10 @@ def test_metal_rejects_fixed_resource_call_with_too_many_arguments(
             5,
         ),
         (
-            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias, input.bias))",
             "textureCompare",
-            4,
             5,
+            6,
         ),
         (
             "textureGather(colorMap, input.uv, input.component, input.component)",
@@ -18866,10 +18866,10 @@ def test_metal_rejects_fixed_resource_call_with_too_many_arguments(
             4,
         ),
         (
-            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component, input.component)",
             "textureGatherCompareOffset",
-            5,
             6,
+            7,
         ),
     ],
 )

@@ -77,6 +77,10 @@ from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
 )
+from .device_variables import (
+    DeviceVariableUnsupportedError,
+    refuse_device_variables,
+)
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
@@ -226,6 +230,12 @@ from .tessellation_patches import (
 )
 from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
+from .texture_operands import (
+    TextureOperandError,
+    TextureOperandUnsupportedError,
+    check_texture_operands,
+    register_texture_operand_target,
+)
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
@@ -244,6 +254,12 @@ from .vertex_input_positions import (
 from .void_casts import VoidCastError, lower_void_casts
 from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .work_graph_nodes import (
+    WorkGraphNodeError,
+    WorkGraphUnsupportedError,
+    check_work_graph_nodes,
+    refuse_work_graph_nodes,
+)
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -268,6 +284,7 @@ __all__ = [
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
+    "DeviceVariableUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FeedbackTextureUnsupportedError",
@@ -277,6 +294,8 @@ __all__ = [
     "HalfFloatUnsupportedError",
     "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
+    "WorkGraphNodeError",
+    "WorkGraphUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
@@ -312,6 +331,8 @@ __all__ = [
     "StorageVariableUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
+    "TextureOperandError",
+    "TextureOperandUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
@@ -325,6 +346,8 @@ __all__ = [
     "VoidValueError",
     "apply_rule_carrying",
     "generate_refusing_undeclared_identifiers",
+    "check_texture_operands",
+    "register_texture_operand_target",
 ]
 
 
@@ -498,6 +521,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_constant_blocks(program, report.target)
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
+    refuse_work_graph_nodes(program, report.target)
+    check_work_graph_nodes(program, report.target)
     # These three passes only read the program, so they share one computation of its unreachable functions.
     with shared_dead_functions():
         refuse_undeclared_types(program, report.target)
@@ -515,6 +540,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    refuse_device_variables(program, report.target)
     fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
@@ -594,6 +620,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
+    check_texture_operands(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
     refuse_feedback_textures(program, report.target)
