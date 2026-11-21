@@ -193,20 +193,23 @@ def _entry_functions(ast):
 
 
 def _always_renamed_names(ast, codegen):
-    """Program-scope resources and every threadgroup variable.
+    """Program-scope resources.
 
-    Metal refused a function that declared one of these names whether or not it read the variable, so renaming
-    the declaration in every function changes no output Metal generated before.
+    Metal refused a function that declared one of these names whether or not it read the resource, so renaming
+    the declaration in every function changes no output Metal generated before. Threadgroup memory is forwarded
+    only to the functions that reach it, so a function that does not keeps its declarations' names.
     """
-    names = set(codegen.collect_global_resource_names(ast))
-    variables = list(getattr(ast, "global_variables", None) or [])
+    return set(codegen.collect_global_resource_names(ast))
+
+
+def _block_member_names(ast):
+    """Constant-buffer member names that no other program or stage storage has."""
+    names = set(_cbuffer_member_names(getattr(ast, "cbuffers", None)))
+    others = set(_storage_variable_names(getattr(ast, "global_variables", None)))
     for stage in program_stages(ast):
-        variables.extend(getattr(stage, "local_variables", None) or [])
-    for node in variables:
-        name = getattr(node, "name", None)
-        if isinstance(name, str) and codegen.is_program_scope_groupshared_global(node):
-            names.add(name)
-    return names
+        names.update(_cbuffer_member_names(getattr(stage, "local_cbuffers", None)))
+        others.update(_storage_variable_names(getattr(stage, "local_variables", None)))
+    return names - others
 
 
 def _rename_targets(ast, functions, names, is_resource_type, always_renamed):
@@ -214,7 +217,8 @@ def _rename_targets(ast, functions, names, is_resource_type, always_renamed):
 
     A function renames its declarations of a name it reaches (it reads the program-scope variable, or calls a
     function that does), since Metal appends that variable to its parameters under the same name. An entry
-    function renames every declaration of a storage name: Metal declares the storage among its parameters. Every
+    function renames every declaration of a storage name that Metal declares among its parameters; a
+    constant-buffer member is read through its block parameter, so an entry local of that name keeps it. Every
     function renames the names of program-scope resources, which Metal refused to generate before.
     """
     walk = _ScopedWalk(names, is_resource_type)
@@ -238,11 +242,12 @@ def _rename_targets(ast, functions, names, is_resource_type, always_renamed):
                     reached[id(function)] |= reached[id(target)]
             changed = changed or len(reached[id(function)]) != before
     entries = {id(function) for function in _entry_functions(ast)}
+    entry_names = names - _block_member_names(ast)
     targets = {}
     for function in functions:
         wanted = reached[id(function)] | always_renamed
         if id(function) in entries:
-            wanted = names
+            wanted = entry_names | always_renamed
         found = declared[id(function)] & wanted
         if found:
             targets[id(function)] = frozenset(found)
