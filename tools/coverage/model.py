@@ -49,6 +49,8 @@ LANGUAGES = (
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The direction of a translation matrix result, which translates a native probe into another language (:mod:`.pairs`).
+PAIR = "pair"
 # The language an imported probe is emitted to and validated in when CrossTL has no generator for its own: HLSL, the
 # target whose output row covers the most of what OpenCL C kernels call.
 ROUND_TRIPS = {"opencl": "hlsl"}
@@ -316,6 +318,9 @@ class Result:
     sources: tuple[str, str] = field(default=(), compare=False, repr=False)
     # The runtime :mod:`.execution` ran both on, when it did.
     runtime: str = ""
+    # The language a cell of the translation matrix (:mod:`.pairs`) translates the feature's native probe into; empty
+    # for a row's result, whose translation is in the feature's own language.
+    into: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

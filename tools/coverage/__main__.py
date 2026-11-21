@@ -5,11 +5,16 @@ rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publish
 ``issues`` reconciles the tracking and bug issues with a report, and ``compare`` shows how a pull request's report
 differs from the published one. ``tools`` lists the reference tool of every language and whether it is installed, so
 you can tell before a local run which rows it will report as untested.
+
+``run --pairs REPORT`` measures the translation matrix (:mod:`.pairs`) instead of rows: the cells that the rows of
+``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
+rows.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 import sys
 from pathlib import Path
@@ -21,6 +26,7 @@ from . import (
     github,
     issues,
     lowering,
+    pairs,
     publish,
     report,
     runner,
@@ -43,6 +49,13 @@ def _parser() -> argparse.ArgumentParser:
         "--backend", action="append", choices=LANGUAGES, help="repeatable; default: all"
     )
     run.add_argument("--direction", choices=DIRECTIONS, help="default: both")
+    run.add_argument(
+        "--pairs",
+        type=Path,
+        metavar="REPORT",
+        help="measure the translation matrix cells into each --backend instead of rows; REPORT, a merged report of "
+        "every row, defines the cells",
+    )
     run.add_argument(
         "--feature",
         action="append",
@@ -139,7 +152,57 @@ def _lowering_gaps(language: str) -> list[str]:
     return [tool for tool in tools if not validators.command(tool)]
 
 
+def _run_pairs(args: argparse.Namespace) -> int:
+    """``run --pairs``: measure the cells of the translation matrix into each requested backend."""
+    if args.direction:
+        print("error: --pairs measures cells, which have no direction", file=sys.stderr)
+        return 2
+    try:
+        rows = report.load(args.pairs)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"error: cannot read {args.pairs}: {error}", file=sys.stderr)
+        return 2
+    targets = [t for t in args.backend or LANGUAGES if t in runner.OUTPUT_BACKENDS]
+    missing = [
+        f"{target} ({validators.TOOLS[target]})"
+        for target in targets
+        if not validators.available(target)
+    ]
+    if args.strict and missing:
+        print("error: missing tools for " + "; ".join(missing), file=sys.stderr)
+        return 2
+    catalog = functools.cache(
+        lambda language: features.load(language, offline=args.offline)
+    )
+    measured = pairs.plan(rows["backends"], targets, catalog, args.feature or ())
+    results = runner.run(measured.jobs, args.jobs or None, keep=args.keep)
+    results += measured.results
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} translations on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results)
+        if args.strict and idle:
+            print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
+            return 2
+    data = report.build(
+        results, targets, [], execute=args.execute, cells=measured.cells
+    )
+    report.write(data, args.output)
+    print(report.summary(data))
+    if args.feature:
+        for result in results:
+            detail = f": {result.detail}" if result.detail else ""
+            print(
+                f"{result.feature.language} to {result.into} {result.feature.name} {result.outcome}{detail}"
+            )
+    print(f"wrote {args.output}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.pairs:
+        return _run_pairs(args)
     languages = args.backend or LANGUAGES
     directions = [args.direction] if args.direction else list(DIRECTIONS)
     missing = [
