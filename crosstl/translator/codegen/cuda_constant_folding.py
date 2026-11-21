@@ -68,11 +68,15 @@ _SCALAR_KINDS = {
 _VECTOR_PREFIXES = {"": "float", "d": "double", "i": "int", "u": "uint", "b": "bool"}
 _CROSSGL_VECTOR = re.compile(r"([diub]?)vec([2-4])")
 _C_VECTOR = re.compile(r"(float|double|int|uint|bool)([2-4])")
+_CROSSGL_MATRIX = re.compile(r"(d?)mat([2-4])(?:x([2-4]))?")
+# The generators name a matrix type <scalar><columns>x<rows> (cuda_stage_checks, hip_stage_checks).
+_C_MATRIX = re.compile(r"(float|double)([2-4])x([2-4])")
 _ARRAY = re.compile(r"(.+?)\[(\d*)\]")
 _SWIZZLE_SETS = ("xyzw", "rgba", "stpq")
 # Functional casts that are constant expressions, the only calls a static initializer may contain.
 _CONSTANT_CALLEES = frozenset({"float", "double", "int", "unsigned", "bool"})
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_NAME = re.compile(r"(?<![\w.])([A-Za-z_]\w*)\b(?!\s*\()")
 _INT_MIN, _INT_MAX = -(2**31), 2**31 - 1
 _FLOAT_MAX = struct.unpack("<f", b"\xff\xff\x7f\x7f")[0]
 
@@ -98,6 +102,16 @@ class _Array:
     elements: tuple
 
 
+@dataclass(frozen=True)
+class _Matrix:
+    """A matrix value; ``values`` holds its components column by column."""
+
+    kind: str
+    columns: int
+    rows: int
+    values: tuple
+
+
 def _type_shape(type_value):
     """``("scalar", kind)``, ``("vector", kind, n)``, ``("array", element, size)`` or None."""
     if type_value is None:
@@ -107,6 +121,11 @@ def _type_shape(type_value):
         if name == "PrimitiveType":
             kind = _SCALAR_KINDS.get(type_value.name)
             return ("scalar", kind) if kind else None
+        if name == "MatrixType":
+            element = _type_shape(type_value.element_type)
+            if element is None or element[1] not in ("float", "double"):
+                return None
+            return ("matrix", element[1], int(type_value.cols), int(type_value.rows))
         if name == "VectorType":
             element = _type_shape(type_value.element_type)
             if element is None or element[0] != "scalar":
@@ -135,6 +154,14 @@ def _type_shape(type_value):
     vector = _C_VECTOR.fullmatch(text)
     if vector:
         return ("vector", vector.group(1), int(vector.group(2)))
+    matrix = _CROSSGL_MATRIX.fullmatch(text)
+    if matrix:
+        columns = int(matrix.group(2))
+        rows = int(matrix.group(3) or columns)
+        return ("matrix", "double" if matrix.group(1) else "float", columns, rows)
+    matrix = _C_MATRIX.fullmatch(text)
+    if matrix:
+        return ("matrix", matrix.group(1), int(matrix.group(2)), int(matrix.group(3)))
     return None
 
 
@@ -174,6 +201,13 @@ def _convert(value, kind):
         return _Vector(
             kind,
             tuple(_convert(_Scalar(value.kind, v), kind).value for v in value.values),
+        )
+    if isinstance(value, _Matrix) and kind in ("float", "double"):
+        return _Matrix(
+            kind,
+            value.columns,
+            value.rows,
+            tuple(_round(kind, v) for v in value.values),
         )
     raise _NotConstant
 
@@ -231,7 +265,7 @@ _COMPARISONS = {
 
 
 def _binary(operator, left, right):
-    if isinstance(left, _Array) or isinstance(right, _Array):
+    if isinstance(left, (_Array, _Matrix)) or isinstance(right, (_Array, _Matrix)):
         raise _NotConstant
     if operator in ("<<", ">>"):
         # A shift has the type of its promoted left operand (C++ [expr.shift]), not the common type.
@@ -302,7 +336,40 @@ def _components(value):
     raise _NotConstant
 
 
+def _construct_matrix(shape, arguments):
+    """A GLSL matrix constructor: a diagonal, a matrix resized with identity, or components column by column."""
+    _, kind, columns, rows = shape
+    if len(arguments) == 1 and isinstance(arguments[0], _Matrix):
+        source = arguments[0]
+        values = []
+        for column in range(columns):
+            for row in range(rows):
+                if column < source.columns and row < source.rows:
+                    values.append(source.values[column * source.rows + row])
+                else:
+                    values.append(1.0 if column == row else 0.0)
+        return _Matrix(kind, columns, rows, tuple(_round(kind, v) for v in values))
+    if len(arguments) == 1 and isinstance(arguments[0], _Scalar):
+        diagonal = _convert(arguments[0], kind).value
+        return _Matrix(
+            kind,
+            columns,
+            rows,
+            tuple(
+                diagonal if column == row else _round(kind, 0.0)
+                for column in range(columns)
+                for row in range(rows)
+            ),
+        )
+    parts = [part for argument in arguments for part in _components(argument)]
+    if len(parts) != columns * rows:
+        raise _NotConstant
+    return _Matrix(kind, columns, rows, tuple(_convert(p, kind).value for p in parts))
+
+
 def _construct(shape, arguments):
+    if shape[0] == "matrix":
+        return _construct_matrix(shape, arguments)
     if shape[0] == "scalar":
         if len(arguments) != 1 or not isinstance(arguments[0], _Scalar):
             raise _NotConstant
@@ -333,6 +400,11 @@ def _swizzle(value, member):
 def _index(value, index):
     if not isinstance(index, _Scalar) or index.kind not in ("int", "uint"):
         raise _NotConstant
+    if isinstance(value, _Matrix):
+        if not 0 <= index.value < value.columns:
+            raise _NotConstant
+        start = index.value * value.rows
+        return _Vector(value.kind, value.values[start : start + value.rows])
     items = (
         value.elements
         if isinstance(value, _Array)
@@ -403,6 +475,10 @@ def _conform(value, shape):
         if not isinstance(value, _Vector) or len(value.values) != shape[2]:
             raise _NotConstant
         return _convert(value, shape[1])
+    if shape[0] == "matrix":
+        if not isinstance(value, _Matrix) or (value.columns, value.rows) != shape[2:]:
+            raise _NotConstant
+        return _convert(value, shape[1])
     _, element, size = shape
     if not isinstance(value, _Array) or (
         size is not None and len(value.elements) > size
@@ -412,9 +488,18 @@ def _conform(value, shape):
 
 
 def _float_literal(value):
+    """The shortest decimal float literal that reads back as ``value``.
+
+    A shorter decimal can round to infinity as a float (FLT_MAX at 4 digits is 3.403e+38), which C++ makes
+    ill-formed, so such a candidate is skipped. 9 digits always read back exactly.
+    """
     for digits in range(1, 18):
         text = f"{value:.{digits}g}"
-        if struct.unpack("<f", struct.pack("<f", float(text)))[0] == value:
+        try:
+            narrowed = struct.unpack("<f", struct.pack("<f", float(text)))[0]
+        except OverflowError:
+            continue
+        if narrowed == value:
             break
     if not any(mark in text for mark in ".en"):
         text += ".0"
@@ -440,6 +525,10 @@ def _literal(value):
         return (
             "{" + ", ".join(_scalar_literal(value.kind, v) for v in value.values) + "}"
         )
+    if isinstance(value, _Matrix):
+        # The component constructor of the matrix helpers is constexpr, so this initializer is static.
+        components = ", ".join(_scalar_literal(value.kind, v) for v in value.values)
+        return f"{value.kind}{value.columns}x{value.rows}({components})"
     return "{" + ", ".join(_literal(element) for element in value.elements) + "}"
 
 
@@ -455,13 +544,32 @@ def _uses_vector_kind(shape, kind):
     return False
 
 
+def _reads_device_constant(initializer, constants):
+    """Whether ``initializer`` reads a vector, array or matrix constant, which lives in device memory."""
+    return any(
+        name in constants and not isinstance(constants[name], _Scalar)
+        for name in _NAME.findall(initializer)
+    )
+
+
+def _refuse_dynamic_initializer(name, initializer, refusal, requirement=None):
+    requirement = requirement or "a static initializer in device memory"
+    raise refusal(
+        f"File-scope constant '{name}' needs {requirement}, "
+        f"and CrossTL cannot evaluate '{initializer}' while generating code"
+    )
+
+
 def device_constant_declaration(codegen, name, var_type, value, emitted, refusal):
     """The file-scope declaration of the constant ``name``, placed where device code reads it.
 
     ``var_type`` is the CrossGL type, ``value`` the CrossGL initializer and ``emitted`` the generator's own
-    ``const T name = ...`` declaration. A scalar, matrix or structure keeps ``emitted`` as
-    :func:`.gpu_device_globals.constant_in_device_memory` places it; a scalar is also remembered so that later
-    vector and array initializers can fold it. ``refusal`` is the generator's refusal class.
+    ``const T name = ...`` declaration. A scalar stays a host constant, which device code may read when its
+    initializer is a constant expression: one that reads a vector, array or matrix constant gets the folded
+    literal, and one that calls a function and does not fold is refused. A matrix, vector or array is placed in
+    device memory with its folded value, and refused when it does not fold and has no static initializer. A
+    structure keeps ``emitted`` as :func:`.gpu_device_globals.constant_in_device_memory` places it. Every folded
+    value is remembered so that later initializers can fold it. ``refusal`` is the generator's refusal class.
     """
     constants = getattr(codegen, "folded_constants", None)
     if constants is None:
@@ -473,20 +581,33 @@ def device_constant_declaration(codegen, name, var_type, value, emitted, refusal
             folded = _conform(_Folder(constants).fold(value), shape)
         except _NotConstant:
             folded = None
+    head, _, initializer = emitted.partition(" = ")
+    dynamic = _has_dynamic_call(initializer) or _reads_device_constant(
+        initializer, constants
+    )
     constants.pop(name, None)
     if folded is not None:
         constants[name] = folded
     placed = constant_in_device_memory(emitted)
-    if shape is None or shape[0] == "scalar" or value is None:
+    if shape is None or value is None:
         return placed
-    head, _, initializer = emitted.partition(" = ")
+    if shape[0] == "scalar":
+        if dynamic and folded is None:
+            _refuse_dynamic_initializer(
+                name,
+                initializer,
+                refusal,
+                "a constant initializer to be read in device code",
+            )
+        return f"{head} = {_literal(folded)}" if dynamic else placed
+    if shape[0] == "matrix":
+        if folded is None:
+            _refuse_dynamic_initializer(name, initializer, refusal)
+        return in_device_memory(f"{head} = {_literal(folded)}")
     if folded is not None and not _uses_vector_kind(shape, "bool"):
         return in_device_memory(f"{head} = {_literal(folded)}")
     if not names_execution_space(placed) or _has_dynamic_call(initializer):
-        raise refusal(
-            f"File-scope constant '{name}' needs a static initializer in device memory, "
-            f"and CrossTL cannot evaluate '{initializer}' while generating code"
-        )
+        _refuse_dynamic_initializer(name, initializer, refusal)
     return placed
 
 
