@@ -162,7 +162,10 @@ def test_glsl_reads_and_writes_name_the_lanes(tmp_path):
         in generated
     )
     # vec3 writes its three words and leaves the fourth, its padding, as it was.
-    assert "r.CrossGLUnionStorage[2] = floatBitsToUint(crossgl_union_value2.z);" in generated
+    assert (
+        "r.CrossGLUnionStorage[2] = floatBitsToUint(crossgl_union_value2.z);"
+        in generated
+    )
     assert "r.CrossGLUnionStorage[3]" not in generated
 
 
@@ -287,7 +290,9 @@ def test_a_member_name_another_structure_shares_needs_a_known_object_type(tmp_pa
     with pytest.raises(UnionWordViewError, match="cannot be determined"):
         crosstl.translate(str(path), backend="opengl")
     # With every object type known, only the union's member is split.
-    path.write_text(source.replace("outp[1] = float(make().dm.x);", ""), encoding="utf-8")
+    path.write_text(
+        source.replace("outp[1] = float(make().dm.x);", ""), encoding="utf-8"
+    )
     generated = crosstl.translate(str(path), backend="opengl", format_output=False)
     assert "plain.dm.x" in generated
     assert "crossgl_union_get_float16_lane_w1(h.CrossGLUnionStorage, 1)" in generated

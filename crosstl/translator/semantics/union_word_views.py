@@ -195,7 +195,9 @@ class _Unions:
             return None
         nested = self.structs.get(_type_name(member.member_type) or "")
         if nested is not None:
-            return self._plan_struct(union, member, nested, offset, member_size, alignment, size, names)
+            return self._plan_struct(
+                union, member, nested, offset, member_size, alignment, size, names
+            )
         shape = _value_shape(member.member_type)
         if shape is None:
             return None
@@ -218,7 +220,9 @@ class _Unions:
             plan.elements[lane] = (spelling, offset + lane * width)
         return self._name_views(plan, size, names)
 
-    def _plan_struct(self, union, member, nested, offset, member_size, alignment, size, names):
+    def _plan_struct(
+        self, union, member, nested, offset, member_size, alignment, size, names
+    ):
         if _attribute(nested, "union_layout") is not None:
             return None
         plan = _Plan(union, member.name, "struct", nested.name)
@@ -232,11 +236,19 @@ class _Unions:
                 return None
             width = bits // 8
             cursor = -(-cursor // width) * width
-            plan.elements[nested_member.name] = (_ELEMENTS[(kind, bits)][0], offset + cursor)
+            plan.elements[nested_member.name] = (
+                _ELEMENTS[(kind, bits)][0],
+                offset + cursor,
+            )
             cursor += width
             widest = max(widest, width)
         total = -(-cursor // widest) * widest
-        if not plan.elements or total != member_size or widest != alignment or offset % widest:
+        if (
+            not plan.elements
+            or total != member_size
+            or widest != alignment
+            or offset % widest
+        ):
             return None
         return self._name_views(plan, size, names)
 
@@ -257,7 +269,11 @@ class _Unions:
             names.add(candidate)
             views[spelling] = candidate
         for key, (spelling, offset) in list(plan.elements.items()):
-            width = 4 if spelling in ("float", "int", "uint") else int(re.sub(r"\D", "", spelling)) // 8
+            width = (
+                4
+                if spelling in ("float", "int", "uint")
+                else int(re.sub(r"\D", "", spelling)) // 8
+            )
             index = None if width == 4 and size == 4 else offset // width
             plan.elements[key] = _Element(views[spelling], index, spelling)
         return plan
@@ -270,9 +286,11 @@ class _Unions:
             if element.view in seen:
                 continue
             seen.add(element.view)
-            width = 4 if element.spelling in ("float", "int", "uint") else int(
-                re.sub(r"\D", "", element.spelling)
-            ) // 8
+            width = (
+                4
+                if element.spelling in ("float", "int", "uint")
+                else int(re.sub(r"\D", "", element.spelling)) // 8
+            )
             view_type = A.NamedType(element.spelling)
             if element.index is not None:
                 view_type = A.ArrayType(view_type, _literal(size // width))
@@ -398,9 +416,12 @@ class _Rewriter(ScopedWalker):
         if len(elements) == 1:
             return self._element(base, elements[0])
         if not _side_effect_free(base):
-            self._refuse(plan, "a whole read evaluates the containing expression more than once")
+            self._refuse(
+                plan, "a whole read evaluates the containing expression more than once"
+            )
         return A.FunctionCallNode(
-            A.IdentifierNode(spelling), [self._element(base, element) for element in elements]
+            A.IdentifierNode(spelling),
+            [self._element(base, element) for element in elements],
         )
 
     def _components(self, plan, text):
@@ -419,7 +440,11 @@ class _Rewriter(ScopedWalker):
             operand = (
                 expr.object_expr
                 if isinstance(expr, A.MemberAccessNode)
-                else expr.vector_expr if isinstance(expr, A.SwizzleNode) else expr.array_expr
+                else (
+                    expr.vector_expr
+                    if isinstance(expr, A.SwizzleNode)
+                    else expr.array_expr
+                )
             )
             plan = self._plan(operand)
             if plan is not None:
@@ -435,9 +460,14 @@ class _Rewriter(ScopedWalker):
         base = inner.object_expr
         if outer is None:
             if role != "value":
-                self._refuse(plan, f"a whole-member {role} needs one write per element in statement position")
+                self._refuse(
+                    plan,
+                    f"a whole-member {role} needs one write per element in statement position",
+                )
             self.changed += 1
-            return self._construct(plan, base, plan.constructor, list(plan.elements.values()))
+            return self._construct(
+                plan, base, plan.constructor, list(plan.elements.values())
+            )
         if isinstance(outer, A.ArrayAccessNode):
             self._walk_slot(outer, "index_expr", None)
             first = plan.elements[0]
@@ -448,26 +478,38 @@ class _Rewriter(ScopedWalker):
             self.generated.add(id(view))
             self.changed += 1
             return self._checked(plan, role, A.ArrayAccessNode(view, index))
-        text = outer.member if isinstance(outer, A.MemberAccessNode) else outer.components
+        text = (
+            outer.member if isinstance(outer, A.MemberAccessNode) else outer.components
+        )
         if plan.shape == "struct":
             element = plan.elements.get(text)
             if element is None:
-                self._refuse(plan, f"field '{text}' is not a field of '{plan.constructor}'")
+                self._refuse(
+                    plan, f"field '{text}' is not a field of '{plan.constructor}'"
+                )
             self.changed += 1
             return self._checked(plan, role, self._element(base, element))
         indices = self._components(plan, text) if plan.shape == "vector" else None
         if indices is None:
-            self._refuse(plan, f"'.{text}' does not select components of '{plan.constructor}'")
+            self._refuse(
+                plan, f"'.{text}' does not select components of '{plan.constructor}'"
+            )
         if len(indices) > 1 and role != "value":
-            self._refuse(plan, f"a {role} of the swizzle '.{text}' is not a single element")
+            self._refuse(
+                plan, f"a {role} of the swizzle '.{text}' is not a single element"
+            )
         self.changed += 1
         elements = [plan.elements[index] for index in indices]
         spelling = f"{plan.vector_prefix}{len(elements)}"
-        return self._checked(plan, role, self._construct(plan, base, spelling, elements))
+        return self._checked(
+            plan, role, self._construct(plan, base, spelling, elements)
+        )
 
     def _checked(self, plan, role, replacement):
         if role in ("address", "update"):
-            self._refuse(plan, f"an element of the member has no {role} in word storage")
+            self._refuse(
+                plan, f"an element of the member has no {role} in word storage"
+            )
         return replacement
 
     @staticmethod
@@ -496,7 +538,9 @@ class _Rewriter(ScopedWalker):
         self._walk_slot(assignment, "value", None)
         base, value = inner.object_expr, assignment.value
         if not _side_effect_free(base):
-            self._refuse(plan, "a whole write evaluates the containing expression more than once")
+            self._refuse(
+                plan, "a whole write evaluates the containing expression more than once"
+            )
         statements = []
         if not isinstance(value, (A.IdentifierNode, A.LiteralNode)):
             self.temporaries += 1
@@ -515,7 +559,9 @@ class _Rewriter(ScopedWalker):
                 component = key if plan.shape == "struct" else "xyzw"[key]
                 source = A.MemberAccessNode(clone(value), component)
             target = self._element(base, element)
-            statements.append(A.ExpressionStatementNode(A.AssignmentNode(target, source, "=")))
+            statements.append(
+                A.ExpressionStatementNode(A.AssignmentNode(target, source, "="))
+            )
         self.changed += 1
         return A.BlockNode(statements)
 
@@ -529,7 +575,10 @@ class _Rewriter(ScopedWalker):
             if node.arguments:
                 for (union, _member), plan in self.unions.plans.items():
                     if union == callee and plan.first:
-                        self._refuse(plan, "a union initializer initializes the first member, which is split")
+                        self._refuse(
+                            plan,
+                            "a union initializer initializes the first member, which is split",
+                        )
 
     def _walk_slot(self, parent, field_name, key):
         child = get_child(parent, field_name, key)
@@ -563,7 +612,9 @@ class _Rewriter(ScopedWalker):
 
 def split_union_word_views(program, target) -> int:
     """Split the union members word storage cannot carry into lane views for ``target``; returns the rewrites."""
-    if str(target or "").lower() not in _TARGETS or not isinstance(program, A.ShaderNode):
+    if str(target or "").lower() not in _TARGETS or not isinstance(
+        program, A.ShaderNode
+    ):
         return 0
     if not any(
         _attribute(node, "union_layout") is not None

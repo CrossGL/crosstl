@@ -256,7 +256,12 @@ CASES = {
     # float3 covers the first three words of its 16 bytes; the fourth is padding.
     "padded_vector": (
         "Record value; value.words = uint4(1u, 2u, 3u, 0x40800000u); uint padding = uint(value.data.w); value.center = float3(1.0f, 2.0f, 3.0f);",
-        ["value.words.x", "value.words.z", "uint(value.center.z + value.center[1])", "padding"],
+        [
+            "value.words.x",
+            "value.words.z",
+            "uint(value.center.z + value.center[1])",
+            "padding",
+        ],
         [0x3F800000, 0x40400000, 5, 4],
     ),
     "partial_scalars": (
