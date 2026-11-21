@@ -2,8 +2,9 @@
 
 A GLSL entry is ``void main()``: a value the CrossGL entry returns reaches the pipeline only through the stage
 outputs its return type maps to. Where none does, the generator wrote the value as an expression statement
-before ``return;``, so the result was evaluated and discarded. A ray intersection entry returning
-``accept_intersection`` and ``distance`` then never reported a hit, and glslang accepted the shader.
+before ``return;``, so the result was evaluated and discarded, and glslang accepted the shader. A ray
+intersection entry returning ``accept_intersection`` and ``distance`` reports its hit with
+``reportIntersectionEXT`` and is not refused.
 
 A vertex entry that returns a call to a helper declared in its stage block keeps its outputs, and the output
 structure the helper returns is declared: the check for structure uses outside the entries read only the
@@ -131,13 +132,13 @@ def _translate(tmp_path, source, backend="opengl"):
     return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
-def _glslang(tmp_path, code, stage):
+def _glslang(tmp_path, code, stage, *options):
     if shutil.which("glslangValidator") is None:
         return
     path = tmp_path / f"out.{stage}"
     path.write_text(code, encoding="utf-8")
     result = subprocess.run(
-        ["glslangValidator", "-S", stage, str(path)],
+        ["glslangValidator", *options, "-S", stage, str(path)],
         capture_output=True,
         text=True,
         check=False,
@@ -148,12 +149,10 @@ def _glslang(tmp_path, code, stage):
 @pytest.mark.parametrize(
     ("source", "stage", "return_type"),
     [
-        (INTERSECTION_RESULT, "ray_intersection", "BoxResult"),
-        (INTERSECTION_HELPER_RESULT, "ray_intersection", "BoxResult"),
         (CLOSEST_HIT_VALUE, "ray_closest_hit", "float"),
         (COMPUTE_VALUE, "compute", "float"),
     ],
-    ids=["intersection-local", "intersection-call", "closest-hit", "compute"],
+    ids=["closest-hit", "compute"],
 )
 def test_entry_return_value_without_output_is_refused(
     tmp_path, source, stage, return_type
@@ -164,6 +163,19 @@ def test_entry_return_value_without_output_is_refused(
     message = str(refused.value)
     assert f"OpenGL {stage} entry point returns '{return_type}'" in message
     assert "no stage output that receives the value" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [INTERSECTION_RESULT, INTERSECTION_HELPER_RESULT],
+    ids=["intersection-local", "intersection-call"],
+)
+def test_intersection_entry_result_reports_its_hit(tmp_path, source):
+    glsl = _translate(tmp_path, source)
+
+    assert "reportIntersectionEXT(intersection_result.distance, 0u);" in glsl
+    assert "if (intersection_result.accept)" in glsl
+    _glslang(tmp_path, glsl, "rint", "--target-env", "vulkan1.2")
 
 
 @pytest.mark.parametrize("backend", ["opengl", "webgl"])

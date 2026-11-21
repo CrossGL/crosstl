@@ -168,9 +168,9 @@ def refuse_unwritten_entry_return(codegen, value):
     """Refuse a value a stage entry returns when no GLSL output receives it.
 
     A GLSL entry is ``void main()``, so a value the CrossGL entry returns reaches the pipeline only through the
-    stage outputs its return type maps to. When none does (a ray intersection result whose members say whether
-    and where the ray hit, or an output structure with a member that has no GLSL output), the value would be
-    evaluated as a statement and discarded, and the shader would compute something other than the source.
+    stage outputs its return type maps to. When none does (a closest-hit or compute entry's value, or an output
+    structure with a member that has no GLSL output), the value would be evaluated as a statement and
+    discarded, and the shader would compute something other than the source.
     """
     return_type = codegen.current_stage_return_type
     if not return_type or return_type == "void":
