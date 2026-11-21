@@ -9812,11 +9812,12 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     shader_path = tmp_path / "layout_vertex.spvasm"
     shader_path.write_text(LAYOUT_SHADER, encoding="utf-8")
 
-    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output does not bind yet; it is
-    # refused rather than written as a default-valued static.
+    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output binds as a uniform struct.
+    # The vertex input imports as a module-scope '@input' variable that no shared pass gathers into the entry
+    # point's input, so the rust-gpu output refuses it rather than reading a zero-valued static.
     with pytest.raises(
         RustLoweringRefused,
-        match="constant buffers are not lowered to rust-gpu uniform blocks",
+        match="module-scope input 'position' is not passed to an entry point",
     ):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
@@ -9843,12 +9844,13 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     )
     assert "cbuffer PushConstants @push_constant {" in generated_cgl
     assert "pc.model" not in generated_cgl
-    # The push-constant block is a CrossGL constant buffer, which the rust-gpu output refuses for now.
-    with pytest.raises(
-        RustLoweringRefused,
-        match="constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        crosstl.translate(str(shader_path), backend="rust", format_output=False)
+    # The push-constant block is a CrossGL constant buffer, which the rust-gpu output binds as a push constant.
+    generated_rust = crosstl.translate(
+        str(shader_path), backend="rust", format_output=False
+    )
+    assert "#[spirv(push_constant)] push_constants: &PushConstants" in generated_rust
+    assert "pub model: Mat4," in generated_rust
+    assert "(push_constants.model * Vec4::new(1.0, 0.0, 0.0, 1.0))" in generated_rust
 
 
 def test_vulkan_bitwise_shift_precedence_codegen():

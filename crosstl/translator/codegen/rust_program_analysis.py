@@ -33,6 +33,7 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import prepend_array_dimension
+from .rust_gpu_constant_blocks import CONSTANT_BLOCK_FLAG
 from .rust_gpu_interface import (
     STORAGE_SLICE_KIND,
     UNIFORM_VALUE_KIND,
@@ -252,9 +253,14 @@ class RustProgramAnalysisMixin:
                 "kind": WORKGROUP_KIND,
             }
         if is_uniform_value(node, self.type_name_string(type_name)):
-            self.refuse_rust_gpu_layout(
-                node, self.type_name_string(type_name), STD140, element_of_slice=False
-            )
+            # A constant block's struct already places every member at its block offset.
+            if not getattr(node, CONSTANT_BLOCK_FLAG, None):
+                self.refuse_rust_gpu_layout(
+                    node,
+                    self.type_name_string(type_name),
+                    STD140,
+                    element_of_slice=False,
+                )
             return {"node": node, "type_name": type_name, "kind": UNIFORM_VALUE_KIND}
         return None
 
