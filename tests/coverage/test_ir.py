@@ -140,6 +140,41 @@ def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
     assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
 
 
+def test_a_metal_function_takes_the_id_of_the_glsl_function_spirv_cross_writes_it_for():
+    rotate = "OpGroupNonUniformRotateKHR"
+    entry = ir.build(
+        [
+            row(
+                "glsl",
+                (
+                    "subgroupAdd",
+                    "supported",
+                    {"semantic": "OpGroupNonUniformFAdd.Reduce"},
+                ),
+                ("subgroupRotate", "refused", {"semantic": rotate, "detail": "gap"}),
+            ),
+            row(
+                "metal",
+                ("simd_sum", "supported", {}),
+                ("simd_shuffle_rotate_down", "supported", {}),
+                ("simd_shuffle_and_fill_down", "supported", {}),
+            ),
+        ]
+    )
+    features = by_name(entry)
+    assert features["OpGroupNonUniformFAdd.Reduce"]["members"] == [
+        "glsl/subgroupAdd",
+        "metal/simd_sum",
+    ]
+    # The GLSL generator refuses the rotation, but CrossGL expresses it in Metal's spelling.
+    assert features[rotate]["outcome"] == "supported"
+    assert features[rotate]["via"] == ["metal"]
+    # SPIR-V has no instruction that fills the lanes a shuffle leaves, so that function stays Metal's own.
+    assert features["metal/simd_shuffle_and_fill_down"]["members"] == [
+        "metal/simd_shuffle_and_fill_down"
+    ]
+
+
 def test_functions_without_an_id_that_crossgl_spells_alike_are_one_feature():
     method = row("metal", ("vec.erf", "wrong", {"crossgl": "erf", "detail": "bad"}))
     method["features"][0]["category"] = "method"

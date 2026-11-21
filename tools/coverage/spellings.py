@@ -3,13 +3,16 @@
 A coverage probe calls a backend built-in through CrossGL. Most have the same name and arguments in both, so the
 probe uses the backend's spelling. The tables here list the exceptions: the functions CrossGL spells as GLSL does
 (:data:`RENAMES`), those it has under a name GLSL lacks (:data:`WAVES`, :data:`OTHER_NAMES`) and those it writes with
-other arguments (:data:`COUNTERPARTS`). The feature lists use them to give
-each feature its CrossGL spelling, and issue reconciliation uses them to recognise that spelling in a diagnostic.
+other arguments (:data:`COUNTERPARTS`). Rust's entries, for spirv-std and glam, are in :mod:`.rust_spellings`. The
+feature lists use the tables to give each feature its CrossGL spelling, and issue reconciliation uses them to
+recognise that spelling in a diagnostic.
 """
 
 from __future__ import annotations
 
 import re
+
+from . import rust_spellings
 
 # The CrossGL spelling of a function that reads a vector's element at an index, which CrossGL writes as ``v[i]``.
 SUBSCRIPT = "[]"
@@ -138,76 +141,7 @@ RENAMES = {
         "pop_count": "bitCount",
         "bit_reverse": "bitfieldReverse",
     },
-    # Rust names a function by its trait or type, as ``Float::ln`` or ``Vec3::lerp``; only the ones that compute what
-    # the GLSL function does are renamed.
-    "rust": {
-        "Float::ln": "log",
-        "Float::powf": "pow",
-        "Float::mul_add": "fma",
-        "Float::to_degrees": "degrees",
-        "Float::to_radians": "radians",
-        "Float::is_nan": "isnan",
-        "Float::is_infinite": "isinf",
-        "Float::atan2": "atan",
-        "Vec3::ln": "log",
-        "Vec3::powf": "pow",
-        "Vec3::mul_add": "fma",
-        "Vec3::lerp": "mix",
-        "Vec3::fract_gl": "fract",
-        "Vec3::is_nan_mask": "isnan",
-        "Vec3::cmpeq": "equal",
-        "Vec3::cmpne": "notEqual",
-        "Vec3::cmplt": "lessThan",
-        "Vec3::cmple": "lessThanEqual",
-        "Vec3::cmpgt": "greaterThan",
-        "Vec3::cmpge": "greaterThanEqual",
-        # spirv_std::float's packing functions are the GLSL.std.450 instructions of GLSL's packing functions.
-        "vec2_to_f16x2": "packHalf2x16",
-        "f16x2_to_vec2": "unpackHalf2x16",
-        "vec4_to_u8x4_snorm": "packSnorm4x8",
-        "vec4_to_u8x4_unorm": "packUnorm4x8",
-        "vec2_to_u16x2_snorm": "packSnorm2x16",
-        "vec2_to_u16x2_unorm": "packUnorm2x16",
-        "u8x4_to_vec4_snorm": "unpackSnorm4x8",
-        "u8x4_to_vec4_unorm": "unpackUnorm4x8",
-        "u16x2_to_vec2_snorm": "unpackSnorm2x16",
-        "u16x2_to_vec2_unorm": "unpackUnorm2x16",
-        "Derivative::dfdx": "dFdx",
-        "Derivative::dfdy": "dFdy",
-        "Derivative::fwidth": "fwidth",
-        "Derivative::dfdx_fine": "dFdxFine",
-        "Derivative::dfdy_fine": "dFdyFine",
-        "Derivative::fwidth_fine": "fwidthFine",
-        "Derivative::dfdx_coarse": "dFdxCoarse",
-        "Derivative::dfdy_coarse": "dFdyCoarse",
-        "Derivative::fwidth_coarse": "fwidthCoarse",
-        "workgroup_memory_barrier": "memoryBarrierShared",
-        "workgroup_memory_barrier_with_group_sync": "barrier",
-        "device_memory_barrier": "memoryBarrierBuffer",
-        "all_memory_barrier": "memoryBarrier",
-        # spirv-std computes these with GLSL.std.450 SMax, SMin, UMax and UMin; CrossGL's operand types select them.
-        "signed_max": "max",
-        "signed_min": "min",
-        "unsigned_max": "max",
-        "unsigned_min": "min",
-        "atomic_i_add": "atomicAdd",
-        "atomic_f_add": "atomicAdd",
-        "atomic_s_min": "atomicMin",
-        "atomic_u_min": "atomicMin",
-        "atomic_f_min": "atomicMin",
-        "atomic_s_max": "atomicMax",
-        "atomic_u_max": "atomicMax",
-        "atomic_f_max": "atomicMax",
-        "atomic_and": "atomicAnd",
-        "atomic_or": "atomicOr",
-        "atomic_xor": "atomicXor",
-        "atomic_exchange": "atomicExchange",
-        "subgroup_all": "allInvocations",
-        "subgroup_any": "anyInvocation",
-        "subgroup_all_equal": "allInvocationsEqual",
-        "emit_vertex": "EmitVertex",
-        "end_primitive": "EndPrimitive",
-    },
+    "rust": rust_spellings.RENAMES,
 }
 # HIP spells its device functions the way CUDA does. Slang spells its built-in functions the way HLSL does, and adds
 # the coarse and fine fwidth that HLSL lacks, centroid interpolation under its own name, and unpacking functions that
@@ -225,66 +159,8 @@ RENAMES["slang"] = RENAMES["hlsl"] | {
 }
 
 # Subgroup functions, which CrossGL spells with the HLSL wave names (``crosstl/translator/wave_operations.py``) and
-# the GLSL feature list, built from the core GLSL specification, lacks. rust-gpu names one function for each operation
-# and operand kind, as ``subgroup_i_add`` and ``subgroup_f_add``; in CrossGL the operand's type selects the
-# instruction, and ``bool`` operands make the bitwise operations logical. Each operator maps to its wave name and the
-# operand kinds rust-gpu spells it for, with their types.
-_INTEGER = {"i_": "uint", "f_": "float"}
-_ORDERED = {"s_": "int", "u_": "uint", "f_": "float"}
-_BITWISE = {"": "uint", "logical_": "bool"}
-_RUST_SUBGROUP_OPERATORS = {
-    "add": ("Sum", _INTEGER),
-    "mul": ("Product", _INTEGER),
-    "min": ("Min", _ORDERED),
-    "max": ("Max", _ORDERED),
-    "and": ("BitAnd", _BITWISE),
-    "or": ("BitOr", _BITWISE),
-    "xor": ("BitXor", _BITWISE),
-}
-WAVES = {
-    "rust": (
-        {
-            f"subgroup_{scan}{kind}{operator}": prefix + wave
-            for operator, (wave, kinds) in _RUST_SUBGROUP_OPERATORS.items()
-            for kind in kinds
-            for scan, prefix in (
-                ("", "WaveActive"),
-                ("inclusive_", "WavePrefixInclusive"),
-                (
-                    "exclusive_",
-                    (
-                        "WavePrefix"
-                        if operator in ("add", "mul")
-                        else "WavePrefixExclusive"
-                    ),
-                ),
-            )
-        }
-        | {
-            "subgroup_elect": "WaveIsFirstLane",
-            "subgroup_broadcast_first": "WaveReadLaneFirst",
-            "subgroup_shuffle": "WaveReadLaneAt",
-            "subgroup_shuffle_xor": "WaveShuffleXor",
-            "subgroup_shuffle_up": "WaveShuffleUp",
-            "subgroup_shuffle_down": "WaveShuffleDown",
-            "subgroup_quad_broadcast": "QuadReadLaneAt",
-            "subgroup_ballot": "WaveActiveBallot",
-            "subgroup_inverse_ballot": "WaveInverseBallot",
-            "subgroup_ballot_bit_extract": "WaveBallotBitExtract",
-            "subgroup_ballot_bit_count": "WaveBallotBitCount",
-            "subgroup_ballot_inclusive_bit_count": "WaveBallotInclusiveBitCount",
-            "subgroup_ballot_exclusive_bit_count": "WaveBallotExclusiveBitCount",
-            "subgroup_ballot_find_lsb": "WaveBallotFindLSB",
-            "subgroup_ballot_find_msb": "WaveBallotFindMSB",
-            # HLSL has no subgroup barriers, so CrossGL spells them as GL_KHR_shader_subgroup does.
-            "subgroup_barrier": "subgroupBarrier",
-            "subgroup_memory_barrier": "subgroupMemoryBarrier",
-            "subgroup_memory_barrier_buffer": "subgroupMemoryBarrierBuffer",
-            "subgroup_memory_barrier_image": "subgroupMemoryBarrierImage",
-            "subgroup_memory_barrier_shared": "subgroupMemoryBarrierShared",
-        }
-    )
-}
+# the GLSL feature list, built from the core GLSL specification, lacks.
+WAVES = {"rust": rust_spellings.WAVES}
 
 
 # Functions CrossGL writes with other arguments than the backend, as GLSL prototypes. WGSL's texture functions take a
@@ -322,7 +198,8 @@ COUNTERPARTS = {
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
     # Mojo returns both parts of frexp and modf as a tuple. std.atomic's static load and store are CrossGL's relaxed
-    # atomicLoad and atomicStore, and its max and min return nothing.
+    # atomicLoad and atomicStore, and its max and min return nothing. Atomic.fetch_sub takes an Atomic value, where
+    # CrossGL's atomicAdd, which it is of the negated operand (:data:`OTHER_NAMES`), takes the buffer element.
     "mojo": {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
@@ -330,36 +207,10 @@ COUNTERPARTS = {
         "Atomic.store": "void atomicStore(inout int, int)",
         "Atomic.max": "void atomicMax(inout int, int)",
         "Atomic.min": "void atomicMin(inout int, int)",
+        "Atomic.fetch_sub": "int atomicAdd(inout int, int)",
     },
-    # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
-    # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
-    # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
-    # with the vec3 constructor, which also builds a vector from an array's three elements. glam's
-    # extend, truncate and as_dvec3 are vector constructors in CrossGL, as in GLSL (GLSL 4.60 section 5.4.2): vec4
-    # appends an element, vec2 keeps the first two and dvec3 widens each one.
-    "rust": {
-        "Float::sin_cos": "void sincos(float, out float, out float)",
-        "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
-        "Vec3::to_vec3a": "vec3 vec3(vec3)",
-        "Vec3::from_array": "vec3 vec3(float, float, float)",
-        "Vec3::extend": "vec4 vec4(vec3, float)",
-        "Vec3::truncate": "vec2 vec2(vec3)",
-        "Vec3::as_dvec3": "dvec3 dvec3(vec3)",
-        "emit_stream_vertex": "void EmitStreamVertex(const int)",
-        "end_stream_primitive": "void EndStreamPrimitive(const int)",
-    },
+    "rust": rust_spellings.COUNTERPARTS,
 }
-# rust-gpu takes a clustered reduction's cluster size as a constant generic parameter, where CrossGL takes it as a
-# constant argument.
-COUNTERPARTS["rust"].update(
-    {
-        f"subgroup_clustered_{kind}{operator}": (
-            f"{scalar} WaveClustered{wave}({scalar}, const uint)"
-        )
-        for operator, (wave, kinds) in _RUST_SUBGROUP_OPERATORS.items()
-        for kind, scalar in kinds.items()
-    }
-)
 # Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a
 # pointer and returns whether it swapped, where CrossGL's atomicCompSwap, like GLSL's, takes it by value and returns
 # the old value; a ballot returns a simd_vote mask, where CrossGL's returns a uvec4.
@@ -430,11 +281,13 @@ COUNTERPARTS["metal"].update(
 # Metal functions that take memory flags, which CrossGL writes as the operations the Metal importer makes of them. The
 # probe passes mem_none and memory_order_relaxed. A simdgroup barrier with mem_none is CrossGL's execution-only
 # subgroupExecutionBarrier, and a fence keeps its flags, order and scope as CrossGL constants (:data:`OTHER_NAMES`).
-# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result.
+# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result, for
+# atomic_fetch_sub as for atomic_fetch_sub_explicit.
 COUNTERPARTS["metal"].update(
     {
         "simdgroup_barrier": "void subgroupExecutionBarrier()",
         "atomic_thread_fence": "void atomicThreadFence()",
+        "atomic_fetch_sub": "int atomicAdd(inout int, int)",
         "atomic_fetch_sub_explicit": "int atomicAdd(inout int, int)",
     }
 )
@@ -468,6 +321,10 @@ OTHER_NAMES = {
         "WaveGetNumWaves": "gl_NumSubgroups",
         "WaveGetWaveIndex": "gl_SubgroupID",
         "WorkgroupCount": "gl_NumWorkGroups",
+        # CUDA's threadIdx, blockIdx and blockDim, which Slang reads for CUDA only.
+        "cudaThreadIdx": "gl_LocalInvocationID",
+        "cudaBlockIdx": "gl_WorkGroupID",
+        "cudaBlockDim": "gl_WorkGroupSize",
         "HitTriangleVertexPosition": "gl_HitTriangleVertexPositionsEXT[{}]",
         # GL_EXT_shader_realtime_clock's device-scope clock, as two 32-bit halves.
         "getRealtimeClock": "clockRealtime2x32EXT",
@@ -550,12 +407,13 @@ OTHER_NAMES = {
         ),
     },
     # Metal's fence takes its scope as a third argument that defaults to thread_scope_device (MSL 4.1, "Fence
-    # Functions"). Its atomic_fetch_sub_explicit is an atomicAdd of the negated operand, as the Metal importer
-    # writes it.
+    # Functions"). Its atomic_fetch_sub and atomic_fetch_sub_explicit are an atomicAdd of the negated operand, as the
+    # Metal importer writes them.
     "metal": {
         "atomic_thread_fence": (
             "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device)"
         ),
+        "atomic_fetch_sub": "atomicAdd({0}, -({1}))",
         "atomic_fetch_sub_explicit": "atomicAdd({0}, -({1}))",
     },
     # CUDA's fdivide and, without fast math, fdividef return a / b (__clang_cuda_math.h).
@@ -616,10 +474,13 @@ OTHER_NAMES = {
         "warp.match_any": "__match_any_sync(4294967295u, {0})",
         "syncwarp": "subgroupBarrier",
         # max.gpu's lane_id is the invocation's index in its warp, and warp_id divides the x index in the block by the
-        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced.
+        # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced, and
+        # Atomic.fetch_sub, which CrossGL has no operation of its own for, is an atomicAdd of the negated operand,
+        # which wraps to the same result.
         "lane_id": "int64(gl_SubgroupInvocationID)",
         "warp_id": "int64(gl_LocalInvocationID.x / gl_SubgroupSize)",
         "Atomic.fetch_add": "atomicAdd",
+        "Atomic.fetch_sub": "atomicAdd({0}, -({1}))",
         # std.atomic's fence is sequentially consistent by default (atomic.mojo, _DEFAULT_MEMORY_ORDERING), as CUDA's
         # __threadfence is.
         "fence": "memoryBarrier",
@@ -646,183 +507,23 @@ OTHER_NAMES = {
             " ? abs({0}) - nextafter(abs({0}), -INFINITY) : nextafter(abs({0}), INFINITY) - abs({0}))))"
         ),
     },
-    "rust": {
-        # The C math functions of CUDA's device library and MSL compute what these methods of a scalar do. glam's
-        # Vec3::is_finite tests every element at once, and is_finite_mask each one.
-        "Float::exp_m1": "expm1",
-        "Float::ln_1p": "log1p",
-        "Float::is_finite": "isfinite",
-        "Float::is_normal": "isnormal",
-        "Float::is_sign_negative": "signbit",
-        "Vec3::is_finite_mask": "isfinite",
-        # spirv-std documents these as exact implementations of the HLSL barriers.
-        "all_memory_barrier_with_group_sync": "AllMemoryBarrierWithGroupSync",
-        "device_memory_barrier_with_group_sync": "DeviceMemoryBarrierWithGroupSync",
-        # The probe passes memory_barrier subgroup scope and acquire-release semantics on uniform memory
-        # (features/rust.py), the OpMemoryBarrier that GL_KHR_shader_subgroup's subgroupMemoryBarrierBuffer is.
-        "memory_barrier": "subgroupMemoryBarrierBuffer",
-        # OpKill, and the ray tracing and mesh shading instructions GL_EXT_ray_tracing and GL_EXT_mesh_shader name.
-        "kill": "discard",
-        "report_intersection": "reportIntersectionEXT",
-        "ignore_intersection": "ignoreIntersectionEXT",
-        "terminate_ray": "terminateRayEXT",
-        "emit_mesh_tasks_ext": "EmitMeshTasksEXT",
-        "set_mesh_outputs_ext": "SetMeshOutputsEXT",
-        # OpEmitMeshTasksEXT with a payload operand, which CrossGL writes as DXR's DispatchMesh with the payload last.
-        "emit_mesh_tasks_ext_payload": "DispatchMesh",
-        # OpExecuteCallableKHR, which CrossGL calls by DXR's name, CallShader, with the shader index first. The probe
-        # passes execute_callable the index 0 as its constant generic parameter.
-        "execute_callable": "CallShader(0u, {0})",
-        # A lane given as a constant broadcasts, as for Slang's WaveBroadcastLaneAt. subgroup_broadcast_const takes
-        # the lane as a constant generic parameter, which the probe sets to 0.
-        "subgroup_broadcast": "subgroupBroadcast",
-        "subgroup_broadcast_const": "subgroupBroadcast({0}, 0u)",
-        # The probe swaps in direction 0, OpGroupNonUniformQuadSwap's horizontal swap, which is HLSL's
-        # QuadReadAcrossX.
-        "subgroup_quad_swap": "QuadReadAcrossX",
-        # spirv-std passes the new value before the comparator; CrossGL's atomicCompSwap, like GLSL's, takes the
-        # comparator first. Both return the original value.
-        "atomic_compare_exchange": "atomicCompSwap({0}, {2}, {1})",
-        # OpIsHelperInvocationEXT, and OpReadClockKHR at the subgroup scope the probe passes, as a 64-bit integer or
-        # as two 32-bit halves (GL_ARB_shader_clock).
-        "is_helper_invocation": "IsHelperLane",
-        "read_clock_khr": "clockARB",
-        "read_clock_uvec2_khr": "clock2x32ARB",
-        # num-traits computes recip as 1 / x and glam's Vec3::recip divides each element the same way, as HLSL's
-        # rcp does. rust-gpu lowers powi to GLSL.std.450 Pow, CrossGL's pow, which takes a float exponent.
-        "Float::recip": "rcp",
-        "Vec3::recip": "rcp",
-        "Float::powi": "pow({0}, float({1}))",
-        # spirv-std converts one float to a half through the first element of PackHalf2x16, with a zero second
-        # element, and back through the first element of UnpackHalf2x16 (crates/spirv-std/src/float.rs).
-        "f32_to_f16": "packHalf2x16(vec2({0}, 0.0))",
-        "f16_to_f32": "unpackHalf2x16({0}).x",
-        # Rust's fract truncates, where CrossGL's fract floors, and num-traits' log takes a base: num-traits computes
-        # them as self - trunc(self) and self.ln() / base.ln() (src/float.rs), and glam's Vec3::fract as
-        # self - self.trunc() (src/f32/vec3.rs).
-        "Float::fract": "({0} - trunc({0}))",
-        "Vec3::fract": "({0} - trunc({0}))",
-        "Float::log": "(log({0}) / log({1}))",
-        # core's sign tests and constants for f32, which num-traits' Float returns: is_sign_positive is the
-        # negation of is_sign_negative, a subnormal is a non-zero value smaller in magnitude than MIN_POSITIVE,
-        # and signum is NaN for NaN and otherwise 1.0 with the operand's sign.
-        "Float::is_sign_positive": "!signbit({0})",
-        "Float::is_subnormal": "({0} != 0.0 && abs({0}) < 1.17549435e-38)",
-        "Float::signum": "(isnan({0}) ? {0} : copysign(1.0, {0}))",
-        "Float::max_value": "(3.40282347e38)",
-        "Float::min_value": "(-3.40282347e38)",
-        "Float::min_positive_value": "(1.17549435e-38)",
-        "Float::neg_infinity": "(-INFINITY)",
-        "Float::neg_zero": "(-0.0)",
-        # glam's Vec3 methods that glam writes in Rust arithmetic (glam 0.34, src/f32/vec3.rs), written with the same
-        # CrossGL operations. glam's length_squared is dot(v, v). Its max_element and min_element compare with > and
-        # <, which pick the same element as max and min unless an element is NaN.
-        "Vec3::element_sum": "({0}.x + {0}.y + {0}.z)",
-        "Vec3::element_product": "({0}.x * {0}.y * {0}.z)",
-        "Vec3::max_element": "max({0}.x, max({0}.y, {0}.z))",
-        "Vec3::min_element": "min({0}.x, min({0}.y, {0}.z))",
-        # max_position and min_position keep the first of equal elements: glam replaces its candidate only when a
-        # later element compares greater or less.
-        "Vec3::max_position": (
-            "({0}.z > ({0}.y > {0}.x ? {0}.y : {0}.x) ? 2u : ({0}.y > {0}.x ? 1u : 0u))"
-        ),
-        "Vec3::min_position": (
-            "({0}.z < ({0}.y < {0}.x ? {0}.y : {0}.x) ? 2u : ({0}.y < {0}.x ? 1u : 0u))"
-        ),
-        # A slice is the probe's whole input buffer, whose first three elements from_slice reads.
-        "Vec3::from_slice": "vec3({0}[0], {0}[1], {0}[2])",
-        "Vec3::with_x": "vec3({1}, {0}.y, {0}.z)",
-        "Vec3::with_y": "vec3({0}.x, {1}, {0}.z)",
-        "Vec3::with_z": "vec3({0}.x, {0}.y, {1})",
-        "Vec3::midpoint": "(({0} + {1}) * 0.5)",
-        "Vec3::lerp_monotonic": "({0} + ({1} - {0}) * {2})",
-        "Vec3::length_recip": "(1.0 / length({0}))",
-        "Vec3::dot_into_vec": "vec3(dot({0}, {1}))",
-        "Vec3::to_homogeneous": "vec4({0}, 1.0)",
-        "Vec3::from_homogeneous": "({0}.xyz / {0}.w)",
-        "Vec3::as_ivec3": "ivec3({0})",
-        "Vec3::as_uvec3": "uvec3({0})",
-        "Vec3::is_finite": "all(isfinite({0}))",
-        "Vec3::is_nan": "any(isnan({0}))",
-        "Vec3::is_normalized": "(abs(dot({0}, {0}) - 1.0) <= 0.0002)",
-        "Vec3::is_negative_mask": (
-            "bvec3(signbit({0}.x), signbit({0}.y), signbit({0}.z))"
-        ),
-        "Vec3::is_negative_bitmask": (
-            "(uint(signbit({0}.x)) | (uint(signbit({0}.y)) << 1u) | (uint(signbit({0}.z)) << 2u))"
-        ),
-        "Vec3::signum": (
-            "vec3(isnan({0}.x) ? {0}.x : copysign(1.0, {0}.x), isnan({0}.y) ? {0}.y : copysign(1.0, {0}.y), "
-            "isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z))"
-        ),
-        "Vec3::abs_diff_eq": "all(lessThanEqual(abs({0} - {1}), vec3({2})))",
-        "Vec3::project_onto": "({1} * (dot({0}, {1}) / dot({1}, {1})))",
-        "Vec3::project_onto_normalized": "({1} * dot({0}, {1}))",
-        "Vec3::reject_from": "({0} - {1} * (dot({0}, {1}) / dot({1}, {1})))",
-        "Vec3::reject_from_normalized": "({0} - {1} * dot({0}, {1}))",
-        "Vec3::normalize_or": (
-            "(isfinite(1.0 / length({0})) && 1.0 / length({0}) > 0.0 ? {0} * (1.0 / length({0})) : {1})"
-        ),
-        "Vec3::normalize_or_zero": (
-            "(isfinite(1.0 / length({0})) && 1.0 / length({0}) > 0.0 ? {0} * (1.0 / length({0})) : vec3(0.0))"
-        ),
-        "Vec3::clamp_length_max": (
-            "(dot({0}, {0}) > {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) : {0})"
-        ),
-        "Vec3::clamp_length_min": (
-            "(dot({0}, {0}) < {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) : {0})"
-        ),
-        "Vec3::clamp_length": (
-            "(dot({0}, {0}) < {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) "
-            ": (dot({0}, {0}) > {2} * {2} ? {2} * ({0} / sqrt(dot({0}, {0}))) : {0}))"
-        ),
-        "Vec3::move_towards": (
-            "(length({1} - {0}) <= {2} || length({1} - {0}) <= 0.0001 ? {1} "
-            ": {0} + ({1} - {0}) / length({1} - {0}) * {2})"
-        ),
-        "Vec3::angle_to": "atan(dot(cross({0}, {1}), {2}), dot({0}, {1}))",
-        "Vec3::any_orthogonal_vector": (
-            "(abs({0}.x) > abs({0}.y) ? vec3(-{0}.z, 0.0, {0}.x) : vec3(0.0, {0}.z, -{0}.y))"
-        ),
-        # glam's no_std build, the one rust-gpu compiles, divides and takes the remainder per element with Rust's
-        # truncating %, CrossGL's fmod: div_euclid corrects trunc(a / b) by one away from b when the remainder is
-        # negative, and rem_euclid adds |b| to a negative remainder (glam src/f32/math.rs, libm_math).
-        "Vec3::div_euclid": (
-            "vec3("
-            + ", ".join(
-                f"(fmod({{0}}.{c}, {{1}}.{c}) < 0.0 ? trunc({{0}}.{c} / {{1}}.{c}) + ({{1}}.{c} > 0.0 ? -1.0 : 1.0)"
-                f" : trunc({{0}}.{c} / {{1}}.{c}))"
-                for c in "xyz"
-            )
-            + ")"
-        ),
-        "Vec3::rem_euclid": (
-            "vec3("
-            + ", ".join(
-                f"(fmod({{0}}.{c}, {{1}}.{c}) < 0.0 ? fmod({{0}}.{c}, {{1}}.{c}) + abs({{1}}.{c})"
-                f" : fmod({{0}}.{c}, {{1}}.{c}))"
-                for c in "xyz"
-            )
-            + ")"
-        ),
-        # Pixar's orthonormal basis, as glam writes it: with s = signum(z) and a = -1 / (s + z), the vector is
-        # (x * y * a, s + y * y * a, -y).
-        "Vec3::any_orthonormal_vector": (
-            "vec3({0}.x * {0}.y * (-1.0 / ((isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.z)), "
-            "(isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.y * {0}.y "
-            "* (-1.0 / ((isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.z)), -{0}.y)"
-        ),
-        "Vec3::rotate_x": (
-            "vec3({0}.x, {0}.y * cos({1}) - {0}.z * sin({1}), {0}.y * sin({1}) + {0}.z * cos({1}))"
-        ),
-        "Vec3::rotate_y": (
-            "vec3({0}.x * cos({1}) + {0}.z * sin({1}), {0}.y, {0}.x * -sin({1}) + {0}.z * cos({1}))"
-        ),
-        "Vec3::rotate_z": (
-            "vec3({0}.x * cos({1}) - {0}.y * sin({1}), {0}.x * sin({1}) + {0}.y * cos({1}), {0}.z)"
-        ),
-    },
+    "rust": rust_spellings.OTHER_NAMES,
 }
+# Metal's other ballots return a simd_vote or quad_vote mask, whose vote_t integer CrossGL computes from its wave
+# ballot (crossgl.dialect.CrossGLDialect.reading). A SIMD-group's mask has a bit per lane, which is the first 64 bits
+# of the ballot. A quad's mask keeps 4 bits (metal_quadgroup masks quad_vote's vote_t with 0xf), those of the 4
+# consecutive lanes of the lane's quad. An active-threads mask is the ballot of true.
+_SIMD_MASK = (
+    "(uint64(WaveActiveBallot({0}).x) | (uint64(WaveActiveBallot({0}).y) << 32))"
+)
+_QUAD_MASK = "((WaveActiveBallot({0})[WaveGetLaneIndex() >> 5u] >> (WaveGetLaneIndex() & 28u)) & 0xFu)"
+OTHER_NAMES["metal"].update(
+    {
+        "simd_active_threads_mask": _SIMD_MASK.format("true"),
+        "quad_active_threads_mask": _QUAD_MASK.format("true"),
+        "quad_ballot": _QUAD_MASK,
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:

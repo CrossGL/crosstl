@@ -9,7 +9,7 @@ import pytest
 # deadline with the expression it replaced.
 BACKTRACKING_CHECKS = {
     "rust-string": (
-        "from crosstl.backend.Rust.RustCrossGLCodeGen import RUST_STRING_RE; "
+        "from crosstl.backend.Rust.import_tables import RUST_STRING_RE; "
         "literal = chr(34) + (chr(92) + chr(10)) * 64; "
         "assert RUST_STRING_RE.match(literal) is None"
     ),

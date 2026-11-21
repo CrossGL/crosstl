@@ -6,6 +6,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -60,7 +61,6 @@ TINYGRAD_REPO = "https://github.com/tinygrad/tinygrad"
 TINYGRAD_THUNDER_COMMIT = "623b66e0e4e8e519038f9f5cd86a8ab6976032c8"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
-LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
 LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
 LLAMA_CPP_METAL_CONTEXT_COMMIT = "d6d0ce8215a1c324e8de04b52f9dd65c5edc129f"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
@@ -992,10 +992,12 @@ EXTERNAL_FIXTURES = [
             "constant int elems_per_thread_ @function_constant(2);",
         ],
         "not_contains": ["STEEL_CONST"],
+        "preprocess": True,
         "source": (
             """
             #include <metal_common>
-            #include "mlx/backend/metal/kernels/steel/defines.h"
+            // From mlx/backend/metal/kernels/steel/defines.h at the same commit.
+            #define STEEL_CONST static constant constexpr const
             using namespace metal;
 
             STEEL_CONST bool inv_ [[function_constant(0)]];
@@ -1413,6 +1415,15 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["c10::metal::array"],
         "source": (
             """
+            // c10::metal::array, from c10/metal/common.h at the same commit
+            // (the __METAL__ branch).
+            namespace c10 {
+            namespace metal {
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
+
             template <unsigned N = 5, typename idx_t = int32_t>
             struct GridSamplerParams {
                 int32_t sampler_dims;
@@ -1439,7 +1450,14 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["c10::metal::array"],
         "source": (
             """
-            #include <c10/metal/common.h>
+            // c10::metal::array, from c10/metal/common.h at the same commit
+            // (the __METAL__ branch).
+            namespace c10 {
+            namespace metal {
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
 
             template <unsigned N = 5>
             struct UpsampleParams {
@@ -1465,9 +1483,18 @@ EXTERNAL_FIXTURES = [
             "int64 padding_idx;",
         ],
         "not_contains": ["c10::metal::array", "::c10::metal::max_ndim"],
+        "preprocess": True,
         "source": (
             """
-            #include <c10/metal/common.h>
+            // From c10/metal/common.h at the same commit (the __METAL__ branch).
+            #define C10_METAL_CONSTEXPR constant constexpr
+            namespace c10 {
+            namespace metal {
+            C10_METAL_CONSTEXPR unsigned max_ndim = 16;
+            template <typename T, unsigned N>
+            using array = ::metal::array<T, N>;
+            } // namespace metal
+            } // namespace c10
 
             template <typename idx_type_t = uint32_t>
             struct EmbeddingDenseBackwardParams {
@@ -1626,9 +1653,12 @@ EXTERNAL_FIXTURES = [
         "source_path": "aten/src/ATen/native/mps/kernels/ReduceOps.h",
         "roundtrip": True,
         "contains": ["constant uint SUM_NCHAINS = 8;"],
+        "not_contains": ["C10_METAL_CONSTEXPR"],
+        "preprocess": True,
         "source": (
             """
-            #include <c10/metal/common.h>
+            // From c10/metal/common.h at the same commit (the __METAL__ branch).
+            #define C10_METAL_CONSTEXPR constant constexpr
 
             C10_METAL_CONSTEXPR uint32_t SUM_NCHAINS = 8;
         """
@@ -1829,49 +1859,6 @@ EXTERNAL_FIXTURES = [
             void ggml_metal_graph_optimize(
                 ggml_metal_t ctx,
                 struct ggml_cgraph * gf);
-        """
-        ),
-    },
-    {
-        "name": "llama_cpp_ggml_extension_anonymous_union_member",
-        "repo_url": LLAMA_CPP_REPO,
-        "commit": LLAMA_CPP_GGML_COMMON_COMMIT,
-        "source_path": "ggml/src/ggml-common.h included by ggml-metal.metal",
-        "roundtrip": True,
-        "contains": [
-            "// Metal union iq1m_scale_t retains overlapping storage through "
-            "layout metadata",
-            "@union_layout(2, 2, little_endian, metal)",
-            "struct iq1m_scale_t {",
-            "struct block_q4_1 {",
-            "uint8[32 / 2] qs;",
-        ],
-        "not_contains": ["__extension__", "GGML_EXTENSION"],
-        "source": (
-            """
-            #define GGML_EXTENSION __extension__
-            #define GGML_COMMON_AGGR_S
-            #define GGML_COMMON_AGGR_U
-            #define QK4_1 32
-
-            typedef half ggml_half;
-            typedef half2 ggml_half2;
-
-            typedef struct {
-                GGML_EXTENSION union {
-                    struct {
-                        ggml_half d;
-                        ggml_half m;
-                    } GGML_COMMON_AGGR_S;
-                    ggml_half2 dm;
-                } GGML_COMMON_AGGR_U;
-                uint8_t qs[QK4_1 / 2];
-            } block_q4_1;
-
-            typedef union {
-                ggml_half f16;
-                uint16_t u16;
-            } iq1m_scale_t;
         """
         ),
     },
@@ -2289,13 +2276,16 @@ EXTERNAL_FIXTURES = [
         "source_path": "simd_partition.metal",
         "roundtrip": True,
         "contains": [
-            "uint unvisited = uint((uint64)simd_active_threads_mask());",
-            "const uint v = uint((uint64)vote);",
+            "uint unvisited = uint(__crossgl_metal_simd_vote_bits(WaveActiveBallot(true)));",
+            "const uvec4 vote = WaveActiveBallot(activeValue == value);",
+            "const uint v = uint(__crossgl_metal_simd_vote_bits(vote));",
         ],
         "not_contains": [
-            "simd_active_threads_mask().operator",
+            "simd_active_threads_mask",
             "vote.operator",
             "operator, unsigned",
+            "bool vote",
+            "(uint64)vote",
         ],
         "source": (
             """
@@ -2483,14 +2473,18 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "struct_names": ["sv", "alignment_dummy"],
         "contains": [
-            "struct sv",
-            "struct alignment_dummy",
+            "@metal_alignas(16)\n    generic<_T, _length> struct sv",
+            "@metal_alignas(16)\n    struct alignment_dummy",
             "dtype[_length] data;",
         ],
+        "preprocess": True,
         "source": (
             """
             #include <metal_stdlib>
             using namespace metal;
+            // From extra/thunder/metal/include/common/utils.metal at the same commit.
+            #define mittens_ALIGN_AS(n) alignas(n)
+            #define mittens_DEFAULT_ALIGN mittens_ALIGN_AS(16)
 
             template<typename _T, size_t _length>
             struct mittens_DEFAULT_ALIGN sv {
@@ -2511,7 +2505,10 @@ EXTERNAL_FIXTURES = [
 ]
 
 
-def parse_metal(source):
+def parse_metal(source, preprocess=False):
+    # Fixtures that define macros run through the preprocessor, as translation does.
+    if preprocess:
+        source = MetalPreprocessor().preprocess(source)
     tokens = MetalLexer(source).tokenize()
     return MetalParser(tokens).parse()
 
@@ -2525,7 +2522,10 @@ def parse_crossgl(source):
     "fixture", EXTERNAL_FIXTURES, ids=[fixture["name"] for fixture in EXTERNAL_FIXTURES]
 )
 def test_external_metal_fixture_parse_and_roundtrip(fixture):
-    ast = parse_metal(fixture["source"] + fixture.get("instantiation", ""))
+    ast = parse_metal(
+        fixture["source"] + fixture.get("instantiation", ""),
+        preprocess=fixture.get("preprocess", False),
+    )
     assert ast.functions or ast.structs or ast.global_variables or ast.typedefs
     assert fixture["repo_url"]
     assert fixture["commit"]

@@ -6500,7 +6500,7 @@ def test_wgsl_codegen_half_conversion_converts_integer_operands(tmp_path):
     assert "pack2x16float(vec2<f32>(f32(k), 0.0))" in generated
     assert "pack2x16float(vec2<f32>(f32(2), 0.0))" in generated
     assert "crosstl_pack2x16float_vec3(vec3<f32>(i3in[0]))" in generated
-    assert "unpack2x16float(pack2x16float(vec2<f32>(f32(k), 0.0))).x" in generated
+    assert "quantizeToF16(f32(k))" in generated
     assert "unpack2x16float(u32(k)).x" in generated
     validate_wgsl_with_naga(tmp_path, generated)
 
@@ -6728,9 +6728,9 @@ def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
         ("f2_out[0]", "crosstl_unpack2x16float_vec2", "u2_arr"),
         ("f3_out[0]", "crosstl_unpack2x16float_vec3", "u3_arr"),
         ("f4_out[0]", "crosstl_unpack2x16float_vec4", "u4_arr"),
-        ("f2_out[1]", "unpack2x16float(pack2x16float", "v2_arr"),
-        ("f3_out[1]", "crosstl_unpack_pack2x16float_vec3", "v3_arr"),
-        ("f4_out[1]", "crosstl_unpack_pack2x16float_vec4", "v4_arr"),
+        ("f2_out[1]", "quantizeToF16", "v2_arr"),
+        ("f3_out[1]", "quantizeToF16", "v3_arr"),
+        ("f4_out[1]", "quantizeToF16", "v4_arr"),
     ]
 
     # Verify each i++ statement follows the exact sequence:

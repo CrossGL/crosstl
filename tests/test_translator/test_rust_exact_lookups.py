@@ -3,9 +3,10 @@
 Each lookup now either names the Rust spelling exactly or refuses the key:
 
 - operators resolve through the shared C-family table, and unary ``+``, which Rust lacks, is written as its operand;
-- a call to a built-in function of another language that the Rust runtime does not define is refused instead of
+- a call to a built-in function of another language that the rust-gpu output does not lower is refused instead of
   being written as a call nothing defines;
-- ray-tracing calls with an argument count the runtime function does not take are refused;
+- ray-generation programs are refused by stage, and a TraceRay call with an argument count no runtime function
+  takes is refused too;
 - a reserved ``gl_``/``SV_`` semantic the generator does not know is refused, and a user semantic is kept;
 - a built-in type template (``vector<float, 3>``) is never written verbatim;
 - a user type is never classified as a resource because of a prefix of its name.
@@ -79,19 +80,22 @@ def test_an_operator_crossgl_does_not_define_is_refused():
 def test_foreign_builtin_calls_without_a_runtime_function_are_refused(call):
     message = refused(RustLoweringRefused, _rust, _compute(call))
     name = call.split("= ", 1)[1].split("(", 1)[0]
-    assert (
-        f"call to {name}: {name} is a built-in function of another language" in message
-    )
-    assert "the Rust runtime defines no function of that name" in message
+    assert f"function: '{name}' has no rust-gpu lowering for these operands" in message
 
 
 @pytest.mark.parametrize(
     ("call", "written"),
     [
-        ("float r = sqrt(f);", "sqrt(f)"),
-        ("float r = clamp(f, 0.0, 1.0);", "clamp(f, 0.0, 1.0)"),
-        ("float r = smoothstep(0.0, 1.0, f);", "smoothstep(0.0, 1.0, f)"),
-        ("float r = lerp(f, 1.0, 0.5);", "lerp(f, 1.0, 0.5)"),
+        ("float r = sqrt(f);", "let r: f32 = (f).sqrt();"),
+        ("float r = clamp(f, 0.0, 1.0);", "let r: f32 = (f).clamp(0.0, 1.0);"),
+        (
+            "float r = smoothstep(0.0, 1.0, f);",
+            "let __t = ((f - __e0) / (__e1 - __e0)).clamp(0.0, 1.0); __t * __t * (3.0 - 2.0 * __t)",
+        ),
+        (
+            "float r = lerp(f, 1.0, 0.5);",
+            "let r: f32 = ((f) * (1.0 - (0.5)) + (1.0) * (0.5));",
+        ),
     ],
 )
 def test_runtime_functions_are_still_called(call, written):
@@ -123,10 +127,13 @@ shader S {
 """
 
 
-def test_trace_ray_with_the_runtime_argument_count_is_called():
-    code = _rust(_RAY_PROGRAM % "TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);")
-    # The acceleration structure is a bound entry parameter (rust_resource_bindings), not a static.
-    assert "trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in code
+def test_ray_generation_programs_are_refused_by_stage():
+    message = refused(
+        RustLoweringRefused,
+        _rust,
+        _RAY_PROGRAM % "TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);",
+    )
+    assert "ray_generation entry points are not lowered for rust-gpu" in message
 
 
 def test_trace_ray_with_another_argument_count_is_refused():

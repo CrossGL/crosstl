@@ -14,10 +14,19 @@ from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
 from .block_member_names import (
     function_variable_names,
-    instance_block_member_names,
-    rename_shadowing_locals,
 )
 from .import_exact_lookups import crossgl_operator, declared_name, folded_operator
+from .import_tables import (
+    GLSL_FUNCTION_MAP,
+    GLSL_IMAGE_FUNCTION_OPERATIONS,
+    GLSL_TEXTURE_FUNCTION_OPERATIONS,
+    GLSL_TYPE_MAP,
+)
+from .narrow_arithmetic import (
+    import_narrow_binary,
+    import_narrow_unary,
+    narrow_store_targets,
+)
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -31,7 +40,6 @@ from .OpenglAst import (
     FunctionCallNode,
     IfNode,
     InitializerListNode,
-    LayoutNode,
     MemberAccessNode,
     NumberNode,
     PostfixOpNode,
@@ -46,6 +54,7 @@ from .OpenglAst import (
     WhileNode,
 )
 from .scoped_atomics import import_scoped_atomic_call
+from .shader_sections import GLSLShaderSectionMixin
 from .shadow_textures import retype_shadow_textures
 from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
@@ -81,7 +90,7 @@ HALF_FLOAT_LITERAL_SUFFIX_RE = re.compile(
 )
 
 
-class GLSLToCrossGLConverter:
+class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
     """Serialize OpenGL backend AST nodes back into CrossGL source."""
 
     BUFFER_BLOCK_LAYOUT_QUALIFIERS = {"std140", "std430", "scalar"}
@@ -330,58 +339,7 @@ class GLSLToCrossGLConverter:
         self.indent_level = 0
         self.indent_str = "    "
 
-        self.function_map = {
-            "dot": "dot",
-            "normalize": "normalize",
-            "sin": "sin",
-            "cos": "cos",
-            "tan": "tan",
-            "asin": "asin",
-            "acos": "acos",
-            "atan": "atan",
-            "pow": "pow",
-            "exp": "exp",
-            "log": "log",
-            "sqrt": "sqrt",
-            "inversesqrt": "inversesqrt",
-            "abs": "abs",
-            "sign": "sign",
-            "floor": "floor",
-            "ceil": "ceil",
-            "fract": "fract",
-            "mod": "mod",
-            "min": "min",
-            "max": "max",
-            "clamp": "clamp",
-            "mix": "mix",
-            "step": "step",
-            "smoothstep": "smoothstep",
-            "length": "length",
-            "distance": "distance",
-            "reflect": "reflect",
-            "refract": "refract",
-            "debugPrintfEXT": "printf",
-            "traceRayEXT": "TraceRay",
-            "reportIntersectionEXT": "ReportHit",
-            "executeCallableEXT": "CallShader",
-            "terminateRayEXT": "AcceptHitAndEndSearch",
-            "ignoreIntersectionEXT": "IgnoreHit",
-            "SetMeshOutputsEXT": "SetMeshOutputCounts",
-            "EmitMeshTasksEXT": "DispatchMesh",
-            "interpolateAtCentroid": "interpolate_at_centroid",
-            "interpolateAtSample": "interpolate_at_sample",
-            "interpolateAtOffset": "interpolate_at_offset",
-            "dFdx": "ddx",
-            "dFdy": "ddy",
-            "fwidth": "fwidth",
-            "dFdxFine": "ddx_fine",
-            "dFdxCoarse": "ddx_coarse",
-            "dFdyFine": "ddy_fine",
-            "dFdyCoarse": "ddy_coarse",
-            "fwidthFine": "fwidth_fine",
-            "fwidthCoarse": "fwidth_coarse",
-            "memoryBarrierAtomicCounter": "memoryBarrier",
-        }
+        self.function_map = dict(GLSL_FUNCTION_MAP)
         legacy_texture_aliases = {
             "texture1D": ("texture", "sample"),
             "texture2D": ("texture", "sample"),
@@ -414,44 +372,7 @@ class GLSLToCrossGLConverter:
             "texture2DGradOffset": ("textureGradOffset", "sample_grad"),
             "texture3DGradOffset": ("textureGradOffset", "sample_grad"),
         }
-        self.texture_function_operations = {
-            "texture": "sample",
-            "textureLod": "sample_lod",
-            "textureLodOffset": "sample_lod",
-            "textureGrad": "sample_grad",
-            "textureGradOffset": "sample_grad",
-            "textureProj": "sample_projected",
-            "textureProjOffset": "sample_projected",
-            "textureProjLod": "sample_projected",
-            "textureProjLodOffset": "sample_projected",
-            "textureProjGrad": "sample_projected",
-            "textureProjGradOffset": "sample_projected",
-            "textureOffset": "sample_offset",
-            "textureGather": "gather",
-            "textureGatherOffset": "gather",
-            "textureGatherOffsets": "gather",
-            "textureGatherCompare": "gather_compare",
-            "textureGatherCompareOffset": "gather_compare",
-            "textureGatherCompareOffsets": "gather_compare",
-            "textureCompare": "compare",
-            "textureCompareOffset": "compare",
-            "textureCompareLod": "compare",
-            "textureCompareLodOffset": "compare",
-            "textureCompareGrad": "compare",
-            "textureCompareGradOffset": "compare",
-            "textureCompareProj": "compare",
-            "textureCompareProjOffset": "compare",
-            "textureCompareProjLod": "compare",
-            "textureCompareProjLodOffset": "compare",
-            "textureCompareProjGrad": "compare",
-            "textureCompareProjGradOffset": "compare",
-            "texelFetch": "fetch",
-            "texelFetchOffset": "fetch",
-            "textureSize": "query_size",
-            "textureQueryLevels": "query_levels",
-            "textureQueryLod": "query_lod",
-            "textureSamples": "query_samples",
-        }
+        self.texture_function_operations = dict(GLSL_TEXTURE_FUNCTION_OPERATIONS)
         self.texture_function_operations.update(
             {name: operation for name, (_, operation) in legacy_texture_aliases.items()}
         )
@@ -465,191 +386,9 @@ class GLSLToCrossGLConverter:
         self.texture_function_names.update(
             {name: canonical for name, (canonical, _) in legacy_texture_aliases.items()}
         )
-        self.image_function_operations = {
-            "imageLoad": "load",
-            "imageStore": "store",
-            "imageSize": "query_size",
-            "imageSamples": "query_samples",
-            "imageAtomicAdd": "atomic",
-            "imageAtomicMin": "atomic",
-            "imageAtomicMax": "atomic",
-            "imageAtomicAnd": "atomic",
-            "imageAtomicOr": "atomic",
-            "imageAtomicXor": "atomic",
-            "imageAtomicExchange": "atomic",
-            "imageAtomicCompSwap": "atomic",
-        }
+        self.image_function_operations = dict(GLSL_IMAGE_FUNCTION_OPERATIONS)
 
-        # Mapping of GLSL types to CrossGL types
-        self.type_map = {
-            "float": "float",
-            "int": "int",
-            "uint": "uint",
-            "bool": "bool",
-            "vec2": "vec2",
-            "vec3": "vec3",
-            "vec4": "vec4",
-            "float2": "vec2",
-            "float3": "vec3",
-            "float4": "vec4",
-            "ivec2": "ivec2",
-            "ivec3": "ivec3",
-            "ivec4": "ivec4",
-            "int2": "ivec2",
-            "int3": "ivec3",
-            "int4": "ivec4",
-            "uint2": "uvec2",
-            "uint3": "uvec3",
-            "uint4": "uvec4",
-            "bvec2": "bvec2",
-            "bvec3": "bvec3",
-            "bvec4": "bvec4",
-            "mat2": "mat2",
-            "mat3": "mat3",
-            "mat4": "mat4",
-            "float2x2": "mat2",
-            "float3x3": "mat3",
-            "float4x4": "mat4",
-            "float2x3": "mat2x3",
-            "float2x4": "mat2x4",
-            "float3x2": "mat3x2",
-            "float3x4": "mat3x4",
-            "float4x2": "mat4x2",
-            "float4x3": "mat4x3",
-            "texture1D": "texture1D",
-            "texture2D": "texture2D",
-            "texture3D": "texture3D",
-            "textureCube": "textureCube",
-            "texture1DArray": "texture1DArray",
-            "texture2DArray": "texture2DArray",
-            "textureCubeArray": "textureCubeArray",
-            "Texture1D": "texture1D",
-            "Texture1DArray": "texture1DArray",
-            "Texture2D": "texture2D",
-            "Texture2DArray": "texture2DArray",
-            "Texture3D": "texture3D",
-            "TextureCube": "textureCube",
-            "TextureCubeArray": "textureCubeArray",
-            "Texture2DMS": "sampler2DMS",
-            "Texture2DMSArray": "sampler2DMSArray",
-            "sampler": "sampler",
-            "samplerShadow": "comparison_sampler",
-            "SamplerState": "sampler",
-            "SamplerComparisonState": "comparison_sampler",
-            "sampler1D": "sampler1D",
-            "sampler2D": "sampler2D",
-            "sampler3D": "sampler3D",
-            "samplerCube": "samplerCube",
-            "sampler1DArray": "sampler1DArray",
-            "sampler2DArray": "sampler2DArray",
-            "samplerCubeArray": "samplerCubeArray",
-            "sampler2DShadow": "sampler2DShadow",
-            "sampler1DShadow": "sampler1DShadow",
-            "sampler1DArrayShadow": "sampler1DArrayShadow",
-            "sampler2DArrayShadow": "sampler2DArrayShadow",
-            "samplerCubeShadow": "samplerCubeShadow",
-            "samplerCubeArrayShadow": "samplerCubeArrayShadow",
-            "sampler2DRect": "sampler2DRect",
-            "sampler2DRectShadow": "sampler2DRectShadow",
-            "samplerBuffer": "samplerBuffer",
-            # Vulkan GLSL texel buffers take no sampler; CrossGL spells them samplerBuffer.
-            "textureBuffer": "samplerBuffer",
-            "itextureBuffer": "isamplerBuffer",
-            "utextureBuffer": "usamplerBuffer",
-            "sampler2DMS": "sampler2DMS",
-            "sampler2DMSArray": "sampler2DMSArray",
-            "isampler1D": "isampler1D",
-            "isampler2D": "isampler2D",
-            "isampler3D": "isampler3D",
-            "isamplerCube": "isamplerCube",
-            "isampler1DArray": "isampler1DArray",
-            "isampler2DArray": "isampler2DArray",
-            "isamplerCubeArray": "isamplerCubeArray",
-            "isampler2DRect": "isampler2DRect",
-            "isamplerBuffer": "isamplerBuffer",
-            "isampler2DMS": "isampler2DMS",
-            "isampler2DMSArray": "isampler2DMSArray",
-            "usampler1D": "usampler1D",
-            "usampler2D": "usampler2D",
-            "usampler3D": "usampler3D",
-            "usamplerCube": "usamplerCube",
-            "usampler1DArray": "usampler1DArray",
-            "usampler2DArray": "usampler2DArray",
-            "usamplerCubeArray": "usamplerCubeArray",
-            "usampler2DRect": "usampler2DRect",
-            "usamplerBuffer": "usamplerBuffer",
-            "usampler2DMS": "usampler2DMS",
-            "usampler2DMSArray": "usampler2DMSArray",
-            "image1D": "image1D",
-            "image2D": "image2D",
-            "image3D": "image3D",
-            "imageCube": "imageCube",
-            "image1DArray": "image1DArray",
-            "image2DArray": "image2DArray",
-            "imageCubeArray": "imageCubeArray",
-            "RWTexture1D": "image1D",
-            "RWTexture1DArray": "image1DArray",
-            "RWTexture2D": "image2D",
-            "RWTexture2DArray": "image2DArray",
-            "RWTexture2DMS": "image2DMS",
-            "RWTexture2DMSArray": "image2DMSArray",
-            "RWTexture3D": "image3D",
-            "RWTextureCube": "imageCube",
-            "RWTextureCubeArray": "imageCubeArray",
-            "RasterizerOrderedTexture1D": "image1D",
-            "RasterizerOrderedTexture1DArray": "image1DArray",
-            "RasterizerOrderedTexture2D": "image2D",
-            "RasterizerOrderedTexture2DArray": "image2DArray",
-            "RasterizerOrderedTexture2DMS": "image2DMS",
-            "RasterizerOrderedTexture2DMSArray": "image2DMSArray",
-            "RasterizerOrderedTexture3D": "image3D",
-            "RasterizerOrderedTextureCube": "imageCube",
-            "RasterizerOrderedTextureCubeArray": "imageCubeArray",
-            "StructuredBuffer": "StructuredBuffer",
-            "RWStructuredBuffer": "RWStructuredBuffer",
-            "Buffer": "StructuredBuffer",
-            "RWBuffer": "RWStructuredBuffer",
-            "AppendStructuredBuffer": "RWStructuredBuffer",
-            "ConsumeStructuredBuffer": "StructuredBuffer",
-            "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
-            "image2DRect": "image2DRect",
-            "imageBuffer": "imageBuffer",
-            "image2DMS": "image2DMS",
-            "image2DMSArray": "image2DMSArray",
-            "subpassInput": "subpassInput",
-            "subpassInputMS": "subpassInputMS",
-            "SubpassInput": "subpassInput",
-            "SubpassInputMS": "subpassInputMS",
-            "isubpassInput": "isubpassInput",
-            "isubpassInputMS": "isubpassInputMS",
-            "usubpassInput": "usubpassInput",
-            "usubpassInputMS": "usubpassInputMS",
-            "iimage1D": "iimage1D",
-            "iimage2D": "iimage2D",
-            "iimage3D": "iimage3D",
-            "iimageCube": "iimageCube",
-            "iimage1DArray": "iimage1DArray",
-            "iimage2DArray": "iimage2DArray",
-            "iimageCubeArray": "iimageCubeArray",
-            "iimage2DRect": "iimage2DRect",
-            "iimageBuffer": "iimageBuffer",
-            "iimage2DMS": "iimage2DMS",
-            "iimage2DMSArray": "iimage2DMSArray",
-            "uimage1D": "uimage1D",
-            "uimage2D": "uimage2D",
-            "uimage3D": "uimage3D",
-            "uimageCube": "uimageCube",
-            "uimage1DArray": "uimage1DArray",
-            "uimage2DArray": "uimage2DArray",
-            "uimageCubeArray": "uimageCubeArray",
-            "uimage2DRect": "uimage2DRect",
-            "uimageBuffer": "uimageBuffer",
-            "uimage2DMS": "uimage2DMS",
-            "uimage2DMSArray": "uimage2DMSArray",
-            "accelerationStructureEXT": "accelerationStructureEXT",
-            "rayQueryEXT": "rayQueryEXT",
-            "void": "void",
-        }
+        self.type_map = dict(GLSL_TYPE_MAP)
 
         # Shader-specific info
         self.uniform_vars = []
@@ -1338,6 +1077,8 @@ class GLSLToCrossGLConverter:
         for var in getattr(node, "global_variables", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "io_variables", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "constant", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
             if self.is_anonymous_ssbo_member_variable(var):
@@ -2275,8 +2016,12 @@ class GLSLToCrossGLConverter:
         block_struct = self.structs_by_name.get(block_name)
         if block_struct is None:
             return block_name
-        if getattr(block_struct, "interface_layout", None) or getattr(
-            block_struct, "hlsl_cbuffer", False
+        # A uniform block keeps its block name, which is what the host looks it up by (glGetUniformBlockIndex),
+        # also when it has no layout qualifier, as GLSL ES 3.00 blocks usually do; its instance name is local.
+        if (
+            getattr(block_struct, "interface_layout", None)
+            or getattr(block_struct, "hlsl_cbuffer", False)
+            or self.is_descriptor_set_uniform_block_struct(block_struct)
         ):
             return block_name
         if len(uniforms) == 1 and getattr(uniforms[0], "name", None):
@@ -2572,516 +2317,23 @@ class GLSLToCrossGLConverter:
     def generate_shader(self, node):
         refuse_unsupported_glsl_types(node)
         retype_shadow_textures(node)
-        self.uniform_vars = []
-        self.inputs = []
-        self.outputs = []
-        self.local_vars = []
-        self.flattened_uniform_block_instances = {}
-        self.flattened_uniform_block_member_renames = {}
-        rename_shadowing_locals(node, instance_block_member_names(node))
-        self.emitted_cbuffer_member_names = set()
-        self.function_name_renames = self.collect_function_name_renames(
-            getattr(node, "functions", []) or []
-        )
-        self.user_function_arities = {
-            (
-                getattr(function, "name", None),
-                len(getattr(function, "params", []) or []),
-            )
-            for function in getattr(node, "functions", []) or []
-            if getattr(function, "name", None)
-        }
-        self.glsl_function_return_types = {}
-        for function in getattr(node, "functions", []) or []:
-            if getattr(function, "name", None):
-                self.glsl_function_return_types.setdefault(function.name, set()).add(
-                    str(getattr(function, "return_type", "") or "").strip()
-                )
-        self.prepare_structured_buffers(node)
-        node.io_variables = self.deduplicate_builtin_stage_io_variables(
-            getattr(node, "io_variables", []) or []
-        )
+        self.reset_glsl_shader_state(node)
+        # Narrow integer results stored straight into a register of their own type (:mod:`.narrow_arithmetic`).
+        self.glsl_narrow_stores = narrow_store_targets(node)
 
-        for var in node.io_variables:
-            if isinstance(var, (LayoutNode, VariableNode)):
-                if self._is_input_var(var):
-                    self.inputs.append(var)
-                if self._is_output_var(var):
-                    self.outputs.append(var)
+        fragment_uses_direct_outputs = self.collect_glsl_stage_builtin_writes(node)
 
-        builtin_redeclaration_qualifiers = self.qualifier_only_builtin_qualifiers(node)
-        self.apply_builtin_redeclaration_qualifiers(
-            [*self.inputs, *self.outputs], builtin_redeclaration_qualifiers
-        )
-
-        fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
-        fragment_writes_sample_mask = self.fragment_main_writes_name(
-            node, "gl_SampleMask"
-        )
-        vertex_writes_point_size = self.main_writes_name(
-            node, "gl_PointSize", shader_type="vertex"
-        )
-        vertex_builtin_output_writes = {}
-        if self.shader_type == "vertex":
-            for builtin_name in self.VERTEX_BUILTIN_OUTPUT_TYPES:
-                vertex_builtin_output_writes[builtin_name] = self.main_writes_name(
-                    node, builtin_name, shader_type="vertex"
-                )
-
-        # Preserve source-declared/written vertex built-ins without inventing outputs
-        # that the source never assigns. DirectX rejects an unwritten SV_Position
-        # member when this CrossGL is lowered to HLSL.
-        if self.shader_type == "vertex":
-            output_names = {
-                var.name for var in self.outputs if isinstance(var, VariableNode)
-            }
-            if "gl_Position" not in output_names and (
-                "gl_Position" in builtin_redeclaration_qualifiers
-                or vertex_builtin_output_writes.get("gl_Position", False)
-            ):
-                builtin = VariableNode(
-                    "vec4",
-                    "gl_Position",
-                    qualifiers=self.builtin_output_qualifiers(
-                        "gl_Position", builtin_redeclaration_qualifiers
-                    ),
-                    semantic="gl_Position",
-                )
-                self.outputs.append(builtin)
-                output_names.add("gl_Position")
-
-            for name, vtype in self.VERTEX_BUILTIN_OUTPUT_TYPES.items():
-                if name == "gl_Position" or (
-                    name not in builtin_redeclaration_qualifiers
-                    and not (name == "gl_PointSize" and vertex_writes_point_size)
-                    and not vertex_builtin_output_writes.get(name, False)
-                ):
-                    continue
-                if name in output_names:
-                    continue
-                is_array = name in self.VERTEX_BUILTIN_ARRAY_OUTPUTS
-                self.outputs.append(
-                    VariableNode(
-                        vtype,
-                        name,
-                        qualifiers=self.builtin_output_qualifiers(
-                            name, builtin_redeclaration_qualifiers
-                        ),
-                        array_sizes=[None] if is_array else [],
-                        is_array=is_array,
-                        semantic=name,
-                    )
-                )
-                output_names.add(name)
-
-        # Ensure fragment outputs include gl_FragColor if no outputs declared
-        fragment_entry_return = None
-        if self.shader_type == "fragment":
-            fragment_entry_return = next(
-                (
-                    function
-                    for function in getattr(node, "functions", []) or []
-                    if getattr(function, "name", None) == "main"
-                    and self.is_fragment_explicit_entry_return(function)
-                ),
-                None,
-            )
-
-        if (
-            self.shader_type == "fragment"
-            and not self.outputs
-            and not fragment_writes_depth
-            and not fragment_writes_sample_mask
-            and fragment_entry_return is None
-        ):
-            builtin = VariableNode(
-                "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
-            )
-            self.outputs.append(builtin)
-        fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
-            fragment_writes_depth, fragment_writes_sample_mask
-        )
-
-        for uniform in node.uniforms:
-            if self._is_unsupported_extension_resource_type(uniform.vtype):
-                continue
-            self.uniform_vars.append(uniform)
-
-        result = ""
-        preprocessor = getattr(node, "preprocessor", []) or []
-        if preprocessor:
-            for line in preprocessor:
-                result += f"{line}\n"
-            result += "\n"
-        result += "shader main {\n"
-
-        # Generate struct definitions
-        crossgl_structs = self.structs_for_crossgl_output(node.structs)
-        for struct in crossgl_structs:
-            if struct.name in self.converted_ssbo_struct_names:
-                continue
-            if self.is_push_constant_interface_block_struct(struct) or (
-                self.is_descriptor_set_uniform_block_struct(struct)
-                and not self.is_arrayed_descriptor_set_uniform_block_struct(struct)
-            ):
-                continue
-            result += self.indent_str + self.generate_struct(struct) + "\n\n"
-
-        # Generate input struct if needed
-        if self.inputs and self.shader_type in (
-            "vertex",
-            "fragment",
-        ):
-            result += self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
-            self.increase_indent()
-            for input_var in self.inputs:
-                result += self.indent() + self.generate_stage_struct_member(input_var)
-            self.decrease_indent()
-            result += self.indent_str + "};\n\n"
-
-        # Generate output struct for vertex-like stages
-        if self.outputs and self.shader_type == "vertex":
-            result += self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
-            self.increase_indent()
-            for output_var in self.outputs:
-                result += self.indent() + self.generate_stage_struct_member(output_var)
-            self.decrease_indent()
-            result += self.indent_str + "};\n\n"
+        result, crossgl_structs = self.render_glsl_shader_interface(node)
 
         # Generate uniforms: split resource uniforms from constant data
-        if self.uniform_vars:
-            resource_uniforms = [
-                u for u in self.uniform_vars if self._is_resource_type(u.vtype)
-            ]
-            subroutine_uniforms = [
-                u for u in self.uniform_vars if self.is_subroutine_qualified(u)
-            ]
-            resource_uniforms = [
-                u for u in resource_uniforms if not self.is_subroutine_qualified(u)
-            ]
-            data_uniforms = [
-                u
-                for u in self.uniform_vars
-                if not self._is_resource_type(u.vtype)
-                and not self.is_subroutine_qualified(u)
-            ]
-            push_constant_blocks = {}
-            descriptor_set_uniform_blocks = {}
-            arrayed_descriptor_set_uniform_blocks = []
-            ordinary_data_uniforms = []
-            for uniform in data_uniforms:
-                if self.is_push_constant_uniform(uniform):
-                    block_name = self.push_constant_block_name(uniform)
-                    push_constant_blocks.setdefault(block_name, []).append(uniform)
-                elif self.is_arrayed_descriptor_set_uniform_block(uniform):
-                    arrayed_descriptor_set_uniform_blocks.append(uniform)
-                else:
-                    block_name = self.descriptor_set_uniform_block_name(uniform)
-                    if block_name:
-                        descriptor_set_uniform_blocks.setdefault(block_name, []).append(
-                            uniform
-                        )
-                    else:
-                        ordinary_data_uniforms.append(uniform)
-
-            for uniform in resource_uniforms:
-                var_type = self.convert_type(uniform.vtype)
-                var_name = uniform.name
-                attributes = self.image_resource_attribute_suffix(
-                    uniform
-                ) + self.precision_qualifier_attribute_suffix(uniform)
-                array_suffix = self.array_suffix(uniform)
-                result += (
-                    self.indent_str
-                    + f"{var_type} {var_name}{array_suffix}{attributes};\n"
-                )
-
-            for uniform in subroutine_uniforms:
-                result += (
-                    self.indent_str
-                    + self.generate_variable_declaration(uniform)
-                    + ";\n"
-                )
-
-            for block_name, uniforms in push_constant_blocks.items():
-                result += self.indent_str + self.generate_push_constant_block(
-                    block_name, uniforms
-                )
-
-            for block_name, uniforms in descriptor_set_uniform_blocks.items():
-                result += self.indent_str + self.generate_descriptor_set_uniform_block(
-                    block_name, uniforms
-                )
-
-            for uniform in arrayed_descriptor_set_uniform_blocks:
-                result += (
-                    self.indent_str
-                    + self.generate_arrayed_descriptor_set_uniform_block(uniform)
-                )
-
-            if ordinary_data_uniforms:
-                ordinary_block_name = self.fallback_uniform_block_name(
-                    node,
-                    crossgl_structs,
-                    {
-                        *push_constant_blocks,
-                        *descriptor_set_uniform_blocks,
-                        *(
-                            self.uniform_block_name(uniform)
-                            for uniform in arrayed_descriptor_set_uniform_blocks
-                        ),
-                    },
-                )
-                result += self.indent_str + f"cbuffer {ordinary_block_name} {{\n"
-                self.increase_indent()
-                for uniform in ordinary_data_uniforms:
-                    var_type = self.convert_type(uniform.vtype)
-                    var_name = uniform.name
-                    array_suffix = self.array_suffix(uniform)
-                    attributes = self.vulkan_memory_model_qualifier_attribute_suffix(
-                        uniform
-                    )
-                    result += (
-                        self.indent()
-                        + f"{var_type} {var_name}{array_suffix}{attributes};\n"
-                    )
-                self.decrease_indent()
-                result += self.indent_str + "};\n"
-
-            result += "\n"
-
-        # Generate global constants
-        for const_var in getattr(node, "constant", []) or []:
-            result += (
-                self.indent_str
-                + self.generate_variable_declaration(const_var, array_on_type=True)
-                + ";\n"
-            )
-        if getattr(node, "constant", []):
-            result += "\n"
-
-        # Generate global variables
-        for ssbo_struct in self.anonymous_ssbo_block_structs:
-            result += (
-                self.indent_str
-                + self.anonymous_ssbo_block_declaration(ssbo_struct)
-                + "\n"
-            )
-
-        for global_var in getattr(node, "global_variables", []) or []:
-            if self.is_qualifier_only_builtin_declaration(global_var):
-                continue
-            if self.is_buffer_reference_forward_declaration(global_var):
-                continue
-            if self.is_anonymous_ssbo_member_variable(global_var):
-                continue
-            builtin_specialization = self.builtin_specialization_constant_declaration(
-                global_var
-            )
-            if builtin_specialization is not None:
-                result += self.indent_str + builtin_specialization + ";\n"
-                continue
-            structured_buffer_decl = self.structured_buffer_declaration(global_var)
-            if structured_buffer_decl is not None:
-                result += self.indent_str + structured_buffer_decl + ";\n"
-                continue
-            ssbo_block_decl = self.ssbo_block_declaration(global_var)
-            if ssbo_block_decl is not None:
-                result += self.indent_str + ssbo_block_decl + ";\n"
-                continue
-            result += (
-                self.indent_str
-                + self.private_global_prefix(global_var)
-                + self.generate_variable_declaration(global_var)
-                + ";\n"
-            )
-        if getattr(node, "global_variables", []):
-            result += "\n"
-
-        if fragment_uses_direct_outputs and self.outputs:
-            for output_var in self.outputs:
-                result += (
-                    self.indent_str
-                    + self.generate_variable_declaration(
-                        output_var,
-                        array_before_attributes=True,
-                    )
-                    + ";\n"
-                )
-            result += "\n"
-
-        if self.shader_type in self.NON_STRUCT_STAGE_TYPES and (
-            self.inputs or self.outputs
-        ):
-            for interface_var in [*self.inputs, *self.outputs]:
-                if self.is_graphics_interface_block_variable(interface_var):
-                    continue
-                result += (
-                    self.indent_str
-                    + self.generate_variable_declaration(interface_var)
-                    + ";\n"
-                )
-            result += "\n"
+        result = self.render_glsl_shader_globals(
+            node, crossgl_structs, fragment_uses_direct_outputs, result
+        )
 
         # Generate shader function
-        result += self.indent_str + f"{self.shader_type} {{\n"
-
-        layouts = getattr(node, "layouts", []) or []
-        if layouts:
-            self.increase_indent()
-            for layout in layouts:
-                result += self.indent() + f"{self.format_layout(layout)};\n"
-            result += "\n"
-            self.decrease_indent()
-
-        main_function = None
-        other_functions = []
-
-        for function in node.functions:
-            if function.name == "main":
-                main_function = function
-            else:
-                other_functions.append(function)
-
-        shadertoy_main_image = None
-        if main_function is None and self.shader_type == "fragment":
-            shadertoy_main_image = self.find_shadertoy_main_image(other_functions)
-
-        defined_function_signatures = {
-            self.function_signature(function)
-            for function in other_functions
-            if not self.is_function_prototype(function)
-        }
-
-        # Generate auxiliary functions first
-        for function in other_functions:
-            if (
-                self.is_function_prototype(function)
-                and self.function_signature(function) in defined_function_signatures
-            ):
-                continue
-            self.increase_indent()
-            result += self.indent() + self.generate_function(function) + "\n\n"
-            self.decrease_indent()
-
-        # Generate the main function if it exists
-        if main_function or shadertoy_main_image:
-            self.increase_indent()
-            input_parameter = (
-                f"{self.stage_struct_name()}Input input" if self.inputs else ""
-            )
-
-            # Determine function signature based on shader type
-            if self.shader_type == "vertex":
-                result += (
-                    self.indent()
-                    + f"{self.stage_struct_name()}Output main({input_parameter})"
-                )
-            elif self.shader_type == "fragment":
-                if self.is_fragment_explicit_entry_return(main_function):
-                    return_type = self.convert_type(main_function.return_type)
-                    semantic = self.semantic_attribute_suffix(
-                        getattr(main_function, "semantic", None)
-                    )
-                    result += (
-                        self.indent()
-                        + f"{return_type} main({input_parameter})"
-                        + semantic
-                    )
-                elif fragment_uses_direct_outputs:
-                    result += self.indent() + f"void main({input_parameter})"
-                else:
-                    output_type = "vec4"
-                    output_attributes = ""
-                    if self.outputs:
-                        output_var = self.outputs[0]
-                        output_type = self.convert_type(output_var.vtype)
-                        output_attributes = self.fragment_return_attribute_suffix(
-                            output_var, 0
-                        )
-                    result += (
-                        self.indent()
-                        + f"{output_type} main({input_parameter})"
-                        + output_attributes
-                    )
-            elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
-                result += self.indent() + "void main()"
-            else:
-                result += (
-                    self.indent()
-                    + f"{self.stage_struct_name()}Output main({input_parameter})"
-                )
-
-            result += " {\n"
-
-            self.increase_indent()
-
-            # For vertex shaders, create the output struct
-            if self.shader_type == "vertex":
-                result += self.indent() + f"{self.stage_struct_name()}Output output;\n"
-
-            # For fragment shaders, declare a local output if assignments are used
-            if (
-                self.shader_type == "fragment"
-                and self.outputs
-                and not fragment_uses_direct_outputs
-                and shadertoy_main_image is None
-            ):
-                output_type = self.convert_type(self.outputs[0].vtype)
-                output_name = self.outputs[0].name
-                result += self.indent() + f"{output_type} {output_name};\n"
-
-            # Generate statements for the main function
-            if shadertoy_main_image is not None:
-                for statement in self.generate_shadertoy_main_image_entrypoint(
-                    shadertoy_main_image, fragment_uses_direct_outputs
-                ):
-                    result += self.indent() + statement + "\n"
-            else:
-                # GLSL's void main() may leave early with `return;`; the entry now returns its outputs.
-                self.entry_bare_return_value = None
-                if self.shader_type == "vertex":
-                    self.entry_bare_return_value = "output"
-                elif (
-                    self.shader_type == "fragment"
-                    and self.outputs
-                    and not fragment_uses_direct_outputs
-                    and not self.is_fragment_explicit_entry_return(main_function)
-                ):
-                    self.entry_bare_return_value = self.outputs[0].name
-                # The entry's locals get a scope of their own, as other functions' do, so that a local that
-                # shadows a member of an anonymous buffer block is not read as that member.
-                self.push_variable_type_scope()
-                try:
-                    for statement in self.generate_statement_sequence(
-                        main_function.body
-                    ):
-                        result += self.indent() + statement + "\n"
-                finally:
-                    self.pop_variable_type_scope()
-                    self.entry_bare_return_value = None
-
-                if self.shader_type in ("vertex",) and not any(
-                    isinstance(stmt, ReturnNode) for stmt in main_function.body
-                ):
-                    result += self.indent() + "return output;\n"
-
-                if (
-                    self.shader_type == "fragment"
-                    and not fragment_uses_direct_outputs
-                    and not self.is_fragment_explicit_entry_return(main_function)
-                    and not any(
-                        isinstance(stmt, ReturnNode) for stmt in main_function.body
-                    )
-                ):
-                    output_name = (
-                        self.outputs[0].name if self.outputs else "gl_FragColor"
-                    )
-                    result += self.indent() + f"return {output_name};\n"
-
-            self.decrease_indent()
-            result += self.indent() + "}\n"
-            self.decrease_indent()
+        result = self.render_glsl_stage_block(
+            node, fragment_uses_direct_outputs, result
+        )
 
         result += self.indent_str + "}\n"
 
@@ -3696,13 +2948,13 @@ class GLSLToCrossGLConverter:
             equality = lower_aggregate_equality(self, node, left, right)
             if equality is not None:
                 return equality
-            return f"({left} {operator} {right})"
+            return import_narrow_binary(self, node, left, operator, right)
         elif isinstance(node, UnaryOpNode):
             if node.op in {"++", "--"}:
                 self.mark_structured_element_reference(node.operand)
             operand = self.generate_operand(node.operand)
             operator = crossgl_operator(node.op)
-            return f"({operator}{operand})"
+            return import_narrow_unary(self, node, operator, operand)
         elif isinstance(node, PostfixOpNode):
             self.mark_structured_element_reference(node.operand)
             operand = self.generate_operand(node.operand)

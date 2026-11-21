@@ -94,7 +94,7 @@
       "class": "silent",
       "component": "SPIR-V emitter (HLSL source)",
       "summary": "precise was not lowered to NoContraction",
-      "status": "open",
+      "status": "fixed",
       "cases": [
         "h_precise",
         "g_precise",
@@ -103,7 +103,11 @@
       "targets": [
         "spirv"
       ],
-      "note": "Main decorates only the operations of the precise declaration itself; h_precise diverges on MoltenVK and KosmicKrisp. Data-flow propagation of NoContraction is in review (core/precise-dataflow)."
+      "tests": [
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_hlsl_precise_local_qualifier_reaches_spirv",
+        "tests/test_translator/test_spirv_precise_dataflow.py::test_values_computed_into_other_locals_first_are_precise"
+      ],
+      "note": "NoContraction follows the data flow into every operation that contributes to a precise value (#4529), so h_precise, g_precise and s_nocontraction are preserved on lavapipe, MoltenVK and KosmicKrisp. The D3D12 WARP cells of these cases still diverge, the native HLSL reference included: WARP fuses DXC's unfused fmul and fsub, which is a property of the WARP JIT, not of the SPIR-V route."
     },
     {
       "id": "S5",
@@ -321,14 +325,17 @@
       "class": "silent",
       "component": "Metal importer with SPIR-V and GLSL emitters",
       "summary": "whole-file multi-kernel translation: the second kernel loses its entry status or bindings collide",
-      "status": "open",
-      "note": "GLSL output of a two-kernel Metal file has one void main, and the second kernel becomes a non-entry function without a diagnostic; one GLSL compilation unit has one entry point, so this needs a refusal or one output per entry. SPIR-V keeps both entry points.",
+      "status": "refused",
+      "note": "A GLSL compilation unit has one entry point per stage (GLSL 4.60 section 6.1). Whole-file GLSL translation of a program with two entries of one stage raises OpenGLRepeatedStageEntryError; translate with entry_point gives one artifact per entry, with its own bindings. SPIR-V, HLSL and Metal keep every entry in one module. Open M3 gap: HLSL keeps both kernels but moves the second one's buffer(0) to register(u1), and translate_with_metadata reports no HLSL bindings, so a host binding by the source slots binds the wrong buffer.",
       "probes": [
         {
           "source": "S16.metal",
           "target": "opengl",
           "expect": "refused"
         }
+      ],
+      "tests": [
+        "tests/test_translator/test_glsl_guarded_stage_entries.py"
       ]
     },
     {
@@ -431,19 +438,32 @@
       "class": "silent",
       "component": "CUDA importer",
       "summary": "__nv_bfloat16 imported as binary16 and size_t as a 32-bit integer",
-      "status": "open",
+      "status": "fixed",
       "probes": [
         {
           "source": "S21.cu",
           "target": "cgl",
           "expect": "translated",
           "present": [
-            "bfloat16",
-            "\\b(uint64|ulong)\\b"
+            "array<bfloat16>",
+            "\\bu64 n\\b|\\bn: u64\\b",
+            "var i: u64 = "
+          ],
+          "absent": [
+            "\\bf16\\b",
+            "__bfloat162float",
+            "\\bsize_t\\b"
           ]
         }
       ],
-      "note": "size_t still imports as a 32-bit integer, so index arithmetic wraps at 2^32."
+      "tests": [
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_and_ptrdiff_t_import_as_64_bit",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_size_t_index_arithmetic_is_64_bit_on_metal_and_spirv",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_imports_as_bfloat16_with_its_conversions",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_bfloat16_buffers_keep_two_byte_elements",
+        "tests/test_backend/test_CUDA/test_import_widths.py::test_sizeof_operands_import_as_crossgl_types"
+      ],
+      "note": "size_t and ptrdiff_t import as u64 and i64 on CUDA and HIP; OpenGL refuses a 64-bit subscript rather than truncating it."
     },
     {
       "id": "S22",
@@ -530,8 +550,15 @@
       "class": "silent",
       "component": "Metal importer",
       "summary": "the source-owned precise::pow wrapper calls the target pow for finite cases, 23.9 ulp under Apple's default options",
-      "status": "unverified",
-      "note": "The importer still emits a __crossgl_metal_power_float wrapper whose finite path calls pow. No conformance case measures pow accuracy against MSL's 16 ulp bound yet."
+      "status": "fixed",
+      "cases": [
+        "m_precise_pow"
+      ],
+      "tests": [
+        "tests/test_translator/test_metal_power.py::test_precise_power_runs_the_portable_power_over_the_normal_range",
+        "tests/test_translator/test_metal_power.py::test_power_executes_metal_subnormal_control"
+      ],
+      "note": "precise::pow now calls __crossgl_metal_precise_power_float, whose finite path is the fdlibm binary32 power over every normal result and overflow; only subnormal results and subnormal operands keep the target's pow, because flushing them is the target's choice. Before the fix m_precise_pow diverged on 9 of the 10 executed Metal, OpenGL and Vulkan cells: by up to 483 ulp between 2^-120 and 2^120, and by overflowing or vanishing at the ends of the range. After it every cell is within 1 ulp. An unqualified metal::pow keeps the target's pow unless the portable-finite profile is selected."
     },
     {
       "id": "S27",
@@ -571,10 +598,12 @@
       "status": "open",
       "cases": [
         "u_warp_reduce",
+        "x_warp_vote",
+        "x_warp_sync_memory",
         "m_simd_sum",
         "m_simd_divergent"
       ],
-      "note": "Single-file Metal to HLSL still emits numthreads(1, 1, 1) and CUDA to SPIR-V LocalSize 1 1 1; u_warp_reduce diverges on lavapipe. The project layer supplies host sizes, but a single file has no refusal."
+      "note": "Single-file host-sized kernels now take the host's size from the threadgroup_size source option, or emit specialization constants (SPIR-V, GLSL) or macros (HLSL), and refuse where a size is required. CUDA warp shuffles, votes, reductions, __match_any_sync and __syncwarp no longer lower to wave operations, whose subgroup has 4 or 8 lanes on lavapipe: they are emulated per 32-lane warp through workgroup memory (u_warp_reduce and x_warp_vote are preserved on lavapipe, llvmpipe, MoltenVK, KosmicKrisp and Metal); __syncwarp and the CUDA and HIP __syncthreads fence all memory on each side of the workgroup barrier (x_warp_sync_memory), and __activemask and __match_all_sync are refused. Remaining: the WARP cells of u_warp_reduce need a fresh Windows run, and m_simd_sum and m_simd_divergent are driver-rejected on llvmpipe GL."
     },
     {
       "id": "S30",
@@ -611,7 +640,7 @@
           "target": "vulkan",
           "expect": "translated",
           "present": [
-            "FMin",
+            "NMin",
             "OpSelect"
           ]
         }
@@ -746,18 +775,38 @@
       "class": "invalid",
       "component": "Rust and Mojo emitters",
       "summary": "CrossGL char became Rust char or Mojo String",
-      "status": "open",
+      "status": "fixed",
       "probes": [
         {
           "source": "V8.cgl",
           "target": "rust",
           "expect": "translated",
+          "present": [
+            "\\bc: i8\\b"
+          ],
           "absent": [
             ":\\s*char\\b"
           ]
+        },
+        {
+          "source": "V8.cgl",
+          "target": "mojo",
+          "expect": "translated",
+          "present": [
+            "\\bInt8\\b"
+          ],
+          "absent": [
+            "\\bString\\b"
+          ]
         }
       ],
-      "note": "Rust still declares char c: char and Mojo String."
+      "note": "CrossGL char is a signed 8-bit integer: Rust i8 and Mojo Int8, with C integer promotion on Mojo; a literal without a one-byte value is refused.",
+      "tests": [
+        "tests/test_translator/test_codegen/test_rust_codegen.py::test_char_is_a_signed_8_bit_integer_in_rust",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::test_rust_refuses_a_char_literal_without_a_single_byte_value",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::test_mojo_char_and_short_operands_promote_to_int",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::test_mojo_refuses_a_char_literal_without_a_single_byte_value"
+      ]
     },
     {
       "id": "V9",
@@ -797,7 +846,7 @@
       "class": "invalid",
       "component": "CUDA and HIP emitters",
       "summary": "a graphics entry point emitted as a __device__ function instead of a refusal",
-      "status": "open",
+      "status": "refused",
       "probes": [
         {
           "source": "V11.frag",
@@ -810,7 +859,12 @@
           "expect": "refused"
         }
       ],
-      "note": "A GLSL fragment shader still translates to CUDA and HIP without a kernel."
+      "note": "CUDA and HIP declare only __global__ kernels; vertex, fragment, geometry, tessellation, mesh, task and ray-tracing entries are refused with StageUnsupportedError instead of becoming __device__ functions or no-op placeholder hooks.",
+      "tests": [
+        "tests/test_translator/test_codegen/test_backend_registry.py::test_kernel_only_backends_refuse_graphics_stages",
+        "tests/test_translator/test_translation_pipeline.py::test_native_graphics_sources_are_refused_on_kernel_only_targets",
+        "tests/test_examples_contract.py::test_graphics_examples_are_refused_on_kernel_only_targets"
+      ]
     },
     {
       "id": "V12",

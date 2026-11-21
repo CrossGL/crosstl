@@ -413,8 +413,20 @@ def test_latency_counts_timeouts_at_the_limit_and_checks_budgets():
         "Latency budget exceeded"
     )
     assert run.check_budgets(summary, {"p95Seconds": {}})[0].startswith(
-        "No wall latency budget"
+        "No wall p95 latency budget"
     )
+    # The median and the maximum have budgets of their own; the timed-out cell is the maximum.
+    assert summary["latency"]["metal"]["p50Seconds"] == 0.5
+    assert run.check_budgets(summary, {"p50Seconds": {"metal": 0.5}}) == []
+    assert run.check_budgets(summary, {"p50Seconds": {"metal": 0.4}}) == [
+        "Latency budget exceeded for metal: wall p50 0.5 s > 0.4 s"
+    ]
+    assert run.check_budgets(summary, {"maxSeconds": {"metal": 10}}) == [
+        "Latency budget exceeded for metal: wall max 300 s > 10 s"
+    ]
+    assert run.check_budgets(summary, {"maxSeconds": {}}) == [
+        "No wall max latency budget for source language metal"
+    ]
     # CPU time is charged the limit for the timed-out cell as well, and has its own budget.
     assert summary["latency"]["metal"]["p95CpuSeconds"] == 300
     assert run.check_budgets(summary, {"p95CpuSeconds": {"metal": 1}})[0].startswith(
@@ -425,7 +437,13 @@ def test_latency_counts_timeouts_at_the_limit_and_checks_budgets():
 def test_committed_budgets_and_scoreboards_match_the_manifest():
     budgets = json.loads(run.BUDGETS.read_text())
     assert budgets["timeoutSeconds"] > 0
-    assert set(budgets["p95Seconds"]) == set(manifest.LANGUAGES)
+    for key, _kind, _statistic in run.LATENCY_BUDGETS:
+        assert set(budgets[key]) == set(manifest.LANGUAGES), key
+    # A source language that every target translates within the translation-time goal keeps that goal as its
+    # budget: a median of 0.5 s and no translation over 10 s.
+    for language in ("glsl", "hlsl", "spirv"):
+        assert budgets["p50Seconds"][language] <= 0.5
+        assert budgets["maxSeconds"][language] <= 10
     data = load()
     for path in sorted(run.SCOREBOARDS.glob("*.json")):
         board = json.loads(path.read_text())
@@ -476,6 +494,93 @@ def test_worker_translates_and_times_one_unit(tmp_path):
         )
     finally:
         worker.stop()
+
+
+TWO_METAL_KERNELS = """#include <metal_stdlib>
+using namespace metal;
+kernel void add_one(device uint *data [[buffer(0)]], uint i [[thread_position_in_grid]]) { data[i] += 1u; }
+kernel void double_it(device float *data [[buffer(0)]], uint i [[thread_position_in_grid]]) { data[i] *= 2.0f; }
+"""
+
+
+def test_worker_translates_each_entry_where_a_unit_holds_one_per_stage(tmp_path):
+    """GLSL refuses a whole file with two kernels, so the corpus cell translates and checks each entry alone."""
+    source = tmp_path / "two.metal"
+    source.write_text(TWO_METAL_KERNELS)
+    artifact = tmp_path / "out" / "two.metal.comp"
+    worker = run.Worker(timeout=120)
+    try:
+        result = worker.translate(
+            {
+                "id": "two",
+                "source": str(source),
+                "sourceBackend": "metal",
+                "backend": "opengl",
+                "artifact": str(artifact),
+            }
+        )
+    finally:
+        worker.stop()
+    assert result["status"] == "translated" and result["markers"] == 0
+    entries = result["entryArtifacts"]
+    assert [(e["stage"], e["entry"]) for e in entries] == [
+        ("compute", "add_one"),
+        ("compute", "double_it"),
+    ]
+    assert not artifact.exists()
+    paths = run.translated_artifacts(result, artifact)
+    assert [path.name for path in paths] == [
+        "two.metal.0.add_one.comp",
+        "two.metal.1.double_it.comp",
+    ]
+    texts = [path.read_text() for path in paths]
+    assert all(text.count("void main()") == 1 for text in texts)
+    assert "1u" in texts[0] and "2.0" in texts[1] and "2.0" not in texts[0]
+    accepted = {"verdict": "accepted"}
+    assert run.classify(result, accepted, artifact, "glsl") == "usable"
+    paths[1].write_text("#version 450\n")
+    # An entry artifact without an entry point degrades the whole cell.
+    assert run.classify(result, accepted, artifact, "glsl") == "degraded"
+
+
+def test_entry_artifacts_are_checked_one_stage_at_a_time(tmp_path, monkeypatch):
+    seen = []
+
+    def check(path, target, stages):
+        seen.append((Path(path).name, target, tuple(stages)))
+        accepted = "bad" not in str(path)
+        return {
+            "verdict": "accepted" if accepted else "rejected",
+            "commands": [str(path)],
+            "log": "" if accepted else "syntax error",
+        }
+
+    monkeypatch.setattr(checks, "check", check)
+    translation = {
+        "status": "translated",
+        "entryArtifacts": [
+            {"entry": "a", "stage": "vertex", "artifact": str(tmp_path / "u.0.a.glsl")},
+            {
+                "entry": "b",
+                "stage": "fragment",
+                "artifact": str(tmp_path / "u.1.bad.glsl"),
+            },
+        ],
+    }
+    verdict = run.check_translation(
+        translation, tmp_path / "u.glsl", "glsl", ("vertex", "fragment")
+    )
+    assert seen == [
+        ("u.0.a.glsl", "glsl", ("vertex",)),
+        ("u.1.bad.glsl", "glsl", ("fragment",)),
+    ]
+    assert (
+        verdict["verdict"] == "rejected" and verdict["log"] == "entry b: syntax error"
+    )
+    assert verdict["commands"] == [
+        str(tmp_path / "u.0.a.glsl"),
+        str(tmp_path / "u.1.bad.glsl"),
+    ]
 
 
 def test_interrupted_translation_resumes_from_its_journal(tmp_path):

@@ -7,6 +7,10 @@ declarator ([basic.scope.pdecl]/1). Member-call lowering resolves a receiver
 from the declaration that introduces it, so a struct-typed name after the
 first declarator of a list would otherwise have no declaration of its own.
 
+A type alias of a struct (``typedef S A;`` or ``using A = S;``) names the
+same type, so ``A a, b;`` splits like ``S a, b;`` wherever the alias is in
+scope.
+
 Only simple-declarations that start a statement are split, and only when every
 declarator is a plain (optionally pointer, reference or array) declarator with
 an optional initializer. ``for`` init-statements, parameter lists and any list
@@ -15,7 +19,7 @@ that cannot be split exactly stay unchanged.
 
 import re
 from bisect import bisect_right
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 _SPECIFIER = (
     r"(?:const|volatile|thread|threadgroup|threadgroup_imageblock|device|"
@@ -93,14 +97,20 @@ def split_struct_declarator_lists(
     code: str,
     struct_names: Iterable[str],
     ignored_spans: Sequence[Tuple[int, int]] = (),
+    names_struct_at: Optional[Callable[[str, int], bool]] = None,
 ) -> str:
-    """Split ``S a, b;`` into ``S a; S b;`` for each concrete struct ``S``."""
+    """Split ``S a, b;`` into ``S a; S b;`` for each concrete struct ``S``.
+
+    ``struct_names`` may include alias names. When ``names_struct_at`` is
+    given, a list is split only if ``names_struct_at(name, offset)`` confirms
+    that the type name at ``offset`` denotes a struct there.
+    """
     names = sorted(set(struct_names), key=lambda name: (-len(name), name))
     if not names or "," not in code:
         return code
     pattern = re.compile(
         rf"(?<![\w:.>])(?:{_SPECIFIER}\s+)*"
-        rf"(?:{'|'.join(re.escape(name) for name in names)})\b"
+        rf"(?P<type>{'|'.join(re.escape(name) for name in names)})\b"
     )
     spans = sorted(ignored_spans)
     replacements: List[Tuple[int, int, str]] = []
@@ -108,6 +118,10 @@ def split_struct_declarator_lists(
     for match in pattern.finditer(code):
         start = match.start()
         if start < last_end:
+            continue
+        if names_struct_at is not None and not names_struct_at(
+            match.group("type"), match.start("type")
+        ):
             continue
         if _previous_significant_character(code, start, spans) not in (
             None,

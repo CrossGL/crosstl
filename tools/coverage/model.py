@@ -49,6 +49,8 @@ LANGUAGES = (
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The direction of a translation matrix result, which translates a native probe into another language (:mod:`.pairs`).
+PAIR = "pair"
 # The language an imported probe is emitted to and validated in when CrossTL has no generator for its own: HLSL, the
 # target whose output row covers the most of what OpenCL C kernels call.
 ROUND_TRIPS = {"opencl": "hlsl"}
@@ -134,6 +136,16 @@ class Type:
 
 
 VOID = Type.other("void")
+# The opaque spelling of a C pointer to any memory, which CUDA's address space conversions return. A probe holds the
+# result in a local of the language's generic pointer type.
+GENERIC_POINTER = "void *"
+# The instruction kinds an AMD scheduling group of MAX's ``schedule_group_barrier`` takes, and the mask a probe passes:
+# every ALU instruction (max/gpu/sync/sync.mojo).
+SCHEDULE_MASK = "AMDScheduleBarrierMask"
+SCHEDULE_MASK_VALUE = f"{SCHEDULE_MASK}.ALL_ALU"
+# The type of the binary function MAX's generic warp reductions apply (max/gpu/primitives/warp.mojo), which a Mojo
+# probe defines as the sum of its two arguments.
+REDUCE_CLOSURE = "_ReduceClosure"
 # The OpenCL C enumerated types of the synchronization, atomic, event-profiling and enqueue functions, whose arguments
 # are named constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as
 # ``opaque``.
@@ -209,6 +221,16 @@ def descriptor_reading(opaque: str) -> tuple[Type, str] | None:
     )
 
 
+# DXC's BuiltInTrianglePositions, the three object-space vertex positions of a hit triangle that
+# TriangleObjectPositions returns (HLSL shader model 6.10), as the intrinsic table spells it.
+TRIANGLE_POSITIONS = "triangle_positions"
+
+
+def struct_reading(opaque: str) -> tuple[Type, str] | None:
+    """How a probe reads a built-in struct that a call returns: through its first member."""
+    return (Type("float", (3,)), "{}.p0") if opaque == TRIANGLE_POSITIONS else None
+
+
 _TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")
 
 
@@ -229,11 +251,13 @@ def tuple_element(opaque: str) -> tuple[Type, int] | None:
 @dataclass(frozen=True)
 class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
+    ``atomic``, an atomic value whose method the probe calls, made of the output buffer's element,
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
     value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
-    a uniform, ``workgroup``, a variable the compute workgroup shares, ``buffer``, a runtime-sized array, for which
-    the probe passes its input buffer of the parameter's type, or ``condition``, a constant the compiler checks, for
-    which the probe passes true.
+    a uniform, ``workgroup``, a variable the compute workgroup shares, ``workgroup address`` and ``constant address``,
+    a pointer to such a variable or to one in constant memory, ``buffer``, a runtime-sized array, for which the probe
+    passes its input buffer of the parameter's type, ``condition``, a constant the compiler checks, for which the
+    probe passes true, or ``mutable``, a receiver the method changes in place, which the probe stores after the call.
     """
 
     type: Type
@@ -304,6 +328,12 @@ class Result:
     sources: tuple[str, str] = field(default=(), compare=False, repr=False)
     # The runtime :mod:`.execution` ran both on, when it did.
     runtime: str = ""
+    # The language a cell of the translation matrix (:mod:`.pairs`) translates the feature's native probe into; empty
+    # for a row's result, whose translation is in the feature's own language.
+    into: str = ""
+    # Why :mod:`.execution` did not run a supported compute probe on the runtime it selected, starting with
+    # ``on <runtime>``; empty when the probe ran, or when no runtime was there to run it.
+    unrun: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

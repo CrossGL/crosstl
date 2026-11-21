@@ -1,5 +1,7 @@
 """How each language's reference compiler lowers a probe to SPIR-V, which :mod:`.semantic`, :mod:`.decorations`,
-:mod:`.execution` and :mod:`.spirv_input` compare and run."""
+:mod:`.execution` and :mod:`.spirv_input` compare and run, and the parts of that SPIR-V a host must not see: the
+capabilities rust-gpu declares and the counter buffers DXC declares that the module never uses.
+"""
 
 from __future__ import annotations
 
@@ -161,3 +163,88 @@ def lower(
         if result.returncode != 0:
             return "", result.stderr.strip()[-2000:]
         return result.stdout, ""
+
+
+_CAPABILITY = re.compile(r"^[ \t]*OpCapability (\w+)[ \t]*\n", re.M)
+
+
+def without_unused_capabilities(assembly: str) -> str:
+    """``assembly`` without each capability that spirv-val accepts it without.
+
+    rust-gpu compiles every probe with all of ``rustgpu.CAPABILITIES`` enabled and removes only the ones it knows how
+    to prove unused. A Vulkan module may only declare capabilities the device enables (Vulkan 1.4,
+    VUID-VkShaderModuleCreateInfo-pCode-08740), and lavapipe will not create a pipeline from one that declares more.
+    spirv-val requires every capability an instruction, type, decoration or built-in of the module needs, so what it
+    accepts is what the module uses.
+    """
+    target = validators.spirv_environment([assembly])
+    assemble, validate = validators.command("spirv-as"), validators.command("spirv-val")
+    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
+
+        def valid(text: str) -> bool:
+            Path(scratch, "probe.spvasm").write_text(text)
+            steps = (
+                [*assemble, "--target-env", target, "probe.spvasm", "-o", "probe.spv"],
+                [*validate, "--target-env", target, "probe.spv"],
+            )
+            return all(validators.run(step, scratch).accepted for step in steps)
+
+        # Removing a later line leaves the offsets of the earlier ones in place.
+        for found in reversed(list(_CAPABILITY.finditer(assembly))):
+            trimmed = assembly[: found.start()] + assembly[found.end() :]
+            if found[1] != "Shader" and valid(trimmed):
+                assembly = trimmed
+    return assembly
+
+
+# DXC declares a counter buffer, of this type, for every RWStructuredBuffer a function takes as a parameter, and
+# -fspv-preserve-bindings keeps it, with a binding of its own, when nothing uses it.
+_COUNTER = re.compile(r'^\s*OpName (%\S+) "type\.ACSBuffer\.counter"$', re.M)
+# One instruction that defines an id: the id, the opcode and the operands.
+DEFINITION = re.compile(r"^\s*(%\S+) = (Op\w+)((?: \S+)*)\s*$")
+# Instructions that name or decorate an id without using it.
+_ANNOTATIONS = frozenset({"OpName", "OpDecorate"})
+
+
+def without_unused_counters(assembly: str) -> str:
+    """``assembly`` without the counter buffers DXC declares that nothing uses.
+
+    The source declares no such buffer and the shader never reads it, so it is no resource the host binds.
+    """
+    types = set(_COUNTER.findall(assembly))
+    if not types:
+        return assembly
+    lines = assembly.splitlines(keepends=True)
+    defined = [DEFINITION.match(line) for line in lines]
+    pointers = {
+        found[1]
+        for found in defined
+        if found and found[2] == "OpTypePointer" and found[3].split()[-1] in types
+    }
+    counters = {
+        found[1]
+        for found in defined
+        if found and found[2] == "OpVariable" and found[3].split()[0] in pointers
+    }
+    used = set()
+    for line, found in zip(lines, defined):
+        words = line.split()
+        if (found and found[1] in counters) or words[:1] == ["OpEntryPoint"]:
+            continue
+        used |= counters.intersection(words[2:] if _annotates(words) else words)
+    unused = counters - used
+    kept = []
+    for line, found in zip(lines, defined):
+        words = line.split()
+        if (found and found[1] in unused) or (_annotates(words) and words[1] in unused):
+            continue
+        if words[:1] == ["OpEntryPoint"]:
+            line = re.sub(
+                r"[ \t]+(%\S+)", lambda m: "" if m[1] in unused else m[0], line
+            )
+        kept.append(line)
+    return "".join(kept)
+
+
+def _annotates(words: list[str]) -> bool:
+    return bool(words) and words[0] in _ANNOTATIONS

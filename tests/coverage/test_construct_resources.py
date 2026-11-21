@@ -136,7 +136,7 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
         (
             "metal",
             "array-of-textures-nonuniform-index",
-            "uint k = uint(fin[i]) & 1u;\n",
+            "int k = int(fin[i]) & 1;\n",
         ),
         ("rust", "array-of-textures-loop-index", "for k in 0..2 {\n"),
         (

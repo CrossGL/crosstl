@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +20,13 @@ from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import hip_import_partial_output
+
+# windows-latest ships an MSVC STL that refuses any Clang older than its own minimum (error STL1000) before
+# parsing a single declaration. _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is the STL's documented override; the
+# syntax check of the generated HIP source still runs in full.
+HOST_STL_FLAGS = (
+    ["-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"] if sys.platform == "win32" else []
+)
 
 ROCM_BIT_EXTRACT_HIP = """
 #include <hip/hip_runtime.h>
@@ -1154,22 +1162,21 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "overlapping storage is not modeled" not in result
         assert (
-            "// HIP union compute_type_interface represented as struct-like layout; "
-            "overlapping storage is not modeled"
-        ) in result
-        assert "struct compute_type_interface {" in result
-        assert "f32 f32;" in result
-        assert "f64 f64;" in result
-        assert "i32 i32;" in result
+            "@union_layout(8, 8, little_endian, hip) struct compute_type_interface {"
+            in result
+        )
+        assert "@union_member_layout(0, 4, 4) f32 f32;" in result
+        assert "@union_member_layout(0, 8, 8) f64 f64;" in result
+        assert "@union_member_layout(0, 4, 4) i32 i32;" in result
         local_union = re.search(
-            r"// HIP union (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) "
-            r"represented as struct-like layout; overlapping storage is not modeled",
+            r"@union_layout\(4, 4, little_endian, hip\) "
+            r"struct (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) \{",
             result,
         )
         assert local_union is not None
         local_union_name = local_union.group(1)
-        assert f"struct {local_union_name} {{" in result
         assert f"var ua: {local_union_name} = {{a}};" in result
         assert "consume(ua.f);" in result
         assert "union compute_type_interface {" not in result
@@ -1612,7 +1619,7 @@ class TestHipCodeGen:
         assert "__syncwarp" not in result
         assert "None" not in result
 
-    def test_rocm_docs_syncthreads_vote_intrinsics_emit_reparseable_diagnostic(self):
+    def test_rocm_docs_syncthreads_vote_intrinsics_count_in_a_workgroup_variable(self):
         # Source: ROCm HIP C++ language extensions, HIP 7.0.51831 docs.
         # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.2/how-to/hip_cpp_language_extensions.html#synchronization-functions
         code = """
@@ -1629,16 +1636,19 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
-        )
+        result = HipToCrossGLConverter().generate(ast)
 
-        # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
-        for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
-            assert f"HIP block-wide sync vote {name}((idx < n))" in message
-        assert "__syncthreads_count((idx < n))" not in result
-        assert "__syncthreads_and((idx < n))" not in result
-        assert "__syncthreads_or((idx < n))" not in result
+        # Each is a barrier that also reduces the predicate over the block, counted in one workgroup variable.
+        assert "var<workgroup> crossgl_block_votes: u32;" in result
+        assert (
+            "i32(crossgl_block_count(((idx < n) != 0), gl_LocalInvocationIndex))"
+            in result
+        )
+        assert (
+            "i32(crossgl_block_count(!(((idx < n) != 0)), gl_LocalInvocationIndex) == 0u)"
+            in result
+        )
+        assert "__syncthreads_" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_rocm_hip_ldg_address_load_codegen_reparse(self):
@@ -6813,7 +6823,7 @@ class TestHipCodeGen:
         assert "textureDesc.filterMode = hipFilterModePoint;" in result
         assert "var manualFilter: i32 = textureDesc.filterMode;" in result
         assert "viewDesc.width = 64;" in result
-        assert "var manualWidth: u32 = viewDesc.width;" in result
+        assert "var manualWidth: u64 = viewDesc.width;" in result
         assert "var resErr: hipError_t = hipSuccess;" in result
         assert (
             "ints[5] = (/* HIP device query: "
@@ -6830,7 +6840,7 @@ class TestHipCodeGen:
             "textureObject.resourceViewDesc.lastLayer(texObj) */ 0);"
         ) in result
         assert "(aliasViewDesc.firstLayer++);" in result
-        assert "var manualLayer: u32 = aliasViewDesc.firstLayer;" in result
+        assert "var manualLayer: u64 = aliasViewDesc.firstLayer;" in result
         assert "ints[0] = resourceDesc.resType;" not in result
         assert "ints[1] = textureDesc.filterMode;" not in result
         assert "dims[0] = viewDesc.width;" not in result
@@ -6838,8 +6848,8 @@ class TestHipCodeGen:
         assert "ints[6] = aliasTextureDesc.maxAnisotropy;" not in result
         assert "dims[7] = aliasViewDesc.lastLayer;" not in result
         assert "var manualFilter: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
-        assert "var manualLayer: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
+        assert "var manualLayer: u64 = (/* HIP device query:" not in result
 
     def test_hip_texture_object_nested_descriptor_member_reads_emit_metadata_expressions(
         self,
@@ -6923,7 +6933,7 @@ class TestHipCodeGen:
         assert "textureDesc.addressMode[0] = hipAddressModeClamp;" in result
         assert "var manualAddress: i32 = textureDesc.addressMode[0];" in result
         assert "resourceDesc.res.pitch2D.width = 32;" in result
-        assert "var manualPitchWidth: u32 = resourceDesc.res.pitch2D.width;" in result
+        assert "var manualPitchWidth: u64 = resourceDesc.res.pitch2D.width;" in result
         assert "ptrs[0] = resourceDesc.res.linear.devPtr;" in result
         assert "ptrs[1] = resourceDesc.res.pitch2D.devPtr;" in result
         assert "var resErr: hipError_t = hipSuccess;" in result
@@ -6950,7 +6960,7 @@ class TestHipCodeGen:
         assert "textureObject.resourceDesc.res.mipmap.mipmap(texObj)" not in result
         assert "textureObject.resourceDesc.res.array.array(texObj)" not in result
         assert "var manualAddress: i32 = (/* HIP device query:" not in result
-        assert "var manualPitchWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualPitchWidth: u64 = (/* HIP device query:" not in result
         assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
 
     def test_hip_texture_object_descriptor_unmapped_fields_remain_raw(self):
@@ -7179,14 +7189,14 @@ class TestHipCodeGen:
         assert "channelDesc.x = 32;" in result
         assert "var manualChannelX: i32 = channelDesc.x;" in result
         assert "arrayDesc.Width = 99;" in result
-        assert "var manualWidth: u32 = arrayDesc.Width;" in result
+        assert "var manualWidth: u64 = arrayDesc.Width;" in result
         assert "(array3DDesc.Flags++);" in result
         assert "var manualFlags: i32 = array3DDesc.Flags;" in result
         assert "ints[0] = channelDesc.x;" not in result
         assert "dims[0] = arrayDesc.Width;" not in result
         assert "dims[2] = array3DDesc.Width;" not in result
         assert "var manualChannelX: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
         assert "var manualFlags: i32 = (/* HIP device query:" not in result
 
     def test_hip_array_info_descriptor_extent_member_reads_emit_metadata_expressions(
@@ -7251,7 +7261,7 @@ class TestHipCodeGen:
         assert "desc.x = 16;" in result
         assert "var manualDescX: i32 = desc.x;" in result
         assert "extent.width = 64;" in result
-        assert "var manualWidth: u32 = extent.width;" in result
+        assert "var manualWidth: u64 = extent.width;" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert (
             "ints[5] = (/* HIP device query: " "array.info.channelDesc.f(array) */ 0);"
@@ -7264,7 +7274,7 @@ class TestHipCodeGen:
             in result
         )
         assert "(statusExtent.depth++);" in result
-        assert "var manualDepth: u32 = statusExtent.depth;" in result
+        assert "var manualDepth: u64 = statusExtent.depth;" in result
         assert "ints[0] = desc.x;" not in result
         assert "dims[0] = extent.width;" not in result
         assert "flagsOut[0] = flags;" not in result
@@ -7272,8 +7282,8 @@ class TestHipCodeGen:
         assert "dims[3] = statusExtent.height;" not in result
         assert "flagsOut[1] = statusFlags;" not in result
         assert "var manualDescX: i32 = (/* HIP device query:" not in result
-        assert "var manualWidth: u32 = (/* HIP device query:" not in result
-        assert "var manualDepth: u32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u64 = (/* HIP device query:" not in result
+        assert "var manualDepth: u64 = (/* HIP device query:" not in result
 
     def test_hip_descriptor_array_outputs_clear_stale_metadata(self):
         code = """
@@ -9157,12 +9167,12 @@ class TestHipCodeGen:
             "device: device */ 0);"
         ) in result
         assert (
-            "var total: u32 = (/* HIP device property: totalGlobalMem */ 0);"
+            "var total: u64 = (/* HIP device property: totalGlobalMem */ 0);"
         ) in result
         assert "props.multiProcessorCount = 7;" in result
         assert "var sms: i32 = props.multiProcessorCount;" not in result
         assert "var warp: i32 = props.warpSize;" not in result
-        assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
+        assert "var total: u64 = propsPtr->totalGlobalMem;" not in result
 
     def test_hip_device_property_string_array_outputs_clear_stale_metadata(self):
         code = """
@@ -9307,7 +9317,7 @@ class TestHipCodeGen:
             "out[0] = (/* HIP device query: totalMem, device: device */ 0);" in result
         )
         assert "total = 1024;" in result
-        assert "var manualTotal: u32 = total;" in result
+        assert "var manualTotal: u64 = total;" in result
         assert (
             "// HIP get device compute capability: major output: major, "
             "minor output: minor, device: (device + 1)"
@@ -9328,15 +9338,15 @@ class TestHipCodeGen:
         ) in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert (
-            "var fromStatus: u32 = (/* HIP device query: totalMem, "
+            "var fromStatus: u64 = (/* HIP device query: totalMem, "
             "device: (device + 2) */ 0);"
         ) in result
         assert "out[0] = total;" not in result
         assert "var packed: i32 = ((major * 10) + minor);" not in result
-        assert "var manualTotal: u32 = (/* HIP device query:" not in result
+        assert "var manualTotal: u64 = (/* HIP device query:" not in result
         assert "var manualMajor: i32 = (/* HIP device query:" not in result
         assert "var manualMinor: i32 = (/* HIP device query:" not in result
-        assert "var fromStatus: u32 = statusTotal;" not in result
+        assert "var fromStatus: u64 = statusTotal;" not in result
 
     def test_hip_device_current_and_count_reads_emit_metadata_expressions(self):
         code = """
@@ -9460,14 +9470,14 @@ class TestHipCodeGen:
             "value: limitValue"
         ) in result
         assert "limitValue = 4096;" in result
-        assert "var manualLimit: u32 = limitValue;" in result
+        assert "var manualLimit: u64 = limitValue;" in result
         assert (
             "// HIP get device limit: output: statusLimit, "
             "limit: hipLimitPrintfFifoSize"
         ) in result
         assert "var errLimit: hipError_t = hipSuccess;" in result
         assert (
-            "var statusLimitValue: u32 = "
+            "var statusLimitValue: u64 = "
             "(/* HIP device query: limit.hipLimitPrintfFifoSize */ 0);"
         ) in result
         assert "// HIP get device flags: output: flags" in result
@@ -9484,7 +9494,7 @@ class TestHipCodeGen:
         assert "var capturedFlags: u32 = flags;" not in result
         assert "var manualDevice: i32 = (/* HIP device query:" not in result
         assert "var manualBusDevice: i32 = (/* HIP device query:" not in result
-        assert "var manualLimit: u32 = (/* HIP device query:" not in result
+        assert "var manualLimit: u64 = (/* HIP device query:" not in result
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
 
     def test_hip_cache_and_shared_memory_config_reads_emit_metadata_expressions(
@@ -10275,7 +10285,7 @@ class TestHipCodeGen:
             "stream.captureDependencyCount(stream) */ 0);"
         ) in result
         assert "numDeps = 4;" in result
-        assert "var manualNumDeps: u32 = numDeps;" in result
+        assert "var manualNumDeps: u64 = numDeps;" in result
         assert "var errRange: hipError_t = hipSuccess;" in result
         assert (
             "out[10] = (/* HIP device query: streamPriorityRange.least */ 0);" in result
@@ -10313,7 +10323,7 @@ class TestHipCodeGen:
         assert "var manualGreatestPriority: i32 = (/* HIP device query:" not in result
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
         assert "var manualPriority: i32 = (/* HIP device query:" not in result
-        assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
+        assert "var manualNumDeps: u64 = (/* HIP device query:" not in result
 
     def test_hip_stream_capture_outputs_clear_stale_metadata(self):
         code = """
@@ -10854,7 +10864,7 @@ class TestHipCodeGen:
         assert "basePtr = devicePtr;" in result
         assert "rangeSize = 3;" in result
         assert "var manualBase: ptr<void> = basePtr;" in result
-        assert "var manualRangeSize: u32 = rangeSize;" in result
+        assert "var manualRangeSize: u64 = rangeSize;" in result
         assert (
             "// HIP pointer attribute: output: pointerAttrValue, "
             "attribute: hipPointerAttributeMemoryType, pointer: devicePtr"
@@ -10908,15 +10918,15 @@ class TestHipCodeGen:
             "virtualMemory.allocationGranularity("
             "prop, hipMemAllocationGranularityMinimum) */ 0);"
         ) in result
-        assert "var manualFreeMem: u32 = freeMem;" in result
-        assert "var manualTotalMem: u32 = totalMem;" in result
+        assert "var manualFreeMem: u64 = freeMem;" in result
+        assert "var manualTotalMem: u64 = totalMem;" in result
         assert "var manualPointerAttrValue: i32 = pointerAttrValue;" in result
-        assert "var manualPointerSize: u32 = pointerSize;" in result
+        assert "var manualPointerSize: u64 = pointerSize;" in result
         assert "var manualAccessFlags: u64 = accessFlags;" in result
-        assert "var manualPoolAttrValue: u32 = poolAttrValue;" in result
+        assert "var manualPoolAttrValue: u64 = poolAttrValue;" in result
         assert "var manualPoolAccessFlags: u64 = poolAccessFlags;" in result
         assert "var manualHostFlags: u32 = hostFlags;" in result
-        assert "var manualAllocationGranularity: u32 = allocationGranularity;" in result
+        assert "var manualAllocationGranularity: u64 = allocationGranularity;" in result
         assert "var errElapsed: hipError_t = hipSuccess;" in result
         assert (
             "times[1] = (/* HIP device query: " "event.elapsedTime(start, stop) */ 0);"
@@ -10945,8 +10955,8 @@ class TestHipCodeGen:
         assert "sizes[6] = statusPointerSize;" not in result
         assert "attrs[1] = statusPointerAttrValue;" not in result
         assert "var manualElapsedMs: f32 = (/* HIP device query:" not in result
-        assert "var manualFreeMem: u32 = (/* HIP device query:" not in result
-        assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
+        assert "var manualFreeMem: u64 = (/* HIP device query:" not in result
+        assert "var manualPointerSize: u64 = (/* HIP device query:" not in result
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
     def test_hip_memory_pointer_array_outputs_clear_stale_metadata(self):
@@ -11277,7 +11287,7 @@ class TestHipCodeGen:
         assert "// HIP get symbol size: output: symbolSize, symbol: symbol" in result
         assert "sizes[0] = (/* HIP device query: symbol.size(symbol) */ 0);" in result
         assert "symbolSize = 1;" in result
-        assert "var manualSymbolSize: u32 = symbolSize;" in result
+        assert "var manualSymbolSize: u64 = symbolSize;" in result
         assert (
             "// HIP memory range get attribute: output: rangeValue, "
             "output bytes: 4, "
@@ -11331,7 +11341,7 @@ class TestHipCodeGen:
         assert "sizes[1] = statusSymbolSize;" not in result
         assert "values[2] = statusRangeValue;" not in result
         assert "values[3] = statusFunctionAttribute;" not in result
-        assert "var manualSymbolSize: u32 = (/* HIP device query:" not in result
+        assert "var manualSymbolSize: u64 = (/* HIP device query:" not in result
         assert "var manualRangeValue: i32 = (/* HIP device query:" not in result
         assert "var manualFunctionAttribute: i32 = (/* HIP device query:" not in result
         assert "var manualArrayFlags: u32 = (/* HIP device query:" not in result
@@ -14227,7 +14237,7 @@ class TestHipCodeGen:
             in result
         )
         assert "alignment = 4;" in result
-        assert "var manualAlignment: u32 = alignment;" in result
+        assert "var manualAlignment: u64 = alignment;" in result
         assert (
             "ints[0] = (/* HIP device query: "
             "textureReference.addressMode(texRef, 1) */ 0);"
@@ -14305,7 +14315,7 @@ class TestHipCodeGen:
         assert "flagsOut[1] = statusFlags;" not in result
         assert "floats[3] = statusMinClamp;" not in result
         assert "floats[4] = statusMaxClamp;" not in result
-        assert "var manualAlignment: u32 = (/* HIP device query:" not in result
+        assert "var manualAlignment: u64 = (/* HIP device query:" not in result
         assert (
             "var manualAddressMode: hipTextureAddressMode = (/* HIP device query:"
             not in result
@@ -16914,7 +16924,7 @@ class TestHipCodeGen:
         assert (
             "@group(0) @binding(1) var<storage, read_write> mask: array<u64>" in result
         )
-        assert "@group(0) @binding(3) var<uniform> size: u32" in result
+        assert "@group(0) @binding(3) var<uniform> size: u64" in result
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
         assert (
             "var lid: u32 = (gl_LocalInvocationID.x % int(gl_SubgroupSize));" in result
@@ -16944,7 +16954,7 @@ class TestHipCodeGen:
 
         assert "void prepare(inout array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(array<f32> h) {" in result
+        assert "u64 count(array<f32> h) {" in result
         assert "return h.size();" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
@@ -17680,9 +17690,13 @@ class TestHipCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The HIP importer binds the plain value as a uniform; the pointers are storage-buffer slices.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &[i32], "
+            "#[spirv(uniform, descriptor_set = 0, binding = 2)] value: &f32)" in result
         )
+        assert "let value: f32 = *value;" in result
         assert "data[indices[0] as usize] = value;" in result
 
     def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(
@@ -18217,12 +18231,17 @@ class TestHipCodeGen:
         result = HipToCrossGLConverter().generate(ast)
         assert result == HipToCrossGLConverter().generate(ast)
         definitions = {
-            line.split()[1]: line
+            match.group(1): line
             for line in result.splitlines()
-            if line.startswith("struct CrossGLFunctionLocal_host_")
+            if (
+                match := re.search(r"\bstruct (CrossGLFunctionLocal_host_\w+) \{", line)
+            )
         }
         struct_name = next(name for name in definitions if "_left_struct_" in name)
         union_name = next(name for name in definitions if "_payloads_union_" in name)
+        assert definitions[union_name].startswith(
+            "@union_layout(4, 4, little_endian, hip) struct "
+        )
         assert result.index(f"struct {struct_name} {{") < result.index("void host(")
         assert result.index(f"struct {union_name} {{") < result.index("void host(")
         assert f"var left: {struct_name};" in result
@@ -18513,14 +18532,6 @@ class TestHipCodeGen:
                 "derived-to-base value",
             ),
             (
-                "named-union-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; };",
-                "",
-                "Bits bits; bits.signed_value=input[0]; "
-                "output[0]=int(bits.unsigned_value);",
-                "union overlapping storage",
-            ),
-            (
                 "anonymous-union-overlap",
                 "struct State { union { int signed_value; "
                 "unsigned unsigned_value; }; };",
@@ -18568,6 +18579,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -18918,6 +18930,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19089,13 +19102,6 @@ class TestHipCodeGen:
                 "state.value=1; output[0]=int(state); }",
                 "conversion operator",
             ),
-            (
-                "union-pointer-overlap",
-                "union Bits { int signed_value; unsigned unsigned_value; }; "
-                "__global__ void probe(int* output) { Bits bits; Bits* ptr=&bits; "
-                "ptr->signed_value=1; output[0]=int(ptr->unsigned_value); }",
-                "union indirect object access",
-            ),
         ],
     )
     def test_native_valid_adjacent_record_semantics_fail_closed(
@@ -19113,6 +19119,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19165,6 +19172,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19226,7 +19234,8 @@ class TestHipCodeGen:
         ) in compact
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_dynamic_union_array_object_fails_closed(self):
+    def test_dynamic_union_array_object_keeps_its_layout_contract(self):
+        # A named union carries the union layout contract, so no member needs to be shown active.
         code = """
         union Bits { int value; unsigned bits; };
         __global__ void probe(int* output, int index) {
@@ -19237,8 +19246,11 @@ class TestHipCodeGen:
         """
         ast = HipParser(HipLexer(code).tokenize()).parse()
 
-        with pytest.raises(HipRecordSemanticError, match="unprovable active storage"):
-            HipToCrossGLConverter().generate(ast)
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in result
+        assert "values[index].value = 1;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_inherited_fields_remain_translatable_without_base_aggregate_init(self):
         code = """
@@ -19275,37 +19287,43 @@ class TestHipCodeGen:
         assert "state.inner.value" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_native_valid_union_reference_alias_fails_closed(self, tmp_path):
+        source_path = tmp_path / "union-reference-alias.hip"
+        source_path.write_text(
+            "union Bits { int value; unsigned bits; }; "
+            "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
+            "alias.value=1; output[0]=int(value.bits); }",
+            encoding="utf-8",
+        )
+        with pytest.raises(HipRecordSemanticError, match="non-const record reference"):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
     @pytest.mark.parametrize(
-        ("name", "source", "feature"),
+        ("name", "source"),
         [
-            (
-                "union-reference-alias",
-                "union Bits { int value; unsigned bits; }; "
-                "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
-                "alias.value=1; output[0]=int(value.bits); }",
-                "union indirect object access",
-            ),
             (
                 "union-helper-value-flow",
                 "union Bits { int value; unsigned bits; }; "
                 "int read(Bits value) { return int(value.bits); } "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "output[0]=read(value); }",
-                "union function argument active storage",
             ),
             (
                 "union-copy",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy=value; output[0]=int(copy.bits); }",
-                "union-containing copy construction",
             ),
             (
                 "union-assignment",
                 "union Bits { int value; unsigned bits; }; "
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "Bits copy; copy.bits=2u; copy=value; output[0]=int(copy.bits); }",
-                "union-containing assignment",
             ),
             (
                 "union-return",
@@ -19313,7 +19331,6 @@ class TestHipCodeGen:
                 "Bits make() { Bits value; value.value=1; return value; } "
                 "__global__ void probe(int* output) { Bits value=make(); "
                 "output[0]=int(value.bits); }",
-                "union-containing value flow",
             ),
             (
                 "union-ternary-copy",
@@ -19321,7 +19338,6 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output, int condition) { "
                 "Bits left; left.value=1; Bits right; right.bits=2u; "
                 "Bits value=condition?left:right; output[0]=value.value; }",
-                "union-containing copy construction",
             ),
             (
                 "nested-union-copy",
@@ -19330,12 +19346,11 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output) { Outer left; "
                 "left.bits.value=1; Outer right=left; "
                 "output[0]=int(right.bits.bits); }",
-                "union-containing copy construction",
             ),
         ],
     )
-    def test_native_valid_union_alias_and_value_flows_fail_closed(
-        self, tmp_path, name, source, feature
+    def test_native_valid_union_value_flows_keep_the_layout_contract(
+        self, tmp_path, name, source
     ):
         source_path = tmp_path / f"{name}.hip"
         source_path.write_text(source, encoding="utf-8")
@@ -19349,6 +19364,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19358,13 +19374,17 @@ class TestHipCodeGen:
             )
             assert native.returncode == 0, native.stderr
 
-        with pytest.raises(HipRecordSemanticError, match=feature):
-            translate(
-                str(source_path),
-                backend="directx",
-                source_backend="hip",
-                format_output=False,
-            )
+        crossgl = translate(
+            str(source_path), backend="cgl", source_backend="hip", format_output=False
+        )
+        assert "@union_layout(4, 4, little_endian, hip) struct Bits {" in crossgl
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "CrossGLUnionStorage" in hlsl
 
     @pytest.mark.parametrize(
         ("name", "source", "feature"),
@@ -19582,6 +19602,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19832,6 +19853,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
@@ -19911,6 +19933,7 @@ class TestHipCodeGen:
                     "-std=c++17",
                     "-Werror",
                     "-D__global__=",
+                    *HOST_STL_FLAGS,
                     "-fsyntax-only",
                     str(source_path),
                 ],
