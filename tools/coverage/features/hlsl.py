@@ -24,8 +24,9 @@ from ..model import (
     raytracing_stage,
 )
 from ..objects import OBJECTS, SAMPLERS, VERTEX, element
-from ..validators import HLSL_PREVIEW, HLSL_PREVIEW_SHADER_MODEL, HLSL_SPIRV
+from ..validators import HLSL_PREVIEW, HLSL_PREVIEW_SHADER_MODEL
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
+from ..validators import HLSL_SPIRV
 from .common import pick
 
 _VULKAN = "DXC's SPIR-V extensions, not Direct3D HLSL"

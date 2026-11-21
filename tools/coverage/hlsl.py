@@ -11,8 +11,8 @@ from .model import (
     Type,
     coop_element,
     descriptor_reading,
-    struct_reading,
     slang_literal,
+    struct_reading,
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
