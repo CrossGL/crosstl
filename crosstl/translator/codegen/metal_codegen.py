@@ -1881,8 +1881,7 @@ class MetalCodeGen(
         self.current_image_format_parameters = image_format_parameters
         self.register_metal_buffer_resource_parameter_scope(
             self.current_function_name,
-            include_all=shader_type
-            in {
+            include_all=shader_type in {
                 "vertex",
                 "fragment",
                 "geometry",
@@ -3534,8 +3533,7 @@ class MetalCodeGen(
     def buffer_atomic_supports_scalar_type(operation, component_type):
         return component_type in {"int", "uint"} or (
             component_type == "float"
-            and operation
-            in {
+            and operation in {
                 "load",
                 "store",
                 "fetch_add",
@@ -3698,8 +3696,7 @@ class MetalCodeGen(
             fragment_label(fragment_provenance),
         )
         if (
-            fragment_metadata
-            != (
+            fragment_metadata != (
                 "unspecified",
                 "unspecified",
                 "unspecified",
