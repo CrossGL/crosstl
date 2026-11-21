@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import execution, ir, lowering, upstream, validators
 from .features import metal
-from .model import DIRECTIONS, OUTCOMES, Result, Score
+from .model import DIRECTIONS, OUTCOMES, PAIR, Result, Score
 
 # 3: the coverage branch stores each backend's feature rows in its own file.
 SCHEMA = 3
@@ -70,16 +70,16 @@ def _sources(languages: list[str]) -> dict[str, dict[str, str]]:
     return dict(sorted(sources.items()))
 
 
-def _execution(language: str, group: list[Result], execute: bool) -> dict:
-    """What a row records about running its probes.
+def _execution(executes: bool, group: list[Result], execute: bool) -> dict:
+    """What a row or a cell records about running its probes.
 
-    ``executes`` says whether the conformance harness has a runtime for the language at all; a row without one is
-    compile-only. ``executed`` counts the probes that ran, 0 included, once ``execute`` asked for them to run, and
-    ``runtime`` names the runtimes they ran on.
+    ``executes`` says whether the conformance harness can run the row's language, or the cell's probes and
+    translations (:func:`.execution.runs_pair`), at all; a row without a runtime is compile-only. ``executed`` counts
+    the probes that ran, 0 included, once ``execute`` asked for them to run, and ``runtime`` names the runtimes they
+    ran on.
     """
     runtimes = sorted({r.runtime for r in group if r.runtime})
     executed = sum(1 for r in group if r.runtime)
-    executes = execution.runs(language)
     return {
         "executes": executes,
         **({"executed": executed} if executed or (execute and executes) else {}),
@@ -87,16 +87,63 @@ def _execution(language: str, group: list[Result], execute: bool) -> dict:
     }
 
 
+def _score(group: list[Result]) -> dict:
+    score = Score()
+    for item in group:
+        score.add(item.outcome)
+    return {
+        "score": None if score.percent is None else round(score.percent, 1),
+        "counts": score.counts,
+    }
+
+
+def _pairs(
+    results: list[Result], cells: list[tuple[str, str]], execute: bool
+) -> list[dict]:
+    """The translation matrix cells ``cells`` as ``results`` measured them, in ``(source, target)`` order, each scored
+    as a row is; a cell without a result is listed with no score."""
+    grouped: dict[tuple[str, str], list[Result]] = {cell: [] for cell in cells}
+    for result in results:
+        if result.direction == PAIR:
+            grouped.setdefault((result.feature.language, result.into), []).append(
+                result
+            )
+    measured = []
+    for (source, target), group in sorted(grouped.items()):
+        group.sort(key=lambda r: r.feature.key)
+        measured.append(
+            {
+                "source": source,
+                "target": target,
+                "validator": validators.TOOLS[target],
+                **_execution(execution.runs_pair(source, target), group, execute),
+                **_score(group),
+                "features": [
+                    {
+                        "name": r.feature.name,
+                        "category": r.feature.category,
+                        "outcome": r.outcome,
+                        **({"detail": r.detail} if r.detail else {}),
+                    }
+                    for r in group
+                ],
+            }
+        )
+    return measured
+
+
 def build(
     results: list[Result],
     languages: list[str],
     directions: list[str],
     execute: bool = False,
+    cells: list[tuple[str, str]] | None = None,
 ) -> dict:
     """Group ``results`` by language and direction and score each group.
 
     ``execute`` says that the executable probes of ``results`` were run, so a row records how many of them ran even
-    when none did.
+    when none did. With ``cells``, the report's ``pairs`` lists those cells of the translation matrix
+    (:mod:`.pairs`), scored from the results of the pair direction.
     """
     backends = []
     for language in languages:
@@ -121,18 +168,14 @@ def build(
             )
             if not group:
                 continue
-            score = Score()
-            for item in group:
-                score.add(item.outcome)
             backends.append(
                 {
                     "language": language,
                     "direction": direction,
                     "offered": True,
                     "validator": validators.TOOLS[language],
-                    **_execution(language, group, execute),
-                    "score": None if score.percent is None else round(score.percent, 1),
-                    "counts": score.counts,
+                    **_execution(execution.runs(language), group, execute),
+                    **_score(group),
                     "features": [
                         {
                             "name": r.feature.name,
@@ -181,14 +224,15 @@ def build(
         "sources": _sources(languages),
         "validators": {tool: validators.version(tool) or None for tool in tools},
         "backends": backends,
+        **({} if cells is None else {"pairs": _pairs(results, cells, execute)}),
     }
 
 
 def merge(reports: list[dict]) -> dict:
     """One report from reports of separate runners, such as a Linux and a macOS job, with the IR row rebuilt.
 
-    The runners must have measured the same commit; a language and direction measured twice is an error, because the
-    merged score would depend on which runner came last.
+    The runners must have measured the same commit; a language and direction, or a translation matrix cell, measured
+    twice is an error, because the merged score would depend on which runner came last.
     """
     if not reports:
         raise ValueError("no reports to merge")
@@ -228,6 +272,18 @@ def merge(reports: list[dict]) -> dict:
         for tool in tools
     }
     merged["backends"] = backends
+    merged.pop("pairs", None)
+    cells: dict[tuple[str, str], dict] = {}
+    for report in reports:
+        for cell in report.get("pairs", []):
+            key = (cell["source"], cell["target"])
+            if key in cells:
+                raise ValueError(
+                    f"{key[0]} to {key[1]} is measured by more than one report"
+                )
+            cells[key] = cell
+    if any("pairs" in r for r in reports):
+        merged["pairs"] = [cells[key] for key in sorted(cells)]
     return merged
 
 
@@ -265,6 +321,7 @@ def dumps(report: dict) -> str:
     stored = {
         **report,
         "backends": [_rows(b) if "features" in b else b for b in report["backends"]],
+        **({"pairs": [_rows(c) for c in report["pairs"]]} if "pairs" in report else {}),
     }
     return _json(stored)
 
@@ -316,7 +373,12 @@ def _expanded(data: dict) -> dict:
         _features(b) if isinstance(b, dict) and "columns" in b else b
         for b in data["backends"]
     ]
-    return {**data, "backends": backends}
+    cells = [_features(c) if "columns" in c else c for c in data.get("pairs", [])]
+    return {
+        **data,
+        "backends": backends,
+        **({"pairs": cells} if "pairs" in data else {}),
+    }
 
 
 def loads(text: str) -> dict:
@@ -356,5 +418,12 @@ def summary(report: dict) -> str:
         lines.append(
             f"{label:<16}{score:>7}  "
             + "  ".join(f"{backend['counts'][o]:>9}" for o in OUTCOMES)
+        )
+    for cell in report.get("pairs", []):
+        label = f"{cell['source']} to {cell['target']}"
+        score = "n/a" if cell["score"] is None else f"{cell['score']:.1f}%"
+        lines.append(
+            f"{label:<16}{score:>7}  "
+            + "  ".join(f"{cell['counts'][o]:>9}" for o in OUTCOMES)
         )
     return "\n".join(lines)
