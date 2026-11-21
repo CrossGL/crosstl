@@ -22,7 +22,6 @@ name: Coverage
 # the native probes of every source language straight to its own languages, as the published rows define the cells.
 # The publish job writes the matrix to coverage.json (its features in features/pairs/<source>-to-<target>.json), to
 # COVERAGE.md and to one pairs/<source>-to-<target>.md page of gaps per cell; a push to main keeps the last matrix.
-# A matrix run that finishes after a push published newer rows publishes its matrix with those rows.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
