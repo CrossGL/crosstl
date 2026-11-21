@@ -9,6 +9,7 @@ refused two kernels whose ``<kernel>_Args`` blocks or buffers shared an index, a
 ``out`` at the first kernel's index when two kernels named different buffers ``out``.
 """
 
+import re
 import shutil
 import struct
 import subprocess
@@ -145,7 +146,10 @@ def _kernel(metal, name):
     """The signature and body of kernel ``name``, up to the next kernel."""
     start = metal.index(f"kernel void {name}(")
     end = metal.find("kernel void ", start + 1)
-    return metal[start:] if end < 0 else metal[start:end]
+    text = metal[start:] if end < 0 else metal[start:end]
+    # clang-format, when it is installed, writes `float* a`; without it the output
+    # reads `float *a`. Compare one spelling.
+    return re.sub(r"\s*([*&])\s*", r" \1", text)
 
 
 def _compile(tmp_path, metal):
