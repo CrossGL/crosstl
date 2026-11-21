@@ -19,6 +19,7 @@ from .glsl_buffer_layout import (
     std430_array_stride,
     std430_value_type_info,
 )
+from .glsl_wave_extended import GLSL_QUAD_VOTE_FUNCTIONS
 from .image_access_contracts import operation_argument_type_error
 from .index_range_contracts import (
     INDEX_RANGE_ASSERTED,
@@ -464,6 +465,7 @@ class OpenGLWaveOperationMixin:
             "WaveActiveAllTrue",
             "WaveActiveAnyTrue",
             "WaveActiveAllEqual",
+            *GLSL_QUAD_VOTE_FUNCTIONS,
         }:
             return "bool"
         if operation in {
@@ -693,6 +695,7 @@ class OpenGLWaveOperationMixin:
             "WaveActiveAllTrue",
             "WaveActiveAnyTrue",
             "WaveActiveAllEqual",
+            *GLSL_QUAD_VOTE_FUNCTIONS,
         }:
             return "false"
         if operation in {"WaveActiveBallot", "WaveMatch"}:
