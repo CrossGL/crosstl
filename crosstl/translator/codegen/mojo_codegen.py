@@ -29,6 +29,7 @@ from ..ast import (
 )
 from ..float_limit_constants import float_limit_constant
 from ..refusals import MojoRefusal
+from ..semantics.declared_types import declared_type_names
 from ..unhandled import UNHANDLED
 from .array_utils import collect_literal_int_constants
 from .comma_expressions import is_comma_expression, refuse_comma_expression
@@ -537,8 +538,10 @@ class MojoCodeGen(
 
         A call the generator has no lowering for is written as it stands, so the rendered program is refused when
         it still calls a built-in function of another shading language that Mojo does not define and the program
-        does not declare.
+        does not declare. A built-in type of another language that Mojo has no mapping for, such as Metal's
+        ``visible_function_table``, is refused the same way.
         """
+        self.program_type_names = declared_type_names(ast)
         output = self.render_program(ast)
         refuse_written_foreign_calls(
             output, MOJO_CALLABLE_FUNCTION_NAMES, "Mojo", non_calls=MOJO_NON_CALLS
