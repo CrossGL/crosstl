@@ -3395,9 +3395,7 @@ class GLSLCodeGen(
         self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
-        self.current_glsl_group_vote_suffix = self.glsl_group_vote_suffix(
-            ast, target_stage
-        )
+        self.set_glsl_stage_group_vote_suffix(ast, target_stage)
         code += f"{version_line}\n"
         code += source_license_comments(ast, "opengl")
         for line in self.glsl_stage_extension_lines(ast, target_stage):

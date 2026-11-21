@@ -99,6 +99,12 @@ class OpenGLGroupVoteMixin:
                     return None
         return "" if version_number >= 460 else "ARB"
 
+    def set_glsl_stage_group_vote_suffix(self, ast, target_stage=None):
+        """Record :meth:`glsl_group_vote_suffix` for the stage being generated."""
+        self.current_glsl_group_vote_suffix = self.glsl_group_vote_suffix(
+            ast, target_stage
+        )
+
     def uses_glsl_subgroup_extension_builtin(self, roots):
         """Whether ``roots`` read a built-in a GL_KHR_shader_subgroup extension declares, such as
         ``gl_SubgroupEqMask``, by name or through a semantic."""
