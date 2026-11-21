@@ -10486,3 +10486,47 @@ class TestCudaCodeGen:
         assert "struct SharedMemory {" in result
         assert "// Kernel: use_shared" in result
         assert "fn use_shared(" in result
+
+    def test_elaborated_struct_array_types(self):
+        code = """
+        struct Pair {
+            float a;
+            int b;
+        };
+        struct Holder {
+            struct Pair ps[2];
+        };
+        __global__ void probe(float* outp) {
+            struct Pair local[2];
+            local[0].a = 1.0f;
+            local[1].b = 2;
+            struct Holder h;
+            h.ps[1].a = 3.0f;
+            struct Pair* ptrs[2];
+            ptrs[0] = &local[0];
+            outp[0] = local[0].a + (float)local[1].b + h.ps[1].a + ptrs[0]->a;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "array<Pair, 2> ps;" in result
+        assert "var local: array<Pair, 2>;" in result
+        assert "Pair_2" not in result
+        assert "var ptrs: array<ptr<Pair>, 2>;" in result
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[2]") == "array<Pair, 2>"
+        )
+        assert (
+            codegen.convert_cuda_type_to_crossgl("const struct Pair[2]")
+            == "array<Pair, 2>"
+        )
+        assert codegen.convert_cuda_type_to_crossgl("class Pair[2]") == "array<Pair, 2>"
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[N]") == "array<Pair, N>"
+        )

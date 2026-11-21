@@ -198,6 +198,9 @@ class CudaImportNameMixin:
         for prefix in ("class ", "struct ", "union "):
             if normalized_type.startswith(prefix):
                 type_name = normalized_type[len(prefix) :].strip()
+                # An array suffix binds before the pointer: `struct Pair* p[2]` is an array of pointers.
+                if "[" in type_name:
+                    return self.convert_cuda_type_to_crossgl(type_name)
                 if "*" in type_name:
                     return self.convert_cuda_pointer_type(type_name)
                 return self.sanitize_crossgl_type_identifier(type_name)
