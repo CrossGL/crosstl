@@ -331,6 +331,9 @@ class Result:
     # The language a cell of the translation matrix (:mod:`.pairs`) translates the feature's native probe into; empty
     # for a row's result, whose translation is in the feature's own language.
     into: str = ""
+    # Why :mod:`.execution` did not run a supported compute probe on the runtime it selected, starting with
+    # ``on <runtime>``; empty when the probe ran, or when no runtime was there to run it.
+    unrun: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

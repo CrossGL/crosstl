@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from tools.coverage import lowering, report, runner, upstream, validators
+from tools.coverage import lowering, publish, report, runner, upstream, validators
 from tools.coverage.model import Feature, Result, Score, Signature, Type
 
 ABS = Feature(
@@ -400,6 +400,141 @@ def test_merge_refuses_mixed_commits_and_double_measurements():
         report.merge([_report(row), _report(row)])
 
 
+def _hlsl_row(*features, **row):
+    return {
+        "language": "hlsl",
+        "direction": "output",
+        "offered": True,
+        "executes": True,
+        **row,
+        "features": [
+            {
+                "name": name,
+                "category": "function",
+                "group": "g",
+                "outcome": outcome,
+                **extra,
+            }
+            for name, outcome, extra in features
+        ],
+    }
+
+
+def test_merge_adds_the_execution_verdicts_of_an_execution_only_report():
+    lavapipe = {"runtime": "vulkan-lavapipe"}
+    diverged = {"runtime": "vulkan-lavapipe", "detail": "on vulkan-lavapipe, diverged"}
+    linux = _report(
+        _hlsl_row(
+            ("abs", "supported", lavapipe),
+            ("cos", "supported", lavapipe),
+            # lavapipe skips a probe that rounds through a 16-bit float; WARP runs it.
+            ("f16tof32", "supported", {}),
+            ("sin", "wrong", diverged),
+            ("tan", "refused", {"detail": "refused"}),
+            ("exp", "supported", lavapipe),
+            executed=4,
+            runtime="vulkan-lavapipe",
+            executions={"vulkan-lavapipe": 4},
+        ),
+        tool="dxc",
+    )
+    warp = {"runtime": "d3d12-warp"}
+    windows = _report(
+        _hlsl_row(
+            ("abs", "supported", warp),
+            ("cos", "wrong", {**warp, "detail": "on d3d12-warp, diverged"}),
+            ("f16tof32", "supported", warp),
+            ("sin", "supported", warp),
+            # Its static verdict differs; the Linux report decides static verdicts.
+            ("tan", "supported", warp),
+            ("exp", "wrong", {"detail": "rejected by DXC"}),
+            executed=5,
+            runtime="d3d12-warp",
+        ),
+        tool="dxc",
+    )
+    windows["execution_only"] = True
+    windows["validators"] = {"dxc": "windows"}
+    merged = report.merge([windows, linux])
+    assert "execution_only" not in merged and merged["validators"] == {"dxc": "1.0"}
+    [row] = [b for b in merged["backends"] if b["language"] == "hlsl"]
+    found = {
+        f["name"]: (f["outcome"], f.get("runtime"), f.get("detail"))
+        for f in row["features"]
+    }
+    both = "d3d12-warp, vulkan-lavapipe"
+    assert found == {
+        "abs": ("supported", both, None),
+        "cos": ("wrong", both, "on d3d12-warp, diverged"),
+        "f16tof32": ("supported", "d3d12-warp", None),
+        "sin": ("wrong", both, "on vulkan-lavapipe, diverged"),
+        "tan": ("refused", None, "refused"),
+        "exp": ("supported", "vulkan-lavapipe", None),
+    }
+    assert row["counts"] == {"supported": 3, "refused": 1, "wrong": 2, "untested": 0}
+    assert row["score"] == 50.0
+    assert row["executed"] == 5 and row["runtime"] == both
+    assert row["executions"] == {"d3d12-warp": 4, "vulkan-lavapipe": 4}
+    assert "| 4 on d3d12-warp, 4 on vulkan-lavapipe |" in publish.markdown(merged)
+
+
+def test_merge_lists_the_probes_an_execution_only_runtime_did_not_run():
+    half = {"unrun": ["on vulkan-lavapipe, its SPIR-V declares a 16-bit float"]}
+    linux = _report(
+        _hlsl_row(
+            ("abs", "supported", {"runtime": "vulkan-lavapipe"}),
+            ("f16tof32", "supported", half),
+            ("tan", "refused", {"detail": "refused"}),
+            executed=1,
+            runtime="vulkan-lavapipe",
+        ),
+        tool="dxc",
+    )
+    later = "on d3d12-warp, its native probe did not run (invalid)\nerror: needs shader model 6.9"
+    windows = _report(
+        _hlsl_row(
+            ("abs", "supported", {"unrun": [later]}),
+            ("f16tof32", "supported", {"unrun": [later]}),
+            # A refused probe stays refused, with no reason to run it.
+            ("tan", "supported", {"unrun": [later]}),
+        ),
+        tool="dxc",
+    )
+    windows["execution_only"] = True
+    [row] = [
+        b for b in report.merge([linux, windows])["backends"] if b["language"] == "hlsl"
+    ]
+    found = {f["name"]: f.get("unrun") for f in row["features"]}
+    assert found == {"abs": [later], "f16tof32": [*half["unrun"], later], "tan": None}
+    text = publish.markdown(report.merge([linux, windows]))
+    assert "<summary>2 supported compute probes a runtime did not run</summary>" in text
+    assert (
+        "- `on d3d12-warp, its native probe did not run (invalid)` (2): `abs`, `f16tof32`"
+        in text
+    )
+    assert (
+        "- `on vulkan-lavapipe, its SPIR-V declares a 16-bit float`: `f16tof32`" in text
+    )
+    assert "needs shader model 6.9" in report.dumps(report.merge([linux, windows]))
+
+
+def test_merge_needs_a_full_report_for_every_execution_only_row():
+    windows = _report(_hlsl_row(("abs", "supported", {"runtime": "d3d12-warp"})))
+    windows["execution_only"] = True
+    with pytest.raises(ValueError, match="every report is execution-only"):
+        report.merge([windows])
+    linux = _report(_row("glsl", "output", "supported"))
+    with pytest.raises(ValueError, match="hlsl output has execution verdicts"):
+        report.merge([linux, windows])
+
+
+def test_execution_only_needs_execute(capsys):
+    from tools.coverage import __main__ as cli
+
+    assert cli.main(["run", "--backend", "hlsl", "--execution-only"]) == 2
+    assert "--execution-only needs --execute" in capsys.readouterr().err
+
+
 def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys):
     from tools.coverage import __main__ as cli
     from tools.coverage import features
@@ -463,6 +598,28 @@ def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys)
     assert capsys.readouterr().err.strip() == (
         "error: missing tools for rust lowering to SPIR-V (spirv-dis)"
     )
+
+
+@pytest.mark.parametrize("execution_only", [False, True])
+def test_only_a_static_hlsl_run_needs_the_shader_model_preview(
+    monkeypatch, capsys, execution_only
+):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(
+        validators,
+        "available",
+        lambda language, target="": language != "wgsl"
+        and target != validators.HLSL_PREVIEW,
+    )
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
+    argv = ["run", "--strict", "--execute", "--backend", "hlsl", "--backend", "wgsl"]
+    assert cli.main(argv + ["--execution-only"] * execution_only) == 2
+    error = capsys.readouterr().err
+    assert error.startswith(
+        f"error: missing tools for wgsl ({validators.TOOLS['wgsl']})"
+    )
+    assert ("dxc-preview" in error) is not execution_only
 
 
 @pytest.mark.parametrize(
