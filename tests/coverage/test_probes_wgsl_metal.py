@@ -210,9 +210,10 @@ def test_metal_ballots_are_read_as_their_vote_integer():
     assert (
         "uint r = static_cast<quad_vote::vote_t>(quad_active_threads_mask());" in source
     )
-    # CrossGL has no mask type to read, so the operation is an IR gap, not an untested probe.
-    with pytest.raises(probes.NoSpelling, match="no type for Metal's quad_vote"):
-        probes.build(mask, "crossgl")
+    # CrossGL reads the mask its spelling computes as the same vote_t integer.
+    assert (
+        "uint r = quad_active_threads_mask();" in probes.build(mask, "crossgl").source
+    )
 
 
 def test_metal_half_arguments_are_read_from_float_buffers():

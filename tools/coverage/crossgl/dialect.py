@@ -378,7 +378,14 @@ class CrossGL(Dialect):
             return name.format(*arguments)
         return super().call(name, arguments)
 
+    # CrossGL spells a Metal ballot as an expression that already computes the mask's vote_t integer
+    # (spellings.OTHER_NAMES), which the Metal probe reads with a static_cast: 64 bits for a SIMD-group, and a quad's
+    # four bits, which the Metal probe stores as a uint.
+    _VOTE_MASKS = {"simd_vote": Type("uint64"), "quad_vote": Type("uint")}
+
     def reading(self, opaque: str) -> tuple[Type, str] | None:
+        if opaque in self._VOTE_MASKS:
+            return self._VOTE_MASKS[opaque], "{}"
         element = coop_element(opaque)
         if element:
             return element, "{}[0]"
