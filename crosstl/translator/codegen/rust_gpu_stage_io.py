@@ -415,6 +415,11 @@ class RustGpuStageIoMixin:
             name = getattr(attr, "name", attr)
             if str(name).lower() not in _QUALIFIER_ATTRIBUTES:
                 return name
+        # A module-scope ``out float gl_FragDepth @depth_greater;`` reaches the entry as a member of that name:
+        # GLSL reserves the gl_ prefix, so the name itself is the built-in.
+        name = getattr(node, "name", None)
+        if isinstance(name, str) and name.lower().startswith("gl_"):
+            return name
         return None
 
     def rust_stage_io_let(self, source_name):

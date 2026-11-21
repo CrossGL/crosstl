@@ -131,6 +131,33 @@ def test_fragment_value_output_and_early_fragment_tests(tmp_path):
     assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
+def test_module_scope_frag_depth_is_the_built_in_with_its_depth_mode(tmp_path):
+    code = rust("""
+        shader Probe {
+            struct FragmentInput {
+                vec2 uv;
+            }
+            out vec4 color @location(0);
+            out float gl_FragDepth @depth_greater;
+            fragment {
+                void main(FragmentInput input) {
+                    color = vec4(input.uv, 0.0, 1.0);
+                    gl_FragDepth = input.uv.x * 0.5 + 0.25;
+                }
+            }
+        }
+        """)
+    # The gl_ name is the built-in even without a semantic, and its attribute names the conservative-depth mode.
+    fragment = entry_signature(
+        code, "#[spirv(fragment(depth_replacing, depth_greater))]"
+    )
+    assert "#[spirv(location = 0)] out_color: &mut Vec4" in fragment
+    assert "#[spirv(frag_depth)] out_gl_FragDepth: &mut f32" in fragment
+    assert "location = 1" not in fragment
+
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
 def test_fragment_derivatives_are_spirv_std_derivative_calls(tmp_path):
     code = rust("""
         shader Edges {
