@@ -18,8 +18,8 @@ pre-commit install
 
 `pre-commit` runs black, isort, ruff and the repository checks on the files
 you commit. Run `pre-commit run --all-files` before your first push if you
-installed it late. The Lint check runs the same pinned black on every Python
-file a pull request changes.
+installed it late. The Lint check runs the same pinned hooks on every file a
+pull request changes, and the merge queue runs them again.
 
 Native validators are optional. Tests that need glslang, DXC, SPIRV-Tools or
 the Metal toolchain are skipped when the tool is missing, and CI runs them on
@@ -57,10 +57,10 @@ Coverage is measured, so there is no support table to edit. The Coverage
 workflow writes a probe for every built-in in each language's pinned upstream
 feature list and for a set of language constructs (types, operators, control
 flow, resources, compute and stages), translates it, and checks the result
-with the language's reference tool. A comment on your pull request lists how
-it changes coverage against `main`.
-Once the change is on `main`, it closes the `coverage` issues whose probes now
-pass. Each of those issues gives the command that reproduces it, for example:
+with the language's reference tool. A comment on your pull request lists the
+scores and features your change moves against `main`. Once it is on `main`, the
+Coverage workflow closes the `coverage` issues whose probes now pass. Each of
+those issues gives the command that reproduces it, for example:
 
 ```bash
 python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum --keep probes

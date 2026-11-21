@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = {
     "bug",
     "enhancement",
-    "documentation",
     "question",
     "good first issue",
     "help wanted",
@@ -57,7 +56,7 @@ def _many(count=labels.MINIMUM):
 def test_the_label_file_defines_the_taxonomy_and_little_else():
     names = {label.name for label in load()}
     assert TAXONOMY <= names
-    assert len(names) <= 31
+    assert len(names) <= 30
 
 
 def test_labels_that_workflows_and_dependabot_apply_are_defined():
@@ -89,6 +88,12 @@ def test_labels_that_the_coverage_issues_apply_are_defined():
     ]
     rows.append({"language": ir.LANGUAGE, "direction": "output"})
     used = {label for row in rows for label in issues.bug_labels(row)}
+    used |= {
+        label
+        for source in issues.PAIR_LANGUAGES
+        for target in issues.PAIR_LANGUAGES
+        for label in issues.pair_labels({"source": source, "target": target})
+    }
     assert used <= {label.name for label in load()}
 
 

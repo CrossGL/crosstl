@@ -280,18 +280,30 @@ def _program(body, declarations="", scalar="float16"):
 
 
 @pytest.mark.parametrize("intrinsic", ["asfloat16", "asuint16"])
-@pytest.mark.parametrize("scope", ["local", "function", "global"])
+@pytest.mark.parametrize("scope", ["local", "global"])
 def test_half_storage_intrinsic_shadowing_is_diagnosed(intrinsic, scope):
     declarations, body = "", "results[0] = values[0];"
     if scope == "local":
         body = f"int {intrinsic} = 0; " + body
-    elif scope == "global":
-        declarations = f"int {intrinsic};"
     else:
-        declarations = f"float16 {intrinsic}(float16 value) {{ return value; }}"
+        declarations = f"int {intrinsic};"
     with pytest.raises(DirectXHalfStorageError) as error:
         HLSLCodeGen().generate(_program(body, declarations))
     assert error.value.reason == "storage-intrinsic-shadowed"
+
+
+@pytest.mark.parametrize("intrinsic", ["asfloat16", "asuint16"])
+def test_half_storage_beside_intrinsic_named_function_compiles(intrinsic, tmp_path):
+    # A helper named like the storage intrinsic is renamed, so the storage access keeps the intrinsic.
+    generated = HLSLCodeGen().generate(
+        _program(
+            f"results[0] = {intrinsic}(values[0]);",
+            f"float16 {intrinsic}(float16 value) {{ return value; }}",
+        )
+    )
+    assert f"float16_t {intrinsic}_fn(float16_t value)" in generated
+    assert f"{intrinsic}_fn(" in generated.split("void CSMain", 1)[1]
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
 def test_half_storage_state_does_not_leak_between_programs():

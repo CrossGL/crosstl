@@ -213,8 +213,10 @@ def test_explicit_narrow_glsl_arithmetic_wraps_at_its_width(tmp_path, target):
         tmp_path, GLSL_KERNEL.format(helpers="", body=body), target, ".comp"
     )
     if target == "wgsl":
+        # The GLSL importer converts each result back to uint16_t, because CrossGL promotes narrow scalars.
         line = wgsl_line(output, "o[i]")
-        assert line.count("& 65535") == 2, line
+        assert "i32((i32((u32(v) * u32(v))) & 65535))" in line, line
+        assert "(i32(-v) & 65535)" in line, line
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -245,8 +247,8 @@ def test_in_range_glsl_operations_keep_their_narrow_type(tmp_path, target):
     )
     if target == "wgsl":
         line = wgsl_line(output, "o[i]")
-        assert "(i32(((v & w) + v)) & 65535)" in line, line
-        assert "(i32(((v >> 1) * w)) & 65535)" in line, line
+        assert "(i32((u32((v & w)) + u32(v))) & 65535)" in line, line
+        assert "(i32((u32((v >> 1)) * u32(w))) & 65535)" in line, line
     else:
         # The initializers of v and w, the sum and the product.
         assert spirv_masks(output, 65535) == 4

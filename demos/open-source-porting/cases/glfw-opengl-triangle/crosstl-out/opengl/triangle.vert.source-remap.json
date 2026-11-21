@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 286,
+        "endLine": 23,
+        "endOffset": 537,
         "file": "crosstl-out/opengl/triangle.vert.glsl",
-        "length": 286,
+        "length": 537,
         "line": 1,
         "offset": 0
       },

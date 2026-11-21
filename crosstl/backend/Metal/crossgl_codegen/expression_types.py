@@ -14,6 +14,7 @@ from ..matrix_arithmetic import (
     matrix_arithmetic_shape,
 )
 from ..matrix_columns import matrix_columns_object
+from ..member_aggregates import promoted_member_access
 from ..MetalAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -34,6 +35,7 @@ from ..texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
 )
+from ..vote_masks import vote_mask_call_metal_type
 from .support import (
     MetalAddressProvenanceError,
     MetalArithmeticTypeResolutionError,
@@ -966,6 +968,9 @@ class MetalExpressionTypeMixin:
                 )
             return selection["selected_type"]
         if isinstance(expr, MemberAccessNode):
+            promoted = promoted_member_access(self, expr)
+            if promoted is not None:
+                return self.expression_metal_type(promoted)
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
                 return None
@@ -1066,6 +1071,9 @@ class MetalExpressionTypeMixin:
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
+            mask_type = vote_mask_call_metal_type(self, expr)
+            if mask_type is not None:
+                return mask_type
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
                 return expression_call_return_type(

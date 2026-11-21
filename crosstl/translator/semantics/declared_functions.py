@@ -14,11 +14,13 @@ built-in functions of the languages the importers read, which an importer may ca
 to map. A name reserved to the implementation (``__builtin_ctz``, ``__cgl_wrap_add``) is never a user function. Whether the target can express a built-in is left to the generators. A SPIR-V operation the importer kept as
 a call (``spirvSDot``) is refused by :mod:`.spirv_instructions` with its own diagnostic.
 
-As for undeclared types (:mod:`.declared_types`), only calls in code a stage entry can reach are checked (every
-function of a program without entries), skipping, for a target that instantiates generic structures, the generic
-structures no live code names, and only plain names: a callee with a namespace or member qualifier
-(``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve themselves. Explicit
-generic arguments (``pick<float>(x)``) are not part of the name.
+As for undeclared types (:mod:`.declared_types`), every call is checked — no generator drops a plain function or
+an explicit specialization no stage entry reaches — skipping the generic functions no code calls, which those
+generators emit only through the calls that instantiate them (the Rust generator writes even those, so for
+``rust`` their bodies are read), for a target that instantiates
+generic structures the generic structures no code names, and only plain names: a callee with a namespace or
+member qualifier (``metal::fast::sin``, ``obj.method``) is a library or method spelling the generators resolve
+themselves. Explicit generic arguments (``pick<float>(x)``) are not part of the name.
 """
 
 from __future__ import annotations
@@ -36,7 +38,6 @@ from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .declared_types import (
     INSTANTIATING_TARGETS,
     _add_declared_type_name,
-    _dead_functions,
     _nodes,
     _short,
     _uninstantiated_templates,
@@ -51,6 +52,10 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Targets whose generators write a generic function no call instantiates, so its body reaches the generated
+# output and the names it uses are checked like any other body. Every other generator emits a generic function
+# only through the calls that instantiate it.
+GENERIC_WRITING_TARGETS = frozenset({"rust"})
 
 
 class UndeclaredFunctionError(TranslationDiagnostic):
@@ -152,16 +157,60 @@ def _unused_static_members(program, skip):
     return {id(member) for member in pending}
 
 
-def undeclared_function_calls(program, target=None):
-    """``(name, call)`` for each call in live code of ``program`` whose plain callee is neither declared nor built in.
+def _never_called_generic_functions(program, skip):
+    """Ids of the generic functions no code calls, which the generators only emit through call sites.
 
-    Live code is every function a stage entry reaches and every initialized static structure member live code names.
-    For a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the generic structures no live code names are
-    not live either, because those generators emit a generic structure only through the instantiations it names.
+    The mirror of :func:`~.declared_types._uninstantiated_templates`: except under the Rust generator, which
+    writes even a generic function nothing instantiates, a generic function is written to the output only when a
+    call instantiates it, so a body nothing calls never reaches the generated output, and the plain
+    callee spellings the qualified-member lowering leaves behind inside it (``CTile::Frag_t::mma`` where ``CTile``
+    is a parameter cannot be resolved, so the call stays a bare ``mma``) must not be refused. A name used anywhere
+    outside the generic bodies counts as a call — through another generic body only once that body is live itself,
+    following the same fixed point the unused static members follow.
+    """
+    generic = {}
+    for node in _nodes(program, skip):
+        if (
+            isinstance(node, A.FunctionNode)
+            and isinstance(node.name, str)
+            and getattr(node, "generic_params", None)
+        ):
+            generic.setdefault(node.name, []).append(node)
+    every = {id(function) for group in generic.values() for function in group}
+    if not every:
+        return set()
+    hidden = set(skip) | every
+    used = _used_names(program, hidden)
+    live = set()
+    pending = sorted(used & generic.keys())
+    while pending:
+        name = pending.pop()
+        for function in generic.get(name, []):
+            if id(function) in live:
+                continue
+            live.add(id(function))
+            used = _used_names(function, hidden - {id(function)})
+            pending.extend(sorted(used & generic.keys()))
+    return every - live
+
+
+def undeclared_function_calls(program, target=None):
+    """``(name, call)`` for each call in ``program`` whose plain callee is neither declared nor built in.
+
+    Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
+    reaches, so a call in such a function reaches the generated output too. The generic functions no code calls
+    are not read — those generators emit a generic function only through the calls that instantiate it — except
+    for the Rust generator, which writes even those, so for ``target="rust"`` their bodies are read as well.
+    Static structure members
+    nothing names are not read, and for a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the
+    generic structures no code names are not read either, because those generators emit a generic structure only
+    through the instantiations it names.
     """
     declared = declared_function_names(program)
     calls = []
-    skip = set(_dead_functions(program))
+    skip = set()
+    if str(target or "").lower() not in GENERIC_WRITING_TARGETS:
+        skip = _never_called_generic_functions(program, skip)
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     skip |= _unused_static_members(program, skip)

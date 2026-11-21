@@ -37,6 +37,7 @@ from ..function_templates import (
     template_type_parameter_names,
 )
 from ..struct_methods import method_local_names
+from ..vk_locations import VK_LOCATION_ATTRIBUTE, check_function_return_vk_location
 
 
 class FunctionStatementMixin:
@@ -61,10 +62,12 @@ class FunctionStatementMixin:
             # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, as MSL's
             # [[early_fragment_tests]] imports; it is not a semantic of the function.
             code += "    " * indent + "layout(early_fragment_tests) in;\n"
+        check_function_return_vk_location(self, func)
         code += self.format_attributes(
             attributes,
             indent,
             set(skip_attribute_names or ())
+            | {VK_LOCATION_ATTRIBUTE}
             | ({"earlydepthstencil"} if early_tests else set()),
         )
         precise_as_attribute = (
@@ -133,9 +136,12 @@ class FunctionStatementMixin:
             f"{function_name}({params}){semantic}{stage_entry_attribute} {{\n"
         )
         previous_return_type = self.current_function_return_type
+        previous_source_function = getattr(self, "current_source_function", None)
         self.current_function_return_type = func.return_type
+        self.current_source_function = func
         code += self.generate_function_body(func.body, indent=indent + 1)
         self.current_function_return_type = previous_return_type
+        self.current_source_function = previous_source_function
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims

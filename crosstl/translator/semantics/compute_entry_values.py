@@ -46,6 +46,7 @@ TARGETS = frozenset(
         "vulkan",
         "spirv",
         "slang",
+        "wgsl",
     }
 )
 

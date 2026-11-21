@@ -161,7 +161,7 @@ class WGSLParameterLoweringMixin:
                 )
 
     def written_parameter_names(self, body_nodes):
-        """Names whose variable the body assigns, increments or passes by reference."""
+        """Names whose variable the body assigns, increments, passes by reference or takes the address of."""
         names = set()
         for node in body_nodes:
             if isinstance(node, AssignmentNode):
@@ -170,6 +170,13 @@ class WGSLParameterLoweringMixin:
                 isinstance(node, UnaryOpNode)
                 and str(node.operator) in INCREMENT_OPERATORS
             ):
+                root = lvalue_root(node.operand)
+            elif (
+                isinstance(node, UnaryOpNode)
+                and str(node.operator) == "&"
+                and not node.is_postfix
+            ):
+                # A pointer local may take a parameter's address only once the parameter is a var.
                 root = lvalue_root(node.operand)
             elif isinstance(node, FunctionCallNode):
                 for index in self.reference_argument_indices_by_name(node):

@@ -2776,6 +2776,10 @@ class TestVulkanSPIRVCodeGen:
                     payload.value = 3.0;
                     double values[2];
                     values[0] = 4.0;
+                    float single = 5.0;
+                    localDouble = single;
+                    payload.value = single;
+                    values[1] = single;
                 }
             }
         }
@@ -2789,6 +2793,7 @@ class TestVulkanSPIRVCodeGen:
 
         assert double_type is not None
         assert int_type is not None
+        # A float value stored to a double location is widened; an unsuffixed literal is a double constant.
         assert (
             len(
                 re.findall(
@@ -2796,8 +2801,17 @@ class TestVulkanSPIRVCodeGen:
                     spv_code,
                 )
             )
-            >= 4
+            >= 3
         )
+        for literal in ("0.0", "1.0", "3.0", "4.0"):
+            constant = re.search(
+                rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} {literal}\n",
+                spv_code,
+            )
+            assert constant is not None
+            assert re.search(
+                rf"OpStore %\d+ {re.escape(constant.group(1))}\n", spv_code
+            )
         assert re.search(
             rf"%\d+ = OpConvertFToS {re.escape(int_type.group(1))} %\d+",
             spv_code,
@@ -2812,12 +2826,17 @@ class TestVulkanSPIRVCodeGen:
                     return 0.0;
                 }
 
+                double widenSingle(float single) {
+                    return single;
+                }
+
                 int makeInt() {
                     return 2.5;
                 }
 
                 void main() {
                     double x = makeDouble();
+                    double w = widenSingle(0.5f);
                     int y = makeInt();
                 }
             }
@@ -2838,6 +2857,11 @@ class TestVulkanSPIRVCodeGen:
             rf"OpReturnValue (?P=result)",
             spv_code,
         )
+        zero = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.0\n", spv_code
+        )
+        assert zero is not None
+        assert f"OpReturnValue {zero.group(1)}\n" in spv_code
         assert re.search(
             rf"(?P<result>%\d+) = OpConvertFToS "
             rf"{re.escape(int_type.group(1))} %\d+\n"
@@ -2860,6 +2884,8 @@ class TestVulkanSPIRVCodeGen:
 
                 void main() {
                     double x = useDouble(0.0);
+                    float single = 0.25;
+                    double z = useDouble(single);
                     int y = useInt(2.5);
                 }
             }
@@ -2879,6 +2905,15 @@ class TestVulkanSPIRVCodeGen:
             rf"{re.escape(double_type.group(1))} %\d+\n"
             rf"%\d+ = OpFunctionCall {re.escape(double_type.group(1))} %\d+ "
             rf"(?P=arg)",
+            spv_code,
+        )
+        zero = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.0\n", spv_code
+        )
+        assert zero is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall {re.escape(double_type.group(1))} %\d+ "
+            rf"{re.escape(zero.group(1))}\n",
             spv_code,
         )
         assert re.search(
@@ -3940,9 +3975,10 @@ class TestVulkanSPIRVCodeGen:
             rf"{re.escape(float_type.group(1))} %\d+",
             spv_code,
         )
+        # The unsuffixed literal 3.0 is read as the double member's value, not widened from binary32.
         assert re.search(
-            rf"{re.escape(construct.group('gain'))} = OpFConvert "
-            rf"{re.escape(double_type.group(1))} %\d+",
+            rf"{re.escape(construct.group('gain'))} = OpConstant "
+            rf"{re.escape(double_type.group(1))} 3.0\n",
             spv_code,
         )
         assert re.search(
@@ -5503,6 +5539,8 @@ class TestVulkanSPIRVCodeGen:
                     dvec3 da = dvec3(1.0, 0.0, 0.0);
                     dvec3 db = dvec3(0.0, 1.0, 0.0);
                     dvec3 dt = refract(da, db, 0.5);
+                    float single = 0.75;
+                    dvec3 dw = refract(da, db, single);
 
                     vec3 fa = vec3(1.0, 0.0, 0.0);
                     vec3 fb = vec3(0.0, 1.0, 0.0);
@@ -5543,6 +5581,16 @@ class TestVulkanSPIRVCodeGen:
                 spv_code,
             )
             for conversion in double_eta_conversions
+        )
+        # The unsuffixed literal eta of the double refract is a double constant.
+        half = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.5\n", spv_code
+        )
+        assert half is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            rf"Refract %\d+ %\d+ {re.escape(half.group(1))}(?:\s|$)",
+            spv_code,
         )
 
         float_eta_conversions = re.findall(
@@ -34555,6 +34603,108 @@ class TestSpirvShaderValidation:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
 
+    def test_opt_in_profile_lowers_multiply_accumulate_and_block_member_pointer(
+        self, tmp_path
+    ):
+        profile_source = """
+        shader Accumulate {
+            struct A { float a[]; };
+            RWStructuredBuffer<A> buf @set(0) @binding(0);
+            compute {
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 1) buffer float* input;
+                void main() {
+                    CooperativeMatrix<float, 8, 8, subgroup, matrix_a, unspecified> a;
+                    CooperativeMatrix<float, 8, 8, subgroup, matrix_b, unspecified> b;
+                    CooperativeMatrix<float, 8, 8, subgroup, accumulator, unspecified> c;
+                    CooperativeMatrix<float, 8, 8, subgroup, accumulator, unspecified> d;
+                    cooperative_matrix_load(a, input, 8);
+                    cooperative_matrix_load(b, input + 64, 8);
+                    cooperative_matrix_load(c, buf[0].a[4], 8);
+                    cooperative_matrix_multiply_accumulate(d, a, b, c);
+                    cooperative_matrix_store(input, d, 8);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 3
+        mul_add = re.search(
+            r"OpCooperativeMatrixMulAddKHR %\d+ (%\d+) (%\d+) (%\d+)", spv_code
+        )
+        assert mul_add is not None
+        accumulator_load = re.search(
+            rf"{re.escape(mul_add.group(3))} = OpLoad", spv_code
+        )
+        assert accumulator_load is not None
+        assert "OpTypeRuntimeArray" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_rejects_misaligned_block_member_pointer(self):
+        profile_source = """
+        shader Misaligned {
+            struct A { float a[]; };
+            RWStructuredBuffer<A> buf @set(0) @binding(0);
+            compute {
+                void main() {
+                    CooperativeMatrix<float, 8, 8, subgroup, accumulator, unspecified> c;
+                    cooperative_matrix_load(c, buf[0].a[1], 8);
+                }
+            }
+        }
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "pointer offset for load to be aligned to 16 bytes; got 4 bytes",
+            "cooperative-matrix-load-alignment",
+            "spirv.cooperative_matrix.load-alignment",
+        )
+
+    def test_opt_in_profile_lowers_elementwise_fill_and_column_major(self, tmp_path):
+        acc = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        left = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader Elementwise {{
+            compute {{
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {left} a;
+                    {acc} c = cooperative_matrix_fill(1.0);
+                    {acc} d;
+                    cooperative_matrix_load(a, input, 8, 0, true);
+                    d = cooperative_matrix_add(c, c);
+                    d = cooperative_matrix_subtract(d, c);
+                    d = cooperative_matrix_elementwise_multiply(d, c);
+                    d = cooperative_matrix_negate(d);
+                    cooperative_matrix_store(input, d, 8, 0, true);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCompositeConstruct") == 1
+        for opcode in ("OpFAdd", "OpFSub", "OpFMul", "OpFNegate"):
+            assert spv_code.count(f"= {opcode} ") == 1
+        layouts = re.findall(
+            r"OpCooperativeMatrix(?:Load|Store)KHR (?:%\d+ )+(%\d+) %\d+ Aligned",
+            spv_code,
+        )
+        assert len(layouts) == 2
+        for layout in layouts:
+            assert re.search(rf"{layout} = OpConstant %\d+ 1\n", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
     def test_opt_in_profile_lowers_workgroup_matrix_memory(self, tmp_path):
         matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
         profile_source = f"""
@@ -35113,18 +35263,25 @@ class TestSpirvShaderValidation:
         ("operation", "feature", "capability", "message"),
         (
             pytest.param(
-                "cooperative_matrix_load(matrix, input, 8, 0);",
+                "cooperative_matrix_load(matrix, input, 8, 1);",
                 "cooperative-matrix-load-memory-contract",
                 "spirv.cooperative_matrix.load-memory-contract",
-                "default row-major form",
-                id="load-origin-or-layout",
+                "requires a zero origin operand",
+                id="load-nonzero-origin",
             ),
             pytest.param(
-                "cooperative_matrix_store(output, matrix, 8, 0);",
+                "cooperative_matrix_store(output, matrix, 8, 1);",
                 "cooperative-matrix-store-memory-contract",
                 "spirv.cooperative_matrix.store-memory-contract",
-                "default row-major form",
-                id="store-origin-or-layout",
+                "requires a zero origin operand",
+                id="store-nonzero-origin",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 8, 0, transposed);",
+                "cooperative-matrix-load-layout",
+                "spirv.cooperative_matrix.load-transpose",
+                "literal true or false transpose operand",
+                id="load-dynamic-transpose",
             ),
             pytest.param(
                 "cooperative_matrix_load(matrix, input, stride);",
@@ -36130,8 +36287,8 @@ class TestSpirvShaderValidation:
 
     def test_opt_in_profile_keeps_unimplemented_operations_fail_closed(self):
         operation = CooperativeMatrixOpNode(
-            "elementwise_multiply",
-            [IdentifierNode("left"), IdentifierNode("right")],
+            "diagonal",
+            [IdentifierNode("value")],
         )
         generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
 
@@ -36139,7 +36296,7 @@ class TestSpirvShaderValidation:
             UnsupportedSPIRVFeatureError,
             match=(
                 "SPIR-V KHR cooperative-matrix type support is enabled, but "
-                "operation 'elementwise_multiply' is not implemented"
+                "operation 'diagonal' is not implemented"
             ),
         ) as exc_info:
             generator.process_expression(operation)

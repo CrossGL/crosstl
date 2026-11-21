@@ -47,8 +47,10 @@ jobs:
         id: select
         env:
           # Pushes to main and pull requests labelled ci:full test every supported
-          # version; other pull requests test the oldest and the newest.
-          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
+          # version; other pull requests test the oldest and the newest. The
+          # Complete Test Suite runs every backend test on Python 3.12 on
+          # Ubuntu, so a 3.12 leg here would repeat it.
+          FULL_PYTHON_VERSIONS: '["3.11", "3.13", "3.14", "3.15"]'
           PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
           FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
@@ -70,23 +72,12 @@ jobs:
       PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.OS == 'macOS-latest' && '3' || '4' }}
     strategy:
       matrix:
-        backend:
-          [
-            directx,
-            metal,
-            GLSL,
-            "slang",
-            "SPIRV",
-            "mojo",
-            "rust",
-            "CUDA",
-            "HIP",
-          ]
+        # One Ubuntu leg runs every backend test. A leg per importer made nine
+        # jobs per Python version, most of them under a minute, and skipped
+        # test_HLSL, test_OpenCL and the modules shared by several importers.
+        backend: [all]
         python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
-        OS: [ubuntu-latest, windows-latest, macOS-latest]
-        exclude:
-          - OS: windows-latest
-          - OS: macOS-latest
+        OS: [ubuntu-latest]
         include:
           - backend: all
             python-version: "3.13"
@@ -165,13 +156,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/reports
-          if [ "${{ matrix.backend }}" == "all" ]; then
-            python -m pytest tests/test_backend -n auto \
-              --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          else
-            python -m pytest tests/test_backend/test_${{ matrix.backend }} -n auto \
-              --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          fi
+          python -m pytest tests/test_backend -n auto \
+            --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
 
       - name: Write backend test failure summary
         if: failure() && steps.run_backend_tests.outcome == 'failure'

@@ -14,8 +14,10 @@ Scopes follow CrossGL, which keeps GLSL's rule that a local's scope begins after
 initializer is visible in its condition, update and body, a ``switch`` shares one scope across its cases as C++ and
 GLSL do, and a lambda sees its parameters and captures.
 
-Only function bodies a stage entry can reach are checked (every function of a program without entries), as for
-:mod:`.declared_types`: the generators drop the others. Names with namespace or member qualifiers (``metal::x``,
+Every function body is checked, as for :mod:`.declared_types`: no generator drops a plain function or an
+explicit specialization no stage entry reaches, so a name an unreached function uses reaches the generated
+output the same way. Names with
+namespace or member qualifiers (``metal::x``,
 ``Kind::A``) are resolved by the importers and generators themselves, and so are callee names, member names,
 attribute arguments, types and ``static_assert`` conditions. Whether a ``gl_`` built-in exists and fits its stage is
 checked by :mod:`.builtin_names` and :mod:`.builtin_stage_identifiers`.
@@ -35,8 +37,9 @@ from ..ray_query_vocabulary import ray_query_constant
 from ..refusals import supersedes_pending_refusals
 from ..standard_constants import standard_math_constant
 from .builtin_type_names import BUILTIN_TYPE_NAMES
-from .declared_types import dead_function_ids, declared_type_names
+from .declared_types import declared_type_names
 from .rewrite import child_slots, get_child
+from .work_graph_nodes import BARRIER_FLAGS
 
 __all__ = [
     "UndeclaredIdentifierError",
@@ -111,6 +114,7 @@ def _is_builtin_value(name):
         name in _LANGUAGE_VALUES
         or name in _FENCE_ARGUMENTS
         or name in RAY_FLAG_CONSTANTS
+        or name in BARRIER_FLAGS
         or name.startswith("gl_")
         or standard_math_constant(name) is not None
         or float_limit_constant(name) is not None
@@ -483,7 +487,7 @@ def _checked_functions(program):
 
 
 def undeclared_identifier_uses(program, target=None):
-    """``(name, node, function_name)`` for each plain name a live function body uses without a declaration in scope.
+    """``(name, node, function_name)`` for each plain name a function body uses without a declaration in scope.
 
     ``target`` is accepted for symmetry with the other refusal passes; the rule does not depend on it.
     """
@@ -497,15 +501,10 @@ def undeclared_identifier_uses(program, target=None):
         # A module function may be called from any stage, and importers place helpers there that read the
         # variables of the stage that calls them.
         every_stage |= stage_names[id(stage)]
-    dead = dead_function_ids(program)
     uses = []
     seen = set()
     for function, stage in _checked_functions(program):
-        if (
-            id(function) in seen
-            or id(function) in dead
-            or getattr(function, "body", None) is None
-        ):
+        if id(function) in seen or getattr(function, "body", None) is None:
             continue
         seen.add(id(function))
         outer = module | (stage_names[id(stage)] if stage is not None else every_stage)
@@ -514,7 +513,7 @@ def undeclared_identifier_uses(program, target=None):
 
 
 def refuse_undeclared_identifiers(program, target):
-    """Raise :class:`UndeclaredIdentifierError` for the first undeclared plain name in a live function body."""
+    """Raise :class:`UndeclaredIdentifierError` for the first undeclared plain name in a function body."""
     for name, node, function in undeclared_identifier_uses(program, target):
         raise UndeclaredIdentifierError(
             target,

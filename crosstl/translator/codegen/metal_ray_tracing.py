@@ -10,6 +10,7 @@ from ..ast import (
 )
 from ..refusals import MetalRefusal
 from .array_utils import split_array_type_suffix
+from .metal_intersection_tags import METAL_INTERSECTION_INPUTS
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .stage_utils import normalize_stage_name
 
@@ -281,7 +282,9 @@ class MetalRayTracingMixin:
         if shader_type == "ray_generation":
             self.validate_metal_ray_generation_parameters(func, shader_type)
         if shader_type in {"ray_intersection", "intersection"}:
-            self.validate_metal_ray_intersection_parameters(func, shader_type)
+            self.validate_metal_ray_intersection_parameters(
+                func, shader_type, raw_return_type
+            )
             self.validate_metal_ray_intersection_return_type(func, raw_return_type)
 
     def validate_metal_ray_generation_parameters(self, func, shader_type):
@@ -305,14 +308,21 @@ class MetalRayTracingMixin:
                 "bound buffer"
             )
 
-    def validate_metal_ray_intersection_parameters(self, func, shader_type):
+    def validate_metal_ray_intersection_parameters(
+        self, func, shader_type, raw_return_type=None
+    ):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        primitive_type = self.metal_ray_intersection_primitive_type(
+            func, raw_return_type
+        )
         for parameter in parameters:
             ray_semantic_role = self.metal_ray_semantic_role(parameter, shader_type)
             if ray_semantic_role == "payload":
                 continue
             if ray_semantic_role != "ray":
-                if self.is_metal_ray_intersection_builtin_parameter(parameter):
+                if self.is_metal_ray_intersection_builtin_parameter(
+                    parameter, primitive_type
+                ):
                     continue
                 if self.is_metal_ray_intersection_buffer_parameter(
                     parameter, shader_type
@@ -351,29 +361,21 @@ class MetalRayTracingMixin:
             or self.is_metal_ray_query_type_name(type_name)
         )
 
-    def is_metal_ray_intersection_builtin_parameter(self, parameter):
+    def is_metal_ray_intersection_builtin_parameter(
+        self, parameter, primitive_type="triangle"
+    ):
         semantic = self.semantic_from_node(parameter)
         metal_semantic = self.canonical_metal_semantic(semantic)
         if metal_semantic is None:
             return False
         normalized = str(metal_semantic).strip().lower()
-        return normalized in {
-            "origin",
-            "direction",
-            "min_distance",
-            "max_distance",
-            "geometry_id",
-            "primitive_id",
-            "instance_id",
-            "world_space_origin",
-            "world_space_direction",
-            "barycentric_coord",
-            "object_to_world_transform",
-            "world_to_object_transform",
-        }
+        return normalized in METAL_INTERSECTION_INPUTS[primitive_type]
 
     def is_metal_ray_intersection_buffer_parameter(self, parameter, shader_type):
         raw_type = self.parameter_raw_type(parameter)
+        if self.is_structured_buffer_type(raw_type):
+            # The Metal importer writes a ``device T* [[buffer(n)]]`` parameter as a structured buffer.
+            return self.explicit_buffer_binding_index(parameter) is not None
         if not (
             isinstance(raw_type, (PointerType, ReferenceType))
             or self.is_array_type_node(raw_type)

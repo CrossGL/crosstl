@@ -20,14 +20,18 @@ touches Metal or Direct3D.
   - Path-filtered demo workflows for the files they cover.
 - **Merge queue tier.** The `merge_group` event runs each gating workflow once
   more on the exact commit that will land on `main`. That run covers every
-  supported Python version (3.11 through 3.15) and the MLX smoke job. The full
-  MLX native, parity, corpus and host tier runs in the queue only when the
-  group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
-  to `main`. A pull request merges only when this run passes.
+  supported Python version (3.11 through 3.15) once: the Complete Test Suite
+  runs every test on Python 3.12, and the translator and backend workflows run
+  their whole suites on the other versions. It also runs the MLX smoke job.
+  The full MLX native, parity, corpus and host tier runs in the queue only
+  when the group changes `demos/integrations/mlx/**` or the MLX workflow, as
+  for pushes to `main`. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
-  backend, complete, examples, conformance and ComputeSharp workflows skip a
-  push whose commits already passed the merge queue, and run in full for any
-  other commit.
+  backend, complete and examples workflows skip a push whose commits already
+  passed the merge queue, and run in full for any other commit. Conformance,
+  the corpus and ComputeSharp report no required check, so they do not run in
+  the merge queue: conformance and ComputeSharp test the push to `main`, and
+  the corpus tests `main` nightly.
   The MLX tier, conformance, the corpus and coverage also run nightly, and
   fuzzing runs weekly.
 
@@ -74,8 +78,8 @@ Push a commit without the marker instead. When the branch is behind `main`,
 | `backend-tests.yml` | Importers for each source language |
 | `full-tests.yml` | The whole suite, split by test id into eight shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
-| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main` |
-| `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
+| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main`. Its Windows job runs the HLSL compute probes on Direct3D 12 WARP, on pushes to `main`, nightly, and on pull requests that change the coverage engine, HLSL's front end or generator modules, or the files the D3D12 runtime executes with, but never in the merge queue (`tools/coverage/legs.py`) |
+| `lint.yml` | The pinned hooks in `.pre-commit-config.yaml`, except the local test hooks, on the files a change touches, and on every file when it changes the hooks |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
 | `computesharp.yml` | The ComputeSharp port: the upstream tests on Direct3D WARP on Windows as the baseline, and the translated tests on Metal on macOS and on Mesa OpenGL on Linux; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
 | `conformance.yml` | Differential execution of `tests/conformance`; Linux on pull requests, all three platforms on `main` and nightly |
@@ -96,7 +100,8 @@ toolchain pins and timeouts.
 
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
-| Backend, translator and example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Backend and translator tests | Python 3.11, 3.13, 3.14 and 3.15, with 3.12 in the complete suite (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
 | Complete core and demo unit suite | Required | Covered by focused platform jobs | Covered by focused platform jobs |
 | Complete DirectX demo corpus compilation | Pinned Linux DXC | Native execution | Not required |
 | Direct3D execution and host integration | Not applicable | Required WARP and dispatch checks | Not applicable |

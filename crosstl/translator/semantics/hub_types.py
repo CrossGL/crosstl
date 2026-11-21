@@ -478,6 +478,9 @@ class TypeScope:
             for argument in arguments[1:]:
                 result = arithmetic_result(result, self.infer(argument))
             return result
+        if name == "textureSamplePosition" and name not in self.functions:
+            # A multisample texture's sample position relative to the pixel centre (:mod:`.texture_operands`).
+            return FLOAT32.with_lanes(2)
         texel = self._infer_texel_call(name, arguments)
         if texel is not None:
             return texel

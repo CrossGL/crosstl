@@ -80,6 +80,10 @@ alone. The two outputs must match bit for bit, so a probe must compute a result 
 cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
 fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
 reassociates additions that the SPIR-V does not mark `NoContraction`.
+The remainder is the one exception. CrossGL's `fmod` is the exact remainder of C and MSL, while the Vulkan precision
+table gives SPIR-V's `OpFRem` the error inherited from `x - y * trunc(x / y)`, which lavapipe computes. So where the
+native probe of an `fmod` runs as SPIR-V that uses `OpFRem`, a translated word also matches when it is the exact
+remainder of the probe's arguments.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
@@ -99,7 +103,9 @@ reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), mi
 same arguments without the call. rust-gpu removes unused values, so a Rust baseline branches on each boolean argument
 to keep the comparison that makes it. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
-the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
+the id of the GLSL function CrossGL spells the same way. CrossGL spells Metal's SIMD-group and quad-group functions as
+Metal does, so each of those takes the id of the GLSL function that SPIRV-Cross writes it for: Metal `simd_sum` and
+GLSL `subgroupAdd` count once. A function that still has no id takes the id of the other
 functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. Functions that
 have no id at all count once per CrossGL spelling, because their CrossGL probes call the same CrossGL function: CUDA and
 HIP `__clz` are the one feature `crossgl/__clz`. A feature SPIR-V cannot express is listed by hand in
