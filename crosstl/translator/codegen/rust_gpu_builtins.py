@@ -17,6 +17,7 @@ from .rust_gpu_common_functions import (
     COMMON_FUNCTION_NAMES,
     generate_common_function_call,
 )
+from .rust_gpu_math_calls import RUST_GPU_MATH_CALL_NAMES, generate_rust_gpu_math_call
 
 _FLOATS = frozenset({"f32", "f64"})
 _SIGNED = frozenset({"i32", "i64"})
@@ -159,6 +160,7 @@ RUST_GPU_BUILTIN_NAMES = frozenset(
     | set(DERIVATIVES)
     | set(TERMINATORS)
     | COMMON_FUNCTION_NAMES
+    | RUST_GPU_MATH_CALL_NAMES
     | {"fma", "clamp", "mix", "any", "all", "not", "inversesqrt"}
 )
 
@@ -190,6 +192,8 @@ def generate_rust_gpu_builtin_call(generator, name, args):
         return _derivative_call(generator, name, args)
     if name == "transpose":
         return _transpose_call(generator, args)
+    if name in RUST_GPU_MATH_CALL_NAMES:
+        return generate_rust_gpu_math_call(generator, name, args)
     if name == "atan2":
         # HLSL atan2(y, x) is GLSL atan(y, x).
         name = "atan"
@@ -282,6 +286,9 @@ def _vector_call(name, shapes, values):
         return _method(values[0], "map", f"|c| c.{_FLOAT_UNARY[name]}()")
     if name == "pow" and len(values) == 2 and every_vector:
         return _componentwise(shapes[0][0], shapes[0][1], "powf", values)
+    if name == "pow" and len(values) == 2 and shapes[0][1] and not shapes[1][1]:
+        # glam's powf raises each component to one scalar exponent.
+        return _method(values[0], "powf", values[1])
     if name == "atan" and len(values) == 2 and every_vector:
         return _componentwise(shapes[0][0], shapes[0][1], "atan2", values)
     if name == "fma" and len(values) == 3 and every_vector:

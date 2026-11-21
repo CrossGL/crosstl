@@ -29,6 +29,7 @@ from ..host_workgroup_size import function_entry_execution_config
 from ..refusals import RustRefusal
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .rust_exact_lookups import call_names_resolving_to
+from .rust_gpu_math_calls import rust_gpu_math_mutated_roots
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -351,6 +352,7 @@ class RustFunctionSignatureMixin:
                     names.update(self.mutable_reference_borrow_root_names(argument))
                 names.update(self.rust_output_argument_roots(func_name, args))
                 names.update(rust_memory_atomic_location_roots(self, func_name, args))
+                names.update(rust_gpu_math_mutated_roots(self, func_name, args))
                 collect(current.function)
                 collect(args)
                 return
