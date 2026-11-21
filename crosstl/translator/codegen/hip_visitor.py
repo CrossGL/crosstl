@@ -11,6 +11,7 @@ from ..ast import (
 )
 from ..refusals import HipRefusal
 from .array_utils import split_array_type_suffix
+from .cuda_function_prototypes import late_called_functions, prototype_of
 from .cuda_shared_memory import helper_shared_variables
 from .enum_utils import (
     enum_struct_fields,
@@ -401,6 +402,7 @@ class HipVisitorMixin:
             self.visit(cbuffer)
 
         functions = getattr(node, "functions", [])
+        self.emit_late_function_prototypes(functions)
         for func in functions:
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -441,6 +443,11 @@ class HipVisitorMixin:
                     )
                     try:
                         self.current_stage_name = saved_stage_name
+                        self.emit_late_function_prototypes(
+                            func
+                            for func in getattr(stage, "local_functions", [])
+                            if id(func) not in emitted_local_functions
+                        )
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
                                 continue
@@ -473,6 +480,16 @@ class HipVisitorMixin:
                             self.hip_function_capture_params.pop(captured_name, None)
 
         return ""
+
+    def emit_late_function_prototypes(self, functions):
+        """Declare each function of ``functions`` that an earlier one calls (:mod:`.cuda_function_prototypes`)."""
+        late = late_called_functions(
+            func for func in functions if not generic_function_parameters(func)
+        )
+        for func in late:
+            self.visit(prototype_of(func))
+        if late:
+            self.add_line()
 
     def stage_entry_name_counts(self, stages):
         counts = {}
