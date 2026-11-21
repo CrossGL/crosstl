@@ -90,6 +90,23 @@ def test_gating_workflows_report_one_result_for_pull_requests_and_the_merge_queu
     assert "exit 1" in step["run"]
 
 
+# GitHub does not start a workflow whose file is larger than this. It reports
+# "a workflow file issue" without jobs, so a gating workflow's result check never
+# arrives and a merge group waits for the check timeout. A merged
+# demo-project-testing.yml of 512,046 bytes failed this way (#4829), while
+# 511,879 bytes started.
+WORKFLOW_SIZE_LIMIT = 512_000
+
+
+def test_every_workflow_file_fits_the_size_github_starts():
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        size = path.stat().st_size
+        assert size <= WORKFLOW_SIZE_LIMIT, (
+            f"{path.name} is {size:,} bytes, over the {WORKFLOW_SIZE_LIMIT:,} bytes"
+            " GitHub starts; move repeated steps into a composite action"
+        )
+
+
 def test_every_job_has_a_timeout():
     for filename, workflow in _workflows().items():
         for name, job in workflow["jobs"].items():
@@ -383,7 +400,8 @@ def test_upstream_source_caches_fall_back_to_an_older_cache():
         prefix = key.split("${{ hashFiles(")[0]
         assert cache.get("restore-keys") == prefix, (name, key)
         keys.append(key)
-    assert len(keys) == 3
+    # Linux, the compute matrix, Rust and Direct3D 12.
+    assert len(keys) == 4
 
 
 def _local_action_text(name):
