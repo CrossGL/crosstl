@@ -1,6 +1,6 @@
 """Token and name tables of the CrossGL parser."""
 
-from ..wave_operations import WAVE_EXTENDED_OPERATIONS
+from ..wave_operations import WAVE_EXTENDED_OPERATIONS, WAVE_PARTITIONED_OPERATIONS
 
 WAVE_INTRINSICS = {
     "WaveGetLaneCount",
@@ -44,6 +44,7 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
     *sorted(WAVE_EXTENDED_OPERATIONS),
+    *sorted(WAVE_PARTITIONED_OPERATIONS),
 }
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",

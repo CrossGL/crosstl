@@ -146,6 +146,10 @@ from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .partitioned_waves import (
+    PartitionedWaveUnsupportedError,
+    lower_partitioned_wave_operations,
+)
 from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
@@ -265,6 +269,7 @@ __all__ = [
     "TessFactorUnsupportedError",
     "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
+    "PartitionedWaveUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
@@ -471,7 +476,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`), and partitioned
+    wave reductions and scans become loops over the subgroup's lanes, or are refused with
+    :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`). HLSL's
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
@@ -607,6 +614,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
+    lower_partitioned_wave_operations(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
