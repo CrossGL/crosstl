@@ -8,6 +8,7 @@ component of 0 is dropped, and one that is not an integer constant from 0 to 3 i
 import pytest
 
 import crosstl
+from crosstl.translator.refusals import RegistryRefusal
 from crosstl.translator.semantics import (
     ShadowSampleUnsupportedError,
     TextureOperandError,
@@ -235,7 +236,7 @@ def test_a_registered_target_receives_the_compare_form_with_its_bias(
 
 
 def test_registering_an_unknown_feature_is_an_error():
-    with pytest.raises(ValueError, match="unknown texture operand feature"):
+    with pytest.raises(RegistryRefusal, match="unknown texture operand feature"):
         texture_operands.register_texture_operand_target("compare-lod", "directx")
 
 

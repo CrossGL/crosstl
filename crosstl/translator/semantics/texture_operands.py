@@ -36,6 +36,7 @@ from __future__ import annotations
 from .. import ast as A
 from ..codegen.call_graph import _stage_functions
 from ..diagnostics import CODE_PREFIX, SourceSpan, TranslationDiagnostic
+from ..refusals import RegistryRefusal
 from .hub_types import TypeScope, call_name, element_type_node
 from .rewrite import child_slots, get_child
 
@@ -103,7 +104,7 @@ _TARGETS: dict[str, set[str]] = {
 def register_texture_operand_target(feature: str, *targets: str) -> None:
     """Declare that the generators of ``targets`` lower ``feature``, so programs that use it reach them."""
     if feature not in _TARGETS:
-        raise ValueError(
+        raise RegistryRefusal(
             f"unknown texture operand feature {feature!r}; expected one of {', '.join(TEXTURE_OPERAND_FEATURES)}"
         )
     _TARGETS[feature].update(str(target).lower() for target in targets)
