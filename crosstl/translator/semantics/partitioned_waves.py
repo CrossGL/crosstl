@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import RegistryRefusal
 from ..wave_operations import WAVE_PARTITIONED_OPERATIONS
 from .hub_types import HubType
 from .lane_reads import (
@@ -113,7 +114,7 @@ def register_native_partitioned_wave_operations(target, operations):
     """Declare that ``target``'s generator emits ``operations`` itself, so their calls are not lowered."""
     unknown = sorted(set(operations) - set(WAVE_PARTITIONED_OPERATIONS))
     if unknown:
-        raise ValueError(f"not partitioned wave operations: {', '.join(unknown)}")
+        raise RegistryRefusal(f"not partitioned wave operations: {', '.join(unknown)}")
     _NATIVE[str(target)] = _NATIVE.get(str(target), frozenset()) | frozenset(operations)
 
 

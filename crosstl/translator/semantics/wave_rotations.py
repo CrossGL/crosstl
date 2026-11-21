@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import RegistryRefusal
 from ..wave_operations import WAVE_ROTATE_OPERATIONS
 from .hub_types import HubType
 from .lane_reads import (
@@ -76,7 +77,7 @@ def register_native_wave_rotations(target, operations):
     """Declare that ``target``'s generator emits ``operations`` itself, so their calls are not lowered."""
     unknown = sorted(set(operations) - set(WAVE_ROTATE_OPERATIONS))
     if unknown:
-        raise ValueError(f"not wave rotations: {', '.join(unknown)}")
+        raise RegistryRefusal(f"not wave rotations: {', '.join(unknown)}")
     _NATIVE[str(target)] = _NATIVE.get(str(target), frozenset()) | frozenset(operations)
 
 
