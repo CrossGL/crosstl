@@ -6155,8 +6155,9 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
     assert "struct StructuredBuffer {" not in generated_code
     assert generated_code.count("struct StructuredBuffer_ {") == 1
     assert (
-        "RWStructuredBuffer<StructuredBuffer_> index_buffer @set(0) @binding(5);"
-        in (generated_code)
+        "RWStructuredBuffer<StructuredBuffer_> index_buffer @set(0) @binding(5);" in (
+            generated_code
+        )
     )
     assert (
         "RWStructuredBuffer<StructuredBuffer_> dynamic_index_buffer @set(0) @binding(9);"
