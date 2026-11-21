@@ -1,9 +1,14 @@
 #version 450 core
+#ifdef VULKAN
+#define CROSSGL_BINDING(s, vulkan, opengl) set = s, binding = vulkan
+#else
+#define CROSSGL_BINDING(s, vulkan, opengl) binding = opengl
+#endif
 layout(std430, binding = 0) buffer ABuffer { float A[]; };
 layout(std430, binding = 1) buffer BBuffer { float B[]; };
 layout(std430, binding = 2) buffer CBuffer { float C[]; };
 // Constant Buffers
-layout(std140, binding = 0) uniform vectorAdd_numElements_Args {
+layout(std140, CROSSGL_BINDING(0, 3, 0)) uniform vectorAdd_numElements_Args {
     int vectorAdd_numElements_Args_numElements;
 };
 // Compute Shader
