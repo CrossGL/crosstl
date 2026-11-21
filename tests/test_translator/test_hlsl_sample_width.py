@@ -80,7 +80,10 @@ def test_crossgl_bias_sample_narrows_to_the_element_type(tmp_path):
 def test_scalar_sample_assigned_to_a_vector_splats_on_glsl(tmp_path):
     glsl = _translate(tmp_path, HLSL_NARROW, ".hlsl", "opengl")
 
-    assert "vec4 splat = vec4(texture(depthTex, uv).x);" in glsl
+    assert (
+        "vec4 splat = vec4(texture(CROSSGL_SAMPLED(sampler2D(depthTex, samp), depthTex), uv).x);"
+        in glsl
+    )
     _validate_glsl(tmp_path, glsl)
 
 
