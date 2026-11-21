@@ -11,6 +11,7 @@ from ..MetalAst import (
     UnaryOpNode,
     VariableNode,
 )
+from ..ordered_atomics import require_relaxed_atomic_order
 from .support import (
     MetalAtomicCompareExchangeLoweringError,
     MetalAtomicFenceLoweringError,
@@ -319,12 +320,14 @@ class MetalSynchronizationMixin:
             and not self.metal_user_function_overloads(name)
             and len(args) >= 2
         ):
+            require_relaxed_atomic_order(self, unscoped_name, args[2:], source_location)
             return self.metal_atomic_fetch_sub(args, is_main, source_location)
         mapped = self.metal_atomic_intrinsics.get(unscoped_name)
         if mapped is None or unscoped_name in self.user_function_names:
             return None
         if len(args) < 2:
             return None
+        require_relaxed_atomic_order(self, unscoped_name, args[2:], source_location)
         # Drop Metal's trailing memory_order argument; keep the atomic target and
         # the operand value.
         target = self.generate_metal_atomic_target(args[0], is_main)

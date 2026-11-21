@@ -1302,6 +1302,29 @@ class SpirvBufferMethodMixin:
                     )
                 return access
             return None
+        elif isinstance(expr, BinaryOpNode) and expr.op == "-":
+            # `p - n` moves `p` back by `n` elements; `p - q` (a pointer difference) is not a pointer.
+            left_pointer = self.variable_pointer_from_expression(expr.left)
+            if (
+                left_pointer is None
+                or not self.is_storage_buffer_pointer_arithmetic_base(left_pointer)
+            ):
+                return None
+            right_pointer = self.variable_pointer_from_expression(expr.right)
+            if (
+                right_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(right_pointer)
+            ):
+                return None
+            index = self.process_expression(expr.right)
+            if index is None:
+                return None
+            access, _ = self.create_array_element_access(expr.left, index, expr.right)
+            if access is not None:
+                self.record_storage_buffer_pointer_offset_alias(
+                    left_pointer, access, index, "-"
+                )
+            return access
         elif isinstance(expr, TernaryOpNode):
             literal_condition = evaluate_literal_int_expression(
                 expr.condition,

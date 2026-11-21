@@ -67,12 +67,23 @@ class MetalIdentifierMixin:
         ):
             return name
 
-        if "<" in str(name):
+        # A name's sanitized form depends on the name and, for a template name, on the spelling table, whose
+        # entries never change once set; so it is computed once per table.
+        spellings = self.__dict__.setdefault("template_name_spellings", {})
+        memo = self.__dict__.get("_sanitized_identifier_memo")
+        if memo is None or memo[0] is not spellings:
+            memo = (spellings, {})
+            self.__dict__["_sanitized_identifier_memo"] = memo
+        key = str(name)
+        sanitized = memo[1].get(key)
+        if sanitized is None:
+            sanitized = memo[1][key] = self._sanitize_identifier_text(key, spellings)
+        return sanitized
+
+    def _sanitize_identifier_text(self, name, spellings):
+        if "<" in name:
             # ``f<uint>`` and ``f<uint32_t>`` name one specialization; the first spelling met names it.
-            spellings = self.__dict__.setdefault("template_name_spellings", {})
-            name = spellings.setdefault(
-                canonical_scalar_type_spelling(str(name)), str(name)
-            )
+            name = spellings.setdefault(canonical_scalar_type_spelling(name), name)
         parts = []
         for index, char in enumerate(str(name)):
             valid = (

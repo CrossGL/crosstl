@@ -7,6 +7,7 @@ from ..CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from ..pointer_math_import import sine_cosine_statements
 
 
 class CudaImportRuntimeCallMixin:
@@ -34,29 +35,7 @@ class CudaImportRuntimeCallMixin:
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
-        if function_name == "__sincosf" and len(args) == 3:
-            value = self.visit(args[0])
-            sin_target = self.format_cuda_output_pointer_target(args[1])
-            cos_target = self.format_cuda_output_pointer_target(args[2])
-            if sin_target is None or cos_target is None:
-                return None
-            return [
-                f"{sin_target} = sin({value});",
-                f"{cos_target} = cos({value});",
-            ]
-
-        return None
-
-    def format_cuda_output_pointer_target(self, arg):
-        if isinstance(arg, CastNode):
-            return self.format_cuda_output_pointer_target(arg.expression)
-        if isinstance(arg, UnaryOpNode) and arg.op == "&":
-            return self.visit(arg.operand)
-
-        target = self.visit(arg)
-        if not target:
-            return None
-        return f"(*{target})"
+        return sine_cosine_statements(self, function_name, args, UnaryOpNode)
 
     def format_cuda_runtime_status_expression(self, value):
         if not isinstance(value, FunctionCallNode):

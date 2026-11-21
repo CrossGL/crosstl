@@ -1,6 +1,7 @@
 """Postfix and primary expressions in the CrossGL parser: member access, calls, generic suffixes, struct constructors, lambda arguments, primary expressions and literals."""
 
 from ..ast import (
+    FLOAT_LITERAL_SUFFIX,
     ArrayAccessNode,
     ArrayLiteralNode,
     AssignmentNode,
@@ -795,7 +796,12 @@ class ParserPostfixExpressionMixin:
                 if literal_text.lower().startswith("0x")
                 else float(literal_text)
             )
-            return LiteralNode(literal_value, PrimitiveType("float"))
+            literal = LiteralNode(literal_value, PrimitiveType("float"))
+            if literal_text != value:
+                # ``0.1f`` is a binary32 value; an unsuffixed ``0.1`` is its exact decimal value, rounded once
+                # to the type its context requires (FLOAT_LITERAL_SUFFIX).
+                literal.add_annotation(FLOAT_LITERAL_SUFFIX, "f")
+            return literal
 
         elif token_type == "BOOLEAN_LITERAL":
             self.eat("BOOLEAN_LITERAL")

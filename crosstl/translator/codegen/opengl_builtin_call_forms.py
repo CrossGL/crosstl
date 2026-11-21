@@ -20,6 +20,7 @@ from .generic_function_utils import (
 from .glsl_tessellation_input_arrays import (
     tessellation_input_length,
 )
+from .opengl_operand_forms import glsl_operand_form_call
 from .sizeof_calls import (
     sizeof_call_bytes,
 )
@@ -45,6 +46,9 @@ class OpenGLBuiltinCallFormMixin:
         original_func_name,
     ):
         """Render a call that a matrix, logical, mesh, ray-query, synchronization, subgroup, atomic or math lowering handles, or return ``UNHANDLED``."""
+        operand_form_call = glsl_operand_form_call(self, expr, original_func_name)
+        if operand_form_call is not UNHANDLED:
+            return operand_form_call
         emulated_matrix_call = self.generate_glsl_emulated_matrix_call(
             expr, original_func_name, list(expr.args or [])
         )

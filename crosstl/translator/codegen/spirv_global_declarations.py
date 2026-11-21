@@ -14,6 +14,7 @@ from ..ast import (
 from ..refusals import VulkanRefusal
 from .enum_utils import generic_type_parts
 from .precise_dataflow import declaration_is_precise
+from .spirv_conservative_depth import record_depth_layout
 from .spirv_hlsl_registers import (
     reserve_exact_binding,
     reserve_hlsl_descriptor_slots,
@@ -107,9 +108,21 @@ class SpirvGlobalDeclarationMixin:
         builtin_type = self.variable_value_types.get(builtin.id)
         if builtin_type is not None:
             self.validate_spirv_builtin_semantic_type(
-                semantic, type_id.type.base_type, "interface declaration"
+                semantic,
+                self.crossgl_spelling_of_type(type_id),
+                "interface declaration",
             )
         return builtin
+
+    def crossgl_spelling_of_type(self, type_id: SpirvId) -> str:
+        """``type_id``'s CrossGL spelling, ``int[1]`` for a sized array, as the semantic type checks read it."""
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is None or array_info[0] is None:
+            return type_id.type.base_type
+        element_type, size = array_info
+        if isinstance(size, int):
+            return f"{self.crossgl_spelling_of_type(element_type)}[{size}]"
+        return type_id.type.base_type
 
     def process_global_variable_declaration(
         self, node: VariableNode, default_storage_class: str = "Private"
@@ -182,6 +195,7 @@ class SpirvGlobalDeclarationMixin:
             var_type = sized_per_vertex_interface_type(self, var_type, storage_class)
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
+            record_depth_layout(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Input")
                 var_id = self.register_input(
@@ -190,6 +204,7 @@ class SpirvGlobalDeclarationMixin:
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            record_depth_layout(self, var_id, node, storage_class)
             decorate_invariant_builtin_output(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
@@ -645,10 +660,10 @@ class SpirvGlobalDeclarationMixin:
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
-        if "patch" in {
+        if self.has_attribute(node, "patch") or "patch" in {
             str(qualifier).lower() for qualifier in getattr(node, "qualifiers", ())
         }:
-            # GLSL `patch in`/`patch out`: one value per patch, not per control point.
+            # GLSL `patch in`/`patch out` and CrossGL `@patch`: one value per patch, not per control point.
             self.decorations.append(f"OpDecorate %{var_id.id} Patch")
         if self.declaration_metadata_names(node) & {
             "pervertex",

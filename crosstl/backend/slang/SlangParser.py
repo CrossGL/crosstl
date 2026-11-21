@@ -2842,7 +2842,8 @@ class SlangParser:
             self.eat("SEMICOLON")
             return []
         if self.current_token[0] == "LBRACE":
-            return self.parse_block()
+            # A nested compound statement keeps its scope: a declaration in it may reuse an outer or sibling name.
+            return BlockNode(self.parse_block())
         if self.is_labeled_statement_start():
             return self.parse_labeled_statement()
         if self.is_anonymous_struct_variable_declaration_start():
