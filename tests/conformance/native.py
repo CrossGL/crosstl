@@ -24,6 +24,11 @@ VULKAN_TIMEOUT = 15
 # newest version on an Apple GPU but older than 3.1 on the Apple Paravirtual device of hosted macOS runners, so one
 # artifact compiled under two languages. MSL 3.1 is the first with ``bfloat`` (MSL specification section 2.1).
 METAL_LANGUAGE_VERSION = (3, 1)
+# An artifact that MSL 3.1 rejects compiles under the oldest later version that accepts it, offline and then in the
+# driver: ``coherent(device)`` arrives in MSL 3.2, ``pack_float_to_snorm10a2`` in 4.0 and the atomic functions without
+# ``_explicit`` in 4.1, the version the coverage validators check (tools/coverage/validators.py METAL_STANDARD). An
+# artifact keeps one language either way, and every artifact MSL 3.1 accepts keeps 3.1.
+METAL_LANGUAGE_VERSIONS = ((3, 1), (3, 2), (4, 0), (4, 1))
 
 
 class DriverRejected(RuntimeError):
@@ -67,10 +72,31 @@ def _constants(job, *kinds):
     return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
-def metal_language_version(metal):
-    """``METAL_LANGUAGE_VERSION`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
-    major, minor = METAL_LANGUAGE_VERSION
+def metal_language_version(metal, version=METAL_LANGUAGE_VERSION):
+    """``version`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
+    major, minor = version
     return getattr(metal, f"MTLLanguageVersion{major}_{minor}", major << 16 | minor)
+
+
+def _metal_function(Metal, library, entry):
+    """The entry function, specialized when it declares ``[[function_constant(n)]]`` values.
+
+    A function that reads function constants builds a pipeline only once specialized (Metal Shading Language
+    Specification, "Program Scope Function Constants"). The harness sets no value, so ``is_function_constant_defined``
+    is false for each constant and the kernel takes the default it writes, as a SPIR-V, GLSL or HLSL kernel does
+    without a specialization value.
+    """
+    function = library.newFunctionWithName_(entry)
+    if function is None:
+        raise RuntimeError(f"Missing Metal entry {entry}")
+    if not function.functionConstantsDictionary():
+        return function
+    function, error = library.newFunctionWithName_constantValues_error_(
+        entry, Metal.MTLFunctionConstantValues.new(), None
+    )
+    if function is None:
+        raise DriverRejected(f"Metal function specialization: {error}")
+    return function
 
 
 def execute_metal(job):
@@ -81,7 +107,11 @@ def execute_metal(job):
         raise RuntimeError("No Metal device")
     identity = _expect(job, str(device.name()))
     options = Metal.MTLCompileOptions.new()
-    options.setLanguageVersion_(metal_language_version(Metal))
+    options.setLanguageVersion_(
+        metal_language_version(
+            Metal, tuple(job.get("metal_language", METAL_LANGUAGE_VERSION))
+        )
+    )
     strict = job["config"] == "strict"
     options.setMathMode_(Metal.MTLMathModeSafe if strict else Metal.MTLMathModeFast)
     options.setMathFloatingPointFunctions_(
@@ -94,9 +124,7 @@ def execute_metal(job):
     )
     if library is None:
         raise DriverRejected(f"Metal driver compile: {error}")
-    function = library.newFunctionWithName_(job["entry"])
-    if function is None:
-        raise RuntimeError(f"Missing Metal entry {job['entry']}")
+    function = _metal_function(Metal, library, job["entry"])
     pipeline, error = device.newComputePipelineStateWithFunction_error_(function, None)
     if pipeline is None:
         raise DriverRejected(f"Metal pipeline: {error}")
