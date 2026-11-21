@@ -141,7 +141,9 @@ def test_an_interpolant_is_read_straight_from_a_shader_input():
     assert "layout(location = 0) in vec2 a0;" in glsl
     assert "vec2 r = interpolateAtCentroid(a0);" in glsl
     crossgl = probes.build(centroid, "crossgl").source
-    assert "        vec2 uv;\n        vec2 a0;\n    }" in crossgl
+    # The interpolant is the probe's only input, as in the native probe, so it links at location 0 in both.
+    assert "    struct FragmentInput {\n        vec2 a0;\n    }" in crossgl
+    assert "FragmentOutput main(FragmentInput input) {" in crossgl
     assert "vec2 r = interpolateAtCentroid(input.a0);" in crossgl
     hlsl = Feature(
         "hlsl",
