@@ -70,7 +70,7 @@ def test_array_type_argument_specializes_the_call(tmp_path, backend, specializat
 @pytest.mark.parametrize(
     ("body", "call"),
     [
-        (MATRIX, "pick::<Mat4<f32>>("),
+        (MATRIX, "pick::<Mat4>("),
         (ARRAY, "pick::<[f32; 2]>("),
         (NESTED_ARRAY, "pick::<[[f32; 3]; 2]>("),
     ],

@@ -11,6 +11,7 @@ from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
@@ -5829,11 +5830,12 @@ def test_translate_api_accepts_spirv_source(tmp_path):
         str(shader_path), backend="rust", format_output=False
     )
 
-    assert '#[cfg_attr(feature = "crossgl_gpu", fragment_shader)]' in generated_code
-    assert "pub fn main()" in generated_code
+    assert "#[spirv(fragment)]" in generated_code
     assert (
-        "let color: Vec4<f32> = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
+        "pub fn main(#[spirv(location = 0)] out_cgl_FragColor: &mut Vec4) -> ()"
+        in generated_code
     )
+    assert "let color: Vec4 = Vec4::new(1.0, 0.0, 0.0, 1.0);" in generated_code
 
 
 def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
@@ -9745,28 +9747,13 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     shader_path = tmp_path / "layout_vertex.spvasm"
     shader_path.write_text(LAYOUT_SHADER, encoding="utf-8")
 
-    generated_code = crosstl.translate(
-        str(shader_path), backend="rust", format_output=False
-    )
-
-    assert "pub struct Particles" in generated_code
-    assert (
-        "static VIEW_PROJ: std::sync::LazyLock<Mat4<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "static POSITION: std::sync::LazyLock<Vec3<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "gl_Position = Vec4::<f32>::new((*POSITION).x, (*POSITION).y, "
-        "(*POSITION).z, 1.0);" in generated_code
-    )
-    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_code
+    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output does not bind yet; it is
+    # refused rather than written as a default-valued static.
+    with pytest.raises(
+        RustLoweringRefused,
+        match="constant buffers are not lowered to rust-gpu uniform blocks",
+    ):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
 def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
@@ -9789,18 +9776,14 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     generated_cgl = crosstl.translate(
         str(shader_path), backend="cgl", format_output=False
     )
-    generated_rust = crosstl.translate(
-        str(shader_path), backend="rust", format_output=False
-    )
-
     assert "cbuffer PushConstants @push_constant {" in generated_cgl
     assert "pc.model" not in generated_cgl
-    assert "pub struct PushConstants" in generated_rust
-    assert (
-        "static MODEL: std::sync::LazyLock<Mat4<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_rust
-    )
-    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_rust
+    # The push-constant block is a CrossGL constant buffer, which the rust-gpu output refuses for now.
+    with pytest.raises(
+        RustLoweringRefused,
+        match="constant buffers are not lowered to rust-gpu uniform blocks",
+    ):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
 def test_vulkan_bitwise_shift_precedence_codegen():

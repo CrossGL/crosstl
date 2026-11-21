@@ -6,6 +6,7 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
 from crosstl.backend.import_refusals import CudaImportRefused
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 from crosstl.translator.semantics.declared_functions import UndeclaredFunctionError
@@ -10013,12 +10014,25 @@ class TestCudaCodeGen:
         source_path = tmp_path / "kernel.cu"
         source_path.write_text(code)
 
+        # rust-gpu has no binding for the plain-value parameter yet, so it is refused by name.
+        with pytest.raises(
+            RustLoweringRefused,
+            match="compute entry parameter 'value' is not a compute built-in input",
+        ):
+            translate(str(source_path), backend="rust", format_output=False)
+
+        source_path.write_text(
+            code.replace(", float value)", ")").replace("= value;", "= 1.0f;")
+        )
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The pointer parameters are rust-gpu storage-buffer slices of the compute entry point.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &mut [i32])"
+            in result
         )
-        assert "data[indices[0] as usize] = value;" in result
+        assert "data[indices[0] as usize] = 1.0;" in result
 
     def test_cuda_load_cache_intrinsics_from_programming_guide_pointer_address_conversion(
         self,

@@ -5,6 +5,10 @@ from ..ast import (
     FunctionCallNode,
     IdentifierNode,
 )
+from .spirv_float_literals import (
+    float_literal_value,
+    signed_float_literal_value,
+)
 from .spirv_literal_context import (
     is_literal_operand,
 )
@@ -132,7 +136,10 @@ class SpirvExpressionKindMixin:
         primitive_type_name = self.normalize_primitive_name(literal_type)
         if primitive_type_name in {"float", "double"}:
             literal_type_id = self.register_primitive_type(primitive_type_name)
-            return self.register_constant(float(expr.value), literal_type_id)
+            constant = self.register_constant(float(expr.value), literal_type_id)
+            if primitive_type_name != "float":
+                return constant
+            return float_literal_value(expr, constant, float(expr.value))
         if primitive_type_name in self.INTEGER_TYPE_NAMES:
             literal_value = int(expr.value)
             if (
@@ -331,7 +338,9 @@ class SpirvExpressionKindMixin:
             float_type = self.register_primitive_type("float")
             return self.register_constant(0.0, float_type)
 
-        return self.unary_operation(expr.op, operand.type, operand)
+        return signed_float_literal_value(
+            expr.op, operand, self.unary_operation(expr.op, operand.type, operand)
+        )
 
     def spirv_ternary_expression(
         self,

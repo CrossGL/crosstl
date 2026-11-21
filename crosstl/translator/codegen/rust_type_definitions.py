@@ -8,6 +8,7 @@ from ..ast import (
 from ..matrix_shape import matrix_type_spelling
 from ..refusals import RustRefusal
 from .array_utils import prepend_array_dimension
+from .rust_gpu_constants import fold_array_size
 from .union_layout import UnionLayoutCollector
 
 
@@ -160,7 +161,7 @@ class RustTypeDefinitionMixin:
         members = getattr(node, "members", [])
         derive_traits = self.derive_traits_for_members(members, include_default=True)
         code = f"#[repr(C)]\n#[derive({derive_traits})]\n"
-        code += f"pub struct {node.name}{self.format_generic_params(node)} {{\n"
+        code += f"pub struct {self.rust_type_identifier(node.name)}{self.format_generic_params(node)} {{\n"
         member_types = {}
         member_semantics = {}
 
@@ -240,8 +241,8 @@ class RustTypeDefinitionMixin:
             else:
                 fields.append(f"{field_ident}: {param_ident}")
 
-        code = f"impl{generic_decl} {node.name}{generic_use} {{\n"
-        code += f"    pub fn new({', '.join(params)}) -> Self {{\n"
+        code = f"impl{generic_decl} {self.rust_type_identifier(node.name)}{generic_use} {{\n"
+        code += f"    pub const fn new({', '.join(params)}) -> Self {{\n"
         code += f"        Self {{ {', '.join(fields)} }}\n"
         code += "    }\n"
         code += "}\n\n"
@@ -539,9 +540,9 @@ class RustTypeDefinitionMixin:
     def format_array_size(self, size):
         if size is None:
             return None
-        if hasattr(size, "value"):
+        if hasattr(size, "value") and not hasattr(size, "operator"):
             return size.value
-        return size
+        return fold_array_size(self, size)
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""

@@ -51,7 +51,16 @@ _READ_OPCODES = frozenset(
 _EFFECT_OPCODES = frozenset(
     {"OpFunctionCall", "OpReportIntersectionKHR", "OpRayQueryProceedKHR"}
 )
-_BARRIERS = frozenset({"OpControlBarrier", "OpMemoryBarrier", "OpMemoryNamedBarrier"})
+# A fragment interlock bounds a critical section: device and image reads must not move into or out of it.
+_BARRIERS = frozenset(
+    {
+        "OpControlBarrier",
+        "OpMemoryBarrier",
+        "OpMemoryNamedBarrier",
+        "OpBeginInvocationInterlockEXT",
+        "OpEndInvocationInterlockEXT",
+    }
+)
 _EMITS = frozenset(
     {"OpEmitVertex", "OpEndPrimitive", "OpEmitStreamVertex", "OpEndStreamPrimitive"}
 )
@@ -83,7 +92,13 @@ class _Module:
             variable["id"]: variable.get("storage_class")
             for variable in global_variables
         }
-        self.value_type_ids = dict(parameters)
+        # A global's pointer type tells a Uniform BufferBlock (device memory) from a uniform block.
+        self.value_type_ids = {
+            variable["id"]: variable["pointer_type_id"]
+            for variable in global_variables
+            if variable.get("pointer_type_id")
+        }
+        self.value_type_ids.update(parameters)
         self.parameters = set(self.value_type_ids)
         self.definitions = {}
         self.locals = set()
