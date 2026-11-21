@@ -1262,8 +1262,18 @@ class DirectXCompileTimeGlobalMixin:
         self.validate_hlsl_mesh_thread_group_size(shader_type, values)
         return f"[numthreads({values[0]}, {values[1]}, {values[2]})]\n"
 
+    def hlsl_alias_resolved_type_text(self, raw_type):
+        """``raw_type``'s spelling with type aliases resolved, so ``typedef float Triple[3]`` reads as ``float[3]``."""
+        type_text = self.type_name_string(raw_type)
+        aliases = getattr(self, "hlsl_type_aliases", {})
+        seen = set()
+        while type_text in aliases and type_text not in seen:
+            seen.add(type_text)
+            type_text = self.type_name_string(aliases[type_text])
+        return type_text
+
     def hlsl_fixed_array_return_components(self, raw_return_type):
-        type_text = self.type_name_string(raw_return_type)
+        type_text = self.hlsl_alias_resolved_type_text(raw_return_type)
         if not type_text:
             return None
         base_type, array_suffix = split_array_type_suffix(type_text)
@@ -1385,6 +1395,9 @@ class DirectXCompileTimeGlobalMixin:
         if expected != self.map_type(lowered_type):
             return None
         values = [f"{rendered}[{index}]" for index in range(component_count)]
+        if lowered_type in self.hlsl_fixed_array_return_struct_metadata:
+            # HLSL constructs only numeric types; a structure needs the generated constructor function.
+            return self.format_struct_constructor_expression(lowered_type, values)
         return f"{lowered_type}({', '.join(values)})"
 
     def hlsl_direct_recursive_call_nodes(self, function):

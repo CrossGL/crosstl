@@ -7,6 +7,12 @@ from ..ast import (
     StructNode,
     VariableNode,
 )
+from ..refusals import HipRefusal
+from .cuda_constant_folding import (
+    device_constant_declaration,
+    device_variable_declaration,
+    is_device_variable,
+)
 from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
@@ -24,7 +30,7 @@ class HipDeclarationMixin:
     def visit_StructNode(self, node: StructNode) -> str:
         if getattr(node, "is_cbuffer", False):
             return self.emit_cbuffer_members_as_constant_memory(node)
-        self.add_line(f"struct {node.name}")
+        self.add_line(f"{self.native_unions.struct_keyword(node)} {node.name}")
         self.add_line("{")
         self.indent_level += 1
 
@@ -64,6 +70,9 @@ class HipDeclarationMixin:
         self.struct_member_semantics[node.name] = member_semantics
         self.indent_level -= 1
         self.add_line("};")
+        layout_assertion = self.native_unions.layout_assertion(node)
+        if layout_assertion:
+            self.add_line(layout_assertion)
         self.add_line()
         return ""
 
@@ -101,7 +110,16 @@ class HipDeclarationMixin:
         if metadata_comment:
             self.add_line(metadata_comment)
         place = file_scope_placement(self, node, metadata_comment)
-        self.add_line(f"{place(self.format_variable_declaration(node))};")
+        declaration = self.format_variable_declaration(node)
+        if place is constant_in_device_memory:
+            declaration = device_constant_declaration(
+                self, node.name, var_type, initial_value, declaration, HipRefusal
+            )
+        elif at_file_scope(self) and is_device_variable(node):
+            declaration = device_variable_declaration(
+                self, node.name, var_type, initial_value, declaration, HipRefusal
+            )
+        self.add_line(f"{place(declaration)};")
         metadata_declaration = self.query_metadata_declaration(node.name, var_type)
         if metadata_declaration:
             self.add_line(f"{place(metadata_declaration)};")
@@ -127,7 +145,9 @@ class HipDeclarationMixin:
             declaration += f" = {self.visit(value)}"
         declaration = f"const {declaration}"
         if at_file_scope(self):
-            declaration = constant_in_device_memory(declaration)
+            declaration = device_constant_declaration(
+                self, node.name, const_type, value, declaration, HipRefusal
+            )
         self.add_line(f"{declaration};")
         return ""
 
@@ -146,6 +166,9 @@ class HipDeclarationMixin:
                 qualifiers.append("__shared__")
             elif "uniform" in qualifier_name:
                 qualifiers.append("__constant__")
+            elif qualifier_name == "device" and at_file_scope(self):
+                # A program-scope variable in device memory, which every thread reads and writes.
+                qualifiers.append("__device__")
         return qualifiers
 
     def declaration_qualifier_names(self, node):

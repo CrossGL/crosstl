@@ -150,9 +150,6 @@ class MetalProgramSectionMixin:
         global_vars,
     ):
         """Reserve the cbuffer and explicit bindings, then declare every program-scope variable after ``code``."""
-        texture_register = 0
-        sampler_register = 0
-        buffer_register = 0
         used_resource_bindings = {}
         source_resource_bindings = {}
         self.pre_reserve_cbuffer_bindings(
@@ -161,15 +158,12 @@ class MetalProgramSectionMixin:
         self.reserve_explicit_global_resource_bindings(
             global_vars, used_resource_bindings, source_resource_bindings
         )
-        buffer_register = self.reserve_cbuffer_bindings(
+        self.reserve_cbuffer_bindings(
             used_resource_bindings,
             source_resource_bindings,
         )
         emission = MetalGlobalEmission(
             code,
-            texture_register,
-            sampler_register,
-            buffer_register,
             used_resource_bindings,
             source_resource_bindings,
         )

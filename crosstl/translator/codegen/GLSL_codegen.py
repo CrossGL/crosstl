@@ -119,6 +119,7 @@ from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -142,6 +143,7 @@ from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
 )
+from .glsl_spirv_varying_locations import spirv_location_macro_definition
 from .glsl_stage_distances import distance_output_epilogue
 from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
@@ -1844,17 +1846,8 @@ class GLSLCodeGen(
             invocation_count + self.software_subgroup_width - 1
         ) // self.software_subgroup_width
 
-        if any(
-            self.glsl_wave_size_attribute(attribute)
-            for attribute in getattr(entry_function, "attributes", []) or []
-        ):
-            raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup lowering cannot be combined with a "
-                "hardware WaveSize contract",
-                workgroup_size=concrete_workgroup_size,
-                reason="hardware-contract-conflict",
-                source_location=getattr(entry_function, "source_location", None),
-            )
+        # Refuses a WaveSize other than the software subgroup width.
+        self.glsl_exact_subgroup_width(entry_function, "compute")
 
         all_records = self.glsl_software_subgroup_operation_records(
             ast,
@@ -3036,6 +3029,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
@@ -3365,6 +3361,7 @@ class GLSLCodeGen(
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
+        self.glsl_spirv_location_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -4549,6 +4546,12 @@ class GLSLCodeGen(
             code = (
                 code[:cooperative_matrix_support_insertion_index]
                 + descriptor_binding_macro_definition()
+                + code[cooperative_matrix_support_insertion_index:]
+            )
+        if self.glsl_spirv_location_macro_used:
+            code = (
+                code[:cooperative_matrix_support_insertion_index]
+                + spirv_location_macro_definition()
                 + code[cooperative_matrix_support_insertion_index:]
             )
         code = self.finish_generic_resource_helper_refusals(code)
@@ -8732,6 +8735,7 @@ class GLSLCodeGen(
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -8744,6 +8748,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -8978,6 +8983,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 

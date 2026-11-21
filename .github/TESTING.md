@@ -20,10 +20,12 @@ touches Metal or Direct3D.
   - Path-filtered demo workflows for the files they cover.
 - **Merge queue tier.** The `merge_group` event runs each gating workflow once
   more on the exact commit that will land on `main`. That run covers every
-  supported Python version (3.11 through 3.15) and the MLX smoke job. The full
-  MLX native, parity, corpus and host tier runs in the queue only when the
-  group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
-  to `main`. A pull request merges only when this run passes.
+  supported Python version (3.11 through 3.15) once: the Complete Test Suite
+  runs every test on Python 3.12, and the translator and backend workflows run
+  their whole suites on the other versions. It also runs the MLX smoke job.
+  The full MLX native, parity, corpus and host tier runs in the queue only
+  when the group changes `demos/integrations/mlx/**` or the MLX workflow, as
+  for pushes to `main`. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
   backend, complete, examples, conformance and ComputeSharp workflows skip a
   push whose commits already passed the merge queue, and run in full for any
@@ -96,7 +98,8 @@ toolchain pins and timeouts.
 
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
-| Backend, translator and example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Backend and translator tests | Python 3.11, 3.13, 3.14 and 3.15, with 3.12 in the complete suite (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
+| Example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
 | Complete core and demo unit suite | Required | Covered by focused platform jobs | Covered by focused platform jobs |
 | Complete DirectX demo corpus compilation | Pinned Linux DXC | Native execution | Not required |
 | Direct3D execution and host integration | Not applicable | Required WARP and dispatch checks | Not applicable |

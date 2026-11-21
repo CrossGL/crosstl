@@ -35,6 +35,13 @@ translation must declare that block too. Probes with different ordered inputs ke
 one that reads a clock or queries a ray query, because two runs of it need not agree.
 Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
 defines.
+
+The two probes must write the same words, with one exception. CrossGL's ``fmod`` is the exact remainder of C and MSL,
+which the HLSL documentation also gives (``x = i * y + f``). SPIR-V's ``OpFRem`` need not compute it: the Vulkan
+specification's precision table gives ``OpFRem`` the error inherited from ``x - y * trunc(x / y)``, and lavapipe
+computes that expression. So where the native probe of a CrossGL ``fmod`` runs as SPIR-V that uses ``OpFRem``, a
+translated word matches when it is the native probe's word or the exact remainder of the probe's arguments
+(:func:`remainders`). Any other word still differs.
 """
 
 from __future__ import annotations
@@ -47,7 +54,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import lanes, lowering, validators
-from .model import Result
+from .model import Feature, Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
 SUFFIXES = {"glsl": ".comp", "metal": ".metal", "spirv": ".spvasm"}
@@ -94,6 +101,8 @@ _FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
 # structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
 # keep their validation result.
 _UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
+# The SPIR-V remainder whose precision Vulkan inherits from x - y * trunc(x / y).
+_INEXACT_REMAINDER = re.compile(r"\bOpFRem\b")
 DIVERGED = "computes different results from the native probe"
 REBOUND = "binds other resources than the native probe"
 REJECTED = "is rejected by the runtime"
@@ -218,15 +227,55 @@ def inputs(buffer: str):
     return generator.integers(0, 16, count).astype(dtype)
 
 
-def difference(native, translated) -> str:
+def remainders(feature: Feature):
+    """The output words a probe of ``feature`` writes when it computes the exact remainder of its arguments, or
+    ``None`` when ``feature`` is not CrossGL's ``fmod`` of two float scalars or vectors.
+
+    The probe reads its arguments in order from consecutive elements of the float input, so a ``floatN`` call takes
+    ``x`` from ``fin[i]`` to ``fin[i + N - 1]`` and ``y`` from the next N elements, and stores the ``floatN`` result
+    in the N words from ``N * i`` (:mod:`.probes`).
+    """
+    import numpy as np
+
+    signature = feature.signature
+    if feature.crossgl != "fmod" or signature is None:
+        return None
+    kinds = [param.type for param in signature.params]
+    directions = {param.direction for param in signature.params}
+    result = signature.result
+    if (
+        len(kinds) != 2
+        or directions != {"in"}
+        or any(kind != result for kind in kinds)
+        or result.scalar != "float"
+        or result.opaque
+        or result.count
+        or len(result.shape) > 1
+    ):
+        return None
+    width = result.shape[0] if result.shape else 1
+    data = inputs("fin")
+    elements = np.arange(THREADS)[:, None] + np.arange(width)[None, :]
+    exact = np.fmod(data[elements], data[elements + width]).astype(np.float32)
+    return exact.reshape(-1).view(np.uint32)
+
+
+def difference(native, translated, exact=None) -> str:
     """How the output words ``translated`` differ from ``native``, or an empty string when they match.
 
-    Two words that are both NaN as 32-bit floats match, whatever their payload.
+    Two words that are both NaN as 32-bit floats match, whatever their payload. ``exact``, when given, holds the words
+    an exact remainder writes at the start of the output (:func:`remainders`); a translated word there also matches
+    when it is the exact one.
     """
     import numpy as np
 
     floats = (native.view(np.float32), translated.view(np.float32))
     differ = (native != translated) & ~(np.isnan(floats[0]) & np.isnan(floats[1]))
+    if exact is not None:
+        count = len(exact)
+        written = translated[:count]
+        nan = np.isnan(written.view(np.float32)) & np.isnan(exact.view(np.float32))
+        differ[:count] &= (written != exact) & ~nan
     if not differ.any():
         return ""
     word = int(np.argmax(differ))
@@ -307,16 +356,17 @@ def _execute(
     via_spirv: bool,
 ):
     """Run one chunk of results, as SPIR-V when ``via_spirv``; return ``{index: (native record, translated record,
-    outputs, lowered, rebound, via_spirv)}``.
+    outputs, lowered, rebound, via_spirv, exact)}``.
 
-    ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares, and
-    ``rebound`` is :func:`rebinding`'s objection to the translation's resources.
+    ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares,
+    ``rebound`` is :func:`rebinding`'s objection to the translation's resources, and ``exact`` holds the words of an
+    exact remainder where the native probe computes one with ``OpFRem`` (:func:`remainders`), or ``None``.
     """
     from tests.conformance import runner
 
     runs_as = "spirv" if via_spirv else language
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
-    rebound = {}
+    rebound, exact = {}, {}
     assemblies = []
     for index, result in chunk:
         data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
@@ -334,6 +384,8 @@ def _execute(
             continue
         if via_spirv:
             assemblies += texts
+        if runs_as == "spirv" and _INEXACT_REMAINDER.search(texts[0]):
+            exact[index] = remainders(result.feature)
         paths = []
         for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
@@ -382,6 +434,7 @@ def _execute(
             index in lowered,
             rebound.get(index, ""),
             via_spirv,
+            exact.get(index),
         )
         for index, roles in found.items()
     }
@@ -395,6 +448,7 @@ def _judge(
     lowered: bool,
     rebound: str,
     via_spirv: bool,
+    exact,
     index: int,
 ) -> Result:
     if not native or not translated or native["outcome"] != "preserved":
@@ -418,7 +472,7 @@ def _judge(
     if translated["outcome"] != "preserved":
         return result
     found = difference(
-        outputs[f"{index:05d}-native"], outputs[f"{index:05d}-translated"]
+        outputs[f"{index:05d}-native"], outputs[f"{index:05d}-translated"], exact
     )
     if found:
         first, _, rest = found.partition("\n")

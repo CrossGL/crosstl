@@ -9,7 +9,8 @@ are retained separately, on the ``directx-warp`` profile of their own frozen
 contract and lock.
 
 ``run`` (Windows) builds each pristine project in the configuration of its
-upstream steps (with the audit exceptions of ``baseline-audit.props``),
+upstream steps (with the audit exceptions of ``baseline-audit.props``, in the
+upstream checkout so that its ``global.json`` selects the SDK),
 exports its cases with the discovery tool (``--host-only`` for a project
 without generated shaders), requires the frozen lock and runs every recorded
 ``dotnet test`` command of ``test_projects.json``:
@@ -173,6 +174,7 @@ def run_suite(
 ) -> dict[str, Any]:
     """Build, export, check, run and account one retained project."""
 
+    runner = companions.in_source(runner, source)
     retention = item.retention or {}
     configuration = retention["configuration"]
     directory.mkdir(parents=True, exist_ok=True)
@@ -261,8 +263,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     report = companions.run_all(
         selected,
-        args.output,
-        lambda item, directory: run_suite(item, args.source, directory),
+        args.output.resolve(),
+        lambda item, directory: run_suite(item, args.source.resolve(), directory),
         report_name="retained.json",
     )
     for name, entry in report["suites"].items():

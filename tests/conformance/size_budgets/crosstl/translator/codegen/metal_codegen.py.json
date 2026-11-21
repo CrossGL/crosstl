@@ -1,9 +1,6 @@
 {
  "functions": {
   "MetalCodeGen.__init__": 657,
-  "MetalCodeGen.expression_result_type": 747,
-  "MetalCodeGen.generate_expression": 1292,
   "MetalCodeGen.generate_statement": 319
- },
- "module": 5636
+ }
 }

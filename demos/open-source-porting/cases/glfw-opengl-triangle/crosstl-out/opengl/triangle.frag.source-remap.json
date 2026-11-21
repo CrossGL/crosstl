@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 155,
+        "endLine": 17,
+        "endOffset": 406,
         "file": "crosstl-out/opengl/triangle.frag.glsl",
-        "length": 155,
+        "length": 406,
         "line": 1,
         "offset": 0
       },
