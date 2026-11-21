@@ -45,6 +45,7 @@ from . import (
     pointers,
     portability,
     primitives,
+    promotion,
     qualifiers,
     rasterization,
     rays,
@@ -75,6 +76,13 @@ def _opencl_scalar(spelling: str, source: str = "iin", prelude: str = "") -> Tem
     return Template(
         f"{spelling} v = ({spelling}){source}[i];\noutp[i] = (float)(v * v);",
         prelude=prelude,
+    )
+
+
+def _opencl_narrow(spelling: str) -> Template:
+    """An 8- or 16-bit integer type's probe, whose product converts back to the type (base.narrow_scalar)."""
+    return Template(
+        f"{spelling} v = ({spelling})iin[i];\noutp[i] = (float)(({spelling})(v * v));"
     )
 
 
@@ -161,6 +169,7 @@ OPENCL = {
     **pointers.OPENCL,
     **memory.OPENCL,
     **unions.OPENCL,
+    **promotion.OPENCL,
     **subgroups.OPENCL,
     **specializations.KERNELS,
     **qualifiers.OPENCL,
@@ -183,10 +192,10 @@ OPENCL = {
         "half", "fin", "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
     ),
     "double": _opencl_scalar("double", "fin"),
-    "int8": _opencl_scalar("char"),
-    "uint8": _opencl_scalar("uchar"),
-    "int16": _opencl_scalar("short"),
-    "uint16": _opencl_scalar("ushort"),
+    "int8": _opencl_narrow("char"),
+    "uint8": _opencl_narrow("uchar"),
+    "int16": _opencl_narrow("short"),
+    "uint16": _opencl_narrow("ushort"),
     "int64": _opencl_scalar("long"),
     "uint64": _opencl_scalar("ulong"),
     "shared-memory": Template(
