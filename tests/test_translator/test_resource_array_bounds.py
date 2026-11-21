@@ -68,9 +68,8 @@ def texture_size(code, backend):
         marker = "array<texture2d<float>, "
         start = code.index(marker) + len(marker)
         return int(code[start : code.index(">", start)])
-    marker = "uniform sampler2D texs["
-    start = code.index(marker) + len(marker)
-    return int(code[start : code.index("]", start)])
+    # A Vulkan compilation declares texs[] unsized; the OpenGL declaration carries the size.
+    return int(re.search(r"uniform sampler2D texs\[(\d+)\];", code).group(1))
 
 
 def block_size(code, backend):

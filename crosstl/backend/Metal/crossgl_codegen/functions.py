@@ -35,6 +35,7 @@ from ..MetalAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from ..ordered_atomics import fenced_atomic_statement
 from ..sparse_color import import_sparse_color_assignment
 
 
@@ -462,6 +463,10 @@ class MetalFunctionMixin:
         code = ""
         for stmt in body:
             code += "    " * indent
+            fenced_atomic = fenced_atomic_statement(self, stmt, indent, is_main)
+            if fenced_atomic is not None:
+                code += fenced_atomic
+                continue
             if isinstance(stmt, TypeAliasNode):
                 # Register a block-local ``using`` or ``typedef`` so later
                 # declarations and expressions resolve it in lexical order. The

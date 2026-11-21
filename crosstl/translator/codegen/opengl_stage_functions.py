@@ -241,17 +241,21 @@ class OpenGLStageFunctionMixin:
 
         topology_name = str(topology).strip().strip('"').lower()
         if topology_name in {"triangle_cw", "triangles_cw"}:
-            if domain != "triangles":
+            # Triangle and quad patches both tessellate into triangles, whose winding cw and ccw set (GLSL 4.60
+            # section 4.4.1.2); an isoline patch tessellates into lines.
+            if domain not in ("triangles", "quads"):
                 raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_cw requires "
-                    "triangles domain"
+                    "a triangles or quads domain"
                 )
             return "cw", False
         if topology_name in {"triangle_ccw", "triangles_ccw"}:
-            if domain != "triangles":
+            # Triangle and quad patches both tessellate into triangles, whose winding cw and ccw set (GLSL 4.60
+            # section 4.4.1.2); an isoline patch tessellates into lines.
+            if domain not in ("triangles", "quads"):
                 raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_ccw requires "
-                    "triangles domain"
+                    "a triangles or quads domain"
                 )
             return "ccw", False
         if topology_name in {"line", "lines"}:

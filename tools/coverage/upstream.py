@@ -51,6 +51,12 @@ LLVM_HIP = Pin("llvm/llvm-project", "6009708b4367171ccdbf4b5905cb6a803753fe18")
 ROCM_CLR = Pin("ROCm/clr", "1949b1621a802ffb1492616adbae6154bfbe64ef")
 
 DXC = Pin("microsoft/DirectXShaderCompiler", "d355aa8364d34df3f0822ba0de8d1dfc75ae6f48")
+# DXC's Shader Model 6.10 preview (v1.10.2605.37, Patch 2 of the May 2026 preview), whose table declares the
+# intrinsics that need shader model 6.10 as the preview compiler accepts them. The release table above declares
+# some of them under earlier names, such as TriangleObjectPosition for TriangleObjectPositions.
+DXC_PREVIEW = Pin(
+    "microsoft/DirectXShaderCompiler", "c4d8f4f99aa221da58cd540bf2099a2889632ab6"
+)
 
 # Mojo's standard library at the release CI installs (mojo 1.2.0, tagged mojo/v1.2.0 and max/v26.7.0).
 MODULAR = Pin("modular/modular", "527d069ee11a41ac5320af1f9402db0a66b2b868")
@@ -139,6 +145,11 @@ SOURCES = {
         "utils/hct/gen_intrin_main.txt",
         "24bc62cd69825c062f6527b783d2089c669c643b2df9336a6b5c7895a0ad7eec",
         "DXC v1.9.2602.24 intrinsic table",
+    ),
+    "hlsl-preview": DXC_PREVIEW.file(
+        "utils/hct/gen_intrin_main.txt",
+        "268fa13272b910491b615a3fa2c06e6fb4ca364f52bb12eef4b4fb1ef88ab9d2",
+        "DXC v1.10.2605.37 (Shader Model 6.10 preview) intrinsic table",
     ),
     "mojo-atomic": MODULAR.file(
         "Mojo/stdlib/std/atomic/atomic.mojo",

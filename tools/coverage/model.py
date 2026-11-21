@@ -49,6 +49,8 @@ LANGUAGES = (
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The direction of a translation matrix result, which translates a native probe into another language (:mod:`.pairs`).
+PAIR = "pair"
 # The language an imported probe is emitted to and validated in when CrossTL has no generator for its own: HLSL, the
 # target whose output row covers the most of what OpenCL C kernels call.
 ROUND_TRIPS = {"opencl": "hlsl"}
@@ -219,6 +221,16 @@ def descriptor_reading(opaque: str) -> tuple[Type, str] | None:
     )
 
 
+# DXC's BuiltInTrianglePositions, the three object-space vertex positions of a hit triangle that
+# TriangleObjectPositions returns (HLSL shader model 6.10), as the intrinsic table spells it.
+TRIANGLE_POSITIONS = "triangle_positions"
+
+
+def struct_reading(opaque: str) -> tuple[Type, str] | None:
+    """How a probe reads a built-in struct that a call returns: through its first member."""
+    return (Type("float", (3,)), "{}.p0") if opaque == TRIANGLE_POSITIONS else None
+
+
 _TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")
 
 
@@ -316,6 +328,9 @@ class Result:
     sources: tuple[str, str] = field(default=(), compare=False, repr=False)
     # The runtime :mod:`.execution` ran both on, when it did.
     runtime: str = ""
+    # The language a cell of the translation matrix (:mod:`.pairs`) translates the feature's native probe into; empty
+    # for a row's result, whose translation is in the feature's own language.
+    into: str = ""
     # Why :mod:`.execution` did not run a supported compute probe on the runtime it selected, starting with
     # ``on <runtime>``; empty when the probe ran, or when no runtime was there to run it.
     unrun: str = ""

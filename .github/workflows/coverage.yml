@@ -3,7 +3,8 @@ name: Coverage
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
 # job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc
-# (and nvcc for the Slang functions only CUDA has), and OpenCL C input with the runner image's clang-18 and DXC, and
+# (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL intrinsics that
+# need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
 # and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
@@ -111,6 +112,10 @@ jobs:
         uses: ./.github/actions/install-linux-dxc
         with:
           pinned: "true"
+
+      # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
+      - name: Install the DXC Shader Model 6.10 preview
+        uses: ./.github/actions/install-dxc-preview
 
       - name: Install pinned glslang and SPIRV-Tools
         uses: ./.github/actions/install-shader-validators

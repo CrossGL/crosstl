@@ -140,6 +140,11 @@ from .metal_threadgroup_forwarding import (
 )
 from .metal_type_mapping import MetalTypeMappingMixin
 from .metal_wave_operations import MetalWaveOperationMixin
+from .metal_wide_atomics import (
+    discarded_wide_atomic_call,
+    is_metal_wide_atomic,
+    metal_wide_atomic_call,
+)
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     collect_stage_entry_records,
@@ -2799,6 +2804,9 @@ class MetalCodeGen(
 
     def generate_discarded_expression(self, expr):
         """Render an unused result without changing nested value expressions."""
+        wide_atomic = discarded_wide_atomic_call(self, expr)
+        if wide_atomic is not None:
+            return wide_atomic
         if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
         if is_comma_expression(expr):
@@ -3187,7 +3195,9 @@ class MetalCodeGen(
             source_location=getattr(node, "source_location", None),
         )
 
-    def generate_metal_buffer_resource_atomic_call(self, func_name, args):
+    def generate_metal_buffer_resource_atomic_call(
+        self, func_name, args, *, wide_result_discarded=False
+    ):
         if func_name in self.user_function_names:
             return None
         operation_info = self.buffer_atomic_operations().get(func_name)
@@ -3205,7 +3215,10 @@ class MetalCodeGen(
         target = args[0]
         target_type = self.expression_result_type(target)
         mapped_target_type = self.map_type(target_type)
-        if not self.buffer_atomic_supports_scalar_type(operation, mapped_target_type):
+        wide = is_metal_wide_atomic(operation, mapped_target_type)
+        if not wide and not self.buffer_atomic_supports_scalar_type(
+            operation, mapped_target_type
+        ):
             return self.unsupported_metal_buffer_resource_atomic_call(
                 func_name,
                 target,
@@ -3244,6 +3257,17 @@ class MetalCodeGen(
             target_expr = self.generate_expression(target)
             if not self.is_metal_address_expression(target, target_expr):
                 target_expr = f"&{target_expr}"
+        if wide:
+            return metal_wide_atomic_call(
+                self,
+                func_name,
+                operation,
+                target,
+                target_expr,
+                address_space,
+                args[1],
+                discarded=wide_result_discarded,
+            )
         if operation == "compare_exchange":
             compare = self.generate_expression_with_expected(
                 args[1], mapped_target_type
