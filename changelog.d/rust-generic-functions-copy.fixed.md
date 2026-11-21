@@ -1,1 +1,1 @@
-Rust output adds a `Copy` bound to every generic function value parameter, and refuses generic functions whose bodies call concrete functions with generic arguments. Both changes prevent rustc from rejecting generated generic function bodies (#4748).
+Rust output refuses a generic function whose body passes a generic argument to a concrete function, instead of writing a generic body that rustc rejects (#4748).
