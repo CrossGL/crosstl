@@ -211,6 +211,16 @@ FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
 HOSTED = {"opencl": frozenset({"ImageFormat"})}
 # How :func:`lost` begins, which the bug issue for a translation that drops an anchor recognizes.
 LOSES = "the translation loses"
+# The anchor of the device-global probe (:mod:`.templates.memory`), whose ``float acc[64]`` every invocation shares.
+# Each invocation reads and rewrites only its own element, so a translation that keeps a copy of the array per
+# invocation (an HLSL or Slang ``static``, a GLSL or WGSL private global, a local) or per workgroup still compiles and
+# computes what the probe computes. Compiled to SPIR-V, such a copy is a Private, Function or Workgroup variable of the
+# array's type. CUDA and HIP compile to no SPIR-V here, and keep the shared array when they declare it ``__device__``
+# at program scope: a local array compiles too, and a program-scope one without ``__device__`` lives on the host.
+SHARED = "StorageClass.CrossWorkgroup"
+_COPIES = r"=\s*OpVariable\s+%_ptr_(?:Private|Function|Workgroup)__arr_float_u?int_64(?:_\d+)?\s"
+_DEVICE = r"^[ \t]*(?:static[ \t]+)?__device__[ \t][^;{}()]*\bacc[ \t]*\["
+_SHARED_SOURCE = {"cuda": _DEVICE, "hip": _DEVICE}
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
@@ -307,4 +317,18 @@ def lost(feature: Feature, language: str, source: str, imported: str = "") -> st
             for anchor, pattern in wanted
             if not re.search(pattern, compiled, re.M)
         ]
+    if not missing and copied(feature, language, source):
+        return f"{LOSES} {SHARED}: it keeps a copy of the shared array per invocation or per workgroup"
     return f"{LOSES} {', '.join(missing)}" if missing else ""
+
+
+def copied(feature: Feature, language: str, source: str) -> bool:
+    """Whether ``source``, a validated translation of the device-global probe into ``language``, keeps its shared
+    array as a copy per invocation or per workgroup (:data:`SHARED`). False for other features and for a translation
+    that cannot be compiled here."""
+    if SHARED not in feature.group.split():
+        return False
+    if language in _SHARED_SOURCE:
+        return not re.search(_SHARED_SOURCE[language], source, re.M)
+    compiled = _compiled(feature, language, source)
+    return bool(compiled) and bool(re.search(_COPIES, compiled))

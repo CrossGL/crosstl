@@ -29,7 +29,7 @@ from .stage_interface_structs import StageInterfaceUnsupportedError
 __all__ = ["adopt_module_stage_outputs"]
 
 TARGETS = frozenset(
-    {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang"}
+    {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang", "rust"}
 )
 _GRAPHICS = frozenset({"vertex", "fragment"})
 

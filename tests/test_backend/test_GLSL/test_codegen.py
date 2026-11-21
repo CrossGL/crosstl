@@ -1660,12 +1660,20 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
     # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
-    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit. A Vulkan
+    # compilation (which defines VULKAN) keeps the separate texture and sampler at their source bindings.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
-    assert "texture(g_tTex1, 0.1)" in glsl
-    assert "g_sSamp1" not in glsl
-    assert "texture1D" not in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 1) uniform texture1D g_tTex1;\n#else\n"
+        "layout(binding = 1) uniform sampler1D g_tTex1;\n#endif\n"
+    ) in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 0) uniform sampler g_sSamp1;\n#endif\n" in glsl
+    )
+    assert (
+        "texture(CROSSGL_SAMPLED(sampler1D(g_tTex1, g_sSamp1), g_tTex1), 0.1)" in glsl
+    )
+    assert "#else\n#define CROSSGL_SAMPLED(vulkan, opengl) opengl\n#endif\n" in glsl
     validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2232,7 +2240,7 @@ def test_codegen_resource_array_functions_keep_array_receivers():
     assert "imageStore(images[index], ivec2(1, 2), (c + r))" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 0) uniform sampler2D textures[2];" in glsl
+    assert "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D textures[2];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D images[2];" in glsl
 
 

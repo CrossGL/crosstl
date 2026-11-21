@@ -219,13 +219,15 @@ def test_vulkan_overload_with_parameters_keeps_the_intrinsic(
 
 
 @pytest.mark.parametrize("name, source, source_backend", OVERLOADS)
-def test_hlsl_overload_with_parameters_is_not_renamed(
+def test_hlsl_overload_with_parameters_keeps_the_intrinsic_call(
     tmp_path, name, source, source_backend
 ):
     code = _translate(tmp_path, source, name, "directx", source_backend)
-    assert re.search(r"\bfloat3 WorldRayOrigin\(float k\)", code), code
-    assert re.search(r"WorldRayOrigin\(\) \+ WorldRayOrigin\(2\.0\)", code), code
-    assert "WorldRayOrigin_" not in code, code
+    # HLSL output renames every user function named like an HLSL intrinsic, with the calls its overloads accept
+    # (crosstl/translator/codegen/hlsl_intrinsic_functions.py); the call without arguments stays the intrinsic.
+    assert re.search(r"\bfloat3 WorldRayOrigin_fn\(float k\)", code), code
+    assert re.search(r"WorldRayOrigin\(\) \+ WorldRayOrigin_fn\(2\.0\)", code), code
+    assert not re.search(r"\bWorldRayOrigin\(float", code), code
 
 
 @pytest.mark.parametrize("name, source, source_backend", OVERLOADS)

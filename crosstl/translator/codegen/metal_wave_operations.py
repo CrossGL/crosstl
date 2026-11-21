@@ -15,6 +15,11 @@ from ..wave_operations import (
     wave_extended_result_type,
 )
 from .array_utils import split_array_type_suffix
+from .metal_grid_quads import (
+    GRID_QUAD_OPERATIONS,
+    metal_grid_quad_lane_move,
+    metal_grid_quad_vote,
+)
 from .metal_wave_extended import metal_wave_extension_call
 
 
@@ -511,6 +516,14 @@ class MetalWaveOperationMixin:
                     f"{self.diagnostic_zero_value_for_type(mapped_type)})"
                 )
             return result
+        if operation in GRID_QUAD_OPERATIONS:
+            grid_quad = metal_grid_quad_vote(
+                self, operation, arguments
+            ) or metal_grid_quad_lane_move(
+                self, operation, arguments, self.generate_expression(arguments[0])
+            )
+            if grid_quad is not None:
+                return grid_quad
         if operation == "QuadReadLaneAt":
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
@@ -639,6 +652,11 @@ class MetalWaveOperationMixin:
                 f"{intrinsic}({bits(arguments[0])}, "
                 f"ushort({self.generate_expression(arguments[1])}))"
             )
+        # A refused quad read records its refusal, so the program is not returned with it.
+        inner = (
+            metal_grid_quad_lane_move(self, operation, arguments, bits(arguments[0]))
+            or inner
+        )
         return f"as_type<{mapped_type}>({inner})"
 
     def metal_wave_result_type(self, operation, arguments):

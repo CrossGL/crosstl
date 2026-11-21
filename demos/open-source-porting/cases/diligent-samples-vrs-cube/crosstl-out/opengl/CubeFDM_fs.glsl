@@ -1,9 +1,14 @@
 #version 450 core
 #extension GL_EXT_fragment_invocation_density : require
+#ifdef VULKAN
+#define CROSSGL_BINDING(s, vulkan, opengl) set = s, binding = vulkan
+#else
+#define CROSSGL_BINDING(s, vulkan, opengl) binding = opengl
+#endif
 layout(location = 0) in vec2 in_UV;
 layout(binding = 0) uniform sampler2D g_Texture;
 // Constant Buffers
-layout(std140, binding = 0) uniform g_Constants {
+layout(std140, CROSSGL_BINDING(0, 1, 0)) uniform g_Constants {
     mat4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;

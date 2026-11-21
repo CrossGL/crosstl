@@ -111,6 +111,10 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.metal_source_scans import (
+    next_identifier_scan_stop,
+    next_statement_scan_stop,
+)
 from crosstl.project.namespace_alias_scopes import (
     alias_visible_at,
     alias_visible_in_scope,
@@ -15172,7 +15176,7 @@ def _metal_find_implicit_template_function_calls(
                 i = end + 2
                 continue
             if not (body[i].isalpha() or body[i] == "_"):
-                i += 1
+                i = next_identifier_scan_stop(body, i + 1, len(body))
                 continue
             ident, consumed = preprocessor._read_identifier(body, i)
             if preprocessor._is_member_identifier_context(body, i):
@@ -15250,6 +15254,20 @@ class _MetalMaterializationTypeEnvironmentCache:
     ) = None
     struct_fields_by_name: dict[str, dict[str, str]] | None = None
     lexical_scopes: list[tuple[int, int]] | None = None
+    # The whole scoped statement scan of each function body, by body span, of ``statement_scan_source``.
+    statement_scans: dict[tuple[int, int], list[tuple[int, int]]] = field(
+        default_factory=dict
+    )
+    statement_scan_source: str | None = None
+
+    def statement_scans_of(
+        self, source: str
+    ) -> dict[tuple[int, int], list[tuple[int, int]]]:
+        """The statement scans of ``source``, dropping any kept for other text."""
+        if self.statement_scan_source is not source:
+            self.statement_scans = {}
+            self.statement_scan_source = source
+        return self.statement_scans
 
 
 @dataclass
@@ -16714,6 +16732,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
     paren_depth = bracket_depth = angle_depth = brace_depth = 0
     i = start
     while i < end:
+        i = next_statement_scan_stop(source, i, end)
+        if i >= end:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16769,15 +16790,53 @@ def _metal_scoped_statement_spans(
     end: int,
     position: int,
     lexical_scopes: Sequence[tuple[int, int]] | None = None,
+    scans: dict[tuple[int, int], list[tuple[int, int]]] | None = None,
 ) -> list[tuple[int, int]]:
+    """The statements of ``source[start:end]`` that end by ``position`` in a scope open at ``position``.
+
+    The scan runs left to right and its state at a character depends only on the characters before it, so the
+    statements a scan up to ``position`` finds are those of the whole range that end by ``position``. ``scans``
+    keeps each range's whole scan, so that the calls for several positions in one function scan it once.
+    """
     if lexical_scopes is None:
         lexical_scopes = preprocessor._find_lexical_brace_scopes(source)
+    if scans is None:
+        spans = _metal_scoped_statement_scan(source, start, min(end, position))
+    else:
+        whole = scans.get((start, end))
+        if whole is None:
+            whole = scans[(start, end)] = _metal_scoped_statement_scan(
+                source, start, end
+            )
+        spans = [span for span in whole if span[1] <= position]
+    active_scopes = {
+        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
+    }
+    return [
+        span
+        for span in spans
+        if preprocessor._innermost_lexical_scope(
+            lexical_scopes,
+            span[0],
+            len(source),
+        )
+        in active_scopes
+    ]
+
+
+def _metal_scoped_statement_scan(
+    source: str, start: int, stop: int
+) -> list[tuple[int, int]]:
+    """The statement spans of ``source[start:stop]``; a block statement starts a new statement scan boundary."""
     spans: list[tuple[int, int]] = []
     statement_start = start
     paren_depth = bracket_depth = 0
     statement_scope_stack: list[bool] = []
     i = start
-    while i < min(end, position):
+    while i < stop:
+        i = next_statement_scan_stop(source, i, stop)
+        if i >= stop:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16847,20 +16906,7 @@ def _metal_scoped_statement_spans(
             if closes_statement_scope:
                 statement_start = i + 1
         i += 1
-
-    active_scopes = {
-        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
-    }
-    return [
-        span
-        for span in spans
-        if preprocessor._innermost_lexical_scope(
-            lexical_scopes,
-            span[0],
-            len(source),
-        )
-        in active_scopes
-    ]
+    return spans
 
 
 def _read_metal_string_for_project(source: str, start: int) -> tuple[str, int]:
@@ -17701,6 +17747,7 @@ def _metal_function_type_environment(
                 if cache is not None and cache.lexical_scopes is not None
                 else None
             ),
+            cache.statement_scans_of(source) if cache is not None else None,
         )
     )
     for start, end in statement_spans:
@@ -18264,6 +18311,11 @@ class _SpanLookup:
         self._spans = merged
         self._starts = [start for start, _end in merged]
 
+    def next_start(self, position: int, default: int) -> int:
+        """The start of the first span that starts at or after ``position``, else ``default``."""
+        index = bisect.bisect_left(self._starts, position)
+        return self._starts[index] if index < len(self._starts) else default
+
     def containing(self, position: int) -> tuple[int, int] | None:
         index = bisect.bisect_right(self._starts, position) - 1
         if index < 0:
@@ -18311,7 +18363,11 @@ def _metal_template_reference_names(
                 i = min(excluded_span[1], scan_end)
                 continue
             if not (source[i].isalpha() or source[i] == "_"):
-                i += 1
+                # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+                i = min(
+                    next_identifier_scan_stop(source, i + 1, scan_end),
+                    excluded.next_start(i + 1, scan_end),
+                )
                 continue
 
             ident, consumed = preprocessor._read_identifier(source, i)
@@ -18470,7 +18526,11 @@ def _plain_template_helper_call_sites(
                 )
                 i = paren_end + 1
                 continue
-            i += 1
+            # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+            i = min(
+                next_identifier_scan_stop(source, i + 1, scan_end),
+                excluded.next_start(i + 1, scan_end),
+            )
     return calls
 
 

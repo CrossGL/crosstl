@@ -3,6 +3,7 @@
 import re
 
 from ....translator.codegen.array_utils import evaluate_literal_int_expression
+from ....translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from ..constant_constructor_folding import constant_initialization
 from ..MetalAst import (
     ConstantBufferNode,
@@ -37,6 +38,21 @@ class MetalStructDeclarationMixin:
             # already become a concrete function. One that is left has no
             # entry point in the Metal library, so it emits nothing.
             return ""
+        if qualifier == "vertex" and self.is_metal_post_tessellation_function(function):
+            # A [[patch]] vertex function is a tessellation evaluation stage (:mod:`..post_tessellation_import`).
+            return (
+                "    // Tessellation Evaluation Shader\n"
+                "    tessellation_evaluation {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
@@ -109,6 +125,15 @@ class MetalStructDeclarationMixin:
         if qualifier is None and ray_attribute is not None:
             # [[intersection(bounding_box, ...)]] keeps the stage as an attribute rather than a qualifier.
             qualifier = ray_attribute
+        if qualifier == "intersection" and ray_attribute == "intersection":
+            # [[intersection(primitive_type, tags...)]]; MSL has no intersection function qualifier keyword.
+            return self.generate_metal_intersection_stage(
+                function,
+                template_value_bindings=template_value_bindings,
+                template_type_bindings=template_type_bindings,
+                output_name=output_name,
+                specialization_key=specialization_key,
+            )
         if qualifier in self.rt_qualifiers:
             # Printed as a plain helper, the function would lose the qualifier that lets the host place it in an
             # intersection function table, and the targets would get no ray-tracing stage.
@@ -554,18 +579,29 @@ class MetalStructDeclarationMixin:
         mapped_names = {}
         used_names = set()
         self.ambiguous_struct_names = set()
-        for struct_node in structs or []:
-            if not isinstance(struct_node, StructNode):
-                continue
-            raw_name = getattr(struct_node, "name", None)
-            if not raw_name:
-                continue
+        named = [
+            struct_node
+            for struct_node in structs or []
+            if isinstance(struct_node, StructNode)
+            and getattr(struct_node, "name", None)
+        ]
+        # The CrossGL parser reads a structure name such as ``let`` or ``vec2``, which a Metal program may declare,
+        # as its keyword, so such a structure takes a suffixed name that no other structure keeps.
+        kept_names = {
+            self.sanitize_identifier(struct_node.name) for struct_node in named
+        } - set(CROSSGL_KEYWORDS)
+        for struct_node in named:
+            raw_name = struct_node.name
             if raw_name in mapped_names:
                 self.ambiguous_struct_names.add(raw_name)
             base_name = self.sanitize_identifier(raw_name)
+            taken = used_names
+            if base_name in CROSSGL_KEYWORDS:
+                base_name = f"{base_name}_"
+                taken = used_names | kept_names
             candidate = base_name
             suffix = 2
-            while candidate in used_names:
+            while candidate in taken:
                 candidate = f"{base_name}_{suffix}"
                 suffix += 1
             used_names.add(candidate)

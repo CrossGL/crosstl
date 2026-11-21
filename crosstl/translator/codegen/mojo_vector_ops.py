@@ -8,6 +8,7 @@ from .mojo_tables import (
     MOJO_INTEGER_INDEX_TYPES,
     MOJO_MAPPED_INTEGER_TYPES,
     MOJO_SCALAR_DTYPES,
+    MOJO_VALUE_STRUCT_TRAITS,
     MOJO_VECTOR_ARITHMETIC_OPS,
     MOJO_VECTOR_COMPARISON_METHODS,
 )
@@ -129,19 +130,21 @@ class MojoVectorOpMixin:
         name = self.matrix_type_name(dtype, columns, rows)
         storage_rows = self.matrix_storage_rows(rows)
         column_type = f"SIMD[{dtype}, {storage_rows}]"
-        code = f"@value\nstruct {name}:\n"
+        code = f"@fieldwise_init\nstruct {name}({MOJO_VALUE_STRUCT_TRAITS}):\n"
         for column in range(columns):
             code += f"    var c{column}: {column_type}\n"
         code += "\n"
         for index_type in ("Int", "Int32", "UInt32"):
-            code += f"    fn __getitem__(self, index: {index_type}) -> {column_type}:\n"
+            code += (
+                f"    def __getitem__(self, index: {index_type}) -> {column_type}:\n"
+            )
             for column in range(columns - 1):
                 code += f"        if index == {column}:\n"
                 code += f"            return self.c{column}\n"
             code += f"        return self.c{columns - 1}\n\n"
 
             code += (
-                f"    fn __setitem__(inout self, index: {index_type}, "
+                f"    def __setitem__(mut self, index: {index_type}, "
                 f"value: {column_type}):\n"
             )
             for column in range(columns - 1):
@@ -153,12 +156,12 @@ class MojoVectorOpMixin:
             vector_terms = [
                 f"self.c{column} * value[{column}]" for column in range(columns)
             ]
-            code += f"    fn __mul__(self, value: {column_type}) -> {column_type}:\n"
+            code += f"    def __mul__(self, value: {column_type}) -> {column_type}:\n"
             code += f"        return {' + '.join(vector_terms)}\n\n"
             matrix_args = ", ".join(
                 f"self * other.c{column}" for column in range(columns)
             )
-            code += f"    fn __mul__(self, other: {name}) -> {name}:\n"
+            code += f"    def __mul__(self, other: {name}) -> {name}:\n"
             code += f"        return {name}({matrix_args})\n\n"
 
             transpose_args = []
@@ -168,9 +171,9 @@ class MojoVectorOpMixin:
                 if rows == 3:
                     components.append(zero)
                 transpose_args.append(f"{column_type}({', '.join(components)})")
-            code += f"fn transpose(m: {name}) -> {name}:\n"
+            code += f"def transpose(m: {name}) -> {name}:\n"
             code += f"    return {name}({', '.join(transpose_args)})\n\n"
-            code += f"fn inverse(m: {name}) -> {name}:\n"
+            code += f"def inverse(m: {name}) -> {name}:\n"
             code += "    return m\n\n"
         return code + "\n"
 
@@ -226,7 +229,7 @@ class MojoVectorOpMixin:
             column_args.append(f"{column_type}({', '.join(column_components)})")
 
         helper_name = self.matrix_constructor_helper_name(helper["key"])
-        code = f"fn {helper_name}({', '.join(params)}) -> {matrix_type}:\n"
+        code = f"def {helper_name}({', '.join(params)}) -> {matrix_type}:\n"
         code += "".join(prelude)
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
@@ -247,7 +250,7 @@ class MojoVectorOpMixin:
             column_args.append(f"{column_type}({', '.join(components)})")
 
         helper_name = self.matrix_diagonal_helper_name(dtype, columns, rows)
-        code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {matrix_type}:\n"
+        code = f"def {helper_name}(s: {mojo_scalar_type}) -> {matrix_type}:\n"
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
 

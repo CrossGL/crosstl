@@ -54,7 +54,7 @@ class MojoExpressionMixin:
             return None
 
         context["lines"].append(
-            f"{indent_str}fn {helper_name}({signature_params}) -> "
+            f"{indent_str}def {helper_name}({signature_params}) -> "
             f"{return_type_mapped}:\n{body}"
         )
         return helper_name
@@ -531,7 +531,8 @@ class MojoExpressionMixin:
         if placeholder is None or name in self.variable_types:
             return None
         placeholder_name, placeholder_type = placeholder
-        self.required_builtin_placeholders.add((placeholder_name, placeholder_type))
+        if placeholder_name not in self.variable_types:
+            self.required_builtin_placeholders.add((placeholder_name, placeholder_type))
         return placeholder_name
 
     def mojo_gpu_builtin_expression(self, name, component=None):

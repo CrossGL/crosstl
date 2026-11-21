@@ -22,6 +22,18 @@ from .vocabulary import (
 )
 
 
+def array_extent_value(extent):
+    """Return the value an ``array<T, N>`` extent names.
+
+    An extent is always a value. A bare name parses as a type argument (``NamedType``) because the generic argument
+    list cannot tell ``N`` from a type, but in the extent position it names a constant or a generic value parameter,
+    exactly as the ``N`` of ``T name[N]`` does.
+    """
+    if type(extent) is NamedType and not extent.generic_args:
+        return IdentifierNode(extent.name, source_location=extent.source_location)
+    return extent
+
+
 class ParserFunctionMixin:
     """Function members of ``Parser``."""
 
@@ -303,8 +315,12 @@ class ParserFunctionMixin:
             size = None
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-                size = self.current_token[1]
-                self.eat(self.current_token[0])
+                if self.peek()[0] in {"GREATER_THAN", "BITWISE_SHIFT_RIGHT"}:
+                    size = self.current_token[1]
+                    self.eat(self.current_token[0])
+                else:
+                    # ``var<workgroup> s: array<f32, (A + B)>``: an extent of several tokens is a value expression.
+                    size = array_extent_value(self.parse_generic_argument())
             self.eat_type_greater_than()
             return ArrayType(element_type, size)
 
@@ -322,6 +338,8 @@ class ParserFunctionMixin:
         generic_args = self.parse_generic_arguments()
         if len(generic_args) == 2:
             element_type, extent = generic_args
+            extent = array_extent_value(extent)
+            generic_args[1] = extent
             if isinstance(element_type, IdentifierNode):
                 element_type = NamedType(element_type.name, [])
             if isinstance(element_type, TypeNode) and (

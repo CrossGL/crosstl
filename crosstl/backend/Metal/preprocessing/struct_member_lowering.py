@@ -770,7 +770,8 @@ class MetalStructMemberLoweringMixin:
                 cursor = ignored[1]
                 continue
             if not (code[cursor].isalpha() or code[cursor] == "_"):
-                cursor += 1
+                # Only identifiers and ignored-span boundaries matter here.
+                cursor = self._next_scan_stop(code, cursor + 1, ignored_spans)
                 continue
             ident, consumed = self._read_identifier(code, cursor)
             ident_end = cursor + consumed

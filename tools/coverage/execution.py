@@ -8,9 +8,10 @@ lines of the runtime's message. The harness binds both probes the way it finds t
 translation that turns those buffers into something else, such as pointers in a uniform block, cannot run in the native
 probe's place.
 
-HLSL, Slang, WGSL and Rust have no runtime on the coverage hosts, so both probes run as the SPIR-V that the
-language's reference compiler (DXC, slangc, naga or rust-gpu) writes for them, on the harness's Vulkan runtime. The
-two go through the same compiler, so a difference between them comes from the translation. A probe the compiler cannot
+Slang, WGSL and Rust have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
+reference compiler (slangc, naga or rust-gpu) writes for them, on the harness's Vulkan runtime. So do HLSL probes on a
+host without the harness's Direct3D 12 runtime, as the SPIR-V DXC writes. The two go through the same compiler, so a
+difference between them comes from the translation. A probe the compiler cannot
 lower keeps its validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips
 rounding through it. rust-gpu leaves out a storage buffer the probe never reads, so a Rust probe of a call that takes
 no argument binds only its output and keeps its validation result too.
@@ -18,6 +19,12 @@ DXC declares a counter buffer for each RWStructuredBuffer a function takes as a 
 buffer, so one that nothing uses is left out of the SPIR-V instead of asking the host for a binding.
 The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
 one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not accept.
+
+Where the selected runtimes include the harness's Direct3D 12 WARP, HLSL probes run there as HLSL instead, with the
+entry point :func:`validators.hlsl_entry` names, compiled by DXC for the harness's shader model
+(``tests.conformance.validators.HLSL_PROFILE``). A probe that needs a later shader model fails to compile there and keeps
+its validation result, and so does one that queries a ray query. The Windows coverage job runs them so, and
+``tools.coverage merge`` adds those verdicts to the rows the Linux job measured (:mod:`.report`).
 
 GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arithmetic types. When it rejects a native
 probe, or a translation that it compiles at a lower version than the translation declares, both probes run again as
@@ -42,6 +49,11 @@ specification's precision table gives ``OpFRem`` the error inherited from ``x - 
 computes that expression. So where the native probe of a CrossGL ``fmod`` runs as SPIR-V that uses ``OpFRem``, a
 translated word matches when it is the native probe's word or the exact remainder of the probe's arguments
 (:func:`remainders`). Any other word still differs.
+
+A cell of the translation matrix (:mod:`.pairs`) translates a native probe in one language into another. The two run
+on the same runtime only as SPIR-V (:func:`runs_pair`): each through its own language's reference compiler, as DXC
+for HLSL and glslang for GLSL, on the Vulkan runtime. A cell with Metal, CUDA or another language at either end keeps
+its validation result, because the native probe and the translation would run on different runtimes.
 """
 
 from __future__ import annotations
@@ -57,8 +69,9 @@ from . import lanes, lowering, validators
 from .model import Feature, Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
-SUFFIXES = {"glsl": ".comp", "metal": ".metal", "spirv": ".spvasm"}
-# The languages that run as the SPIR-V their reference compiler lowers them to.
+SUFFIXES = {"glsl": ".comp", "hlsl": ".hlsl", "metal": ".metal", "spirv": ".spvasm"}
+# The languages that run as the SPIR-V their reference compiler lowers them to, HLSL only where the selected runtimes
+# have none for HLSL itself.
 VIA_SPIRV = frozenset({"hlsl", "rust", "slang", "wgsl"})
 THREADS = 64
 # Output words one thread may write: a 4x4 float matrix is the largest result a probe stores.
@@ -101,6 +114,8 @@ _FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
 # structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
 # keep their validation result.
 _UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
+# The same in HLSL source, which reads no clock DXIL can express.
+_UNREPEATABLE_HLSL = re.compile(r"\bRayQuery\s*<")
 # The SPIR-V remainder whose precision Vulkan inherits from x - y * trunc(x / y).
 _INEXACT_REMAINDER = re.compile(r"\bOpFRem\b")
 DIVERGED = "computes different results from the native probe"
@@ -127,9 +142,27 @@ def found(detail: str) -> bool:
     )
 
 
+def _said(record: dict) -> str:
+    """What the harness ``record`` says went wrong: the runtime's message, the harness's own message for a
+    ``harness-error``, or the log of the first validation step that did not accept the artifact.
+    """
+    message = (record.get("execution") or {}).get("message") or record.get("message")
+    if message:
+        return str(message)
+    failed = next(
+        (
+            step
+            for step in record.get("validation") or ()
+            if isinstance(step, dict) and step.get("status") != "accepted"
+        ),
+        None,
+    )
+    return str(failed.get("log") or "") if failed else ""
+
+
 def _quoted(record: dict) -> str:
     """The first lines of what the runtime said when it rejected the artifact of the harness ``record``."""
-    message = (record.get("execution") or {}).get("message") or ""
+    message = _said(record)
     lines = [line.rstrip() for line in message.splitlines() if line.strip()]
     text = "\n".join(lines[:_QUOTED_LINES])
     if len(text) > _QUOTED_CHARS:
@@ -198,9 +231,28 @@ def runs(language: str) -> bool:
     return language in SUFFIXES or language in VIA_SPIRV
 
 
+def languages(result: Result) -> tuple[str, str]:
+    """The languages of ``result``'s native probe and of its translation: the feature's own for a row's result, and
+    the cell's source and target for a translation matrix result (:mod:`.pairs`)."""
+    return result.feature.language, result.into or result.feature.language
+
+
+def runs_pair(source: str, target: str) -> bool:
+    """Whether the harness can run a native probe in ``source`` and its translation into ``target`` on one runtime.
+
+    Both run on the Vulkan runtime as SPIR-V: a SPIR-V source as it is, and any other as its language's reference
+    compiler lowers it. Two different runtimes, such as Metal's and Vulkan's, need not round a function alike, so a
+    translation with either end in a language that does not lower to SPIR-V keeps its validation result.
+    """
+    spirv = VIA_SPIRV | {"glsl", "spirv"}
+    return source != target and source in spirv and target in spirv
+
+
 def as_spirv(language: str, source: str) -> str:
     """The SPIR-V assembly ``language``'s reference compiler writes for a compute ``source``, or an empty string when
-    it rejects the source."""
+    it rejects the source. A SPIR-V ``source`` is its own assembly."""
+    if language == "spirv":
+        return source
     # GLSL's entry point is main, and naga and rust-gpu take none; HLSL and Slang name theirs after [numthreads(...)].
     entry = (
         "main"
@@ -356,7 +408,7 @@ def _execute(
     via_spirv: bool,
 ):
     """Run one chunk of results, as SPIR-V when ``via_spirv``; return ``{index: (native record, translated record,
-    outputs, lowered, rebound, via_spirv, exact)}``.
+    outputs, lowered, rebound, via_spirv, exact)}`` and ``{index: reason}`` for the results it does not run.
 
     ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares,
     ``rebound`` is :func:`rebinding`'s objection to the translation's resources, and ``exact`` holds the words of an
@@ -366,21 +418,40 @@ def _execute(
 
     runs_as = "spirv" if via_spirv else language
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
-    rebound, exact = {}, {}
+    rebound, exact, skipped = {}, {}, {}
     assemblies = []
     for index, result in chunk:
         data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
         if via_spirv:
-            texts = [as_spirv(language, text) for text in result.sources]
+            texts = [
+                as_spirv(spoken, text)
+                for spoken, text in zip(languages(result), result.sources)
+            ]
             if not all(texts):
+                failed = list(
+                    dict.fromkeys(
+                        validators.TOOLS[spoken]
+                        for spoken, text in zip(languages(result), texts)
+                        if not text
+                    )
+                )
+                verb = "writes" if len(failed) == 1 else "write"
+                skipped[index] = f"{' and '.join(failed)} {verb} no SPIR-V for it"
                 continue
         else:
             texts = [runnable(language, source) for source in result.sources]
             if texts[1] != result.sources[1]:
                 lowered.add(index)
-        if runs_as == "spirv" and any(
-            _FLOAT16.search(text) or _UNREPEATABLE.search(text) for text in texts
-        ):
+        if runs_as == "spirv" and any(_FLOAT16.search(text) for text in texts):
+            skipped[index] = "its SPIR-V declares a 16-bit float, which lavapipe does not round through"
+            continue
+        if runs_as == "spirv" and any(_UNREPEATABLE.search(text) for text in texts):
+            skipped[index] = (
+                "it reads a clock or a ray query, which no second run repeats"
+            )
+            continue
+        if runs_as == "hlsl" and any(_UNREPEATABLE_HLSL.search(t) for t in texts):
+            skipped[index] = "it reads a ray query, which no second run repeats"
             continue
         if via_spirv:
             assemblies += texts
@@ -410,7 +481,7 @@ def _execute(
             )
         rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:
-        return {}
+        return {}, skipped
     # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
     # which declares none, for Vulkan 1.1 as the validators check it.
     records = runner.run_suite(
@@ -437,6 +508,10 @@ def _execute(
             exact.get(index),
         )
         for index, roles in found.items()
+    }, skipped | {
+        index: "the harness recorded no run of it"
+        for index, _ in chunk
+        if index not in found and index not in skipped
     }
 
 
@@ -451,14 +526,27 @@ def _judge(
     exact,
     index: int,
 ) -> Result:
-    if not native or not translated or native["outcome"] != "preserved":
-        return result
+    """``result`` with the verdict of its run, or with the reason the run gave none in ``unrun``."""
+    if not native or not translated:
+        role = "its translation" if native else "its native probe"
+        return replace(result, unrun=f"the harness recorded no run of {role}")
+    if native["outcome"] != "preserved":
+        return replace(result, unrun=_unran("its native probe", native))
     runtime = native["runtime"]
     if lowered and translated["outcome"] == "driver-rejected":
-        return result
-    language = result.feature.language
+        return replace(
+            result,
+            unrun="the runtime compiles the translation only at a lower version than it declares, and rejects it",
+        )
+    compilers = " and ".join(
+        dict.fromkeys(
+            validators.TOOLS[spoken]
+            for spoken in languages(result)
+            if spoken != "spirv"
+        )
+    )
     where = f"on {runtime}" + (
-        f" as SPIR-V from {validators.TOOLS[language]}" if via_spirv else ""
+        f" as SPIR-V from {compilers}" if via_spirv and compilers else ""
     )
     if rebound:
         detail = f"{where}, the translation {REBOUND}\n{rebound}"
@@ -470,7 +558,7 @@ def _judge(
             detail += "\n" + message
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] != "preserved":
-        return result
+        return replace(result, unrun=_unran("the translation", translated))
     found = difference(
         outputs[f"{index:05d}-native"], outputs[f"{index:05d}-translated"], exact
     )
@@ -479,6 +567,14 @@ def _judge(
         detail = f"{where}, the translation {first}\n{rest}"
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     return replace(result, runtime=runtime)
+
+
+def _unran(role: str, record: dict) -> str:
+    """Why the harness ``record`` of ``role`` gives no verdict, with what the runtime said."""
+    message = _quoted(record)
+    return f"{role} did not run ({record['outcome']})" + (
+        f"\n{message}" if message else ""
+    )
 
 
 def _unjudged(native, translated, outputs, lowered: bool, *_) -> bool:
@@ -499,21 +595,26 @@ def _pass(
     workers: int,
     via_spirv: bool,
 ):
-    """Run ``items`` on the first available runtime; return ``({index: records}, runtime id)``, with an empty id when
-    there is nothing to run or no runtime to run it on."""
+    """Run ``items`` on the first available runtime; return ``({index: records}, runtime id, {index: reason})``, with
+    an empty id when there is nothing to run or no runtime to run it on, and the reasons for the items it did not
+    run."""
     from tests.conformance import runner
 
-    if not items or (via_spirv and not lowering.can_lower(language)):
-        return {}, ""
+    lowered = {spoken for _, result in items for spoken in languages(result)}
+    if not items or (
+        via_spirv
+        and not all(lowering.can_lower(spoken) for spoken in lowered - {"spirv"})
+    ):
+        return {}, "", {}
     runs_as = "spirv" if via_spirv else language
     selection = runner.select_runtimes(runtimes, [runs_as])
     available = [pair for pair in selection[runs_as] if pair[1].available]
     if not available:
-        return {}, ""
+        return {}, "", {}
     # One runtime per language keeps a result's verdict independent of how many devices the host has.
     selection = {runs_as: available[:1]}
     chunks = [items[n::workers] for n in range(workers) if items[n::workers]]
-    found = {}
+    found, skipped = {}, {}
     with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
         done = pool.map(
             lambda pair: _execute(
@@ -521,35 +622,57 @@ def _pass(
             ),
             enumerate(chunks),
         )
-        for records in done:
+        for records, reasons in done:
             found.update(records)
-    return found, available[0][0].id
+            skipped.update(reasons)
+    return found, available[0][0].id, skipped
 
 
 def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     """Execute every :func:`executable` result where a runtime is available; return the results and the runtimes.
 
-    ``runtimes`` is the harness's selection: ``available``, or a comma-separated list of runtime ids.
+    ``runtimes`` is the harness's selection: ``available``, or a comma-separated list of runtime ids. A translation
+    matrix result runs with its native probe as SPIR-V when :func:`runs_pair` allows it. A result the selected runtime
+    did not run, or ran without a verdict, says why in ``unrun``.
     """
     results = list(results)
-    by_language: dict[str, list[tuple[int, Result]]] = {}
+    by_language: dict[tuple[str, str], list[tuple[int, Result]]] = {}
     for index, result in enumerate(results):
-        language = result.feature.language
-        if runs(language) and executable(result):
-            by_language.setdefault(language, []).append((index, result))
+        native, translated = languages(result)
+        if native == translated:
+            if not runs(native):
+                continue
+        elif not runs_pair(native, translated):
+            continue
+        if executable(result):
+            by_language.setdefault((native, translated), []).append((index, result))
     used = set()
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-execution-") as scratch:
-        for language, items in by_language.items():
-            via_spirv = language in VIA_SPIRV
-            found, runtime = _pass(
-                language, items, runtimes, Path(scratch, language), workers, via_spirv
-            )
+        for (language, into), items in by_language.items():
+            found, runtime, skipped = {}, "", {}
+            folder = language if into == language else f"{language}-to-{into}"
+            # A row's language the harness runs as itself runs so where a selected runtime can, and otherwise as
+            # SPIR-V; a translation matrix cell runs only as SPIR-V.
+            if into == language and language in SUFFIXES:
+                found, runtime, skipped = _pass(
+                    language, items, runtimes, Path(scratch, folder), workers, False
+                )
+            if not runtime and (language in VIA_SPIRV or into != language):
+                found, runtime, skipped = _pass(
+                    language,
+                    items,
+                    runtimes,
+                    Path(scratch, f"{folder}-spirv"),
+                    workers,
+                    True,
+                )
             used.add(runtime)
-            if language == "glsl":
+            where = dict.fromkeys([*found, *skipped], runtime)
+            if (language, into) == ("glsl", "glsl"):
                 again = [
                     (i, r) for i, r in items if i in found and _unjudged(*found[i])
                 ]
-                rerun, runtime = _pass(
+                rerun, runtime, unran = _pass(
                     language,
                     again,
                     runtimes,
@@ -558,18 +681,33 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                     True,
                 )
                 found.update(rerun)
+                skipped.update(unran)
+                where.update(dict.fromkeys([*rerun, *unran], runtime))
                 if rerun:
                     used.add(runtime)
-            for index, records in found.items():
-                results[index] = _judge(results[index], *records, index)
+            for index in where:
+                judged = results[index]
+                if index in found:
+                    judged = _judge(judged, *found[index], index)
+                # A run that gave no verdict ends with a reason; a later pass's reason for not running it wins.
+                reason = "" if judged.runtime else skipped.get(index, judged.unrun)
+                if reason:
+                    judged = replace(judged, unrun=f"on {where[index]}, {reason}")
+                results[index] = judged
     return results, sorted(used - {""})
 
 
+def _label(result: Result) -> str:
+    native, translated = languages(result)
+    return native if native == translated else f"{native} to {translated}"
+
+
 def idle(results: list[Result]) -> list[str]:
-    """The languages with :func:`executable` results of which none ran.
+    """The languages, or translation matrix cells as ``"<source> to <target>"``, with :func:`executable` results of
+    which none ran.
 
     A runtime that rejects every native probe of a language, as one does for SPIR-V newer than it is told to accept,
     runs none of them, just as a missing runtime does.
     """
-    ran = {r.feature.language for r in results if r.runtime}
-    return sorted({r.feature.language for r in results if executable(r)} - ran)
+    ran = {_label(r) for r in results if r.runtime}
+    return sorted({_label(r) for r in results if executable(r)} - ran)

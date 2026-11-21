@@ -4,7 +4,8 @@ The GLSL emitters keep 8- and 16-bit integer scalars and vectors in 32-bit carri
 ``ivecN``/``uvecN``) and compute on promoted 32-bit operands. Same-type narrow binary operations keep their narrow
 width, so ``float(v * v)`` on ``int8_t v = 13`` wraps at 8 bits to ``-87.0`` and ``(n + m).x`` on ``u16vec2`` wraps
 modulo 2^16. A 32-bit operand promotes the narrow value first, and an integer literal adopts a narrow vector's type
-while promoting a narrow scalar to 32 bits.
+while promoting a narrow scalar to 32 bits. A translation from a source that promotes narrow scalars to ``int``
+(CrossGL itself, MSL, CUDA, HIP, OpenCL C) computes scalar results in 32 bits instead.
 """
 
 import shutil
@@ -319,7 +320,38 @@ def test_glsl_input_roundtrip_wraps_narrow_scalar_product(tmp_path):
     cgl_path.write_text(cgl, encoding="utf-8")
     translated = crosstl.translate(str(cgl_path), backend="opengl", format_output=False)
 
-    assert "float(bitfieldExtract((v * v), 0, 8))" in translated
+    # The importer converts GLSL's 8-bit product back to int8_t, because CrossGL promotes the operands to int.
+    assert "float(int8_t((uint(v) * uint(v))))" in cgl
+    assert "float(bitfieldExtract(int((uint(v) * uint(v))), 0, 8))" in translated
+
+
+def test_crossgl_source_promotes_narrow_scalars_in_glsl(tmp_path):
+    # CrossGL promotes 8- and 16-bit scalar operands to int (C++ [conv.prom]); only a conversion back wraps.
+    source = tmp_path / "promotion.cgl"
+    source.write_text(
+        "shader Promotion {\n"
+        "    compute {\n"
+        "        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+        "        buffer int* iin;\n"
+        "        buffer float* outp;\n"
+        "        void main() {\n"
+        "            uint i = gl_GlobalInvocationID.x;\n"
+        "            int8_t v = int8_t(iin[i]);\n"
+        "            uint16_t u = uint16_t(iin[i]);\n"
+        "            outp[i] = float(v * v);\n"
+        "            outp[i + 1u] = float(int8_t(v * v));\n"
+        "            outp[i + 2u] = float(u * u);\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    code = _compact(crosstl.translate(str(source), backend="opengl"))
+
+    assert "outp[i]=float((v*v));" in code
+    assert "outp[(i+1u)]=float(bitfieldExtract(int((v*v)),0,8));" in code
+    assert "outp[(i+2u)]=float((int(u)*int(u)));" in code
 
 
 @pytest.mark.parametrize(

@@ -864,7 +864,9 @@ class MojoStageContractMixin:
                     node, getattr(node, "name", None), kind="cbuffer"
                 )
                 code += self.generate_struct(node)
-                code += self.generate_cbuffer_member_placeholders(node)
+                code += self.generate_cbuffer_member_placeholders(
+                    node, stage_scope=True
+                )
                 emitted_stage_local_structs.add(node.name)
 
         for node in getattr(stage, "local_variables", []) or []:
@@ -877,65 +879,35 @@ class MojoStageContractMixin:
         self, node, emitted_stage_local_variables
     ):
         if self.is_mojo_shared_variable(node):
-            if isinstance(node, ArrayNode):
-                variable_type = self.array_declared_type(node)
-            else:
-                variable_type = self.variable_declared_type(node) or "float"
-            self.register_variable_type(getattr(node, "name", None), variable_type)
+            self.register_variable_type(
+                getattr(node, "name", None), self.mojo_shared_pointer_type_name(node)[0]
+            )
             return ""
 
         if isinstance(node, ArrayNode):
             variable_type = self.array_declared_type(node)
-            self.register_variable_type(node.name, variable_type)
-            key = (node.name, variable_type)
-            if key in emitted_stage_local_variables:
-                return ""
-            emitted_stage_local_variables.add(key)
-            return self.generate_array_declaration(node)
-
-        variable_type = self.variable_declared_type(node) or "float"
-        self.register_variable_type(getattr(node, "name", None), variable_type)
-        self.register_resource_access_metadata(node, variable_type)
+        else:
+            variable_type = self.variable_declared_type(node) or "float"
         key = (getattr(node, "name", None), variable_type)
         if key in emitted_stage_local_variables:
+            self.register_variable_type(key[0], variable_type)
+            argument_type = (
+                self.mojo_array_kernel_argument_type(node)
+                if isinstance(node, ArrayNode)
+                else self.mojo_kernel_argument_type(node, variable_type)
+            )
+            if argument_type is not None:
+                # A buffer or uniform another stage also declares is an argument of this stage's kernel too.
+                self.declare_mojo_kernel_argument(key[0], argument_type, True)
+            elif self.mojo_builtin_input_source(node) is not None:
+                self.declare_mojo_builtin_input(node, variable_type, True)
+            elif self.is_mojo_private_global(
+                node
+            ) and not self.mojo_type_holds_resource(variable_type):
+                self.declare_mojo_private_global(node, variable_type, True)
             return ""
         emitted_stage_local_variables.add(key)
-
-        if getattr(node, "initial_value", None) is not None:
-            self.validate_expression_target_shape(
-                node.initial_value, variable_type, f"stage declaration {node.name}"
-            )
-            init_expr = self.generate_expression(
-                node.initial_value, variable_type, f"stage declaration {node.name}"
-            )
-            self.validate_scalar_target_conversion(
-                node.initial_value, variable_type, f"stage declaration {node.name}"
-            )
-            var_name = self.mojo_identifier(node.name)
-            return (
-                f"{self.generate_resource_metadata_comment(node, variable_type)}"
-                f"var {var_name}: {self.map_type(variable_type)} = {init_expr}\n"
-            )
-
-        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
-        var_name = self.mojo_identifier(node.name)
-        if self.is_array_type_name(variable_type):
-            return (
-                f"{resource_comment}var {var_name} = "
-                f"{self.array_initial_value_for_type(variable_type)}\n"
-            )
-        if self.is_struct_type_name(variable_type):
-            return f"{resource_comment}var {var_name} = {self.zero_value_for_type(variable_type)}\n"
-        if self.is_resource_type_name(variable_type):
-            mapped_type = self.map_type(variable_type)
-            return (
-                f"{resource_comment}var {var_name}: {mapped_type} = "
-                f"{self.zero_value_for_type(variable_type)}\n"
-            )
-        return (
-            f"var {var_name}: {self.map_type(variable_type)} = "
-            f"{self.zero_value_for_type(variable_type)}\n"
-        )
+        return self.generate_module_variable_declaration(node, stage_scope=True)
 
     def is_mojo_shared_variable(self, node):
         qualifiers = {
@@ -954,7 +926,7 @@ class MojoStageContractMixin:
         for node in getattr(stage_node, "local_variables", []) or []:
             if not self.is_mojo_shared_variable(node):
                 continue
-            code += self.generate_statement(node, indent)
+            code += self.generate_mojo_shared_declaration(node, indent)
         return code
 
     def stage_local_functions_to_emit(self, stage):
