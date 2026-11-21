@@ -15,7 +15,10 @@ from other languages are left alone too: HLSL truncates a wider vector implicitl
 Declarations are checked in function bodies, at module scope (constants and global variables) and at stage
 scope. An initializer that is matrix arithmetic has the shape GLSL 4.60 section 5.10 gives it: ``matCxR * vecC``
 is ``vecR``, ``vecR * matCxR`` is ``vecC``, ``matC1xR1 * matC2xC1`` is ``matC2xR1``, and matrix ``+``, ``-``,
-``/``, unary minus and scaling by a scalar keep the matrix's shape.
+``/``, unary minus and scaling by a scalar keep the matrix's shape. Further arithmetic keeps that shape: unary
+``-`` and ``+`` keep the operand's shape, a ternary has its branches' shape when both agree, and ``+``, ``-``,
+``*`` and ``/`` with a scalar, or between two vectors with the same number of components, keep the vector's
+shape, so ``vec4 a = m43 * v4 + v3;`` is refused too.
 
 The shape of a call is known only for a constructor, a DXR transform call and a function of the program. Other
 calls are left alone, and so is an expression that contains one: a texel read into a narrower vector
@@ -159,23 +162,30 @@ class _ShapeWalker(ScopedWalker):
             if matrix is not None:
                 return _matrix_shape(*matrix)
             return _hub_shape(type_from_name(name))
-        matrix = self.matrix_arithmetic_shape(expr)
-        if matrix is not None:
-            return matrix
+        arithmetic = self.arithmetic_shape(expr)
+        if arithmetic is not None:
+            return arithmetic
         if _contains_call(expr):
             return None
         return _hub_shape(self.scope.infer(expr))
 
-    def matrix_arithmetic_shape(self, expr):
-        """The shape of arithmetic with a matrix operand (GLSL 4.60 section 5.10), or None."""
+    def arithmetic_shape(self, expr):
+        """The shape of vector or matrix arithmetic (GLSL 4.60 section 5.10), or None.
+
+        Vector operands combine too, so a matrix product inside further arithmetic keeps its shape:
+        ``-(m43 * v4)``, ``(m43 * v4) * 2.0``, ``m43 * v4 + v3`` and ``flag ? m43 * v4 : v3`` are ``vec3``.
+        """
         if isinstance(expr, A.UnaryOpNode) and expr.operator in {"-", "+"}:
             operand = self.value_shape(expr.operand)
-            return operand if _is_matrix(operand) else None
+            return operand if _is_vector_or_matrix(operand) else None
         if isinstance(expr, A.TernaryOpNode):
             branches = self.value_shape(expr.true_expr), self.value_shape(
                 expr.false_expr
             )
-            if _is_matrix(branches[0]) and branches[0][:-1] == (branches[1] or ())[:-1]:
+            if (
+                _is_vector_or_matrix(branches[0])
+                and branches[0][:-1] == (branches[1] or ())[:-1]
+            ):
                 return branches[0]
             return None
         if not isinstance(expr, A.BinaryOpNode) or expr.operator not in {
@@ -186,12 +196,17 @@ class _ShapeWalker(ScopedWalker):
         }:
             return None
         left, right = self.value_shape(expr.left), self.value_shape(expr.right)
-        if not (_is_matrix(left) or _is_matrix(right)) or left is None or right is None:
+        if left is None or right is None:
+            return None
+        if left[0] == "scalar" and right[0] == "scalar":
             return None
         if left[0] == "scalar":
             return right
         if right[0] == "scalar":
             return left
+        if not (_is_matrix(left) or _is_matrix(right)):
+            # Component-wise vector arithmetic needs two vectors with the same number of components.
+            return left if left[:-1] == right[:-1] else None
         if expr.operator != "*":
             # Component-wise matrix arithmetic needs two matrices of one shape.
             return left if left[:-1] == right[:-1] else None
@@ -218,6 +233,10 @@ class _ShapeWalker(ScopedWalker):
 
 def _is_matrix(shape):
     return shape is not None and shape[0] == "matrix"
+
+
+def _is_vector_or_matrix(shape):
+    return shape is not None and shape[0] in {"vector", "matrix"}
 
 
 def _matrix_spelling_like(matrix, columns, rows):

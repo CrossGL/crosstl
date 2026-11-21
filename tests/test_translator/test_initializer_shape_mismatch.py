@@ -77,6 +77,27 @@ MISMATCHES = [
     ("mat4x3 a = mat4x3(1.0); mat3x4 m = -a; data[0] = m[0];", "mat3x4", "mat4x3"),
     ("mat4x3 a = mat4x3(1.0); mat3x4 m = 2.0 * a; data[0] = m[0];", "mat3x4", "mat4x3"),
     ("mat4x3 a = mat4x3(1.0); mat3x4 m = a + a; data[0] = m[0];", "mat3x4", "mat4x3"),
+    # A matrix product inside further vector arithmetic keeps its shape.
+    (
+        "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec4 m = -(a * v); data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
+    (
+        "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec4 m = (a * v) * 2.0; data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
+    (
+        "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec4 m = a * v + w; data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
+    (
+        "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec4 m = flag ? a * v : w; data[0] = m;",
+        "vec4",
+        "vec3",
+    ),
 ]
 
 
@@ -128,6 +149,11 @@ MATCHING = [
     "mat3x4 a = mat3x4(1.0); mat4x3 b = mat4x3(1.0); mat4 m = a * b; data[0] = m[0];",
     "mat4x3 a = mat4x3(1.0); mat4x3 m = -a * 2.0 + a / 2.0; data[0] = vec4(m[0], 1.0);",
     "mat4 a = mat4(1.0); mat4 m = true ? a : a * a; data[0] = m[0];",
+    # A matrix product inside further vector arithmetic.
+    "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec3 m = -(a * v); data[0] = vec4(m, 1.0);",
+    "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec3 m = (a * v) * 2.0; data[0] = vec4(m, 1.0);",
+    "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec3 m = a * v + w; data[0] = vec4(m, 1.0);",
+    "mat4x3 a = mat4x3(1.0); vec4 v = vec4(1.0); vec3 w = vec3(1.0); bool flag = true; vec3 m = flag ? a * v : w; data[0] = vec4(m, 1.0);",
     # Same shape, other component type: the conversion is not this check's business.
     "ivec2 a = ivec2(1); uvec2 m = a; data[0] = vec4(m, m);",
     "ivec4 a = ivec4(1); bvec4 m = a; data[0] = vec4(m);",
