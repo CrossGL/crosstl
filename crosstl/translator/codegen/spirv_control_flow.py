@@ -1099,6 +1099,13 @@ class SpirvControlFlowMixin:
             variable_id, _ = self.cooperative_matrix_element_pointer(node.operand)
         else:
             variable_id = self.storage_reference_pointer(node.operand)
+            if variable_id is None or not (
+                variable_id.type.storage_class
+                or self.is_storage_buffer_pointer_arithmetic_base(variable_id)
+            ):
+                # A parameter held as a value, or a member of one, becomes a mutable
+                # Function variable here, the same way an assignment makes it one.
+                variable_id = self.assignable_pointer_from_expression(node.operand)
         if variable_id is None:
             self.refuse_lowering("increment target is not assignable")
             int_type = self.register_primitive_type("int")

@@ -99,6 +99,7 @@ from .crossgl_codegen.value_templates import MetalValueTemplateMixin
 from .crossgl_codegen.vector_types import MetalVectorTypeMixin
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
+from .function_constants import import_function_constant_defaults
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
 from .post_tessellation_import import MetalPostTessellationImport
@@ -465,6 +466,7 @@ class MetalToCrossGLConverter(
         refuse_external_function_calls(ast)
         declare_referenced_library_structs(ast, parse_metal_structs)
         mark_const_cast_written_buffers(ast)
+        import_function_constant_defaults(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -1166,6 +1168,15 @@ float {scalar}(float base, float exponent) {{
             elif name == "attribute" and len(args) == 1:
                 # A vertex attribute index is the input location every target binds by.
                 out = f"location({args[0]})"
+            elif (
+                context_kind == "parameter"
+                and name == "raster_order_group"
+                and "color" not in attr_names
+            ):
+                # A buffer or texture argument in any group orders its accesses between overlapping fragments.
+                # CrossGL has one such order (metal_raster_order_groups.py), which orders at least what the Metal
+                # groups order. A colour attachment input keeps its group with its imageblock data.
+                out = "rasterizer_ordered"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
@@ -1196,5 +1207,10 @@ float {scalar}(float base, float exponent) {{
                 enumerator_values=getattr(self, "metal_enum_index_values", {}),
             )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
-            return "gl_FragDepth"
+            # MSL 3.2 section 5.2.3.5: depth(greater) and depth(less) promise the direction the shader moves
+            # the depth in. CrossGL states that promise as a conservative depth layout next to gl_FragDepth.
+            layout = args[0].lower()
+            return (
+                "gl_FragDepth" if layout == "any" else f"gl_FragDepth @depth_{layout}"
+            )
         return None

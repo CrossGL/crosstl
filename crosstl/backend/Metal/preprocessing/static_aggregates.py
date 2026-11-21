@@ -35,6 +35,13 @@ from .support import (
     _strip_global_metal_qualifiers,
 )
 
+_TEMPLATE_HEAD_RE = re.compile(r"\btemplate\s*<")
+_FREE_OPERATOR_NAME_RE = re.compile(
+    r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%]=|[+\-*/%<>])\s*\("
+)
+# A free operator's name follows its template head before any of these characters.
+_DECLARATION_BREAK_RE = re.compile(r"[;{}]")
+
 
 class MetalStaticAggregateMixin:
     """Members of ``MetalPreprocessor``: static aggregate evaluation, boolean variable templates and free operator overload materialization."""
@@ -882,15 +889,15 @@ class MetalStaticAggregateMixin:
         anonymous_namespace_spans = self._source_analysis(
             code
         ).anonymous_namespace_spans
-        operator_re = re.compile(
-            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%]=|[+\-*/%<>])\s*\("
-        )
         cursor = 0
         while True:
-            template_match = re.search(r"\btemplate\s*<", code[cursor:])
+            # The cursor always follows one of > ( ) { }, or sits between a matched
+            # "template" and its "<", so a match at or after it is the match that
+            # code[cursor:] would give, without copying the rest of the source.
+            template_match = _TEMPLATE_HEAD_RE.search(code, cursor)
             if template_match is None:
                 break
-            template_start = cursor + template_match.start()
+            template_start = template_match.start()
             cursor = template_start + len("template")
             if self._containing_span(template_start, ignored) is not None:
                 continue
@@ -898,14 +905,19 @@ class MetalStaticAggregateMixin:
             angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 continue
-            operator_match = operator_re.search(code, angle_end + 1)
+            # The operator name must come before the next ';', '{' or '}', and the
+            # name itself contains none of them, so the search can stop there
+            # instead of running to the end of the source.
+            declaration_break = _DECLARATION_BREAK_RE.search(code, angle_end + 1)
+            operator_match = _FREE_OPERATOR_NAME_RE.search(
+                code,
+                angle_end + 1,
+                len(code) if declaration_break is None else declaration_break.start(),
+            )
             if operator_match is None:
                 cursor = angle_end + 1
                 continue
             declaration_prefix = code[angle_end + 1 : operator_match.start()]
-            if any(token in declaration_prefix for token in (";", "{", "}")):
-                cursor = angle_end + 1
-                continue
             parameter_open = code.find(
                 "(", operator_match.start(), operator_match.end()
             )

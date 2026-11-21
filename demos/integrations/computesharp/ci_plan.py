@@ -1,7 +1,7 @@
 """Select whether a workflow event runs the ComputeSharp port's validation.
 
-Pull requests, merge-queue groups and pushes to main always start the
-workflow, so its single result check can be required. This plan skips the
+Pull requests and pushes to main always start the workflow, which ends in
+one result check. This plan skips the
 port's jobs when the event's changes cannot affect the port: the relevant
 paths are the demo, its workflow, the packaging metadata and the CrossTL
 modules that translating the generated HLSL imports.
@@ -50,7 +50,7 @@ RECORD_PATHS = (
 )
 # Events without a meaningful change set validate everything.
 UNCONDITIONAL_EVENTS = frozenset({"schedule", "workflow_dispatch"})
-DIFFED_EVENTS = frozenset({"pull_request", "push", "merge_group"})
+DIFFED_EVENTS = frozenset({"pull_request", "push"})
 NO_COMMIT = "0" * 40
 
 

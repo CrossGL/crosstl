@@ -219,6 +219,7 @@ from .hlsl_byte_address_atomics import (
 )
 from .hlsl_byteaddress_typed_access import hlsl_byteaddress_component_refusal
 from .hlsl_call_argument_order import hlsl_ordered_call_expression
+from .hlsl_call_cycles import validate_hlsl_call_cycles
 from .hlsl_exact_float_builtins import (
     emit_hlsl_exact_float_helpers,
     hlsl_exact_float_expression,
@@ -242,6 +243,7 @@ from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_ray_queries import hlsl_ray_query_expression, hlsl_ray_query_helpers
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_shader_records import HlslShaderRecords, is_shader_record_buffer
 from .hlsl_tall_matrix_rows import HlslTallMatrixRows
 from .hlsl_texel_buffers import HLSL_TEXEL_BUFFER_TYPES, HLSLTexelBuffers
 from .hlsl_texture_residency import (
@@ -1527,7 +1529,7 @@ class HLSLCodeGen(
         ) = collect_lowered_glsl_buffer_blocks(
             global_vars,
             structs_by_name=self.structs_by_name,
-            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
+            is_glsl_buffer_block_variable=self.is_glsl_storage_block_variable,
             resource_base_type=self.resource_base_type,
             glsl_buffer_block_layout=self.glsl_buffer_block_layout,
             convert_type_node_to_string=self.convert_type_node_to_string,
@@ -1716,6 +1718,8 @@ class HLSLCodeGen(
             self.collect_unsupported_glsl_buffer_block_functions(functions)
         )
         self.prepare_hlsl_software_subgroup_contract(ast, target_stage)
+        # After the software subgroup contract, whose recursive-helper diagnostic is more specific.
+        validate_hlsl_call_cycles(ast)
         self.validate_global_resource_shadows(ast)
         self.global_mixed_sampler_names = self.collect_global_mixed_sampler_names(ast)
         self.global_mixed_sampler_aliases = {
@@ -1822,6 +1826,7 @@ class HLSLCodeGen(
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers, cbuffers
         )
+        shader_records = HlslShaderRecords(self, ast, target_stage)
         for i, node in enumerate(global_vars):
             resource_count = 1
             if hasattr(node, "var_type"):
@@ -1893,6 +1898,10 @@ class HLSLCodeGen(
 
             if id(node) in self.directx_compile_time_global_node_ids:
                 code += self.generate_directx_compile_time_global_declaration(node)
+                continue
+
+            if is_shader_record_buffer(node):
+                code += shader_records.declaration(node)
                 continue
 
             attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
@@ -7039,7 +7048,7 @@ class HLSLCodeGen(
             value = self.generate_expression(args[0])
             # Inclusive scan = exclusive scan combined with the lane's own value.
             return f"({exclusive_op}({value}) {combine} ({value}))"
-        args_str = ", ".join(self.generate_expression(arg) for arg in args)
+        args_str = self.generate_hlsl_wave_operands(operation, args)
         result = f"{operation}({args_str})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 

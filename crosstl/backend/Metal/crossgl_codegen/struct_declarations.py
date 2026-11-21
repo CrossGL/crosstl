@@ -3,6 +3,7 @@
 import re
 
 from ....translator.codegen.array_utils import evaluate_literal_int_expression
+from ....translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from ..constant_constructor_folding import constant_initialization
 from ..MetalAst import (
     ConstantBufferNode,
@@ -569,18 +570,29 @@ class MetalStructDeclarationMixin:
         mapped_names = {}
         used_names = set()
         self.ambiguous_struct_names = set()
-        for struct_node in structs or []:
-            if not isinstance(struct_node, StructNode):
-                continue
-            raw_name = getattr(struct_node, "name", None)
-            if not raw_name:
-                continue
+        named = [
+            struct_node
+            for struct_node in structs or []
+            if isinstance(struct_node, StructNode)
+            and getattr(struct_node, "name", None)
+        ]
+        # The CrossGL parser reads a structure name such as ``let`` or ``vec2``, which a Metal program may declare,
+        # as its keyword, so such a structure takes a suffixed name that no other structure keeps.
+        kept_names = {
+            self.sanitize_identifier(struct_node.name) for struct_node in named
+        } - set(CROSSGL_KEYWORDS)
+        for struct_node in named:
+            raw_name = struct_node.name
             if raw_name in mapped_names:
                 self.ambiguous_struct_names.add(raw_name)
             base_name = self.sanitize_identifier(raw_name)
+            taken = used_names
+            if base_name in CROSSGL_KEYWORDS:
+                base_name = f"{base_name}_"
+                taken = used_names | kept_names
             candidate = base_name
             suffix = 2
-            while candidate in used_names:
+            while candidate in taken:
                 candidate = f"{base_name}_{suffix}"
                 suffix += 1
             used_names.add(candidate)

@@ -641,7 +641,7 @@ def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct()
 
     assert "struct CGLVSMainOutput" in generated_code
     assert "float4 cgl_Position : SV_Position;" in generated_code
-    assert "float cgl_PointSize : PSIZE;" in generated_code
+    assert "float cgl_PointSize : SV_PointSize;" in generated_code
     assert "CGLVSMainOutput main()" in generated_code
     assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
     assert "cgl_Output.cgl_PointSize = 4.0;" in generated_code
@@ -11334,8 +11334,11 @@ def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
     assert "float4x4 _crossgl_inverse_float4x4(float4x4 m)" in generated_code
     assert "float4x4 modelView = mul(view, model);" in generated_code
     assert (
-        "float3x3 normalMatrix = float3x3(transpose(_crossgl_inverse_float4x4(model)));"
-        in (generated_code)
+        "float3x3 normalMatrix = cgl_matrix_resize_float4x4_to_float3x3("
+        "transpose(_crossgl_inverse_float4x4(model)));" in (generated_code)
+    )
+    assert "float3x3 cgl_matrix_resize_float4x4_to_float3x3(float4x4 m)" in (
+        generated_code
     )
     assert "float3 normal = mul(normalMatrix, float3(0.0, 1.0, 0.0));" in (
         generated_code

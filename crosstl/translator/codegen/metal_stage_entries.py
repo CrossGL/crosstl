@@ -6,11 +6,13 @@ from ..ast import (
     RayQueryOpNode,
     RayTracingOpNode,
 )
+from ..host_workgroup_size import HOST_WORKGROUP_SIZE_KEY, has_explicit_workgroup_size
 from ..refusals import MetalRefusal
 from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import metal_semantic_index
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_post_tessellation import post_tessellation_plan
@@ -587,6 +589,9 @@ class MetalStageEntryMixin:
         self, member, default_member_semantics, struct_name=None
     ):
         if struct_name in self.metal_fragment_entry_output_struct_names:
+            depth = metal_conservative_depth_semantic(member)
+            if depth is not None:
+                return depth
             color = metal_fragment_output_color_semantic(self, member)
             if color is not None:
                 return color
@@ -881,9 +886,16 @@ class MetalStageEntryMixin:
                 )
             return self.attribute_value_to_string(arguments[0])
 
-        if execution_config:
-            return self.metal_local_size_threadgroup_total(execution_config)
-        return None
+        if not execution_config:
+            return None
+        if execution_config.get(
+            HOST_WORKGROUP_SIZE_KEY
+        ) and not has_explicit_workgroup_size(execution_config):
+            # A Metal mesh or object function has no threadgroup size of its own: the host passes
+            # threadsPerObjectThreadgroup and threadsPerMeshThreadgroup when it draws. A stage imported from such a
+            # function keeps the host's choice, so no limit is declared.
+            return None
+        return self.metal_local_size_threadgroup_total(execution_config)
 
     def metal_stage_attribute_arguments(self, func, attribute_name):
         for attr in getattr(func, "attributes", []) or []:

@@ -413,8 +413,20 @@ def test_latency_counts_timeouts_at_the_limit_and_checks_budgets():
         "Latency budget exceeded"
     )
     assert run.check_budgets(summary, {"p95Seconds": {}})[0].startswith(
-        "No wall latency budget"
+        "No wall p95 latency budget"
     )
+    # The median and the maximum have budgets of their own; the timed-out cell is the maximum.
+    assert summary["latency"]["metal"]["p50Seconds"] == 0.5
+    assert run.check_budgets(summary, {"p50Seconds": {"metal": 0.5}}) == []
+    assert run.check_budgets(summary, {"p50Seconds": {"metal": 0.4}}) == [
+        "Latency budget exceeded for metal: wall p50 0.5 s > 0.4 s"
+    ]
+    assert run.check_budgets(summary, {"maxSeconds": {"metal": 10}}) == [
+        "Latency budget exceeded for metal: wall max 300 s > 10 s"
+    ]
+    assert run.check_budgets(summary, {"maxSeconds": {}}) == [
+        "No wall max latency budget for source language metal"
+    ]
     # CPU time is charged the limit for the timed-out cell as well, and has its own budget.
     assert summary["latency"]["metal"]["p95CpuSeconds"] == 300
     assert run.check_budgets(summary, {"p95CpuSeconds": {"metal": 1}})[0].startswith(
@@ -425,7 +437,13 @@ def test_latency_counts_timeouts_at_the_limit_and_checks_budgets():
 def test_committed_budgets_and_scoreboards_match_the_manifest():
     budgets = json.loads(run.BUDGETS.read_text())
     assert budgets["timeoutSeconds"] > 0
-    assert set(budgets["p95Seconds"]) == set(manifest.LANGUAGES)
+    for key, _kind, _statistic in run.LATENCY_BUDGETS:
+        assert set(budgets[key]) == set(manifest.LANGUAGES), key
+    # A source language that every target translates within the translation-time goal keeps that goal as its
+    # budget: a median of 0.5 s and no translation over 10 s.
+    for language in ("glsl", "hlsl", "spirv"):
+        assert budgets["p50Seconds"][language] <= 0.5
+        assert budgets["maxSeconds"][language] <= 10
     data = load()
     for path in sorted(run.SCOREBOARDS.glob("*.json")):
         board = json.loads(path.read_text())

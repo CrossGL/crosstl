@@ -28,6 +28,7 @@ from .VulkanAst import BinaryOpNode, FunctionCallNode, UnaryOpNode
 
 __all__ = [
     "spirv_integer_binary_expression",
+    "spirv_integer_bitcast_expression",
     "spirv_integer_conversion_expression",
     "spirv_integer_type_name",
 ]
@@ -230,6 +231,24 @@ def spirv_integer_binary_expression(
         return BinaryOpNode(lhs, _EQUALITY_OPS[operation], new_rhs)
 
     return None
+
+
+def spirv_integer_bitcast_expression(
+    operand, source_type_id, result_type_id, types, vector_type_name
+):
+    """``OpBitcast`` between integer types of one width and component count, else ``None``.
+
+    The bits are kept, so the bit cast is the same-width constructor of the result type, which converts modulo 2^N
+    in every target (GLSL 4.60 section 5.4.1, C++ [conv.integral]). It covers the 8-, 16- and 64-bit integers, for
+    which CrossGL has no ``asint``/``asuint`` spelling.
+    """
+    source = _integer_shape(source_type_id, types)
+    result = _integer_shape(result_type_id, types)
+    if source is None or result is None or source[1:] != result[1:]:
+        return None
+    if source[0] == result[0]:
+        return operand
+    return _reinterpret(operand, source, result[0], vector_type_name)
 
 
 def _signed_modulus(lhs, lhs_shape, rhs, rhs_shape, result_shape, vector_type_name):

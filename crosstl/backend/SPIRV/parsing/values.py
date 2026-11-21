@@ -1,5 +1,6 @@
 """Bit casts, undefined and null values, composite insertion, image operands and extended instruction names in the SPIR-V parser."""
 
+from ..integer_signedness_import import spirv_integer_bitcast_expression
 from ..VulkanAst import (
     ArrayAccessNode,
     FunctionCallNode,
@@ -36,6 +37,15 @@ class VulkanValueMixin:
 
         function_name = self.spirv_bitcast_function_name(source_family, result_family)
         if function_name is None:
+            reinterpreted = spirv_integer_bitcast_expression(
+                operand,
+                source_type_id,
+                result_type_id,
+                types,
+                self.spirv_vector_type_name,
+            )
+            if reinterpreted is not None:
+                return reinterpreted
             result_type_name = self.spirv_type_name(result_type_id, types)
             fallback_type = self.spirv_fallback_identifier(
                 result_type_name or result_type_id, "type"

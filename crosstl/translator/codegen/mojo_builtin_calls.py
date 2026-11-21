@@ -230,9 +230,14 @@ class MojoBuiltinCallMixin:
         helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
         if helper_name is None:
             raise MojoRefusal(f"Invalid Mojo synchronization operation {sync_type}")
-        self.required_sync_helpers.add(helper_name)
         indent_str = "    " * indent
-        return f"{indent_str}{helper_name}()\n"
+        return f"{indent_str}{self.mojo_sync_call(helper_name)}\n"
+
+    def mojo_sync_call(self, mojo_name):
+        """The Mojo GPU synchronization call ``mojo_name()``, noting the import threadfence needs."""
+        if mojo_name == "threadfence":
+            self.requires_threadfence_import = True
+        return f"{mojo_name}()"
 
     def generate_atomic_op_node(self, expr):
         operation = getattr(expr, "operation", "")
@@ -291,9 +296,11 @@ class MojoBuiltinCallMixin:
         mojo_type = self.map_type(target_type)
         context = self.expression_prelude_stack[-1]
         indent_str = "    " * context["indent"]
-        context["lines"].append(
-            f"{indent_str}var {temp_name}: {mojo_type} = {target_expr}\n"
-        )
+        lines = context["lines"]
+        atomic = f"Atomic[{mojo_type}]"
+        # The address of the target: a buffer or shared-memory element, a structure field or a kernel local.
+        pointer = f"UnsafePointer(to={target_expr})"
+        self.requires_atomic_import = True
 
         if operation == "compare_exchange":
             compare_expr = self.generate_expression(
@@ -302,31 +309,47 @@ class MojoBuiltinCallMixin:
             value_expr = self.generate_expression(
                 args[2], target_type, f"{func_name} value"
             )
-            context["lines"].append(f"{indent_str}if {temp_name} == {compare_expr}:\n")
-            context["lines"].append(f"{indent_str}    {target_expr} = {value_expr}\n")
+            # compare_exchange leaves the value it found in the expected argument, which is the original value
+            # whether or not the exchange happened.
+            lines.append(f"{indent_str}var {temp_name}: {mojo_type} = {compare_expr}\n")
+            lines.append(
+                f"{indent_str}_ = {atomic}.compare_exchange({pointer}, {temp_name}, {value_expr})\n"
+            )
             return temp_name
 
         value_expr = self.generate_expression(
             args[1], target_type, f"{func_name} value"
         )
-        if operation == "exchange":
-            update_expr = value_expr
-        elif operation == "add":
-            update_expr = f"({temp_name} + {value_expr})"
-        elif operation == "min":
-            update_expr = f"min({temp_name}, {value_expr})"
-        elif operation == "max":
-            update_expr = f"max({temp_name}, {value_expr})"
-        elif operation == "and":
-            update_expr = f"({temp_name} & {value_expr})"
-        elif operation == "or":
-            update_expr = f"({temp_name} | {value_expr})"
-        elif operation == "xor":
-            update_expr = f"({temp_name} ^ {value_expr})"
-        else:
+        if operation == "add":
+            lines.append(
+                f"{indent_str}var {temp_name}: {mojo_type} = {atomic}.fetch_add({pointer}, {value_expr})\n"
+            )
+            return temp_name
+        update = {
+            "exchange": "{value}",
+            "min": "min({old}, {value})",
+            "max": "max({old}, {value})",
+            "and": "({old} & {value})",
+            "or": "({old} | {value})",
+            "xor": "({old} ^ {value})",
+        }.get(operation)
+        if update is None:
             raise MojoRefusal(f"Unsupported Mojo scalar atomic operation {func_name}")
-
-        context["lines"].append(f"{indent_str}{target_expr} = {update_expr}\n")
+        # Mojo's Atomic has no fetch_and, fetch_or, fetch_xor or exchange, and its min and max return nothing, so
+        # these retry a compare-and-exchange until it stores the updated value; the loop leaves the original value
+        # in the temporary.
+        pointer_name = f"{temp_name}_ptr"
+        value_name = f"{temp_name}_value"
+        lines.append(f"{indent_str}var {pointer_name} = {pointer}\n")
+        lines.append(f"{indent_str}var {value_name}: {mojo_type} = {value_expr}\n")
+        lines.append(
+            f"{indent_str}var {temp_name}: {mojo_type} = {atomic}.load({pointer_name})\n"
+        )
+        desired = update.format(old=temp_name, value=value_name)
+        lines.append(
+            f"{indent_str}while not {atomic}.compare_exchange({pointer_name}, {temp_name}, {desired}):\n"
+        )
+        lines.append(f"{indent_str}    pass\n")
         return temp_name
 
     def is_assignable_atomic_target(self, target):
@@ -348,7 +371,13 @@ class MojoBuiltinCallMixin:
             return "uvec3"
         if name in {"SV_GroupIndex", "SV_InstanceID", "SV_VertexID"}:
             return "uint"
-        if name == "gl_LocalInvocationIndex":
+        if name in {
+            "gl_LocalInvocationIndex",
+            "gl_NumSubgroups",
+            "gl_SubgroupID",
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
+        }:
             return "uint"
         if name in {"gl_InstanceID", "gl_VertexID"}:
             return "int"
@@ -872,7 +901,6 @@ class MojoBuiltinCallMixin:
     ):
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
-        comparator = ">=" if func_name == "max" else "<="
 
         if self.is_scalar_integer_type(target_type) or (
             self.is_scalar_integer_type(left_type)

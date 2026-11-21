@@ -6,6 +6,7 @@ bind the entry-point interface and emit the body.
 
 from .precise_dataflow import declaration_is_precise, precise_contributors
 from .spirv_entry_bindings import reserve_entry_buffer_bindings
+from .spirv_fragment_interlock import begin_entry_interlock
 from .spirv_function_parameters import SpirvFunctionParameterContext
 from .spirv_mesh_builtins import glsl_mesh_builtin_output_infos
 
@@ -281,6 +282,8 @@ class SpirvFunctionPhaseMixin:
                 }
             ),
         )
+        if entry_point_uses_void_signature:
+            begin_entry_interlock(self, function_node)
         try:
             self.process_statements(function_node.body)
         finally:
