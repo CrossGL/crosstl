@@ -3,6 +3,7 @@
 import re
 
 from ..ast import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     FunctionCallNode,
@@ -1188,10 +1189,16 @@ class OpenGLStorageReinterpretationMixin:
 
     def glsl_workgroup_pointer_access_expression(self, node):
         array = getattr(node, "array", getattr(node, "array_expr", None))
-        binding = self.glsl_workgroup_pointer_binding(
-            array,
-            self.glsl_workgroup_pointer_aliases(),
-        )
+        aliases = self.glsl_workgroup_pointer_aliases()
+        if isinstance(array, ArrayAccessNode) and self.glsl_workgroup_vector_element(
+            self.glsl_workgroup_pointer_binding(
+                getattr(array, "array", getattr(array, "array_expr", None)), aliases
+            )
+        ):
+            # ``p[a][b]`` of vector or matrix elements: ``p[a]`` is one element and ``b`` selects a component
+            # or column of it. ``b`` does not move the pointer, so it is not added to the element offset.
+            return None
+        binding = self.glsl_workgroup_pointer_binding(array, aliases)
         if binding is None:
             return None
         index = getattr(node, "index", getattr(node, "index_expr", None))
@@ -1207,6 +1214,16 @@ class OpenGLStorageReinterpretationMixin:
                 rendered_index = f"int({rendered_index})"
             composed_index = f"({rendered_offset} + {rendered_index})"
         return f"{binding['root']}[{composed_index}]"
+
+    def glsl_workgroup_vector_element(self, binding):
+        """Whether the elements a workgroup pointer ``binding`` addresses are vectors or matrices."""
+        if binding is None:
+            return False
+        element = str(binding.get("element_type") or "")
+        if re.fullmatch(r"(?:f16|f64)?d?mat[234](?:x[234])?", element):
+            return True
+        info = self.glsl_value_type_info(element)
+        return info is not None and info["width"] > 1
 
     def glsl_workgroup_pointer_element_expression(self, expression, index=0):
         binding = self.glsl_workgroup_pointer_binding(

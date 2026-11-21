@@ -3286,8 +3286,16 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "uint quadLane = quad_broadcast(quadDiagonal, ushort(0u));" in (
         generated_code
     )
-    assert "bool quadAny = quad_any(anyLane);" in generated_code
-    assert "bool quadAll = quad_all(allLane);" in generated_code
+    # Compute quad votes count the active threads of four consecutive lanes.
+    quad_lanes = "(simd_vote::vote_t(15u) << (crossglWaveLaneIndex & ~3u))"
+    assert (
+        f"bool quadAny = ((simd_vote::vote_t(simd_ballot(anyLane)) & {quad_lanes}) "
+        "!= simd_vote::vote_t(0u));"
+    ) in generated_code
+    assert (
+        f"bool quadAll = ((simd_vote::vote_t(simd_ballot(allLane)) & {quad_lanes}) "
+        f"== (simd_vote::vote_t(simd_active_threads_mask()) & {quad_lanes}));"
+    ) in generated_code
     assert "uint lane = crossglWaveLaneIndex;" in generated_code
     assert "uint laneCount = crossglWaveLaneCount;" in generated_code
     assert (
@@ -4233,8 +4241,16 @@ def test_metal_quad_operations_lower_to_quad_shuffle():
     assert "float quadY = quad_shuffle_xor(quadX, ushort(2));" in generated_code
     assert "float quadDiag = quad_shuffle_xor(quadY, ushort(3));" in generated_code
     assert "float quadLane = quad_broadcast(value, ushort(2u));" in generated_code
-    assert "bool anyQuad = quad_any(predicate);" in generated_code
-    assert "bool allQuad = quad_all(predicate);" in generated_code
+    # Compute quad votes count the active threads of four consecutive lanes.
+    quad_lanes = "(simd_vote::vote_t(15u) << (crossglWaveLaneIndex & ~3u))"
+    assert (
+        f"bool anyQuad = ((simd_vote::vote_t(simd_ballot(predicate)) & {quad_lanes}) "
+        "!= simd_vote::vote_t(0u));"
+    ) in generated_code
+    assert (
+        f"bool allQuad = ((simd_vote::vote_t(simd_ballot(predicate)) & {quad_lanes}) "
+        f"== (simd_vote::vote_t(simd_active_threads_mask()) & {quad_lanes}));"
+    ) in generated_code
     assert "QuadReadAcrossX(" not in generated_code
     assert "QuadReadAcrossY(" not in generated_code
     assert "QuadReadAcrossDiagonal(" not in generated_code
@@ -18577,7 +18593,7 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "envMap.sample" in generated_code
 
 
-def test_metal_rejects_non_resource_shadow_of_global_resource():
+def test_metal_renames_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {
         sampler2D colorMap;
@@ -18600,14 +18616,13 @@ def test_metal_rejects_non_resource_shadow_of_global_resource():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Non-resource local declaration\\(s\\) shadow Metal global "
-            "resource\\(s\\): colorMap, linearSampler"
-        ),
-    ):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The parameter and the local keep their values under names that no longer hide the resources.
+    assert "float4 shade(float colorMap_, FSInput input)" in generated_code
+    assert "float linearSampler_ = 1.0;" in generated_code
+    assert "return float4(colorMap_ + linearSampler_);" in generated_code
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
 
 
 def test_metal_rejects_texture_call_with_non_resource_argument():

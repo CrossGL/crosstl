@@ -58,6 +58,7 @@ from .metal_library_functions import rename_msl_library_functions
 from .metal_namespace_names import rename_metal_namespace_names
 from .metal_post_tessellation import lower_metal_post_tessellation
 from .metal_safe_math import metal_safe_math_requested
+from .metal_shadowed_storage import rename_metal_shadowing_declarations
 from .metal_specialization_constants import (
     metal_function_constant_type_refusal,
     render_metal_specialization_constant,
@@ -415,6 +416,7 @@ class MetalProgramEntryMixin:
         ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
         ast = lower_metal_post_tessellation(ast, self)
+        ast = rename_metal_shadowing_declarations(ast, self)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
         ast = lower_metal_helper_invocation_reads(ast, self.refuse_lowering)
