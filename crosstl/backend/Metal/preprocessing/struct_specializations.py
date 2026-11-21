@@ -189,11 +189,7 @@ class MetalStructSpecializationMixin:
                 skip_spans=self._find_template_declaration_spans(code),
             ),
         )
-        structs = memoized(
-            values,
-            "concrete_struct_definitions",
-            lambda: self._find_concrete_struct_definitions(code),
-        )
+        structs = self._find_concrete_struct_definitions(code)
         if not self._evaluate_boolean_constraint(
             arguments[0],
             bindings,
