@@ -29,8 +29,10 @@ from ..no_contraction import (
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
@@ -108,7 +110,12 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
-class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
+class OpenCLToCrossGLConverter(
+    OpenCLSizeofScopeMixin,
+    OpenCLPointerResultMixin,
+    OpenCLCompareExchangeMixin,
+    HipToCrossGLConverter,
+):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
@@ -383,7 +390,19 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         self.opencl_sdk_reduce_materialize_op = False
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
-        return super().generate(ast_node)
+        self.reset_opencl_pointer_results()
+        self.reset_opencl_compare_exchanges()
+        text = super().generate(ast_node)
+        helpers = self.opencl_pointer_result_helper_text()
+        if helpers:
+            # The helpers use only scalar and vector types, so they can precede every declaration.
+            marker = "// OpenCL to CrossGL conversion\n"
+            text = (
+                text.replace(marker, marker + helpers + "\n", 1)
+                if marker in text
+                else helpers + text
+            )
+        return text
 
     def generic_visit(self, node):
         if isinstance(node, str):
@@ -997,6 +1016,9 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            pointer_result = self.format_opencl_pointer_result_call(func_name, raw_args)
+            if pointer_result is not None:
+                return pointer_result
             fence = self.format_opencl_fence_call(func_name, raw_args)
             if fence is not None:
                 return fence
@@ -1350,6 +1372,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         return None
 
     def emit_statement(self, stmt):
+        if self.emit_opencl_compare_exchanges(stmt):
+            return
         if self.is_opencl_prefetch_call(stmt):
             for arg in stmt.args:
                 self.emit_opencl_discarded_expression_effects(arg)
@@ -1724,6 +1748,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     )
 
     def visit_AtomicOperationNode(self, node):
+        if is_compare_exchange(node):
+            return self.format_opencl_compare_exchange_value(node)
         node_args = list(node.args)
         if node.operation.endswith("_explicit"):
             node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
