@@ -15,6 +15,7 @@ from pathlib import Path
 from . import (
     decorations,
     execution,
+    metal_reflection,
     placeholders,
     probes,
     rustgpu,
@@ -432,6 +433,15 @@ def run_input(feature: Feature, language: str) -> Result:
     lost = decorations.lost(feature, emitted, translated, imported=language)
     if lost:
         return result("wrong", f"after the round trip: {lost}")
+    # A graphics probe never runs, so a Metal round trip that moves a binding, a vertex attribute or a stage value
+    # still validates; its entry points must keep the interface of the probe's (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.round_trip_difference(probe.source, translated)
+        if language == emitted == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", f"after the round trip: {moved}")
     if emitted == language and _runs(feature, language):
         return replace(result("supported"), sources=(probe.source, translated))
     return result("supported")

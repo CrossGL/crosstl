@@ -481,7 +481,8 @@ def _execute(
     runs_as = "spirv" if via_spirv else language
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
     rebound, exact, skipped = {}, {}, {}
-    assemblies = []
+    # Each case's Vulkan environment, by the case's identity.
+    environments = {}
     for index, result in chunk:
         data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
         if via_spirv:
@@ -515,8 +516,6 @@ def _execute(
         if runs_as == "hlsl" and any(_UNREPEATABLE_HLSL.search(t) for t in texts):
             skipped[index] = "it reads a ray query, which no second run repeats"
             continue
-        if via_spirv:
-            assemblies += texts
         exact[index] = exact_words(result.feature, runs_as, texts[0])
         paths = []
         for role, text in zip(("native", "translated"), texts):
@@ -528,32 +527,37 @@ def _execute(
         constants = CONSTANTS if block else None
         # A subgroup operation's probes run as one workgroup (:mod:`.lanes`), every other probe one per invocation.
         group = THREADS if lanes.cooperative(result.feature) else 1
-        for role, path in zip(("native", "translated"), paths):
+        for role, path, text in zip(("native", "translated"), paths, texts):
+            identity = f"{index:05d}-{role}"
             cases.append(
-                _case(
-                    f"{index:05d}-{role}",
-                    path,
-                    runs_as,
-                    data,
-                    constants,
-                    outputs,
-                    group,
-                )
+                _case(identity, path, runs_as, data, constants, outputs, group)
+            )
+            environments[identity] = validators.spirv_environment(
+                [text] if via_spirv else []
             )
         rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:
         return {}, skipped
-    # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
-    # which declares none, for Vulkan 1.1 as the validators check it.
-    records = runner.run_suite(
-        cases,
-        [runs_as],
-        ["strict"],
-        selection,
-        root,
-        reference=True,
-        environment=validators.spirv_environment(assemblies),
-    )
+    # Each module is assembled for the oldest environment that takes the SPIR-V version its compiler wrote, and a SPIR-V
+    # probe, which declares none, for Vulkan 1.1 as the validators check it. A native probe and its translation may come
+    # from different compilers: DXC's SPIR-V 1.0 decorates storage blocks with BufferBlock, which no environment from
+    # SPIR-V 1.4 on accepts, while slangc writes SPIR-V 1.5.
+    grouped: dict[str, list] = {}
+    for case in cases:
+        grouped.setdefault(environments[case.id], []).append(case)
+    records = [
+        record
+        for environment, members in sorted(grouped.items())
+        for record in runner.run_suite(
+            members,
+            [runs_as],
+            ["strict"],
+            selection,
+            root,
+            reference=True,
+            environment=environment,
+        )
+    ]
     found = {}
     for record in records:
         index, role = record["case"].split("-")
@@ -763,12 +767,41 @@ def _label(result: Result) -> str:
     return native if native == translated else f"{native} to {translated}"
 
 
+def _attempted(result: Result) -> bool:
+    """Whether :func:`run` tries to execute ``result``: a row's result in a language the harness runs, or a cell's
+    that :func:`runs_pair` allows."""
+    native, translated = languages(result)
+    return runs(native) if native == translated else runs_pair(native, translated)
+
+
+def unlowered(results: list[Result]) -> list[str]:
+    """The translation matrix cells, as ``"<source> to <target>"``, with :func:`executable` results that cannot run
+    here because an end's compiler or ``spirv-dis`` is not installed, as rust-gpu is only on the Rust leg.
+    """
+    return sorted(
+        {
+            _label(r)
+            for r in results
+            if r.into
+            and r.into != r.feature.language
+            and executable(r)
+            and _attempted(r)
+            and not all(
+                lowering.can_lower(spoken) for spoken in set(languages(r)) - {"spirv"}
+            )
+        }
+    )
+
+
 def idle(results: list[Result]) -> list[str]:
-    """The languages, or translation matrix cells as ``"<source> to <target>"``, with :func:`executable` results of
-    which none ran.
+    """The languages, or translation matrix cells as ``"<source> to <target>"``, with :func:`executable` results that
+    :func:`run` tries to execute and of which none ran.
 
     A runtime that rejects every native probe of a language, as one does for SPIR-V newer than it is told to accept,
-    runs none of them, just as a missing runtime does.
+    runs none of them, just as a missing runtime does. A cell that cannot run here (:func:`unlowered`) is not idle;
+    the caller reports it on its own.
     """
     ran = {_label(r) for r in results if r.runtime}
-    return sorted({_label(r) for r in results if executable(r)} - ran)
+    skipped = set(unlowered(results))
+    tried = {_label(r) for r in results if executable(r) and _attempted(r)}
+    return sorted(tried - skipped - ran)

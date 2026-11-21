@@ -1242,12 +1242,14 @@ def test_cufftdx_scoped_storage_types_codegen_reparse():
     }
     """
 
-    crossgl = cuda_to_crossgl(source)
+    crossgl, message = cuda_import_partial_output(cuda_to_crossgl, source)
 
     assert "array<FFT_value_type>" in crossgl
-    assert "array<FFT::value_type, FFT_storage_size>" in crossgl
     assert "data: array<FFT::value_type>" not in crossgl
-    assert_crossgl_reparse(crossgl)
+    # A static member of a class the importer did not read has no CrossGL extent spelling.
+    assert (
+        "CUDA array extent 'FFT::storage_size' is not an integral constant" in message
+    )
 
 
 def test_cuda_samples_dependent_scoped_and_enum_types_codegen_reparse():
@@ -1835,12 +1837,15 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
 
     ast = parse_cuda(source)
     shared = ast.kernels[0].body[0]
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "TA[cosize_v<ASmemLayout>]"
-    assert "array<TA, cosize_v_ASmemLayout>" in crossgl
-    assert_crossgl_reparse(crossgl)
+    assert "var<workgroup> smemA: array<TA, " in crossgl
+    # A variable template's value has no CrossGL extent spelling.
+    assert "CUDA array extent 'cosize_v<ASmemLayout>' is not an integral" in message
 
 
 def test_cutlass_cute_dependent_template_type_alias_codegen_reparse():
@@ -1943,9 +1948,7 @@ def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_repa
     crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert shared.vtype == "float[32][(32 + 1)]"
-    assert (
-        "var<workgroup> tile: " "array<array<f32, cuda_array_extent_32_plus_1>, 32>;"
-    ) in crossgl
+    assert ("var<workgroup> tile: " "array<array<f32, 33>, 32>;") in crossgl
     assert "var index_in: i32 = (xIndex + (yIndex * width));" in crossgl
     assert "var index_out: i32 = (xIndex + (yIndex * height));" in crossgl
     assert "yIndex((*width))" not in crossgl
@@ -2512,7 +2515,9 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
 
     ast = parse_cuda(source)
     shared = ast.kernels[0].body[0]
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "half[][((CHUNK_K * K) + SKEW_HALF)]"
@@ -2522,10 +2527,12 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
         "// CUDA dynamic shared memory: shmem uses launch-time shared memory size"
         in crossgl
     )
+    assert "var<workgroup> shmem: array<array<f16, " in crossgl
+    # The fixture leaves out the sample's #define lines, so no target could size the row.
     assert (
-        "var<workgroup> shmem: " "array<array<f16, CHUNK_K_mul_K_plus_SKEW_HALF>>;"
-    ) in crossgl
-    assert_crossgl_reparse(crossgl)
+        "names 'CHUNK_K', 'K', 'SKEW_HALF', which the program does not declare"
+        in message
+    )
 
 
 def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
@@ -2548,7 +2555,9 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert ast.kernels[0].params[0].vtype == "const __nv_bfloat16 *"
     assert ast.kernels[0].params[1].vtype == "__nv_bfloat16 *"
@@ -2560,9 +2569,12 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
     assert body[2].name == "tile_ptr"
     assert body[3].vtype == "__nv_bfloat16"
     assert "array<bfloat16>" in crossgl
+    assert "var<workgroup> shmem: array<array<bfloat16, " in crossgl
+    # The fixture leaves out the sample's #define lines, so no target could size the row.
     assert (
-        "var<workgroup> shmem: " "array<array<bfloat16, CHUNK_K_mul_K_plus_SKEW_BF16>>;"
-    ) in crossgl
+        "names 'CHUNK_K', 'K', 'SKEW_BF16', which the program does not declare"
+        in message
+    )
     assert "var local: ptr<bfloat16> = D;" in crossgl
     assert (
         "var tile_ptr: ptr<bfloat16> = "

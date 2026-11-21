@@ -202,6 +202,7 @@ class HipResourceHintMixin:
 
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
+        self.integer_constants.push()
         self.push_vector1_name_scope()
         self.device_property_source_scopes.append({})
         self.device_attribute_source_scopes.append({})
@@ -214,6 +215,7 @@ class HipResourceHintMixin:
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+            self.integer_constants.pop()
         self.pop_vector1_name_scope()
         if len(self.device_property_source_scopes) > 1:
             self.device_property_source_scopes.pop()
@@ -272,6 +274,8 @@ class HipResourceHintMixin:
         if not self.variable_type_scopes:
             self.variable_type_scopes.append({})
         self.variable_type_scopes[-1][name] = type_name
+        # A declaration hides an integral constant of its name from array extents.
+        self.integer_constants.declare(name)
         self.clear_device_property_source(name)
         self.clear_device_attribute_source(name)
         self.clear_device_query_source(name)

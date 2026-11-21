@@ -198,6 +198,9 @@ OTHER_NAMES = {
     # spirv-std passes the new value before the comparator; CrossGL's atomicCompSwap, like GLSL's, takes the
     # comparator first. Both return the original value.
     "atomic_compare_exchange": "atomicCompSwap({0}, {2}, {1})",
+    # glam's x.smoothstep(edge0, edge1) interpolates its receiver (glam 0.34, src/f32/vec3.rs); CrossGL's
+    # smoothstep, like GLSL's, takes the edges first.
+    "Vec3::smoothstep": "smoothstep({1}, {2}, {0})",
     # OpIsHelperInvocationEXT, and OpReadClockKHR at the subgroup scope the probe passes, as a 64-bit integer or
     # as two 32-bit halves (GL_ARB_shader_clock).
     "is_helper_invocation": "IsHelperLane",

@@ -18,6 +18,45 @@ from __future__ import annotations
 from typing import Any
 
 
+def primary_template_structs_by_name(preprocessor: Any, source: str) -> dict[str, Any]:
+    """The primary struct templates of ``source`` by qualified and, where unique, unqualified name.
+
+    Template argument deduction reads a template's defaults from this table when an argument type spells a
+    defaulted argument that the parameter type omits: ``Tile<T, M, N>`` deduces from
+    ``Tile<float, 1, 1, Frag<float, 8, 8>>`` when the fourth argument equals the default ``Frag<T, 8, 8>`` completed
+    with the deduced ``T`` ([temp.deduct.type]/9, [temp.arg.general]/9). Of two declarations of one name, the one
+    that declares more defaults wins, as in the explicit-call deduction table.
+    """
+    by_name: dict[str, Any] = {}
+    for declaration in preprocessor._find_template_structs(source):
+        if (
+            preprocessor._template_struct_specialization_arguments(declaration)
+            is not None
+        ):
+            continue
+        name = (
+            f"{declaration.namespace}::{declaration.name}"
+            if declaration.namespace
+            else declaration.name
+        )
+        current = by_name.get(name)
+        if current is None or (
+            len(declaration.template_parameter_defaults),
+            len(declaration.template_parameters),
+        ) > (
+            len(current.template_parameter_defaults),
+            len(current.template_parameters),
+        ):
+            by_name[name] = declaration
+    unqualified: dict[str, list[Any]] = {}
+    for declaration in by_name.values():
+        unqualified.setdefault(declaration.name, []).append(declaration)
+    for name, declarations in sorted(unqualified.items()):
+        if len(declarations) == 1:
+            by_name.setdefault(name, declarations[0])
+    return by_name
+
+
 def canonical_struct_template_arguments(
     preprocessor: Any, template: Any, template_arguments: list[str]
 ) -> list[str]:
