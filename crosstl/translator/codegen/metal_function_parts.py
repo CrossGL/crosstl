@@ -23,6 +23,10 @@ from .metal_post_tessellation import (
     post_tessellation_plan,
 )
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_stage_input_merge import (
+    merge_metal_stage_inputs,
+    metal_stage_input_struct_parameter,
+)
 from .metal_varyings import (
     metal_varying_attribute,
 )
@@ -155,6 +159,7 @@ class MetalFunctionPartsMixin:
         skipped_parameter_indices = self.skipped_function_parameter_indices(
             self.current_function_name
         )
+        stage_input_structs = []
         for index, p in enumerate(param_list):
             if index in skipped_parameter_indices:
                 continue
@@ -403,29 +408,44 @@ class MetalFunctionPartsMixin:
             param_attr += metal_raster_order_group_attribute(
                 p, shader_type, declaration
             )
+            stage_input = metal_stage_input_struct_parameter(
+                self, shader_type, p, param_type, param_attr
+            )
+            if stage_input is not None:
+                stage_input_structs.append((len(params), stage_input))
             params.append(f"{declaration}{param_attr}")
-            if self.is_structured_buffer_type(
-                raw_param_type
-            ) and self.structured_buffer_parameter_requires_length(
-                self.current_function_name, p.name
-            ):
-                length_name = self.structured_buffer_length_parameter_name(p.name)
-                self.current_structured_buffer_length_parameters[p.name] = length_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_length_parameter(p.name, array_size)
-                )
-            if self.structured_buffer_requires_counter(raw_param_type):
-                counter_name = self.structured_buffer_counter_parameter_name(p.name)
-                self.current_structured_buffer_counter_parameters[p.name] = counter_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_counter_parameter(p.name, array_size)
-                )
+            self.append_metal_structured_buffer_side_parameters(
+                p, raw_param_type, params
+            )
+        merge_metal_stage_inputs(
+            self,
+            shader_type,
+            params,
+            stage_input_structs,
+            vertex_stage_input_parameters,
+            fragment_stage_input_parameters,
+        )
+
+    def append_metal_structured_buffer_side_parameters(self, p, raw_param_type, params):
+        """Append the length and counter parameters a structured buffer parameter needs."""
+        if self.is_structured_buffer_type(
+            raw_param_type
+        ) and self.structured_buffer_parameter_requires_length(
+            self.current_function_name, p.name
+        ):
+            length_name = self.structured_buffer_length_parameter_name(p.name)
+            self.current_structured_buffer_length_parameters[p.name] = length_name
+            array_size = self.structured_buffer_parameter_array_size(raw_param_type, p)
+            params.append(
+                self.format_structured_buffer_length_parameter(p.name, array_size)
+            )
+        if self.structured_buffer_requires_counter(raw_param_type):
+            counter_name = self.structured_buffer_counter_parameter_name(p.name)
+            self.current_structured_buffer_counter_parameters[p.name] = counter_name
+            array_size = self.structured_buffer_parameter_array_size(raw_param_type, p)
+            params.append(
+                self.format_structured_buffer_counter_parameter(p.name, array_size)
+            )
 
     def metal_stage_entry_parameters(
         self,
