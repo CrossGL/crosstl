@@ -328,6 +328,19 @@ jobs:
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
 
+      # A spirv-to-X cell's SPIR-V probe is compiled from a GLSL probe, or an HLSL one for a construct GLSL cannot
+      # spell, and disassembled (tools/coverage/spirv_input.py). The nightly run installs those compilers after the
+      # rows, which do not use them.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Install pinned Linux DXC for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
       - name: Measure the translation matrix
@@ -516,6 +529,12 @@ jobs:
       - name: Measure coverage
         timeout-minutes: 30
         run: python -m tools.coverage run --strict --execute --jobs 3 --backend metal --output coverage-metal.json
+
+      # A spirv-to-metal probe is compiled from a GLSL probe and disassembled (tools/coverage/spirv_input.py). macOS has
+      # no DXC, so the few constructs only HLSL spells stay untested in that cell.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
 
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
