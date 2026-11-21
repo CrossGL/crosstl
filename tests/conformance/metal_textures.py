@@ -50,6 +50,11 @@ _FORMATS = {
     "ushort": ("MTLPixelFormatRGBA16Uint", "H", 2),
 }
 _ACCESS = frozenset({"sample", "read", "write", "read_write"})
+# The elements of an argument buffer the host fills; a probe indexes one with a value below this.
+_ELEMENTS = 4
+_POINTER = re.compile(
+    r"^(?:const\s+)?(?:device|constant)\s+(?:const\s+)?(\w+)\s*(?:const\s*)?\*\s*\w+$"
+)
 _ATTRIBUTE = re.compile(r"\[\[\s*(texture|sampler)\s*\(\s*(\d+)\s*\)\s*\]\]")
 _ARRAY = re.compile(r"^(?:const\s+)?array\s*<\s*(.+)\s*,\s*(\d+)\s*>\s*\w+\s*$")
 _TEXTURE = re.compile(
@@ -67,7 +72,13 @@ def declaration(parameter: str) -> dict:
     if found is None:
         raise InterfaceChanged(f"No texture or sampler slot in {parameter!r}")
     kind, slot = found.group(1), int(found.group(2))
-    declared = " ".join(parameter[: found.start()].split())
+    return {"slot": slot, **_resource(kind, parameter[: found.start()])}
+
+
+def _resource(kind: str, declared: str) -> dict:
+    """The record, without a slot, of a texture or sampler (``kind``) declared as ``declared``: its type and name,
+    or ``array<type, N> name``."""
+    declared = " ".join(declared.split())
     count = 1
     array = _ARRAY.match(declared)
     if array:
@@ -76,7 +87,7 @@ def declaration(parameter: str) -> dict:
     if kind == "sampler":
         if declared != "sampler":
             raise InterfaceChanged(f"Unexpected Metal sampler type {declared!r}")
-        return {"kind": "sampler", "slot": slot, "count": count}
+        return {"kind": "sampler", "count": count}
     texture = _TEXTURE.match(declared)
     if texture is None or texture.group(1) not in _SHAPES:
         raise InterfaceChanged(f"Unexpected Metal texture type {declared!r}")
@@ -85,11 +96,49 @@ def declaration(parameter: str) -> dict:
         raise InterfaceChanged(f"Unexpected Metal texture type {declared!r}")
     return {
         "kind": "texture",
-        "slot": slot,
         "count": count,
         "type": texture.group(1),
         "element": element,
         "access": access,
+    }
+
+
+def argument_buffer(parameter: str, slot: int, source: str) -> dict | None:
+    """The record of the ``[[buffer(slot)]]`` kernel argument ``parameter`` when it points to an argument buffer: an
+    array of a structure of ``source`` whose members are all textures or samplers. ``None`` for any other buffer.
+
+    The host fills :data:`_ELEMENTS` elements, each with the resource IDs of its own textures and samplers in member
+    order (Metal Shading Language Specification, "Argument Buffers"; a Tier 2 argument buffer holds a texture or a
+    sampler as a ``MTLResourceID``). Raises :class:`InterfaceChanged` for a member that sets its own ``[[id(n)]]``,
+    whose place in the buffer the host does not compute.
+    """
+    pointer = _POINTER.match(" ".join(parameter[: parameter.find("[[")].split()))
+    if pointer is None:
+        return None
+    body = re.search(
+        rf"\bstruct\s+{re.escape(pointer.group(1))}\s*\{{([^{{}}]*)\}}\s*;", source
+    )
+    if body is None:
+        return None
+    members = []
+    for member in filter(None, (item.strip() for item in body.group(1).split(";"))):
+        if "[[" in member:
+            raise InterfaceChanged(
+                f"The Metal argument buffer member {member!r} sets its own index"
+            )
+        kind = "sampler" if re.match(r"(?:const\s+)?sampler\b", member) else "texture"
+        if kind == "texture" and not re.match(
+            r"(?:const\s+)?(?:array\s*<\s*)?(?:%s)\s*<" % "|".join(_SHAPES), member
+        ):
+            return None
+        members.append(_resource(kind, member))
+    if not members:
+        return None
+    return {
+        "kind": "argument_buffer",
+        "slot": slot,
+        "count": _ELEMENTS,
+        "members": members,
     }
 
 
@@ -169,8 +218,9 @@ def _texture(Metal, device, record, slot):
     return texture, None
 
 
-def _sampler(Metal, device):
+def _sampler(Metal, device, encoded=False):
     descriptor = Metal.MTLSamplerDescriptor.new()
+    descriptor.setSupportArgumentBuffers_(encoded)
     filtering = Metal.MTLSamplerMinMagFilterNearest
     addressing = Metal.MTLSamplerAddressModeRepeat
     descriptor.setMinFilter_(filtering)
@@ -192,6 +242,9 @@ def bind(Metal, device, encoder, job) -> list:
     """
     kept = []
     for record in job.get("resources", ()):
+        if record["kind"] == "argument_buffer":
+            kept += _argument_buffer(Metal, device, encoder, record)
+            continue
         for offset in range(record["count"]):
             slot = record["slot"] + offset
             if record["kind"] == "sampler":
@@ -203,3 +256,52 @@ def bind(Metal, device, encoder, job) -> list:
             encoder.setTexture_atIndex_(texture, slot)
             kept += [texture, backing]
     return kept
+
+
+def argument_buffer_layout(record: dict) -> list[tuple[str, dict, int]]:
+    """The resources of the argument buffer ``record`` in buffer order, one 8-byte ``MTLResourceID`` each: the kind,
+    the member record and, for a texture, the slot whose texels it holds.
+
+    The textures of element ``i`` hold the texels of slots ``i * t`` to ``i * t + t - 1``, where ``t`` is the number
+    of textures in one element, so an argument buffer of one texture per element holds the texels that
+    ``array<texture2d<float>, N> [[texture(0)]]`` binds, element by element.
+    """
+    per_element = sum(
+        member["count"] for member in record["members"] if member["kind"] == "texture"
+    )
+    layout = []
+    for element in range(record["count"]):
+        texture = element * per_element
+        for member in record["members"]:
+            for _ in range(member["count"]):
+                if member["kind"] == "texture":
+                    layout.append(("texture", member, texture))
+                    texture += 1
+                else:
+                    layout.append(("sampler", member, -1))
+    return layout
+
+
+def _argument_buffer(Metal, device, encoder, record) -> list:
+    kept, identities = [], []
+    for kind, member, slot in argument_buffer_layout(record):
+        if kind == "sampler":
+            state = _sampler(Metal, device, encoded=True)
+            identities.append(state.gpuResourceID()._impl)
+            kept.append(state)
+            continue
+        texture, backing = _texture(Metal, device, member, slot)
+        usage = Metal.MTLResourceUsageRead
+        if member["access"] in {"write", "read_write"}:
+            usage |= Metal.MTLResourceUsageWrite
+        encoder.useResource_usage_(texture, usage)
+        identities.append(texture.gpuResourceID()._impl)
+        kept += [texture, backing]
+    data = struct.pack(f"<{len(identities)}Q", *identities)
+    buffer = device.newBufferWithBytes_length_options_(
+        data, len(data), Metal.MTLResourceStorageModeShared
+    )
+    if buffer is None:
+        raise RuntimeError("Metal argument buffer allocation failed")
+    encoder.setBuffer_offset_atIndex_(buffer, 0, record["slot"])
+    return kept + [buffer]
