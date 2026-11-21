@@ -6,6 +6,7 @@ from typing import (
     Tuple,
 )
 
+from .spirv_float_literals import exact_float_literal_value
 from .spirv_values import (
     SpirvId,
     SpirvType,
@@ -1225,6 +1226,11 @@ class SpirvBinaryOperationMixin:
         target_type_name = self.normalize_primitive_name(target_type.type.base_type)
         if source_type_name == target_type_name:
             return value
+
+        literal_value = exact_float_literal_value(value)
+        if literal_value is not None and target_type_name == "double":
+            # An unsuffixed literal rounds once, to double (spirv_float_literals).
+            return self.register_constant(literal_value, target_type)
 
         if source_type_name == self.BFLOAT16_TYPE_NAME:
             decoded = self.convert_bfloat16_to_float(value)
