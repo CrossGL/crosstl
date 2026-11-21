@@ -230,6 +230,12 @@ from .tessellation_patches import (
 )
 from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
+from .texture_operands import (
+    TextureOperandError,
+    TextureOperandUnsupportedError,
+    check_texture_operands,
+    register_texture_operand_target,
+)
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
@@ -325,6 +331,8 @@ __all__ = [
     "StorageVariableUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
+    "TextureOperandError",
+    "TextureOperandUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
@@ -338,6 +346,8 @@ __all__ = [
     "VoidValueError",
     "apply_rule_carrying",
     "generate_refusing_undeclared_identifiers",
+    "check_texture_operands",
+    "register_texture_operand_target",
 ]
 
 
@@ -610,6 +620,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
+    check_texture_operands(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
     refuse_feedback_textures(program, report.target)
