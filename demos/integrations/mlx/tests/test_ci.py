@@ -369,8 +369,9 @@ def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failure
         "steps.platform-host-abi.outcome == 'success' }}"
     )
     assert (
-        "matrix.warp_qualification == '1.0.13'"
-        in identity["env"]["EXPECTED_WARP_SHA256"]
+        "matrix.warp_qualification == '1.0.13'" in identity["env"][
+            "EXPECTED_WARP_SHA256"
+        ]
     )
     for digest in (
         "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
@@ -399,8 +400,9 @@ def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failure
     )
     assert "--timeout-seconds 4000" in execute["run"]
     assert (
-        "--cast-batches --large-copies --binary-batches --unary-batches"
-        in execute["run"]
+        "--cast-batches --large-copies --binary-batches --unary-batches" in execute[
+            "run"
+        ]
     )
     assert job["steps"].index(steps["Validate collective helper arguments"]) < job[
         "steps"
