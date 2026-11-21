@@ -1,5 +1,6 @@
 """Expression result types of the CUDA generator and canonical resource type names."""
 
+from .cuda_texel_buffers import TEXEL_BUFFER_QUERY_SPEC, sampled_texel_buffer_type
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 
@@ -231,6 +232,13 @@ class CudaExpressionTypeMixin:
     def dimension_query_spec(self, type_name):
         """Return CUDA resource query metadata for supported image shapes."""
         type_name = self.resource_base_type(type_name)
+        if sampled_texel_buffer_type(type_name) is not None:
+            return dict(TEXEL_BUFFER_QUERY_SPEC)
+        if isinstance(type_name, str) and type_name.startswith(
+            ("isampler", "usampler")
+        ):
+            # An integer texture has the dimensions of the float texture of its shape.
+            type_name = self.sampled_texture_shape_type(type_name)
         spec = ResourceQueryMixin.dimension_query_spec(self, type_name)
         if spec is not None:
             return spec
