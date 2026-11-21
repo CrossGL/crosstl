@@ -85,6 +85,7 @@ from .generic_struct_utils import (
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_interlock import wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices
@@ -4440,6 +4441,7 @@ class GLSLCodeGen(
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -4452,6 +4454,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -4686,6 +4689,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 

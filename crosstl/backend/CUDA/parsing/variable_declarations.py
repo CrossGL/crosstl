@@ -1,5 +1,7 @@
 """Global and local variable declarations in the CUDA parser: prefixes, qualifiers, declarators, shared memory, initializers, bit-fields and array suffixes."""
 
+import re
+
 from ..CudaAst import (
     ConstantMemoryNode,
     FunctionCallNode,
@@ -59,19 +61,23 @@ class CudaVariableDeclarationMixin:
 
     def parse_variable_declaration_list(self):
         qualifiers = self.parse_declaration_prefixes()
-        self.parse_alignment_attributes()
-        self.skip_gnu_attributes()
+        layout = self.parse_alignment_attributes()
+        layout += self.skip_gnu_attributes()
 
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
         declarations = [
-            self.parse_variable_declarator(first_type, qualifiers, allow_prefix=False)
+            self.parse_variable_declarator(
+                first_type, qualifiers, allow_prefix=False, layout=layout
+            )
         ]
 
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             declarations.append(
-                self.parse_variable_declarator(base_type, qualifiers, allow_prefix=True)
+                self.parse_variable_declarator(
+                    base_type, qualifiers, allow_prefix=True, layout=layout
+                )
             )
 
         return declarations
@@ -105,26 +111,47 @@ class CudaVariableDeclarationMixin:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-    def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
+    def parse_variable_declarator(self, base_type, qualifiers, allow_prefix, layout=()):
         vtype = base_type
         if allow_prefix:
             vtype = self.parse_declarator_prefix(vtype)
 
         declarator_qualifiers = list(qualifiers)
         self.parse_interleaved_declaration_qualifiers(declarator_qualifiers)
-        self.parse_alignment_attributes()
+        layout = [*layout, *self.parse_alignment_attributes()]
         name = self.parse_name_component()
         vtype += self.parse_array_suffix()
-        self.skip_bitfield_width()
+        if self.skip_bitfield_width():
+            layout.append("a bit-field width")
         value = self.parse_variable_initializer(vtype)
 
         if self.block_depth > 0:
             refuse_local_memory_space(declarator_qualifiers, name)
         if "__shared__" in declarator_qualifiers:
-            return self.create_shared_memory_node(vtype, name, declarator_qualifiers)
-        if "__constant__" in declarator_qualifiers:
-            return ConstantMemoryNode(vtype, name, value, declarator_qualifiers)
-        return VariableNode(vtype, name, value, declarator_qualifiers)
+            node = self.create_shared_memory_node(vtype, name, declarator_qualifiers)
+        elif "__constant__" in declarator_qualifiers:
+            node = ConstantMemoryNode(vtype, name, value, declarator_qualifiers)
+        else:
+            node = VariableNode(vtype, name, value, declarator_qualifiers)
+        return self.mark_declared_layout(node, layout)
+
+    @staticmethod
+    def mark_declared_layout(node, layout):
+        """``node`` with ``layout_specifiers`` set to the layout-changing specifiers its declaration had.
+
+        The parser drops alignment specifiers, ``aligned`` and ``packed`` attributes and bit-field widths from
+        declarators. An importer that places a record's members, as the union layout contract does, refuses a
+        member that had one instead of placing it at its type's natural layout.
+        """
+        specifiers = tuple(
+            text
+            for text in layout
+            if not str(text).startswith("__attribute__")
+            or re.search(r"align|packed", str(text), re.IGNORECASE)
+        )
+        if specifiers:
+            node.layout_specifiers = specifiers
+        return node
 
     def create_shared_memory_node(self, vtype, name, qualifiers):
         is_extern = "extern" in qualifiers
@@ -175,12 +202,14 @@ class CudaVariableDeclarationMixin:
         return None
 
     def skip_bitfield_width(self):
+        """Skip a ``: width`` bit-field suffix; return whether there was one."""
         if self.current_token[0] != "COLON":
-            return
+            return False
 
         self.eat("COLON")
         if self.current_token[0] not in {"COMMA", "SEMICOLON", "EOF"}:
             self.parse_expression()
+        return True
 
     def constructor_initializer_name(self, vtype):
         return " ".join(

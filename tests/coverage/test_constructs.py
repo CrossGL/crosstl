@@ -117,6 +117,53 @@ def test_only_the_kernel_languages_list_a_device_global():
     assert "device float acc[64] = {1.0, 2.0, 4.0};" in crossgl_probe.source
 
 
+def test_only_the_languages_with_a_union_type_list_union():
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if "union" in {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"cuda", "hip", "metal", "opencl", "rust"}
+    declarations = {
+        "cuda": "union Bits {\n    float f;\n    unsigned int u;\n};",
+        "hip": "union Bits {\n    float f;\n    unsigned int u;\n};",
+        "metal": "union Bits {\n    float f;\n    uint u;\n};",
+        "opencl": "typedef union {\n    float f;\n    uint u;\n} Bits;",
+        "rust": "#[repr(C)]\nunion Bits {\n    f: f32,\n    u: u32,\n}",
+    }
+    for language, declaration in declarations.items():
+        source = probes.build(construct_feature(language, "union"), language).source
+        assert declaration in source, language
+        # The float member is written, then the integer member is read and written, then the float member is read.
+        write, reinterpret, read = (
+            source.index(text)
+            for text in (
+                "f: fin[i]" if language == "rust" else "b.f = fin[i];",
+                "b.u = (b.u >> 16)",
+                "outp[i] = b.f;",
+            )
+        )
+        assert write < reinterpret < read, language
+    crossgl_probe = probes.build(construct_feature("metal", "union"), "crossgl")
+    assert (
+        "@union_layout(4, 4, little_endian, metal)\n    struct Bits {"
+        in crossgl_probe.source
+    )
+    assert crossgl_probe.source.count("@union_member_layout(0, 4, 4)") == 2
+
+
+def test_the_union_probe_tells_shared_storage_from_separate_members():
+    import numpy as np
+
+    fin = execution.inputs("fin")
+    bits = fin.view(np.uint32)
+    shared = ((bits >> 16) | np.uint32(0x3F800000)).view(np.float32)
+    # Members stored apart: the integer reads as zero and the float keeps its input.
+    separate = fin
+    assert ((shared >= 1.0) & (shared < 2.0)).all()
+    assert (shared != separate).all()
+
+
 def test_only_opencl_lists_its_vector_component_names():
     names = {"vector-halves", "numeric-components"}
     listing = {

@@ -41,6 +41,7 @@ __all__ = [
     "EmittedBufferLayouts",
     "KernelBufferLayoutError",
     "KernelBufferLayouts",
+    "record_alignment",
 ]
 
 HLSL_STRUCTURED = "hlsl_structured"
@@ -88,13 +89,15 @@ class _Type:
     name: str = ""
     members: tuple = ()
     alignment: int = 0  # a struct's declared alignment, 0 when none
+    union: bool = False  # a struct whose members all start at offset 0
 
 
 @dataclass
 class _Struct:
     members: tuple  # ((CrossGL type text, name), ...)
     alignment: int = 0
-    unmodelled: str = ""  # why this module cannot place the struct, empty when it can
+    unmodelled: str = ""  # why this module cannot place the struct's declared layout, empty when it can
+    union: bool = False
 
 
 def _round(value, alignment):
@@ -155,9 +158,14 @@ def _place(node, rules, packed_structs, packed=False):
         size, member_alignment, member_leaves = _place(
             member, rules, packed_structs, pack and _packable(member)
         )
-        offset = _round(offset, member_alignment)
-        leaves.extend((offset + start, width) for start, width in member_leaves)
-        offset += size
+        if node.union:
+            # The members of a union overlap from byte 0; the union is as large as its largest member.
+            leaves.extend(member_leaves)
+            offset = max(offset, size)
+        else:
+            offset = _round(offset, member_alignment)
+            leaves.extend((offset + start, width) for start, width in member_leaves)
+            offset += size
         alignment = max(alignment, member_alignment)
     if rules in ("cuda", "cuda32"):
         alignment = max(alignment, node.alignment)
@@ -167,6 +175,27 @@ def _place(node, rules, packed_structs, packed=False):
 def _layout(node, rules, packed_structs=frozenset()):
     size, alignment, leaves = _place(node, rules, packed_structs)
     return _round(size, alignment), leaves
+
+
+def record_alignment(attributes):
+    """``(alignment, unmodelled)`` of a record's ``__align__``, ``alignas`` and ``aligned`` attributes.
+
+    ``alignment`` is the largest declared alignment, 0 when there is none, and ``unmodelled`` is the first attribute
+    that changes the record's layout in a way this module does not model (``packed``, or an alignment that is not a
+    literal), empty when there is none.
+    """
+    alignment, unmodelled = 0, ""
+    for attribute in attributes or ():
+        text = str(attribute).strip()
+        lowered = text.lower()
+        if "align" not in lowered and "packed" not in lowered:
+            continue
+        match = _ALIGNMENT.match(text)
+        if match is None:
+            unmodelled = unmodelled or text
+            continue
+        alignment = max(alignment, int(match.group(1)))
+    return alignment, unmodelled
 
 
 def _struct_names(node):
@@ -201,21 +230,12 @@ class KernelBufferLayouts:
 
     @staticmethod
     def _struct(members, attributes, union=False):
-        alignment, unmodelled = 0, "it is a union" if union else ""
-        for attribute in attributes or ():
-            text = str(attribute).strip()
-            lowered = text.lower()
-            if "align" not in lowered and "packed" not in lowered:
-                continue
-            match = _ALIGNMENT.match(text)
-            if match is None:
-                unmodelled = (
-                    unmodelled
-                    or f"its layout attribute {text} has no CrossGL buffer layout"
-                )
-                continue
-            alignment = max(alignment, int(match.group(1)))
-        return _Struct(tuple(members), alignment, unmodelled)
+        alignment, unmodelled = record_alignment(attributes)
+        if unmodelled:
+            unmodelled = (
+                f"its layout attribute {unmodelled} has no CrossGL buffer layout"
+            )
+        return _Struct(tuple(members), alignment, unmodelled, bool(union))
 
     def plan(self, elements):
         """Decide the layout of every ``(context, element type text)`` in ``elements``.
@@ -318,14 +338,45 @@ class KernelBufferLayouts:
         )
         if not members:
             raise _Unknown(text)
-        return _Type("struct", name=text, members=members, alignment=struct.alignment)
+        return _Type(
+            "struct",
+            name=text,
+            members=members,
+            alignment=struct.alignment,
+            union=struct.union,
+        )
+
+    def cuda_layout(self, text):
+        """``((size, alignment), "")`` of CrossGL type ``text`` in the source's layout, or ``(None, reason)``.
+
+        ``reason`` names a part of the type this module does not model, a struct layout attribute it does not
+        model, or the dependence of the layout on the alignment of a four-component 64-bit vector.
+        """
+        try:
+            node = self._type(self._key(text), ())
+        except _Unknown:
+            return None, f"its type {text} has no modelled {self.label} layout"
+        for name in _struct_names(node):
+            if self.structs[name].unmodelled:
+                return (
+                    None,
+                    f"its type holds struct {name}, and {self.structs[name].unmodelled}",
+                )
+        size, alignment, _leaves = _place(node, "cuda", frozenset())
+        if (size, alignment) != _place(node, "cuda32", frozenset())[:2]:
+            return None, (
+                f"its {self.label} layout depends on the alignment of a four-component 64-bit vector, which is 16 "
+                "bytes for double4 and 32 bytes for double4_32a"
+            )
+        return (size, alignment), ""
 
     def _refuse(self, context, reason):
         raise KernelBufferLayoutError(f"{context}: {reason}", target="cgl")
 
     def _check_modelled(self, context, node):
         for name in _struct_names(node):
-            reason = self.structs[name].unmodelled
+            struct = self.structs[name]
+            reason = "it is a union" if struct.union else struct.unmodelled
             if reason:
                 self._refuse(context, f"its element holds struct {name}, and {reason}")
         cuda = _layout(node, "cuda")

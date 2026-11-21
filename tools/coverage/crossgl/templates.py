@@ -83,6 +83,7 @@ from ..templates.subgroups import CROSSGL as SUBGROUPS
 from ..templates.tasks import CROSSGL as TASKS
 from ..templates.tessellation import CROSSGL as TESSELLATION
 from ..templates.textures import CROSSGL as TEXTURES
+from ..templates.unions import CROSSGL as UNIONS
 from ..templates.values import BASIS
 from ..templates.values import FAMILY as VALUES
 from ..templates.vectors import GLSL as VECTORS
@@ -292,6 +293,7 @@ CONSTRUCTS: dict[str, Template] = {
     **COMPONENTS,
     **POINTERS,
     **MEMORY,
+    **UNIONS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

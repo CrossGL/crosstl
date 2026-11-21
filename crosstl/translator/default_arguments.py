@@ -104,9 +104,11 @@ def _iter_functions(ast):
         if _node_class_name(function) == "FunctionNode":
             yield function
     for stage in getattr(ast, "stages", {}).values():
-        for function in getattr(stage, "functions", []) or []:
-            if _node_class_name(function) == "FunctionNode":
-                yield function
+        # A CrossGL stage block keeps the helpers declared inside it in ``local_functions``.
+        for attribute in ("functions", "local_functions"):
+            for function in getattr(stage, attribute, []) or []:
+                if _node_class_name(function) == "FunctionNode":
+                    yield function
 
 
 def _node_class_name(node):

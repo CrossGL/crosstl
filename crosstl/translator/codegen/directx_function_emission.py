@@ -375,7 +375,7 @@ class HLSLFunctionEmissionMixin:
             )
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
-            if "[" in raw_return_type:
+            if "[" in self.hlsl_alias_resolved_type_text(raw_return_type):
                 fixed_array_return_type = self.hlsl_fixed_array_return_type_name(
                     raw_return_type
                 )

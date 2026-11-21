@@ -33,6 +33,7 @@ from .generic_struct_utils import (
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
 )
+from .glsl_fragment_interlock import plan_fragment_interlock
 from .glsl_narrow_vectors import (
     narrow_scalars_promote,
 )
@@ -370,6 +371,9 @@ class OpenGLProgramPreparationMixin:
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
