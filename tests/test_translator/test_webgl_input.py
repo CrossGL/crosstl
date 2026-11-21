@@ -149,4 +149,5 @@ def test_webgl_round_trip_is_glsl_es_300_that_glslang_accepts(tmp_path, name, so
 )
 def test_webgl_source_to_glsl_output_is_accepted(tmp_path, name, source):
     translated = _translate(_write(tmp_path, name, source), "opengl")
+    assert translated.startswith("#version 330 core\n")
     _glslang(tmp_path, "translated-" + name, translated)
