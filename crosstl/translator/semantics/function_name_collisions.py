@@ -101,6 +101,11 @@ def _walk(node, seen):
                     yield from _walk(item, seen)
 
 
+def _call_roots(program, functions):
+    """The function bodies, then the module and its stages, whose initializers may call a function too."""
+    return [function for function, _ in functions] + [program, *_stages(program)]
+
+
 def _rename_call(node, old_name, new_name):
     for field in ("function", "name"):
         callee = getattr(node, field, None)
@@ -175,8 +180,8 @@ def names_called_with_other_arity(program) -> set:
     arities = _function_arities(functions, names)
     found = set()
     seen = set()
-    for function, _ in functions:
-        for node in _walk(function, seen):
+    for root in _call_roots(program, functions):
+        for node in _walk(root, seen):
             if isinstance(node, A.FunctionCallNode):
                 name = call_name(node)
                 if name in arities and _call_arity(node) not in arities[name]:
@@ -205,8 +210,8 @@ def rename_functions(program, names, *, by_arity=False, keep_calls=frozenset()) 
         if not entry and function.name in renamed:
             function.name = renamed[function.name]
     seen = set()
-    for function, _ in functions:
-        for node in _walk(function, seen):
+    for root in _call_roots(program, functions):
+        for node in _walk(root, seen):
             if isinstance(node, A.FunctionCallNode) and call_name(node) in renamed:
                 old_name = call_name(node)
                 if by_arity and (
