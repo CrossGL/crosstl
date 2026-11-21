@@ -25,6 +25,7 @@ from .metal_exact_lookups import (
 )
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_invariant_position import metal_invariant_attribute_suffix
+from .metal_raster_order_groups import metal_raster_order_group_attribute
 from .metal_signed_builtins import metal_signed_builtin_parameter_name
 from .metal_varyings import (
     is_metal_varying_builtin,
@@ -919,9 +920,20 @@ class MetalStageInterfaceMixin:
         return metal_semantic_key(self, semantic)
 
     def append_global_resource_parameters(
-        self, params_str, func_name=None, func=None, filter_writable_textures=False
+        self,
+        params_str,
+        func_name=None,
+        func=None,
+        filter_writable_textures=False,
+        shader_type=None,
     ):
         resource_params = []
+
+        def ordered(variable, declaration):
+            return metal_raster_order_group_attribute(
+                variable, shader_type, declaration
+            )
+
         dependencies = None
         entry_point_dependencies = (
             self.entry_point_global_resource_dependencies(func)
@@ -972,7 +984,10 @@ class MetalStageInterfaceMixin:
                     address_space,
                     buffer_variable,
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.append(
+                    f"{declaration} [[buffer({i})]]"
+                    f"{ordered(buffer_variable, declaration)}"
+                )
         if self.texture_variables:
             for (
                 texture_variable,
@@ -992,7 +1007,10 @@ class MetalStageInterfaceMixin:
                     texture_name,
                     array_size,
                 )
-                resource_params.append(f"{declaration} [[texture({i})]]")
+                resource_params.append(
+                    f"{declaration} [[texture({i})]]"
+                    f"{ordered(texture_variable, declaration)}"
+                )
         if self.acceleration_structure_variables:
             for (
                 acceleration_structure_variable,
@@ -1068,7 +1086,8 @@ class MetalStageInterfaceMixin:
                     buffer_type, buffer_name, array_size, buffer_variable
                 )
                 resource_params.extend(
-                    expand_entry_buffer_array(
+                    parameter + ordered(buffer_variable, declaration)
+                    for parameter in expand_entry_buffer_array(
                         self,
                         declaration,
                         i,
@@ -1131,7 +1150,8 @@ class MetalStageInterfaceMixin:
                     block, buffer_name, array_size
                 )
                 resource_params.extend(
-                    expand_entry_buffer_array(
+                    parameter + ordered(buffer_variable, declaration)
+                    for parameter in expand_entry_buffer_array(
                         self,
                         declaration,
                         i,

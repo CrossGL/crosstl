@@ -1163,6 +1163,15 @@ float {scalar}(float base, float exponent) {{
             elif name == "attribute" and len(args) == 1:
                 # A vertex attribute index is the input location every target binds by.
                 out = f"location({args[0]})"
+            elif (
+                context_kind == "parameter"
+                and name == "raster_order_group"
+                and "color" not in attr_names
+            ):
+                # A buffer or texture argument in any group orders its accesses between overlapping fragments.
+                # CrossGL has one such order (metal_raster_order_groups.py), which orders at least what the Metal
+                # groups order. A colour attachment input keeps its group with its imageblock data.
+                out = "rasterizer_ordered"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
