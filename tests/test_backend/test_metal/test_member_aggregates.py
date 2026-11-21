@@ -89,31 +89,43 @@ def test_unnamed_member_aggregates_translate_like_named_ones(tmp_path, backend):
 
 
 @pytest.mark.parametrize(
-    "member",
+    ("member", "promoted"),
     (
-        "union { float4 data; float3 center; };",
-        "struct { float x; float y; };",
-        "union { float4 data; struct { float xyz[3]; float radius; }; };",
+        ("union { float4 data; float3 center; };", ("data", "center")),
+        ("struct { float x; float y; };", ("x", "y")),
+        (
+            "union { float4 data; struct { float xyz[3]; float radius; }; };",
+            ("data", "xyz", "radius"),
+        ),
     ),
 )
-def test_anonymous_member_aggregate_is_refused_with_a_code(member):
+def test_anonymous_member_aggregate_is_held_by_a_reserved_member(member, promoted):
     source = f"struct Record {{ float w; {member} }};"
-    with pytest.raises(MetalAnonymousMemberRefusal) as refusal:
-        MetalToCrossGLConverter().generate(_parse(source))
+    record = _parse(source)
+    outer = next(struct for struct in record.structs if struct.name == "Record")
 
-    assert refusal.value.code == "project.translate.metal-anonymous-member-unsupported"
-    assert "struct Record" in str(refusal.value)
-    assert refusal.value.span is not None
+    assert [member.name for member in outer.members] == [
+        "w",
+        "__crossgl_unnamed_member_1",
+    ]
+    assert outer.members[1].anonymous_aggregate_member
+    crossgl = MetalToCrossGLConverter().generate(record)
+    assert "__crossgl_unnamed_member_1;" in crossgl
+    for name in promoted:
+        assert re.search(rf"\b{name}\b", crossgl)
 
 
-def test_anonymous_member_union_refuses_translation(tmp_path):
+def test_anonymous_member_union_translates_through_its_reserved_member(tmp_path):
     source = KERNEL.format(
         declaration="struct Record { union { float4 data; float3 center; }; };",
         expression="records[i].data.w",
     )
-    for backend in ("cgl", "metal", "directx", "opengl", "vulkan"):
-        with pytest.raises(MetalAnonymousMemberRefusal):
-            _translate(tmp_path, source, backend)
+    crossgl = _translate(tmp_path, source, "cgl")
+    metal = _translate(tmp_path, source, "metal")
+
+    assert "buffer_load(records, i).__crossgl_unnamed_member_1.data.w" in crossgl
+    assert "records[i].__crossgl_unnamed_member_1.data.w" in metal
+    assert re.search(r"^union \w+ \{$", metal, re.M)
 
 
 GGML_BLOCK_Q4_1 = """
@@ -133,13 +145,26 @@ typedef struct {
 """
 
 
-def test_ggml_block_with_an_anonymous_union_is_refused_not_shrunk():
+def test_ggml_block_with_an_anonymous_union_keeps_its_layout():
     # Reduced from ggml/src/ggml-common.h (llama.cpp e3471b3e), included by ggml-metal.metal. The importer used
-    # to drop the union, so block_q4_1 lost d, m and dm and shrank from 20 to 16 bytes.
-    with pytest.raises(MetalAnonymousMemberRefusal) as refusal:
-        MetalToCrossGLConverter().generate(_parse(GGML_BLOCK_Q4_1))
+    # to drop the union, so block_q4_1 lost d, m and dm and shrank from 20 to 16 bytes, and then refused it.
+    crossgl = MetalToCrossGLConverter().generate(_parse(GGML_BLOCK_Q4_1))
 
-    assert "anonymous union member" in str(refusal.value)
+    union = re.search(
+        r"@union_layout\((\d+), (\d+), little_endian, metal\)\s*// Structs\s*struct (\w+) \{(.*?)\}",
+        crossgl,
+        re.S,
+    )
+    assert union is not None and union.group(1, 2) == ("4", "4")
+    assert "@union_member_layout(0, 4, 2)" in union.group(4)
+    assert "@union_member_layout(0, 4, 4) f16vec2 dm;" in union.group(4)
+    block = re.search(r"struct block_q4_1 \{(.*?)\}", crossgl, re.S).group(1)
+    assert block.split() == [
+        union.group(3),
+        "__crossgl_unnamed_member_1;",
+        "uint8[16]",
+        "qs;",
+    ]
 
 
 def test_gnu_extension_prefix_on_a_named_member_union_is_consumed():

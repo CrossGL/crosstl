@@ -935,7 +935,8 @@ class SlangCodeGen(
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         constant = bool(qualifiers & {"const", "constant"})
-        if not (constant or "static" in qualifiers) or qualifiers & {
+        private = bool(qualifiers & {"private", "static", "thread"})
+        if not (constant or private) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",

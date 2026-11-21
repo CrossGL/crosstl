@@ -113,13 +113,13 @@ from .generic_struct_utils import (
     collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
-from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_call_helpers import emit_glsl_call_helpers
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_depth_layout import entry_depth_redeclarations
 from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
@@ -134,13 +134,13 @@ from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_program_requirements import finish_glsl_program_requirements
 from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
 from .glsl_refusals import input_attachment_refusal_reason
-from .glsl_shadow_lod import require_shadow_lod_extension
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -3782,6 +3782,7 @@ class GLSLCodeGen(
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
         code += invariant_builtin_redeclarations(self, target_stage)
+        code += entry_depth_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -4567,15 +4568,7 @@ class GLSLCodeGen(
         )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
-        code = self.ensure_glsl_version_supports_generated_layouts(code)
-        if getattr(self, "glsl_shadow_lod_extension_used", False):
-            code = require_shadow_lod_extension(code)
-        code = self.ensure_glsl_formatted_image_load_support(code)
-        code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(
-            code, getattr(self, "glsl_stage_builtin_extensions", ())
-        )
-        return self.ensure_glsl_int64_support(code)
+        return finish_glsl_program_requirements(self, code)
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
@@ -9775,7 +9768,7 @@ class GLSLCodeGen(
             return "shared "
         if is_compile_time:
             return "const "
-        if "static" in qualifiers or "thread" in qualifiers:
+        if qualifiers & {"private", "static", "thread"}:
             # Static and thread-address-space globals are private to each
             # invocation, which is what a GLSL global without a storage
             # qualifier is.
