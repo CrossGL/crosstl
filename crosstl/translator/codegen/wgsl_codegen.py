@@ -842,6 +842,7 @@ class WGSLCodeGen(
 
     def __init__(self):
         self._current_stage_name = None
+        self._helper_stage_names = {}
         self._current_workgroup_size = None
         self._workgroup_size_overrides = WorkgroupSizeOverrides(None)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}

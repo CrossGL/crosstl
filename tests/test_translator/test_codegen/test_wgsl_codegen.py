@@ -5180,6 +5180,12 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
                 return;
             }
         }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                sync();
+                return vec4(1.0);
+            }
+        }
     }
     """
 
@@ -5187,7 +5193,7 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
         ValueError,
         match=(
             "WGSL target does not support barrier\\(\\) inside helper function "
-            "sync yet"
+            "sync, which is not reached only from compute entry points"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
