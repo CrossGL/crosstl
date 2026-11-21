@@ -1193,5 +1193,10 @@ float {scalar}(float base, float exponent) {{
                 enumerator_values=getattr(self, "metal_enum_index_values", {}),
             )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
-            return "gl_FragDepth"
+            # MSL 3.2 section 5.2.3.5: depth(greater) and depth(less) promise the direction the shader moves
+            # the depth in. CrossGL states that promise as a conservative depth layout next to gl_FragDepth.
+            layout = args[0].lower()
+            return (
+                "gl_FragDepth" if layout == "any" else f"gl_FragDepth @depth_{layout}"
+            )
         return None
