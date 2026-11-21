@@ -3,6 +3,7 @@
 from ...assignment_operands import grouped_operand
 from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
+from ..bit_intrinsics import format_bit_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import refuse_directed_rounding
 from ..pointer_math_import import format_pointer_output_call
@@ -85,6 +86,11 @@ class CudaImportIntrinsicMixin:
                 return pointer_output_call
 
         args = [self.visit(arg) for arg in node.args]
+        # Names with a double underscore are reserved to the implementation (C++ [lex.name]), so these are the
+        # intrinsics even where a program function shares the name.
+        bit_intrinsic = format_bit_intrinsic(self, raw_name, node.args, args, "CUDA")
+        if bit_intrinsic is not None:
+            return bit_intrinsic
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
             # The type operand of ``sizeof(let)`` names the struct as its declaration does.
             args = [
@@ -458,12 +464,8 @@ class CudaImportIntrinsicMixin:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__dp4a" and len(args) == 3:
             return f"(dot4I8Packed({args[0]}, {args[1]}) + {args[2]})"
-        if function_name == "__byte_perm" and len(args) == 3:
-            return self.format_cuda_byte_perm_intrinsic(args[0], args[1], args[2])
         if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
-        if function_name in {"__clz", "__clzll"} and len(args) == 1:
-            return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"bitfieldReverse({args[0]})"
         if function_name in {"__hadd", "__uhadd"} and len(args) == 2:
@@ -480,13 +482,6 @@ class CudaImportIntrinsicMixin:
         if function_name == "__usad4" and len(args) in {2, 3}:
             bias = args[2] if len(args) == 3 else "0u"
             return self.format_cuda_usad4_intrinsic(args[0], args[1], bias)
-        if function_name in {
-            "__funnelshift_l",
-            "__funnelshift_lc",
-            "__funnelshift_r",
-            "__funnelshift_rc",
-        }:
-            return self.format_cuda_integer_intrinsic_diagnostic(function_name, args)
         return None
 
     def format_cuda_usad4_intrinsic(self, left, right, bias):
@@ -515,30 +510,6 @@ class CudaImportIntrinsicMixin:
         if shift == 0:
             return f"({operand} & 0xffu)"
         return f"(({operand} >> {shift}) & 0xffu)"
-
-    def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
-        return self.refuse_import(
-            f"CUDA integer intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
-            "0",
-        )
-
-    def format_cuda_byte_perm_intrinsic(self, left, right, selector):
-        normalized_selector = self.normalize_cuda_integer_literal(selector)
-        if normalized_selector in {"0x0123", "0x123"}:
-            return self.format_cuda_byte_swap_32(left)
-
-        return self.format_cuda_integer_intrinsic_diagnostic(
-            "__byte_perm", [left, right, selector]
-        )
-
-    def format_cuda_byte_swap_32(self, value):
-        operand = self.format_bitwise_operand(value)
-        return (
-            f"(((({operand} & 0x000000ffu) << 24) | "
-            f"(({operand} & 0x0000ff00u) << 8)) | "
-            f"((({operand} & 0x00ff0000u) >> 8) | "
-            f"(({operand} & 0xff000000u) >> 24)))"
-        )
 
     def normalize_cuda_integer_literal(self, value):
         text = str(value).strip().replace("'", "").lower()
@@ -588,8 +559,11 @@ class CudaImportIntrinsicMixin:
 
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
+        # fdivide and fdividef return a / b unless fast math is on (__clang_cuda_math.h); __fdividef is the fast form.
         if (
             function_name in {
+                "fdivide",
+                "fdividef",
                 "__fdividef",
                 "__fdiv_rd",
                 "__fdiv_rn",

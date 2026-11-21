@@ -2061,8 +2061,11 @@ def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():
     assert body[0].right.name == "__clz"
     assert isinstance(body[1].right, FunctionCallNode)
     assert body[1].right.name == "__clzll"
-    assert "out[0] = countLeadingZeros(x);" in crossgl
-    assert "out[1] = countLeadingZeros(y);" in crossgl
+    assert "out[0] = (31 - findMSB(u32(x)));" in crossgl
+    assert (
+        "out[1] = ((u32(u64(y) >> 32u) != 0u) ? (31 - findMSB(u32(u64(y) >> 32u))) : "
+        "(63 - findMSB(u32(u64(y)))));"
+    ) in crossgl
     assert "__clz" not in crossgl
     assert "__clzll" not in crossgl
 
@@ -2714,9 +2717,17 @@ def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
 
     assert first_assignment.right.name == "__byte_perm"
     assert "y[0] = " in crossgl
-    assert "((s & 0xf) == 0)" in crossgl
-    assert "((s >> 12) & 0xf)" in crossgl
-    assert "y[1] = (((x1 >> 24) & 0xffu)" in crossgl
+    # Each selector nibble keeps its low three bits, as HIP's __byte_perm masks it with 7.
+    assert (
+        "((((u32(s) & 7u) < 4u) ? u32(x1) : u32(x2)) >> (((u32(s) & 7u) & 3u) * 8u))"
+        in crossgl
+    )
+    assert "((u32(s) >> 12u) & 7u)" in crossgl
+    assert "& 0xf)" not in crossgl
+    assert (
+        "y[1] = (((u32(x1) >> 24u) & 0xffu) | (((u32(x1) >> 16u) & 0xffu) << 8u) | "
+        "(((u32(x1) >> 8u) & 0xffu) << 16u) | ((u32(x1) & 0xffu) << 24u));"
+    ) in crossgl
     assert "= __byte_perm(" not in crossgl
 
 
@@ -2743,22 +2754,14 @@ def test_external_rocm_hip_tests_funnelshift_intrinsics_codegen_reparse():
     assert body[2].right.name == "__funnelshift_lc"
     assert body[3].right.name == "__funnelshift_r"
     assert body[4].right.name == "__funnelshift_rc"
-    assert (
-        "l_out[i] = u32((((u64(0xfacefeedu) << 32u) | "
-        "u64(0xdeadbeefu)) << (i & 31u)) >> 32u);"
-    ) in crossgl
-    assert (
-        "lc_out[i] = u32((((u64(0xfacefeedu) << 32u) | "
-        "u64(0xdeadbeefu)) << min(i, 32u)) >> 32u);"
-    ) in crossgl
-    assert (
-        "r_out[i] = u32(((u64(0xfacefeedu) << 32u) | "
-        "u64(0xdeadbeefu)) >> (i & 31u));"
-    ) in crossgl
-    assert (
-        "rc_out[i] = u32(((u64(0xfacefeedu) << 32u) | "
-        "u64(0xdeadbeefu)) >> min(i, 32u));"
-    ) in crossgl
+    # Operands without side effects stay in 32-bit words, which WGSL and GLSL ES also have.
+    left = "((0xfacefeedu << (u32(i) & 31u)) | ((0xdeadbeefu >> 1u) >> (31u - (u32(i) & 31u))))"
+    right = "((0xdeadbeefu >> (u32(i) & 31u)) | ((0xfacefeedu << 1u) << (31u - (u32(i) & 31u))))"
+    assert f"l_out[i] = {left};" in crossgl
+    assert f"lc_out[i] = ((u32(i) >= 32u) ? 0xdeadbeefu : {left});" in crossgl
+    assert f"r_out[i] = {right};" in crossgl
+    assert f"rc_out[i] = ((u32(i) >= 32u) ? 0xfacefeedu : {right});" in crossgl
+    assert "u64" not in crossgl
     assert "__funnelshift_" not in crossgl
 
 

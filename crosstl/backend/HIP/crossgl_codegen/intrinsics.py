@@ -2,6 +2,7 @@
 
 import re
 
+from ...CUDA.bit_intrinsics import format_bit_intrinsic
 from ...CUDA.directed_rounding import refuse_directed_rounding
 from ...CUDA.pointer_math_import import format_pointer_output_call
 from ..HipAst import (
@@ -62,6 +63,11 @@ class HipIntrinsicMixin:
 
         args = [self.visit(arg) for arg in raw_args]
         args_str = ", ".join(args)
+        # Names with a double underscore are reserved to the implementation (C++ [lex.name]), so these are the
+        # intrinsics even where a program function shares the name.
+        bit_intrinsic = format_bit_intrinsic(self, func_name, raw_args, args, "HIP")
+        if bit_intrinsic is not None:
+            return bit_intrinsic
 
         make_unique = self.format_make_unique_call(func_name, args)
         if make_unique is not None:
