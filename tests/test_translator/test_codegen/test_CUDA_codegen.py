@@ -20868,3 +20868,23 @@ def test_fixed_width_integers_include_cstdint(tmp_path):
     assert "uint16_t" in cuda_code
     assert "uint8_t" in cuda_code
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_f16vec2_constructor_from_vec2_uses_float22half2_rn():
+    """Regression test for Issue #4598: vec2 to f16vec2 lowering uses __float22half2_rn."""
+    source_code = """
+    shader main {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float data[];
+            void main() {
+                vec2 v = vec2(data[0], data[1]);
+                f16vec2 g = f16vec2(v);
+                data[2] = float(g.x + g.y);
+            }
+        }
+    }
+    """
+    ast = Parser(Lexer(source_code).tokens).parse()
+    cuda_code = CudaCodeGen().generate(ast)
+    assert "__float22half2_rn(v)" in cuda_code

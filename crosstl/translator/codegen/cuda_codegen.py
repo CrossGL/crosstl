@@ -1052,6 +1052,11 @@ class CudaCodeGen(
             arg_type = self.type_name_string(self.expression_result_type(raw_args[0]))
             if arg_type in {"vec2<f16>", "half2", "f16vec2"}:
                 return args[0]
+            vector_info = self.vector_type_info(arg_type)
+            if vector_info and len(vector_info["components"]) == 2:
+                if vector_info["component_type"] == "float":
+                    return f"__float22half2_rn({args[0]})"
+                return f"__float22half2_rn(make_float2(static_cast<float>({args[0]}.x), static_cast<float>({args[0]}.y)))"
             return f"__float2half2_rn({args[0]})"
 
         return f"__floats2half2_rn({args[0]}, {args[1]})"

@@ -14885,3 +14885,22 @@ def test_hip_const_match_expression_local_stays_assignable():
     assert "int value;" in hip_code
     assert "value = 10;" in hip_code
     assert "value = -1;" in hip_code
+
+
+def test_f16vec2_constructor_from_vec2_uses_float22half2_rn_hip():
+    """Regression test for Issue #4598: vec2 to f16vec2 lowering uses __float22half2_rn on HIP."""
+    source_code = """
+    shader main {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float data[];
+            void main() {
+                vec2 v = vec2(data[0], data[1]);
+                f16vec2 g = f16vec2(v);
+                data[2] = float(g.x + g.y);
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    assert "__float22half2_rn(v)" in hip_code
