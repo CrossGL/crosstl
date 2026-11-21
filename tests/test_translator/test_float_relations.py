@@ -225,7 +225,8 @@ def test_isnormal_without_an_exact_lowering_is_refused(tmp_path, source):
 
 def test_a_source_defined_isnormal_keeps_its_calls(tmp_path):
     code = _translate(tmp_path, USER_ISNORMAL, "directx", suffix=".cgl")
-    assert "isnormal(data[0])" in code or "isnormal(data.Load(0))" in code
+    # DXC sent isnormal(data[0]) to its IsNormal intrinsic, so HLSL output renames the helper.
+    assert "isnormal_fn(data[0])" in code or "isnormal_fn(data.Load(0))" in code
     assert "isfinite" not in code
 
 
