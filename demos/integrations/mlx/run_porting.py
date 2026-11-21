@@ -532,15 +532,10 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 # Before #2256 these produced SPIR-V that dropped the construct, so they were never translated correctly.
 # binary_two.metal left this set when the exact binary16 fmod helper reached SPIR-V (#3981); it is part
 # of the clean Vulkan frontier again, so it must translate and pass the Vulkan toolchain.
-# random.metal's rbits union views a uint2 as uchar4[2]. Before #4782 SPIR-V wrote that union as a
-# struct with separate members, so the byte writes never reached the words; SPIR-V now refuses
-# sub-word union views until #4795 lowers them over the shared 32-bit words.
-MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {
-    MLX_RANDOM_SOURCE: (
-        "project.translate.vulkan-union-layout-unsupported",
-        "https://github.com/CrossGL/crosstl/issues/4795",
-    ),
-}
+# random.metal's rbits union views a uint2 as uchar4[2]. SPIR-V refused that sub-word view
+# (#4795) until #4800 lowered a union's uchar4 byte view over its 32-bit storage words, so
+# random.metal is part of the clean Vulkan frontier again and must pass the Vulkan toolchain.
+MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {}
 # LayerNorm also needs the SPIR-V lowering tracked in
 # https://github.com/CrossGL/crosstl/issues/2283, but its kernels take the host's
 # threadgroup size, so Vulkan refuses it first as a dynamic-workgroup source.
