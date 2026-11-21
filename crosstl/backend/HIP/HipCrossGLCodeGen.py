@@ -1592,16 +1592,19 @@ class HipToCrossGLConverter(
                 if width_limit == "WaveGetLaneCount()"
                 else f"(WaveGetLaneIndex() % {width_limit})"
             )
+            # Select the source lane first and read in every lane, as the
+            # mask-less __shfl_up/__shfl_down below do: the source lane is
+            # inactive in the lanes that take the other arm of ?: (#4569).
             if function_name == "__shfl_up_sync":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(({segment_lane} >= ({delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({delta}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() - ({delta})) : WaveGetLaneIndex()))"
                 )
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({segment_lane} + ({delta})) < {width_limit}) ? "
-                f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({delta}))) "
-                f": {value})"
+                f"(WaveGetLaneIndex() + ({delta})) : WaveGetLaneIndex()))"
             )
 
         if function_name == "__shfl_xor_sync":
@@ -1784,22 +1787,26 @@ class HipToCrossGLConverter(
         if member_name == "shfl":
             source_lane = f"(({lane} - {local_lane}) + {lane_arg})"
             return f"WaveReadLaneAt({value}, {source_lane})"
+        # The shuffle runs in every lane and only its source lane is selected; a
+        # source outside the tile reads the caller's own lane (#4569).
         if member_name == "shfl_down":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({local_lane} + ({lane_arg})) < {tile_size}) ? "
-                f"WaveReadLaneAt({value}, ({lane} + ({lane_arg}))) : {value})"
+                f"({lane} + ({lane_arg})) : {lane}))"
             )
         if member_name == "shfl_up":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"(({local_lane} >= ({lane_arg})) ? "
-                f"WaveReadLaneAt({value}, ({lane} - ({lane_arg}))) : {value})"
+                f"({lane} - ({lane_arg})) : {lane}))"
             )
 
         source_local_lane = f"({local_lane} ^ ({lane_arg}))"
         source_lane = f"(({lane} - {local_lane}) + {source_local_lane})"
         return (
-            f"(({source_local_lane} < {tile_size}) ? "
-            f"WaveReadLaneAt({value}, {source_lane}) : {value})"
+            f"WaveReadLaneAt({value}, "
+            f"(({source_local_lane} < {tile_size}) ? {source_lane} : {lane}))"
         )
 
     def format_unsupported_cooperative_group_expression(
