@@ -139,7 +139,9 @@ def test_semantic_spelling_reaches_the_glsl_tessellation_interface(
     _glslang(tmp_path, code, "tesc" if stage == "tessellation_control" else "tese")
 
 
-@pytest.mark.parametrize(("topology", "order"), [("triangle_cw", "cw"), ("triangle_ccw", "ccw")])
+@pytest.mark.parametrize(
+    ("topology", "order"), [("triangle_cw", "cw"), ("triangle_ccw", "ccw")]
+)
 def test_quad_patch_with_triangle_topology_takes_its_vertex_order(
     tmp_path, topology, order
 ):
@@ -156,11 +158,17 @@ def test_semantic_index_other_than_zero_is_still_refused(tmp_path):
     _translate(tmp_path, source, "opengl")
 
     with pytest.raises(Exception, match="SV_TessFactor1"):
-        _translate(tmp_path, _program(0).replace("@ SV_TessFactor;", "@ SV_TessFactor1;"), "opengl")
+        _translate(
+            tmp_path,
+            _program(0).replace("@ SV_TessFactor;", "@ SV_TessFactor1;"),
+            "opengl",
+        )
 
 
 def test_unrelated_system_value_on_a_patch_member_is_still_refused(tmp_path):
-    source = _program(0).replace("vec4 extra @ EXTRA;", "uint view @ SV_ViewportArrayIndex;")
+    source = _program(0).replace(
+        "vec4 extra @ EXTRA;", "uint view @ SV_ViewportArrayIndex;"
+    )
     source = source.replace("output.extra = patch[0].position;", "")
     source = source.replace("constants.extra", "patch[1].position")
 
