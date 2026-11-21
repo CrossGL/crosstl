@@ -153,7 +153,9 @@ NESTED_HAZARDS = [
 @pytest.mark.parametrize("statement", NESTED_HAZARDS)
 def test_a_hazard_under_any_statement_is_renamed(statement):
     # A program without a hazard skips the renamer, so the search must reach every declaration the renamer visits.
-    assert separate_initializer_scopes(_program(_nested(statement)), "cgl", "directx") == 1
+    assert (
+        separate_initializer_scopes(_program(_nested(statement)), "cgl", "directx") == 1
+    )
 
 
 def test_a_program_without_a_hazard_is_left_unchanged():
@@ -178,7 +180,5 @@ def _every_name(node):
             seen.add(id(item))
             if isinstance(getattr(item, "name", None), str):
                 names.append(item.name)
-            stack.extend(
-                reversed([v for k, v in vars(item).items() if k != "parent"])
-            )
+            stack.extend(reversed([v for k, v in vars(item).items() if k != "parent"]))
     return names
