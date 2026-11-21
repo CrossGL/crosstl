@@ -15,6 +15,7 @@ from ..storage_image_texels import (
     texel_attribute_arguments,
 )
 from .float_literals import check_float_literal_range
+from .slang_clock_import import SLANG_CLOCK_IMPORTS
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
@@ -2441,6 +2442,15 @@ class SlangToCrossGLConverter(
                 )
             ):
                 return CUDA_THREAD_BUILTINS[function_name]
+            if (
+                function_name in SLANG_CLOCK_IMPORTS
+                and not expr.args
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return SLANG_CLOCK_IMPORTS[function_name]
             if (
                 function_name == "saturate"
                 and len(expr.args) == 1
