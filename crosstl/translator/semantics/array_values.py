@@ -45,7 +45,9 @@ __all__ = [
     "hoist_array_constructors",
 ]
 
-_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\d*)\s*\]\s*")
+# ``element[size]``: the outermost size comes first, so ``float[2][3]`` has two ``float[3]`` elements (GLSL 4.60
+# section 4.1.9). A size that names a constant, ``float[N]``, is the number of elements written.
+_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\w*)\s*\]((?:\s*\[\s*\w*\s*\])*)\s*")
 # Targets whose generators build arrays only in aggregate initializers.
 _DECLARATION_ONLY_TARGETS = frozenset(
     {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "vulkan", "spirv"}
@@ -96,11 +98,37 @@ def array_constructor_shape(expr):
     """
     if not isinstance(expr, A.FunctionCallNode):
         return None
-    match = _ARRAY_CONSTRUCTOR.fullmatch(call_name(expr) or "")
+    match = _ARRAY_CONSTRUCTOR.fullmatch(
+        call_name(expr) or _indexed_type(expr.function)
+    )
     if match is None:
         return None
-    size = match.group(2)
-    return match.group(1), int(size) if size else len(expr.arguments or [])
+    size, inner = match.group(2), re.sub(r"\s+", "", match.group(3))
+    count = int(size) if size.isdigit() else len(expr.arguments or [])
+    return match.group(1) + inner, count
+
+
+def _indexed_type(callee):
+    """``float[2][3]`` for the callee the parser writes for that constructor, a built-in type name indexed with
+    literal or named sizes; ``""`` for any other callee, so a call through an indexed value is not one.
+    """
+    sizes = []
+    while isinstance(callee, A.ArrayAccessNode):
+        index = callee.index_expr
+        if isinstance(index, A.LiteralNode) and str(index.value).isdigit():
+            sizes.append(str(index.value))
+        elif isinstance(index, A.IdentifierNode) and index.name.isidentifier():
+            sizes.append(index.name)
+        else:
+            return ""
+        callee = callee.array_expr
+    if not sizes or not isinstance(callee, A.IdentifierNode):
+        return ""
+    match = _ARRAY_CONSTRUCTOR.fullmatch(callee.name)
+    base = match.group(1) if match else callee.name
+    if not base.isidentifier() or isinstance(_element_type(base), A.NamedType):
+        return ""
+    return callee.name + "".join(f"[{size}]" for size in reversed(sizes))
 
 
 def _shader_scope_variables(program):
@@ -333,7 +361,10 @@ class _Hoister:
         element, size = shape
         elements = list(constructor.arguments or [])
         location = getattr(constructor, "source_location", None)
-        spelled = f"{element}[{size}]"
+        # The outermost size is written first: two ``float[3]`` elements are ``float[2][3]``.
+        spelled = re.sub(
+            r"\w+", lambda base: f"{base.group()}[{size}]", element, count=1
+        )
         if slot.repeated:
             self._refuse(
                 f"array constructor '{spelled}' is evaluated on every iteration of a loop condition or update",

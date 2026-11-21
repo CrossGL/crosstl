@@ -1,0 +1,1 @@
+Metal, HLSL and SPIR-V output build an array constructor with several dimensions, `float[2][2](float[2](1.0, 2.0), ...)`, or one sized by a named constant, `float[N](...)`, as an initializer list, where Metal and HLSL output used to keep the constructor, which their compilers reject, and the SPIR-V generator refused it (#3679, #3553).
