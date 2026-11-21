@@ -1,4 +1,4 @@
-"""OpenCL C vector component selections and geometric built-ins that CrossGL spells differently.
+"""OpenCL C vector component selections that CrossGL spells differently.
 
 Component selection (OpenCL C 3.0 section 6.3.7). Besides ``.xyzw``, OpenCL C selects components by number
 (``v.s0``, ``v.S13``, with hexadecimal digits up to ``sF``) and by half (``.lo``, ``.hi``, ``.even``, ``.odd``).
@@ -18,10 +18,6 @@ with "invalid format for vector swizzle". The importer now writes each selection
 
 The halves depend on the vector's width, so the importer rewrites them only where it knows the selected
 expression's type; a member of a structure keeps its name.
-
-``cross`` (OpenCL C 3.0 section 6.15.6) also takes 4-component vectors, crossing their ``xyz`` components and
-returning ``w = 0``. CrossGL's ``cross`` takes 3-component vectors only, so a 4-component cross imports as
-``vec4<T>(cross(a.xyz, b.xyz), 0.0)``.
 """
 
 from __future__ import annotations
@@ -366,18 +362,3 @@ class OpenCLVectorComponentMixin:
             "trunc",
         }
     )
-
-    def format_opencl_cross_call(self, func_name, args):
-        """``vec4<T>(cross(a.xyz, b.xyz), 0)`` for OpenCL's 4-component ``cross``; None for other calls."""
-        if func_name != "cross" or len(args) != 2:
-            return None
-        crossgl_type = self.opencl_expression_crossgl_type(
-            args[0]
-        ) or self.opencl_expression_crossgl_type(args[1])
-        if self.opencl_crossgl_lanes(crossgl_type) != 4:
-            return None
-        scalar = self.opencl_crossgl_scalar(crossgl_type)
-        left = self.visit(args[0])
-        right = self.visit(args[1])
-        zero = "0.0" if scalar == "f32" else f"{scalar}(0.0)"
-        return f"{crossgl_type}(cross({left}.xyz, {right}.xyz), {zero})"

@@ -1,9 +1,8 @@
-"""OpenCL C numbered and half component selections, 4-component cross and constant-expression array extents.
+"""OpenCL C numbered and half component selections and constant-expression array extents.
 
 The importer copied ``.s01``, ``.hi`` and friends verbatim, which DXC rejected as "invalid format for vector
-swizzle"; passed a 4-component ``cross`` to CrossGL's 3-component one; and turned ``float s[N * 2]`` into an
-undeclared identifier. These were the OpenCL C input coverage cells numeric-components, vector-halves, cross and
-constant-array-size.
+swizzle", and turned ``float s[N * 2]`` into an undeclared identifier. These were the OpenCL C input coverage cells
+numeric-components, vector-halves and constant-array-size.
 """
 
 import re
@@ -127,21 +126,6 @@ def test_selections_crossgl_cannot_write_are_refused(statement, message):
         kernel_body(f"    {statement}")
 
 
-def test_cross_of_four_component_vectors_crosses_xyz_and_returns_zero_w():
-    body = flat(kernel_body("    q[i] = cross(v, q[i]);\n    float3 c = cross(t, t);"))
-    assert "q[i] = vec4<f32>(cross(v.xyz, q[i].xyz), 0.0);" in body
-    assert "var c: vec3<f32> = cross(t, t);" in body
-
-
-def test_double_cross_writes_a_double_zero():
-    body = flat(
-        kernel_body(
-            "    double4 d = (double4)(1.0);\n    d = cross(d, d);\n    a[i] = (float)d.z;"
-        )
-    )
-    assert "d = vec4<f64>(cross(d.xyz, d.xyz), f64(0.0));" in body
-
-
 @pytest.mark.parametrize(
     "text, value",
     [
@@ -196,7 +180,7 @@ void k(__global float* a, __global float4* q) {
     for (int j = 0; j < N * 2; j++) { s[j] = (float)j; }
     v.lo = v.odd;
     v.s13 = t.lo;
-    q[i] = cross(v, q[i]) + (float4)(v.s0, t.even, s[N * 2 - 1]);
+    q[i] = q[i] + (float4)(v.s0, t.even, s[N * 2 - 1]);
 }
 """
 

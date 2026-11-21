@@ -1006,9 +1006,6 @@ class OpenCLToCrossGLConverter(
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
-            cross = self.format_opencl_cross_call(func_name, raw_args)
-            if cross is not None:
-                return cross
             pointer_result = self.format_opencl_pointer_result_call(func_name, raw_args)
             if pointer_result is not None:
                 return pointer_result
