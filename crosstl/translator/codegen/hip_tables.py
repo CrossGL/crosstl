@@ -58,9 +58,6 @@ HIP_WAVE_UVEC4_RESULT_OPS = {
     "WaveActiveBallot",
     "WaveMatch",
 }
-HIP_WARP_SYNC_BUILTIN_ARITIES = {
-    "__shfl_down_sync": (3, 4),
-}
 HIP_BITCAST_FUNCTION_TARGETS = {
     "floatBitsToInt": "int",
     "floatBitsToUint": "uint",
@@ -271,6 +268,10 @@ HIP_TYPE_MAP = {
     "usamplerCubeArray": "hipTextureObject_t",
     "usampler2DMS": "hipTextureObject_t",
     "usampler2DMSArray": "hipTextureObject_t",
+    # A texel buffer is a texture object bound to linear memory (hipResourceTypeLinear).
+    "samplerBuffer": "hipTextureObject_t",
+    "isamplerBuffer": "hipTextureObject_t",
+    "usamplerBuffer": "hipTextureObject_t",
     "image1D": "hipSurfaceObject_t",
     "image1DArray": "hipSurfaceObject_t",
     "image2D": "hipSurfaceObject_t",

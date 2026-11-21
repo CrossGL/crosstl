@@ -1,10 +1,8 @@
 """Declarations in the CUDA to CrossGL converter: shaders, preprocessor lines, structs, enums, functions, kernels, variables, scoped name registries, packed launch arguments and shared and constant memory."""
 
-from ...device_globals import (
-    device_memory_declaration,
-    is_device_memory,
-)
+from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
+from ..array_extents import declare_enumerators, integral_constant_declaration_value
 from ..CudaAst import (
     CastNode,
     DesignatedInitializerNode,
@@ -149,6 +147,8 @@ class CudaImportDeclarationMixin:
         self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
+        # An enumerator is a constant an array extent can name (``float s[TILE * 2]``).
+        declare_enumerators(self.integer_constants, node)
         members = getattr(node, "members", None) or getattr(node, "variants", [])
         for member in members:
             if isinstance(member, tuple):
@@ -194,6 +194,10 @@ class CudaImportDeclarationMixin:
 
     def visit_VariableNode(self, node):
         self.register_variable_type(node.name, node.vtype)
+        self.integer_constants.declare(
+            node.name,
+            integral_constant_declaration_value(node, self.integer_constants),
+        )
 
         cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)
         if cuda_async_sync is not None:
@@ -340,10 +344,12 @@ class CudaImportDeclarationMixin:
 
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
+        self.integer_constants.push()
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+            self.integer_constants.pop()
 
     def push_warp_mask_value_scope(self):
         self.warp_mask_value_scopes.append({})
@@ -409,6 +415,8 @@ class CudaImportDeclarationMixin:
     def register_variable_type(self, name, type_name):
         if name:
             self.variable_type_scopes[-1][name] = type_name
+            # A declaration hides an integral constant of its name from array extents.
+            self.integer_constants.declare(name)
 
     def lookup_variable_type(self, name):
         for scope in reversed(self.variable_type_scopes):

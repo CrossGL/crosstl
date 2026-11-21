@@ -19,7 +19,7 @@ from crosstl.backend.import_refusals import HipImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
-from tests.lowering_refusal_helpers import hip_import_partial_output
+from tests.lowering_refusal_helpers import hip_import_partial_output, refused_hip_import
 
 # windows-latest ships an MSVC STL that refuses any Clang older than its own minimum (error STL1000) before
 # parsing a single declaration. _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is the STL's documented override; the
@@ -1700,11 +1700,40 @@ class TestHipCodeGen:
         assert "__ldlu" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_hip_ldg_non_address_operand_emits_expression_safe_diagnostic(self):
+    def test_hip_cache_load_family_pointer_operands_import_as_loads(self):
         code = """
-        __global__ void read_only(float* input, float* output) {
-            int idx = threadIdx.x;
-            output[idx] = __ldg(input + idx);
+        __global__ void cached_loads(const float* input, float* output, int idx) {
+            const float* ptr = input + idx;
+            output[0] = __ldg(input + idx);
+            output[1] = __ldg(input);
+            output[2] = __ldg(ptr);
+            output[3] = __ldca(input + idx);
+            output[4] = __ldcg(input + idx);
+            output[5] = __ldcs(input + idx);
+            output[6] = __ldlu(input + idx);
+            output[7] = __ldcv(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[0] = (*(input + idx));" in result
+        assert "output[1] = (*input);" in result
+        assert "output[2] = (*ptr);" in result
+        for slot in range(3, 8):
+            assert f"output[{slot}] = (*(input + idx));" in result
+        for name in ("__ldg", "__ldca", "__ldcg", "__ldcs", "__ldlu", "__ldcv"):
+            assert name not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_cache_load_with_two_arguments_is_still_refused(self):
+        code = """
+        __global__ void cached_loads(float* input, float* output, int idx) {
+            output[idx] = __ldg(input, idx);
         }
         """
         lexer = HipLexer(code)
@@ -1716,29 +1745,37 @@ class TestHipCodeGen:
             HipToCrossGLConverter().generate, ast
         )
 
-        assert "HIP load cache intrinsic __ldg((input + idx))" in message
-        assert "__ldg(input + idx)" not in result
+        assert "HIP load cache intrinsic __ldg(input, idx)" in message
+        assert "CrossGL loads take one address" in message
+        assert "__ldg(input, idx)" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_hip_cache_load_family_non_address_operand_emits_safe_diagnostic(self):
-        code = """
-        __global__ void cached_loads(float* input, float* output) {
-            int idx = threadIdx.x;
-            output[idx] = __ldcg(input + idx);
-        }
-        """
-        lexer = HipLexer(code)
-        tokens = lexer.tokenize()
-        parser = HipParser(tokens)
-        ast = parser.parse()
-
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
+    @pytest.mark.parametrize(
+        ("backend", "loads"),
+        [
+            ("cgl", ["o[0] = (*(x + i));", "o[1] = x[i];", "o[2] = (*x);"]),
+            ("opengl", ["o[0] = x[i];", "o[1] = x[i];", "o[2] = x[0];"]),
+            ("metal", ["o[0] = *(x + i);", "o[1] = x[i];", "o[2] = *x;"]),
+        ],
+    )
+    def test_hip_pointer_cache_loads_translate_to_targets(
+        self, tmp_path, backend, loads
+    ):
+        source = tmp_path / "ldg.hip"
+        source.write_text(
+            "#include <hip/hip_runtime.h>\n"
+            "__global__ void k(const float* x, float* o, int i) {\n"
+            "    o[0] = __ldg(x + i);\n"
+            "    o[1] = __ldg(&x[i]);\n"
+            "    o[2] = __ldg(x);\n"
+            "}\n"
         )
 
-        assert "HIP load cache intrinsic __ldcg((input + idx))" in message
-        assert "__ldcg(input + idx)" not in result
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        result = translate(str(source), backend=backend, format_output=False)
+
+        for load in loads:
+            assert load in result
+        assert "__ldg" not in result
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
@@ -1851,23 +1888,27 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        # up/down select the source lane and shuffle in every lane: a shuffle in
+        # one arm of ?: reads lanes that are inactive there (#4569).
         assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+            "WaveReadLaneAt(value, ((WaveGetLaneIndex() >= (delta)) ? "
+            "(WaveGetLaneIndex() - (delta)) : WaveGetLaneIndex()))"
         ) in result
         # The default width and an explicit warpSize are both the wavefront width, which is 32 or 64 lanes
         # depending on the device, so neither may become the constant 32.
         assert (
             result.count(
-                "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
-                "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+                "WaveReadLaneAt(value, (((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
+                "(WaveGetLaneIndex() + (delta)) : WaveGetLaneIndex()))"
             )
             == 2
         )
         assert (
-            "(((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value"
+            "WaveReadLaneAt(value, ((((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
+            "(WaveGetLaneIndex() + (1)) : WaveGetLaneIndex()))"
         ) in result
+        assert "? WaveReadLaneAt(" not in result
+        assert ": WaveReadLaneAt(" not in result
         assert "hip warp intrinsic __shfl_up_sync" not in result
         assert "hip warp intrinsic __shfl_down_sync" not in result
         assert "__shfl_up_sync" not in result
@@ -17257,6 +17298,71 @@ class TestHipCodeGen:
         assert "HIP delete[] h: CrossGL has no device heap" in message
         assert "HIP delete q: CrossGL has no device heap" in message
         assert "delete" not in result
+
+    def test_device_new_malloc_free_are_refused(self):
+        # Device-side heap allocation has no CrossGL form, so it is refused
+        # with the same typed diagnostic as `delete` (#4684) instead of
+        # being written as calls CrossGL does not define.
+        code = """
+        struct P { float x; __device__ P(float v) : x(v) {} };
+        __global__ void k(float* o) {
+            P* p = new P(o[0]);
+            float* a = new float(o[0]);
+            float* b = new float[4];
+            float* c = (float*)malloc(16);
+            free(c);
+            auto q = std::make_unique<float>(o[0]);
+            o[0] = p->x + a[0] + b[0] + *q;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        message = refused_hip_import(HipToCrossGLConverter().generate, ast)
+
+        assert "HIP new P(o[0]): CrossGL has no device heap" in message
+        assert "HIP new f32(o[0]): CrossGL has no device heap" in message
+        assert "HIP new[] f32(4): CrossGL has no device heap" in message
+        assert "HIP malloc(16): CrossGL has no device heap" in message
+        assert "HIP free(c): CrossGL has no device heap" in message
+        assert (
+            "HIP std::make_unique<float>(o[0]): CrossGL has no device heap" in message
+        )
+
+    def test_device_new_is_refused_through_translate(self, tmp_path):
+        # The import refusal fires before any target runs, so `--backend cgl`
+        # fails closed instead of emitting `new<P>(...)` (#4684).
+        source = tmp_path / "new.hip"
+        source.write_text(
+            "struct P { float x; __device__ P(float v) : x(v) {} };\n"
+            "__global__ void k(float* o) {\n"
+            "    P* p = new P(o[0]);\n"
+            "    o[1] = p->x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("cgl", "metal"):
+            with pytest.raises(HipImportRefused) as refusal:
+                translate(str(source), backend=backend)
+            assert refusal.value.code == HipImportRefused.code
+            assert "HIP new P(o[0]): CrossGL has no device heap" in str(refusal.value)
+
+    def test_user_defined_device_malloc_and_free_are_not_refused(self):
+        # A program's own __device__ malloc and free are ordinary calls, not
+        # device heap calls, so they translate (#4684).
+        code = """
+        __device__ float free(float v) { return v * 2.0f; }
+        __device__ float malloc(float v) { return v + 1.0f; }
+        __global__ void k(float* o) {
+            o[0] = free(o[0]) + malloc(o[1]);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "f32 free(f32 v) {" in result
+        assert "f32 malloc(f32 v) {" in result
+        assert "o[0] = (free(o[0]) + malloc(o[1]));" in result
 
     def test_public_rocprim_placement_new_conversion_reparse(self):
         # Upstream: ROCm/rocPRIM

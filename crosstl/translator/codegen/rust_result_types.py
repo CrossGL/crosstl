@@ -4,6 +4,7 @@ import re
 
 from ..ast import (
     ArrayAccessNode,
+    ArrayLiteralNode,
     BinaryOpNode,
     BlockNode,
     ConstructorNode,
@@ -33,6 +34,19 @@ class RustResultTypeMixin:
         else:
             type_name = str(type_name)
         return type_name in self.struct_member_types
+
+    def array_literal_result_type(self, expr):
+        """``T[N]`` for an initializer list of ``N`` elements that all have the type ``T``, else ``None``."""
+        elements = list(getattr(expr, "elements", None) or [])
+        if not elements:
+            return None
+        element_types = {self.expression_result_type(element) for element in elements}
+        if len(element_types) != 1:
+            return None
+        (element_type,) = element_types
+        if not isinstance(element_type, str) or not element_type:
+            return None
+        return f"{element_type}[{len(elements)}]"
 
     def get_expression_name(self, expr):
         if isinstance(expr, IdentifierNode):
@@ -79,6 +93,11 @@ class RustResultTypeMixin:
             variable_type = self.variable_types.get(name)
             if variable_type is not None:
                 return variable_type
+            if isinstance(name, str) and "::" in name:
+                # A unit enum variant, ``Mode::Low``, has its enum's type.
+                enum_type = self.enum_variant_call_result_type(name)
+                if enum_type is not None:
+                    return enum_type
             return self.rust_builtin_value_type(name)
         if isinstance(expr, LiteralNode):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
@@ -93,6 +112,8 @@ class RustResultTypeMixin:
             return None
         if isinstance(expr, BlockNode):
             return self.block_expression_result_type(expr)
+        if isinstance(expr, ArrayLiteralNode):
+            return self.array_literal_result_type(expr)
         if isinstance(expr, ConstructorNode):
             return self.constructor_result_type(expr)
         if isinstance(expr, TextureNode):
@@ -164,6 +185,11 @@ class RustResultTypeMixin:
                 )
                 if texture_member_type is not None:
                     return texture_member_type
+                slice_length_type = self.rust_gpu_slice_length_result_type(
+                    func_expr, arguments
+                )
+                if slice_length_type is not None:
+                    return slice_length_type
                 receiver_type = self.expression_result_type(
                     getattr(
                         func_expr, "object_expr", getattr(func_expr, "object", None)
@@ -179,6 +205,13 @@ class RustResultTypeMixin:
                     return receiver_type
             func_name = getattr(func_expr, "name", func_expr)
             if isinstance(func_name, str) and self.vector_type_info(func_name):
+                return func_name
+            if (
+                isinstance(func_name, str)
+                and func_name in self.struct_member_types
+                and not self.struct_generic_params.get(func_name)
+            ):
+                # A struct constructor call, which the generator writes as ``Struct::new(...)``.
                 return func_name
             if isinstance(func_name, str) and self.matrix_type_info(func_name):
                 return func_name

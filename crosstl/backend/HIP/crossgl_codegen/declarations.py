@@ -4,11 +4,9 @@ import re
 
 from crosstl.translator.refusals import HipSourceRefusal
 
+from ...CUDA.array_extents import integral_constant_declaration_value
 from ...CUDA.local_memory_spaces import crossgl_zero_value
-from ...device_globals import (
-    device_memory_declaration,
-    is_device_memory,
-)
+from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
 from ..HipAst import (
     CastNode,
@@ -87,6 +85,9 @@ class HipDeclarationMixin:
         if output_name != raw_name:
             self.register_unique_ptr_name(output_name, raw_type)
             self.register_variable_type(output_name, var_type)
+        self.integer_constants.declare(
+            raw_name, integral_constant_declaration_value(node, self.integer_constants)
+        )
         if "__shared__" in qualifiers:
             if getattr(node, "is_dynamic_shared_memory", False):
                 self.emit(

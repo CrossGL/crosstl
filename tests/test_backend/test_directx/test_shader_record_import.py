@@ -144,7 +144,7 @@ def test_record_round_trips_to_hlsl_with_a_local_root_signature(tmp_path):
         # Relaxed: b at 4, c at 16 with stride 16. std430 puts b at 16; scalar gives c a stride of 12.
         ("float a; float3 b; float3 c[2];", "sbt.b + sbt.c[1]", "match neither"),
         ("float4x4 m;", "sbt.m[0].xyz", "float4x4"),
-        ("half h;", "float3(sbt.h, 0, 0)", "half"),
+        ("float16_t h;", "float3(sbt.h, 0, 0)", "float16_t"),
         ("min16float h;", "float3(sbt.h, 0, 0)", "min16float"),
     ],
 )

@@ -3998,6 +3998,65 @@ def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
     assert "memoryBarrierShared" not in generated_code
 
 
+CUDA_THREAD_BUILTINS_SOURCE = """
+RWStructuredBuffer<uint> outp;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void main()
+{
+    uint3 t = cudaThreadIdx();
+    uint3 b = cudaBlockIdx();
+    uint3 d = cudaBlockDim();
+    uint i = b.x * d.x + t.x;
+    outp[i] = i;
+}
+"""
+
+
+def test_slang_cuda_thread_builtins_import_as_crossgl_invocation_values():
+    # #4636: Slang declares these for its CUDA target only (hlsl.meta.slang),
+    # returning threadIdx, blockIdx and blockDim.
+    generated_code = generate_code(
+        parse_code(tokenize_code(CUDA_THREAD_BUILTINS_SOURCE))
+    )
+
+    assert "uint3 t = gl_LocalInvocationID;" in generated_code.replace("uvec3", "uint3")
+    assert "uint3 b = gl_WorkGroupID;" in generated_code.replace("uvec3", "uint3")
+    assert "uint3 d = gl_WorkGroupSize;" in generated_code.replace("uvec3", "uint3")
+    assert "cuda" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize("backend", ["metal", "vulkan", "directx", "opengl"])
+def test_slang_cuda_thread_builtins_reach_every_target(tmp_path, backend):
+    source = tmp_path / "probe.slang"
+    source.write_text(CUDA_THREAD_BUILTINS_SOURCE)
+
+    output = translate(str(source), backend=backend)
+
+    assert "cudaThreadIdx" not in output
+    assert "cudaBlockIdx" not in output
+    assert "cudaBlockDim" not in output
+
+
+def test_slang_user_function_named_like_a_cuda_thread_builtin_is_not_remapped():
+    code = """
+    uint3 cudaThreadIdx() { return uint3(7, 0, 0); }
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main() {
+        uint3 t = cudaThreadIdx();
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cudaThreadIdx()" in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
+
+
 def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
     # Source: Slang core module reference for sincos.
     # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html

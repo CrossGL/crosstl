@@ -151,6 +151,9 @@ class RustExpressionMixin:
                 )
                 if texture_call is not None:
                     return texture_call
+                slice_length = self.generate_rust_gpu_slice_length(func_expr, args)
+                if slice_length is not None:
+                    return slice_length
 
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,
