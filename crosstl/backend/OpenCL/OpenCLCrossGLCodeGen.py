@@ -29,6 +29,7 @@ from ..no_contraction import (
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .array_extents import format_opencl_array_extent
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
@@ -36,6 +37,7 @@ from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .vector_components import OpenCLVectorComponentMixin
 from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
@@ -114,6 +116,7 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
 
 
 class OpenCLToCrossGLConverter(
+    OpenCLVectorComponentMixin,
     OpenCLEnumerationMixin,
     OpenCLSizeofScopeMixin,
     OpenCLPointerResultMixin,
@@ -1000,6 +1003,9 @@ class OpenCLToCrossGLConverter(
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            cross = self.format_opencl_cross_call(func_name, raw_args)
+            if cross is not None:
+                return cross
             pointer_result = self.format_opencl_pointer_result_call(func_name, raw_args)
             if pointer_result is not None:
                 return pointer_result
@@ -1833,6 +1839,9 @@ class OpenCLToCrossGLConverter(
         else:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def format_crossgl_array_extent(self, size):
+        return format_opencl_array_extent(size, super().format_crossgl_array_extent)
 
     def convert_hip_type_to_crossgl(self, hip_type):
         if hip_type is None:
