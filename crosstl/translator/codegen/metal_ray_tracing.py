@@ -9,8 +9,8 @@ from ..ast import (
     UnaryOpNode,
 )
 from ..refusals import MetalRefusal
-from .metal_intersection_tags import METAL_INTERSECTION_INPUTS
 from .array_utils import split_array_type_suffix
+from .metal_intersection_tags import METAL_INTERSECTION_INPUTS
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .stage_utils import normalize_stage_name
 
