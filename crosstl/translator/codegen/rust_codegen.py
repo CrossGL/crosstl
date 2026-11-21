@@ -63,6 +63,7 @@ from .rust_tables import (
 )
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
+from .rust_workgroup_references import RustWorkgroupReferenceMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
 
@@ -99,6 +100,7 @@ class RustCodeGen(
     RustGpuStageIoMixin,
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,
+    RustWorkgroupReferenceMixin,
 ):
     """Emit rust-gpu shader crates from the shared CrossGL AST."""
 
@@ -808,6 +810,10 @@ class RustCodeGen(
         self.current_mutated_names = self.collect_mutated_binding_names(
             getattr(func, "body", None)
         )
+        saved_workgroup_references = self.bind_rust_workgroup_references(
+            [p.name for p in param_list]
+            + [info["node"].name for info in promoted_resource_params]
+        )
 
         inferred_constraints = self.combined_function_generic_constraints(func)
         self.current_function_generic_constraints = inferred_constraints
@@ -935,6 +941,7 @@ class RustCodeGen(
                     local_alias_declarations.append(local)
 
         params_str = ", ".join(params) if params else ""
+        self.retype_rust_workgroup_references()
 
         if shader_type in GRAPHICS_STAGES:
             code += self.rust_gpu_stage_attribute(shader_type, stage_interface)
@@ -1048,6 +1055,7 @@ class RustCodeGen(
         self.current_mutated_names = saved_mutated_names
         self.current_rust_output_parameters = saved_output_parameters
         self.current_rust_stage_outputs = saved_stage_outputs
+        self.restore_rust_workgroup_references(saved_workgroup_references)
         return code
 
     def is_function_prototype(self, func):
