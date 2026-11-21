@@ -476,6 +476,8 @@ class OpenGLTableMixin:
         | GLSL_TYPE_KEYWORDS
     )
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
+    # GLSL ES rejects a global or a function that spells a built-in function; desktop GLSL only a call it hides.
+    GLSL_RESERVES_BUILTIN_FUNCTION_NAMES = False
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
         "+=": "+",

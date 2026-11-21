@@ -3,6 +3,7 @@
 from ..integer_signedness_import import (
     spirv_integer_conversion_expression,
 )
+from ..pointer_access_chains import pointer_access_chain_expression
 from ..VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -275,19 +276,19 @@ class VulkanFunctionBodyValueMixin:
             "OpInBoundsPtrAccessChain",
         }:
             if len(operands) >= 3:
-                access = self.spirv_assembly_access_chain_expression(
-                    operands[1],
-                    operands[2:],
-                    expressions,
-                    names,
-                    decorations,
-                    member_decorations,
-                    member_names,
-                    types,
-                    variables_by_id,
-                    constants,
+                expressions[result_id] = pointer_access_chain_expression(
+                    self,
+                    opcode,
+                    operands,
+                    expressions=expressions,
+                    names=names,
+                    decorations=decorations,
+                    member_names=member_names,
+                    types=types,
+                    variables_by_id=variables_by_id,
+                    constants=constants,
+                    expression_type_ids=expression_type_ids,
                 )
-                expressions[result_id] = access
                 expression_type_ids[result_id] = operands[0]
             return True
 

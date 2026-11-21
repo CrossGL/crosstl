@@ -68,6 +68,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
 )
+from .glsl_builtin_functions import called_builtin_spellings, reset_builtin_spellings
 from .glsl_call_helpers import reset_glsl_call_helpers
 from .glsl_exact_lookups import glsl_undeclared_call_reasons
 from .glsl_float_atomic_storage import FloatAtomicStorage
@@ -1301,11 +1302,21 @@ class OpenGLProgramStructureMixin:
         :mod:`.glsl_vulkan_resources` plans its forms from the uses it can see in the AST; a texture that the
         rendering still names outside them, or a runtime array it names without an index, keeps the combined
         OpenGL form in both compilations.
+
+        It also renders the program again with every built-in function name reserved that a program identifier
+        spelled and the rendering calls (:mod:`.glsl_builtin_functions`), so the identifier no longer hides it.
         """
         self.glsl_vulkan_resource_exclusions = frozenset()
+        reset_builtin_spellings(self)
         while True:
             reset_glsl_call_helpers(self)
             code = self._generate_program_attempt(ast, target_stage, early_exits)
+            shadowed = called_builtin_spellings(self, code)
+            if shadowed:
+                self.glsl_shadowed_builtin_names = (
+                    self.glsl_shadowed_builtin_names | shadowed
+                )
+                continue
             unwrapped = self.glsl_vulkan_resources.unwrapped(code)
             if not unwrapped:
                 return code

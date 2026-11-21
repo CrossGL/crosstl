@@ -150,6 +150,7 @@ from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
+    refuse_unwritten_entry_return,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
@@ -9291,6 +9292,7 @@ class GLSLCodeGen(
                         + distance_output_epilogue(self, indent_str)
                         + f"{indent_str}return;\n"
                     )
+                refuse_unwritten_entry_return(self, stmt.value)
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)

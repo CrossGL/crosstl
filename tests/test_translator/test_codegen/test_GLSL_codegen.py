@@ -14175,8 +14175,9 @@ def test_opengl_fixed_array_mutation_cache_isolated_by_exact_overload(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "void step(float values[1])" in generated
-    assert "void step(inout int values[1])" in generated
+    # A user function named like the built-in step() is renamed in GLSL output.
+    assert "void step_(float values[1])" in generated
+    assert "void step_(inout int values[1])" in generated
     assert "void wrapper(float values[1])" in generated
     assert "void wrapper(inout float values[1])" not in generated
     assert "wrapper(total);" in generated
@@ -30697,9 +30698,18 @@ def test_opengl_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
+            output.position = vec4(input.position, 1.0);
 
             // Array access in various forms
             float value = weights[2];
@@ -43931,7 +43941,7 @@ def test_opengl_user_overload_result_width_precedes_builtin(tmp_path):
     }
     """
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
-    assert "vec4 result = vec4(sin(value), sin(value));" in generated
+    assert "vec4 result = vec4(sin_(value), sin_(value));" in generated
     assert_glsl_compute_validates_if_available(generated, tmp_path, "user_builtin")
 
 
@@ -49325,8 +49335,9 @@ def test_opengl_boolean_min_max_respect_user_defined_functions():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "bool min(bool left, bool right)" in generated
-    assert "return min(left, right);" in generated
+    # The user min() keeps its calls under the name GLSL output gives it (min_).
+    assert "bool min_(bool left, bool right)" in generated
+    assert "return min_(left, right);" in generated
     assert "return ((left) && (right));" not in generated
 
 
