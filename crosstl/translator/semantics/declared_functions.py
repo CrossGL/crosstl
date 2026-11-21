@@ -41,6 +41,7 @@ from .declared_types import (
     _nodes,
     _short,
     _uninstantiated_templates,
+    entry_dropped_function_ids,
 )
 from .spirv_instructions import is_spirv_operation_name
 
@@ -194,7 +195,7 @@ def _never_called_generic_functions(program, skip):
     return every - live
 
 
-def undeclared_function_calls(program, target=None):
+def undeclared_function_calls(program, target=None, entry_point=None):
     """``(name, call)`` for each call in ``program`` whose plain callee is neither declared nor built in.
 
     Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
@@ -204,13 +205,14 @@ def undeclared_function_calls(program, target=None):
     Static structure members
     nothing names are not read, and for a ``target`` in :data:`~.declared_types.INSTANTIATING_TARGETS`, the
     generic structures no code names are not read either, because those generators emit a generic structure only
-    through the instantiations it names.
+    through the instantiations it names. A translation that selects ``entry_point`` skips the functions no stage
+    entry reaches, which it does not write (:func:`~.declared_types.entry_dropped_function_ids`).
     """
     declared = declared_function_names(program)
     calls = []
-    skip = set()
+    skip = entry_dropped_function_ids(program, entry_point)
     if str(target or "").lower() not in GENERIC_WRITING_TARGETS:
-        skip = _never_called_generic_functions(program, skip)
+        skip |= _never_called_generic_functions(program, skip)
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     skip |= _unused_static_members(program, skip)
@@ -228,9 +230,9 @@ def undeclared_function_calls(program, target=None):
     return calls
 
 
-def refuse_undeclared_functions(program, target):
+def refuse_undeclared_functions(program, target, entry_point=None):
     """Raise :class:`UndeclaredFunctionError` for the first call to an undeclared function in ``program``."""
-    for name, node in undeclared_function_calls(program, target):
+    for name, node in undeclared_function_calls(program, target, entry_point):
         raise UndeclaredFunctionError(
             target, name, source_location=getattr(node, "source_location", None)
         )

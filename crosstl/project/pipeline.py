@@ -27730,6 +27730,7 @@ def _crossgl_ast_for_project_target(
     source_options: Mapping[str, Any],
     source_is_materialized: bool = False,
     frozen_constants: Sequence[Mapping[str, Any]] = (),
+    entry_point: str | None = None,
 ) -> Any:
     register_default_sources()
     source_spec = SOURCE_REGISTRY.get(source_backend)
@@ -27782,7 +27783,7 @@ def _crossgl_ast_for_project_target(
         intermediate.encode("utf-8")
     ).hexdigest()
     ast = fold_frozen_specialization_branches(ast, frozen_constants)
-    apply_rule_carrying(ast, original_source_backend, target)
+    apply_rule_carrying(ast, original_source_backend, target, entry_point)
     return ast
 
 
@@ -30199,6 +30200,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
@@ -30536,6 +30538,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         if dispatch_region is not None:
                             _validate_project_dispatch_region_execution(

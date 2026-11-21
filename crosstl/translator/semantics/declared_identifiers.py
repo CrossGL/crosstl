@@ -37,7 +37,7 @@ from ..ray_query_vocabulary import ray_query_constant
 from ..refusals import supersedes_pending_refusals
 from ..standard_constants import standard_math_constant
 from .builtin_type_names import BUILTIN_TYPE_NAMES
-from .declared_types import declared_type_names
+from .declared_types import declared_type_names, entry_dropped_function_ids
 from .rewrite import child_slots, get_child
 from .work_graph_nodes import BARRIER_FLAGS
 
@@ -486,12 +486,15 @@ def _checked_functions(program):
             yield entry, stage
 
 
-def undeclared_identifier_uses(program, target=None):
+def undeclared_identifier_uses(program, target=None, entry_point=None):
     """``(name, node, function_name)`` for each plain name a function body uses without a declaration in scope.
 
-    ``target`` is accepted for symmetry with the other refusal passes; the rule does not depend on it.
+    ``target`` is accepted for symmetry with the other refusal passes; the rule does not depend on it. A
+    translation that selects ``entry_point`` skips the functions no stage entry reaches, which it does not write
+    (:func:`~.declared_types.entry_dropped_function_ids`).
     """
     del target
+    dropped = entry_dropped_function_ids(program, entry_point)
     structs = _struct_members(program)
     module = _module_names(program, structs)
     every_stage = set()
@@ -504,7 +507,11 @@ def undeclared_identifier_uses(program, target=None):
     uses = []
     seen = set()
     for function, stage in _checked_functions(program):
-        if id(function) in seen or getattr(function, "body", None) is None:
+        if (
+            id(function) in seen
+            or id(function) in dropped
+            or getattr(function, "body", None) is None
+        ):
             continue
         seen.add(id(function))
         outer = module | (stage_names[id(stage)] if stage is not None else every_stage)
@@ -512,9 +519,11 @@ def undeclared_identifier_uses(program, target=None):
     return uses
 
 
-def refuse_undeclared_identifiers(program, target):
+def refuse_undeclared_identifiers(program, target, entry_point=None):
     """Raise :class:`UndeclaredIdentifierError` for the first undeclared plain name in a function body."""
-    for name, node, function in undeclared_identifier_uses(program, target):
+    for name, node, function in undeclared_identifier_uses(
+        program, target, entry_point
+    ):
         raise UndeclaredIdentifierError(
             target,
             name,
@@ -523,7 +532,7 @@ def refuse_undeclared_identifiers(program, target):
         )
 
 
-def record_undeclared_identifiers(program, target):
+def record_undeclared_identifiers(program, target, entry_point=None):
     """Record on ``program`` the refusal of its first undeclared plain name, for generation to raise.
 
     The refusal is held back so that a later pass or the generator can refuse the same program with a diagnostic of
@@ -533,10 +542,12 @@ def record_undeclared_identifiers(program, target):
     """
     annotations = getattr(program, "annotations", None)
     if not isinstance(annotations, dict):
-        refuse_undeclared_identifiers(program, target)
+        refuse_undeclared_identifiers(program, target, entry_point)
         return None
     annotations.pop(_RECORDED, None)
-    for name, node, function in undeclared_identifier_uses(program, target):
+    for name, node, function in undeclared_identifier_uses(
+        program, target, entry_point
+    ):
         annotations[_RECORDED] = (
             target,
             name,
