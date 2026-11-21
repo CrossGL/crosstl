@@ -20,6 +20,7 @@ from ..ast import (
     IdentifierNode,
     MeshOpNode,
     PointerReinterpretNode,
+    PointerType,
     RayQueryOpNode,
     RayTracingOpNode,
     TextureNode,
@@ -134,6 +135,11 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
     written = written_names(ast)
     for node in _declarations(ast):
         _refuse_declaration(generator, node, written)
+    for function, parameter in _buffer_pointer_parameters(ast):
+        generator.refuse_lowering(
+            f"parameter: '{parameter}' of '{function}' points into a storage buffer; the rust-gpu output passes "
+            "storage buffers only as entry-point slices"
+        )
     if getattr(ast, "cbuffers", None):
         generator.refuse_lowering(
             "resource: constant buffers are not lowered to rust-gpu uniform blocks"
@@ -146,6 +152,26 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
                 generator.refuse_lowering(
                     f"{reason}: not lowered to rust-gpu's spirv_std"
                 )
+
+
+def _buffer_pointer_parameters(ast):
+    """``(function, parameter)`` for each pointer parameter of a non-entry function that points into a buffer."""
+    functions = list(getattr(ast, "functions", None) or [])
+    for stage in (getattr(ast, "stages", None) or {}).values():
+        entry = getattr(stage, "entry_point", None)
+        functions.extend(
+            f for f in getattr(stage, "local_functions", None) or [] if f is not entry
+        )
+    for function in functions:
+        for parameter in getattr(function, "parameters", None) or []:
+            qualifiers = {
+                str(q).lower() for q in getattr(parameter, "qualifiers", None) or []
+            }
+            if isinstance(getattr(parameter, "param_type", None), PointerType) and (
+                qualifiers & {"buffer", "global", "device"}
+                or getattr(parameter.param_type, "address_space", None) is not None
+            ):
+                yield function.name, parameter.name
 
 
 def _refuse_declaration(generator, node, written):
@@ -173,13 +199,27 @@ def _refuse_declaration(generator, node, written):
         )
 
 
-# Types and macros of Rust's ``alloc`` and ``std`` that a ``#![no_std]`` rust-gpu crate cannot name, and string
-# constants, which rust-gpu cannot lower ("unsupported unsized `[u8]` constant").
+# Types and macros of Rust's ``alloc`` and ``std`` that a ``#![no_std]`` rust-gpu crate cannot name, pointer
+# arithmetic, and string constants, which rust-gpu cannot lower ("unsupported unsized `[u8]` constant").
 _HOST_ONLY = (
-    (re.compile(r"(?<![\w:])Vec<"), "a dynamic array (Vec) needs an allocator, which rust-gpu shaders do not have"),
-    (re.compile(r"\bvec!\["), "a dynamic array (vec!) needs an allocator, which rust-gpu shaders do not have"),
-    (re.compile(r"(?<![\w:])String\b"), "strings need an allocator, which rust-gpu shaders do not have"),
+    (
+        re.compile(r"(?<![\w:])Vec<"),
+        "a dynamic array (Vec) needs an allocator, which rust-gpu shaders do not have",
+    ),
+    (
+        re.compile(r"\bvec!\["),
+        "a dynamic array (vec!) needs an allocator, which rust-gpu shaders do not have",
+    ),
+    (
+        re.compile(r"(?<![\w:])String\b"),
+        "strings need an allocator, which rust-gpu shaders do not have",
+    ),
     (re.compile(r"&'static str\b"), "rust-gpu cannot lower string constants"),
+    # Indexing a CrossGL pointer is written as ``*(p).add(i)``; rust-gpu's logical addressing cannot offset a pointer.
+    (
+        re.compile(r"\*\([\w.]+\)\.add\("),
+        "pointer arithmetic (ptr.add) is not lowered to rust-gpu, whose logical addressing cannot offset a pointer",
+    ),
 )
 
 

@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from tests.test_translator.test_codegen.test_rust_codegen import (
     generate_code,
     parse_code,
@@ -25,6 +26,7 @@ def rustc_or_skip():
     if rustc is None:
         pytest.skip("rustc is not installed")
     return rustc
+
 
 HELPERS = """
 shader NarrowArithmetic {
@@ -91,11 +93,13 @@ def test_narrow_integer_arithmetic_runs_with_integer_promotion(tmp_path):
         ),
     ],
 )
-def test_imported_byte_arithmetic_translates_to_rust(tmp_path, source, name):
+def test_imported_byte_kernels_are_refused(tmp_path, source, name):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
 
-    generated = crosstl.translate(str(path), backend="rust", format_output=False)
-
-    assert "(((v.x as i32) + (v.y as i32))" in generated
-    assert "as u8)" in generated
+    # The imported kernel takes its buffers as WGSL-style entry parameters (array<u8>), which the rust-gpu output
+    # does not bind as storage-buffer slices yet.
+    with pytest.raises(
+        RustLoweringRefused, match=r"dynamic array \(Vec\) needs an allocator"
+    ):
+        crosstl.translate(str(path), backend="rust", format_output=False)

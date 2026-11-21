@@ -15,6 +15,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
+from crosstl.translator.refusals import RustRefusal
 
 from .test_rust_codegen import assert_generated_rust_smoke_compiles
 
@@ -29,7 +30,9 @@ def rust(source: str) -> str:
 
 def entry_signature(code: str, attribute: str) -> str:
     """The parameter list of the entry point after ``attribute``."""
-    match = re.search(re.escape(attribute) + r"[^\n]*\npub fn \w+\((.*?)\) -> \(\) \{", code, re.S)
+    match = re.search(
+        re.escape(attribute) + r"[^\n]*\npub fn \w+\((.*?)\) -> \(\) \{", code, re.S
+    )
     assert match, code
     return match.group(1)
 
@@ -101,14 +104,15 @@ def test_vertex_and_fragment_interfaces_are_entry_point_parameters(tmp_path):
     assert "#[spirv(frag_depth)] out_depth: &mut f32" in fragment
     assert "spirv_std::arch::kill();" in code
     # Each return writes every output member through its parameter.
-    assert re.search(r"\*out_color = (\w+)\.color;\s*\*out_depth = \1\.depth;\s*return;", code)
+    assert re.search(
+        r"\*out_color = (\w+)\.color;\s*\*out_depth = \1\.depth;\s*return;", code
+    )
 
     assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
 def test_fragment_value_output_and_early_fragment_tests(tmp_path):
-    code = rust(
-        """
+    code = rust("""
         shader Flat {
             fragment {
                 layout(early_fragment_tests) in;
@@ -117,8 +121,7 @@ def test_fragment_value_output_and_early_fragment_tests(tmp_path):
                 }
             }
         }
-        """
-    )
+        """)
     fragment = entry_signature(code, "#[spirv(fragment(early_fragment_tests))]")
     assert "#[spirv(frag_coord)] position_in: Vec4" in fragment
     # Integer fragment inputs are flat, built-ins included (VUID-StandaloneSpirv-Flat-04744).
@@ -129,8 +132,7 @@ def test_fragment_value_output_and_early_fragment_tests(tmp_path):
 
 
 def test_fragment_derivatives_are_spirv_std_derivative_calls(tmp_path):
-    code = rust(
-        """
+    code = rust("""
         shader Edges {
             struct FragmentInput { vec2 uv; }
             struct FragmentOutput { vec4 color; }
@@ -143,8 +145,7 @@ def test_fragment_derivatives_are_spirv_std_derivative_calls(tmp_path):
                 }
             }
         }
-        """
-    )
+        """)
     assert "spirv_std::arch::Derivative::fwidth(" in code
     assert "spirv_std::arch::Derivative::dfdx(" in code
     assert "spirv_std::arch::Derivative::dfdy(" in code
@@ -157,7 +158,7 @@ def test_fragment_derivatives_are_spirv_std_derivative_calls(tmp_path):
     [
         ("vec2 uv @ noperspective;", "noperspective interpolation"),
         ("bool on;", "has type bool"),
-        ("mat2x3 m;", "has type mat2x3"),
+        ("mat2x3 m;", "glam has no 2x3 matrix of f32"),
         ("vec4 uv @ gl_ClipDistance;", "rust-gpu fragment input"),
     ],
 )
@@ -170,14 +171,16 @@ def test_fragment_inputs_rust_gpu_cannot_declare_are_refused(member, reason):
         }}
     }}
     """
-    with pytest.raises(RustLoweringRefused, match=reason):
+    # glam has no non-square matrices, so mat2x3 is refused where its type is spelled.
+    with pytest.raises((RustLoweringRefused, RustRefusal), match=reason):
         rust(source)
 
 
 def test_geometry_stage_is_refused():
-    with pytest.raises(RustLoweringRefused, match="geometry entry points are not lowered"):
-        rust(
-            """
+    with pytest.raises(
+        RustLoweringRefused, match="geometry entry points are not lowered"
+    ):
+        rust("""
             shader G {
                 struct VertexOutput { vec4 position @ gl_Position; }
                 geometry {
@@ -188,8 +191,7 @@ def test_geometry_stage_is_refused():
                     }
                 }
             }
-            """
-        )
+            """)
 
 
 COMPUTE = """

@@ -19,7 +19,13 @@ from .rust_gpu_common_functions import (
 _FLOATS = frozenset({"f32", "f64"})
 _SIGNED = frozenset({"i32", "i64"})
 _UNSIGNED = frozenset({"u32", "u64"})
-_VECTOR_SCALARS = {"float": "f32", "double": "f64", "int": "i32", "uint": "u32", "bool": "bool"}
+_VECTOR_SCALARS = {
+    "float": "f32",
+    "double": "f64",
+    "int": "i32",
+    "uint": "u32",
+    "bool": "bool",
+}
 
 # Float methods with one operand that CrossGL spells as the method's name or the name given here.
 _FLOAT_UNARY = {
@@ -189,6 +195,9 @@ def generate_rust_gpu_builtin_call(generator, name, args):
         call = generate_common_function_call(name, shapes, values)
         if call is not None:
             return call
+    if name == "lerp":
+        # HLSL lerp(x, y, s) is GLSL mix(x, y, s).
+        name = "mix"
     if all(size == 0 for _scalar, size in shapes):
         return _scalar_call(name, shapes, values)
     return _vector_call(name, shapes, values)
@@ -248,6 +257,12 @@ def _vector_call(name, shapes, values):
         return _method(values[0], _GLAM_BINARY[name], values[1])
     if not floating:
         return None
+    if name == "isinf" and len(values) == 1:
+        # Vec::map returns a float vector, and glam has no infinity mask: a lane is infinite when it is neither
+        # finite nor NaN.
+        return (
+            f"{{ let __v = {values[0]}; !(__v.is_finite_mask() | __v.is_nan_mask()) }}"
+        )
     if len(values) == 1 and name in _FLOAT_UNARY:
         return _method(values[0], "map", f"|c| c.{_FLOAT_UNARY[name]}()")
     if name == "pow" and len(values) == 2 and every_vector:
@@ -272,7 +287,9 @@ def _componentwise(scalar, size, method, values):
     first, second = values
     parts = ", ".join(f"__a.{lane}.{method}(__b.{lane})" for lane in lanes)
     prefix = "D" if scalar == "f64" else ""
-    return f"{{ let __a = {first}; let __b = {second}; {prefix}Vec{size}::new({parts}) }}"
+    return (
+        f"{{ let __a = {first}; let __b = {second}; {prefix}Vec{size}::new({parts}) }}"
+    )
 
 
 def _derivative_call(generator, name, args):
@@ -292,6 +309,9 @@ def _derivative_call(generator, name, args):
 
 def _transpose_call(generator, args):
     """glam's ``transpose`` of a square matrix, the only matrices rust-gpu's glam has."""
-    if len(args) != 1 or generator.matrix_type_info(generator.expression_result_type(args[0])) is None:
+    if (
+        len(args) != 1
+        or generator.matrix_type_info(generator.expression_result_type(args[0])) is None
+    ):
         return None
     return _method(generator.generate_expression(args[0]), "transpose")
