@@ -506,6 +506,21 @@ OTHER_NAMES = {
     },
     "rust": rust_spellings.OTHER_NAMES,
 }
+# Metal's other ballots return a simd_vote or quad_vote mask, whose vote_t integer CrossGL computes from its wave
+# ballot (crossgl.dialect.CrossGLDialect.reading). A SIMD-group's mask has a bit per lane, which is the first 64 bits
+# of the ballot. A quad's mask keeps 4 bits (metal_quadgroup masks quad_vote's vote_t with 0xf), those of the 4
+# consecutive lanes of the lane's quad. An active-threads mask is the ballot of true.
+_SIMD_MASK = (
+    "(uint64(WaveActiveBallot({0}).x) | (uint64(WaveActiveBallot({0}).y) << 32))"
+)
+_QUAD_MASK = "((WaveActiveBallot({0})[WaveGetLaneIndex() >> 5u] >> (WaveGetLaneIndex() & 28u)) & 0xFu)"
+OTHER_NAMES["metal"].update(
+    {
+        "simd_active_threads_mask": _SIMD_MASK.format("true"),
+        "quad_active_threads_mask": _QUAD_MASK.format("true"),
+        "quad_ballot": _QUAD_MASK,
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
