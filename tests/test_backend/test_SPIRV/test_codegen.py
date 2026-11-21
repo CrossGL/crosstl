@@ -5376,6 +5376,8 @@ SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY = """
 ; Source path: test/opt/combine_access_chains_test.cpp
 ; Reduced from CombineAccessChainsTest OpPtrAccessChain fixtures and adapted
 ; to store through the derived pointers so CrossGL output exposes the lowering.
+; The Element operand moves the base pointer within the array the base points into,
+; and the Indexes then index the base's pointee (SPIR-V 1.6 OpPtrAccessChain).
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
@@ -5408,11 +5410,11 @@ OpDecorate %out_b Location 1
 %out_b = OpVariable %ptr_output_uint Output
 %main = OpFunction %void None %fn
 %label = OpLabel
-%access = OpAccessChain %ptr_workgroup_arr_uint %workgroup_values %uint_1
+%access = OpAccessChain %ptr_workgroup_uint %workgroup_values %uint_1 %uint_0
 %ptr_access = OpPtrAccessChain %ptr_workgroup_uint %access %uint_2
 %value = OpLoad %uint %ptr_access
 OpStore %out_a %value
-%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_1
+%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_0 %uint_1
 %value_in_bounds = OpLoad %uint %in_bounds_ptr
 OpStore %out_b %value_in_bounds
 OpReturn
@@ -6151,17 +6153,21 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert generated_code.count("struct StructuredBuffer {") == 1
-    assert "RWStructuredBuffer<StructuredBuffer> index_buffer @set(0) @binding(5);" in (
-        generated_code
+    # A block named for the built-in StructuredBuffer type takes a trailing underscore instead of shadowing it.
+    assert "struct StructuredBuffer {" not in generated_code
+    assert generated_code.count("struct StructuredBuffer_ {") == 1
+    assert (
+        "RWStructuredBuffer<StructuredBuffer_> index_buffer @set(0) @binding(5);" in (
+            generated_code
+        )
     )
     assert (
-        "RWStructuredBuffer<StructuredBuffer> dynamic_index_buffer @set(0) @binding(9);"
+        "RWStructuredBuffer<StructuredBuffer_> dynamic_index_buffer @set(0) @binding(9);"
         in generated_code
     )
-    assert "struct StructuredBuffer_vertex_buffer {" in generated_code
+    assert "struct StructuredBuffer__vertex_buffer {" in generated_code
     assert (
-        "RWStructuredBuffer<StructuredBuffer_vertex_buffer> vertex_buffer "
+        "RWStructuredBuffer<StructuredBuffer__vertex_buffer> vertex_buffer "
         "@set(0) @binding(4);" in generated_code
     )
     assert "Unhandled statement type" not in generated_code
