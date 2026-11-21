@@ -492,7 +492,9 @@ def test_anchored_plan_job_step_reaches_the_jobs_that_alias_it(
     workflow.write_text(_ANCHORED_WORKFLOW.format(shared="shared"))
     base = _commit("Start")
     changed = _ANCHORED_WORKFLOW.format(shared=shared)
-    workflow.write_text(changed.replace("    steps:\n", f"    steps:\n      {plan}\n", 1))
+    workflow.write_text(
+        changed.replace("    steps:\n", f"    steps:\n      {plan}\n", 1)
+    )
     head = _commit("Edit workflow")
     paths = classify_workflow_change(base, head, changed_paths(base, head))
     assert paths == (
