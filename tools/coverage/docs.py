@@ -35,9 +35,9 @@ from .publish import (
 # Where the Coverage workflow publishes the report and its feature files.
 PUBLISHED = "https://raw.githubusercontent.com/CrossGL/crosstl/coverage/"
 COVERAGE_MD = "https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md"
-# The only names a page or a downloaded file may have, so that neither leads outside its directory.
+# The only names a page may have, so that none leads outside its directory. A downloaded file must have a name
+# that report.load would read: ``report.FEATURE_FILE`` for a row, ``report.CELL_FILE`` for a matrix cell.
 _LANGUAGE_ID = re.compile(r"[a-z0-9]+")
-_PUBLISHED_FILE = re.compile(r"(features|pairs)/[a-z0-9-]+\.json")
 # The most bytes one downloaded file may have; the Coverage workflow publishes none over 1 MB.
 _DOWNLOAD_LIMIT = 4_000_000
 HEADER = "% Written from coverage.json by tools/coverage/docs.py when the documentation is built. Do not edit."
@@ -59,17 +59,22 @@ def fetch(
 ) -> Path:
     """Download ``coverage.json`` from ``base``, a URL ending in ``/``, and every file it names into ``directory``.
 
-    Returns the path of the downloaded ``coverage.json``. Raises ``ValueError`` if the report names a file outside
-    ``features/`` or ``pairs/``.
+    Returns the path of the downloaded ``coverage.json``. Raises ``ValueError`` if a row names a file other than a
+    ``features/<language>-<direction>.json`` or a matrix cell one other than a
+    ``features/pairs/<source>-to-<target>.json``.
     """
     text = _download(base + "coverage.json", opener)
     data = json.loads(text)
     names = []
-    for entry in [*data.get("backends", []), *data.get("pairs", [])]:
+    entries = [
+        *((report.FEATURE_FILE, entry) for entry in data.get("backends", [])),
+        *((report.CELL_FILE, entry) for entry in data.get("pairs", [])),
+    ]
+    for pattern, entry in entries:
         name = entry.get("file") if isinstance(entry, dict) else None
         if name is None:
             continue
-        if not isinstance(name, str) or not _PUBLISHED_FILE.fullmatch(name):
+        if not isinstance(name, str) or not pattern.fullmatch(name):
             raise ValueError(
                 f"coverage.json names {name!r}, which is not a published file"
             )

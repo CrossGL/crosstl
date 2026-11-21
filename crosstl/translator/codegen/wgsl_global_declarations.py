@@ -77,6 +77,11 @@ class WGSLGlobalDeclarationMixin:
             return self.generate_sampled_texture_global_variable(
                 node, sampled_texture_type
             )
+        multisampled_texture_type = self.multisampled_texture_type(node.var_type)
+        if multisampled_texture_type is not None:
+            return self.generate_multisampled_texture_global_variable(
+                node, multisampled_texture_type
+            )
         if self.is_sampler_type(node.var_type):
             return self.generate_sampler_global_variable(node)
         storage_texture_type = self.storage_texture_type(node.var_type, node)

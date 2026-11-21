@@ -195,20 +195,27 @@ class _Lowering:
 
     def children(self, node, rewrite):
         result = copy(node)
+        # One result per source object, containers included: a node keeps some children under two field names
+        # (``FunctionCallNode.arguments`` and ``args``), and two copies of that list would make every walker
+        # visit the arguments twice, which doubles the work with every level of nested calls.
         memo = {}
 
         def transform(value):
-            if isinstance(value, ASTNode):
-                if id(value) not in memo:
-                    memo[id(value)] = rewrite(value)
-                return memo[id(value)]
-            if isinstance(value, list):
-                return [transform(child) for child in value]
-            if isinstance(value, tuple):
-                return tuple(transform(child) for child in value)
-            if isinstance(value, dict):
-                return {name: transform(child) for name, child in value.items()}
-            return value
+            if not isinstance(value, (ASTNode, list, tuple, dict)):
+                return value
+            key = id(value)
+            if key not in memo:
+                if isinstance(value, ASTNode):
+                    memo[key] = rewrite(value)
+                elif isinstance(value, list):
+                    memo[key] = [transform(child) for child in value]
+                elif isinstance(value, tuple):
+                    memo[key] = tuple(transform(child) for child in value)
+                else:
+                    memo[key] = {
+                        name: transform(child) for name, child in value.items()
+                    }
+            return memo[key]
 
         for name, value in vars(node).items():
             if name not in AST_CHILD_FIELD_EXCLUSIONS:

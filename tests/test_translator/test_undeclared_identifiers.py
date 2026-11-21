@@ -327,16 +327,17 @@ def test_module_names_builtins_and_constants_need_no_local_declaration():
     assert _names(_cgl(body, helpers)) == []
 
 
-def test_a_helper_no_entry_reaches_is_not_checked(tmp_path):
+def test_a_helper_no_entry_reaches_is_checked(tmp_path):
     helpers = """
     float unused(float x) {
         return x * missing;
     }
     """
     source = _cgl("values[0] = 1.0;", helpers)
-    assert _names(source) == []
+    assert _names(source) == ["missing"]
     path = _write(tmp_path, "dead.cgl", source)
-    assert "values" in crosstl.translate(path, backend="opengl")
+    with pytest.raises(UndeclaredIdentifierError):
+        crosstl.translate(path, backend="opengl")
 
 
 def test_a_helper_an_entry_calls_is_checked():

@@ -10,6 +10,7 @@ from ..floating_point import (
 from ..local_enums import (
     hoist_local_enums,
 )
+from ..member_aggregates import anonymous_member_paths
 from ..MetalParser import (
     AssignmentNode,
     ConstantBufferNode,
@@ -221,6 +222,11 @@ class MetalProgramRenderingMixin:
             for struct_node in structs
             if isinstance(struct_node, StructNode)
             and getattr(struct_node, "name", None)
+        }
+        self.anonymous_member_paths = {
+            name: paths
+            for name, struct_node in self.struct_declarations.items()
+            if (paths := anonymous_member_paths(struct_node, self.struct_declarations))
         }
         self.struct_member_types = self.collect_struct_member_types(structs)
         # Static constants resolve eagerly; constructor calls in their

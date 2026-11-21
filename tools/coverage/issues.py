@@ -2,8 +2,9 @@
 
 There is one tracking issue per language and direction, plus one for CrossGL IR expressiveness, and one bug issue per
 cause of ``wrong`` results in a language and direction (:func:`causes_of`), so one translator bug that breaks many probes
-is one issue. Every managed issue carries a hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here
-edits or closes an issue without one.
+is one issue. Each cell of the translation matrix from one of :data:`PAIR_LANGUAGES` to another has a tracking issue
+too; cells are measured nightly, so a report without them leaves those issues alone. Every managed issue carries a
+hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here edits or closes an issue without one.
 
 :func:`plan` is pure: it compares the report with the managed issues and returns the actions, so a dry run prints
 what an applied run would do. :func:`reconcile` applies a plan, then plans once more without filing new bugs, so the
@@ -57,6 +58,8 @@ TOOLS = {
     "wgsl": "naga",
 }
 AREA = {"output": "area:codegen", "input": "area:frontend"}
+# Each translation matrix cell from one of these languages to another has a tracking issue (:func:`pair_key`).
+PAIR_LANGUAGES = ("cuda", "glsl", "hlsl", "metal")
 
 
 @dataclass(frozen=True)
@@ -250,8 +253,24 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
         "The coverage workflow keeps this issue up to date and closes it when every measured feature is supported, "
         "so edits to this description are overwritten. Each wrong result of a backend also has its own `bug` issue.",
     ]
-    gaps = sorted(_gaps(row), key=lambda f: (f["category"], f["name"]))
     causes = causes_of(row)
+
+    def link(feature: dict) -> str:
+        text = causes.get(feature["name"])
+        number = bugs.get(bug_key(row, text)) if text is not None else None
+        return f" (#{number})" if number else ""
+
+    return _checklist(lines, _gaps(row), link, "COVERAGE.md")
+
+
+def _checklist(
+    lines: list[str], gaps: list[dict], link: Callable[[dict], str], rest: str
+) -> str:
+    """An issue body: ``lines``, then ``gaps`` as a checklist grouped by category, each with its diagnostic.
+
+    ``link`` gives the text that follows a gap's outcome. Gaps past :data:`BODY_LIMIT` are counted and left to ``rest``.
+    """
+    gaps = sorted(gaps, key=lambda f: (f["category"], f["name"]))
     used = sum(len(line) + 1 for line in lines)
     category = ""
     for index, feature in enumerate(gaps):
@@ -260,14 +279,13 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
             if feature["category"] != category
             else []
         )
-        text = causes.get(feature["name"])
-        number = bugs.get(bug_key(row, text)) if text is not None else None
-        link = f" (#{number})" if number else ""
         detail = f": {publish.cell(feature['detail'])}" if feature.get("detail") else ""
-        item.append(f"- [ ] `{feature['name']}` {feature['outcome']}{link}{detail}")
+        item.append(
+            f"- [ ] `{feature['name']}` {feature['outcome']}{link(feature)}{detail}"
+        )
         cost = sum(len(line) + 1 for line in item) + 2
         if used + cost > BODY_LIMIT:
-            lines += ["", f"{len(gaps) - index} more gaps are listed in COVERAGE.md."]
+            lines += ["", f"{len(gaps) - index} more gaps are listed in {rest}."]
             break
         if item[0].startswith("### "):
             lines.append("")
@@ -399,17 +417,35 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
 
 
 def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
-    title = tracking_title(row)
-    body = tracking_body(row, plan.repository, bugs)
-    gaps = row["counts"]["refused"] + row["counts"]["wrong"]
-    issue = plan.managed.get(tracking_key(row))
+    _track(
+        plan,
+        tracking_key(row),
+        tracking_title(row),
+        tracking_body(row, plan.repository, bugs),
+        tracking_labels(row),
+        _name(row),
+        row["counts"]["refused"] + row["counts"]["wrong"],
+    )
+
+
+def _track(
+    plan: _Plan,
+    issue_key: str,
+    title: str,
+    body: str,
+    labels: tuple[str, ...],
+    name: str,
+    gaps: int,
+) -> None:
+    """Keep the tracking issue ``issue_key`` open while ``name`` has ``gaps``, and closed once it has none."""
+    issue = plan.managed.get(issue_key)
     if gaps:
         plan.ensure(
-            tracking_key(row),
+            issue_key,
             title,
             body,
-            tracking_labels(row),
-            f"{_name(row)} has {gaps} {'gap' if gaps == 1 else 'gaps'} again, so this issue is reopened.",
+            labels,
+            f"{name} has {gaps} {'gap' if gaps == 1 else 'gaps'} again, so this issue is reopened.",
         )
     elif issue is not None:
         if issue.state == "open":
@@ -424,6 +460,75 @@ def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
             plan.actions.append(
                 Action("edit", issue.key, title, body, (), issue.number)
             )
+
+
+def _pair_cells(report: dict) -> list[dict]:
+    """The measured translation matrix cells between two of :data:`PAIR_LANGUAGES`, which get tracking issues."""
+    return [
+        cell
+        for cell in report.get("pairs", [])
+        if cell["source"] in PAIR_LANGUAGES
+        and cell["target"] in PAIR_LANGUAGES
+        and cell["source"] != cell["target"]
+        and cell.get("score") is not None
+    ]
+
+
+def pair_key(cell: dict) -> str:
+    return key("pair", cell["source"], cell["target"])
+
+
+def _pair_name(cell: dict) -> str:
+    return f"{chart.name(cell['source'])} to {chart.name(cell['target'])}"
+
+
+def pair_title(cell: dict) -> str:
+    gaps = cell["counts"]["refused"] + cell["counts"]["wrong"]
+    noun = "gap" if gaps == 1 else "gaps"
+    score = f"{cell['score']:.1f} %"
+    return f"{_pair_name(cell)} translation coverage: {score} ({gaps} {noun})"
+
+
+def pair_labels(cell: dict) -> tuple[str, ...]:
+    """A cell's gap is in the source's frontend or in the target's code generator, so both lanes see its issue."""
+    return (LABEL, f"backend:{cell['source']}", f"backend:{cell['target']}")
+
+
+def pair_body(cell: dict, repository: str) -> str:
+    """The tracking issue body of a translation matrix cell: a summary, then its gaps grouped by category."""
+    source, target = chart.name(cell["source"]), chart.name(cell["target"])
+    counts = cell["counts"]
+    tally = (
+        f"{counts['supported']} supported, {counts['refused']} refused, {counts['wrong']} wrong and "
+        f"{counts['untested']} untested"
+    )
+    base = f"https://github.com/{repository}/blob/coverage"
+    tool = TOOLS.get(cell["target"], cell["target"])
+    lines = [
+        MARKER.format(pair_key(cell)),
+        f"{_pair_name(cell)} scores {cell['score']:.1f} %: {tally} features. A feature is supported when CrossTL "
+        f"translates the native {source} probe straight to {target} in one call and {tool} accepts the output. "
+        f"[The cell's page]({base}/{publish.page(cell)}) lists every gap, and "
+        f"[COVERAGE.md]({base}/COVERAGE.md#translation-matrix) has the whole matrix.",
+        "",
+        "The coverage workflow measures the matrix nightly, keeps this issue up to date and closes it when every "
+        "measured feature is supported, so edits to this description are overwritten. A gap is in the "
+        f"{source} frontend or the {target} code generator; the {source} input and {target} output rows show "
+        "which.",
+    ]
+    return _checklist(lines, _gaps(cell), lambda feature: "", "the cell's page")
+
+
+def _pair(plan: _Plan, cell: dict) -> None:
+    _track(
+        plan,
+        pair_key(cell),
+        pair_title(cell),
+        pair_body(cell, plan.repository),
+        pair_labels(cell),
+        _pair_name(cell),
+        cell["counts"]["refused"] + cell["counts"]["wrong"],
+    )
 
 
 def _stale(
@@ -529,6 +634,8 @@ def plan(
     bugs = {k: i.number for k, i in state.managed.items() if k.startswith("wrong/")}
     for row in rows:
         _tracking(state, row, bugs)
+    for cell in _pair_cells(report):
+        _pair(state, cell)
     _bugs(state, measured, new_bugs)
     return state.actions
 

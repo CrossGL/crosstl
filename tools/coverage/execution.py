@@ -43,12 +43,18 @@ one that reads a clock or queries a ray query, because two runs of it need not a
 Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
 defines.
 
-The two probes must write the same words, with one exception. CrossGL's ``fmod`` is the exact remainder of C and MSL,
-which the HLSL documentation also gives (``x = i * y + f``). SPIR-V's ``OpFRem`` need not compute it: the Vulkan
+The two probes must write the same words, with two exceptions, both where the native probe's compiler or runtime
+computes another value than the function the languages define. CrossGL's ``fmod`` is the exact remainder of C and
+MSL, which the HLSL documentation also gives (``x = i * y + f``). SPIR-V's ``OpFRem`` need not compute it: the Vulkan
 specification's precision table gives ``OpFRem`` the error inherited from ``x - y * trunc(x / y)``, and lavapipe
-computes that expression. So where the native probe of a CrossGL ``fmod`` runs as SPIR-V that uses ``OpFRem``, a
-translated word matches when it is the native probe's word or the exact remainder of the probe's arguments
-(:func:`remainders`). Any other word still differs.
+computes that expression. DXC lowers HLSL's ``fmod`` to DXIL as ``frac(abs(x / y)) * y``, the fraction taking the
+sign of ``x / y``, which inherits the division's error too. So where the native probe of a CrossGL ``fmod`` runs as SPIR-V that uses
+``OpFRem``, or as HLSL that calls ``fmod``, a translated word matches when it is the native probe's word or the exact
+remainder of the probe's arguments (:func:`remainders`). CrossGL's ``frexp`` returns the mantissa of C's ``frexp``,
+which keeps the sign of ``x``, as GLSL, MSL and the HLSL documentation (``x = mantissa * 2^exp``) do. DXC lowers HLSL's
+``frexp`` to DXIL as ``(bits & 0x007fffff) | 0x3f000000``, which drops the sign (its SPIR-V keeps it). So where the
+native probe runs as HLSL that calls ``frexp``, a translated word also matches when it is C's mantissa of the probe's
+argument (:func:`mantissas`). Any other word still differs.
 
 A cell of the translation matrix (:mod:`.pairs`) translates a native probe in one language into another. The two run
 on the same runtime only as SPIR-V (:func:`runs_pair`): each through its own language's reference compiler, as DXC
@@ -66,7 +72,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import lanes, lowering, validators
-from .model import Feature, Result
+from .model import Feature, Result, Type
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
 SUFFIXES = {"glsl": ".comp", "hlsl": ".hlsl", "metal": ".metal", "spirv": ".spvasm"}
@@ -118,6 +124,10 @@ _UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
 _UNREPEATABLE_HLSL = re.compile(r"\bRayQuery\s*<")
 # The SPIR-V remainder whose precision Vulkan inherits from x - y * trunc(x / y).
 _INEXACT_REMAINDER = re.compile(r"\bOpFRem\b")
+# The HLSL calls DXC lowers to DXIL as another value than the function's definition: an inexact remainder, and a
+# mantissa without the argument's sign.
+_DXIL_REMAINDER = re.compile(r"\bfmod\s*\(")
+_DXIL_MANTISSA = re.compile(r"\bfrexp\s*\(")
 DIVERGED = "computes different results from the native probe"
 REBOUND = "binds other resources than the native probe"
 REJECTED = "is rejected by the runtime"
@@ -299,24 +309,76 @@ def remainders(feature: Feature):
         len(kinds) != 2
         or directions != {"in"}
         or any(kind != result for kind in kinds)
-        or result.scalar != "float"
-        or result.opaque
-        or result.count
-        or len(result.shape) > 1
+        or not _elementwise_float(result)
     ):
         return None
-    width = result.shape[0] if result.shape else 1
+    x, y = _arguments(result, 2)
+    return np.fmod(x, y).astype(np.float32).reshape(-1).view(np.uint32)
+
+
+def mantissas(feature: Feature):
+    """The output words a probe of ``feature`` writes when it returns C's ``frexp`` mantissa of its argument, which
+    keeps the argument's sign, or ``None`` when ``feature`` is not CrossGL's ``frexp`` of a float scalar or vector.
+
+    The probe reads the argument as :func:`remainders` describes, passes a local for the exponent, and stores the
+    mantissa.
+    """
+    import numpy as np
+
+    signature = feature.signature
+    if feature.crossgl != "frexp" or signature is None:
+        return None
+    params = signature.params
+    result = signature.result
+    if (
+        len(params) != 2
+        or [param.direction for param in params] != ["in", "out"]
+        or params[0].type != result
+        or not _elementwise_float(result)
+    ):
+        return None
+    [x] = _arguments(result, 1)
+    return np.frexp(x)[0].astype(np.float32).reshape(-1).view(np.uint32)
+
+
+def _elementwise_float(kind: Type) -> bool:
+    return (
+        kind.scalar == "float"
+        and not kind.opaque
+        and not kind.count
+        and len(kind.shape) <= 1
+    )
+
+
+def _arguments(kind: Type, count: int):
+    """The ``count`` arguments of the type ``kind`` that each invocation of a probe reads, one row per invocation."""
+    import numpy as np
+
+    width = kind.shape[0] if kind.shape else 1
     data = inputs("fin")
     elements = np.arange(THREADS)[:, None] + np.arange(width)[None, :]
-    exact = np.fmod(data[elements], data[elements + width]).astype(np.float32)
-    return exact.reshape(-1).view(np.uint32)
+    return [data[elements + n * width] for n in range(count)]
+
+
+def exact_words(feature: Feature, runs_as: str, native: str):
+    """The words a translation of ``feature``'s native probe ``native`` may also write where the native probe's
+    compiler computes another value than the function's definition, or ``None`` where it must write the native
+    probe's words. ``runs_as`` is the language the runtime runs: ``spirv`` or ``hlsl`` (DXIL).
+    """
+    if runs_as == "spirv" and _INEXACT_REMAINDER.search(native):
+        return remainders(feature)
+    if runs_as == "hlsl" and _DXIL_REMAINDER.search(native):
+        return remainders(feature)
+    if runs_as == "hlsl" and _DXIL_MANTISSA.search(native):
+        return mantissas(feature)
+    return None
 
 
 def difference(native, translated, exact=None) -> str:
     """How the output words ``translated`` differ from ``native``, or an empty string when they match.
 
     Two words that are both NaN as 32-bit floats match, whatever their payload. ``exact``, when given, holds the words
-    an exact remainder writes at the start of the output (:func:`remainders`); a translated word there also matches
+    the exact result writes at the start of the output (:func:`exact_words`); a translated word there also matches
     when it is the exact one.
     """
     import numpy as np
@@ -412,14 +474,15 @@ def _execute(
 
     ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares,
     ``rebound`` is :func:`rebinding`'s objection to the translation's resources, and ``exact`` holds the words of an
-    exact remainder where the native probe computes one with ``OpFRem`` (:func:`remainders`), or ``None``.
+    exact result where the native probe's compiler computes another (:func:`exact_words`), or ``None``.
     """
     from tests.conformance import runner
 
     runs_as = "spirv" if via_spirv else language
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
     rebound, exact, skipped = {}, {}, {}
-    assemblies = []
+    # Each case's Vulkan environment, by the case's identity.
+    environments = {}
     for index, result in chunk:
         data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
         if via_spirv:
@@ -453,10 +516,7 @@ def _execute(
         if runs_as == "hlsl" and any(_UNREPEATABLE_HLSL.search(t) for t in texts):
             skipped[index] = "it reads a ray query, which no second run repeats"
             continue
-        if via_spirv:
-            assemblies += texts
-        if runs_as == "spirv" and _INEXACT_REMAINDER.search(texts[0]):
-            exact[index] = remainders(result.feature)
+        exact[index] = exact_words(result.feature, runs_as, texts[0])
         paths = []
         for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
@@ -467,32 +527,37 @@ def _execute(
         constants = CONSTANTS if block else None
         # A subgroup operation's probes run as one workgroup (:mod:`.lanes`), every other probe one per invocation.
         group = THREADS if lanes.cooperative(result.feature) else 1
-        for role, path in zip(("native", "translated"), paths):
+        for role, path, text in zip(("native", "translated"), paths, texts):
+            identity = f"{index:05d}-{role}"
             cases.append(
-                _case(
-                    f"{index:05d}-{role}",
-                    path,
-                    runs_as,
-                    data,
-                    constants,
-                    outputs,
-                    group,
-                )
+                _case(identity, path, runs_as, data, constants, outputs, group)
+            )
+            environments[identity] = validators.spirv_environment(
+                [text] if via_spirv else []
             )
         rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:
         return {}, skipped
-    # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
-    # which declares none, for Vulkan 1.1 as the validators check it.
-    records = runner.run_suite(
-        cases,
-        [runs_as],
-        ["strict"],
-        selection,
-        root,
-        reference=True,
-        environment=validators.spirv_environment(assemblies),
-    )
+    # Each module is assembled for the oldest environment that takes the SPIR-V version its compiler wrote, and a SPIR-V
+    # probe, which declares none, for Vulkan 1.1 as the validators check it. A native probe and its translation may come
+    # from different compilers: DXC's SPIR-V 1.0 decorates storage blocks with BufferBlock, which no environment from
+    # SPIR-V 1.4 on accepts, while slangc writes SPIR-V 1.5.
+    grouped: dict[str, list] = {}
+    for case in cases:
+        grouped.setdefault(environments[case.id], []).append(case)
+    records = [
+        record
+        for environment, members in sorted(grouped.items())
+        for record in runner.run_suite(
+            members,
+            [runs_as],
+            ["strict"],
+            selection,
+            root,
+            reference=True,
+            environment=environment,
+        )
+    ]
     found = {}
     for record in records:
         index, role = record["case"].split("-")
@@ -702,12 +767,41 @@ def _label(result: Result) -> str:
     return native if native == translated else f"{native} to {translated}"
 
 
+def _attempted(result: Result) -> bool:
+    """Whether :func:`run` tries to execute ``result``: a row's result in a language the harness runs, or a cell's
+    that :func:`runs_pair` allows."""
+    native, translated = languages(result)
+    return runs(native) if native == translated else runs_pair(native, translated)
+
+
+def unlowered(results: list[Result]) -> list[str]:
+    """The translation matrix cells, as ``"<source> to <target>"``, with :func:`executable` results that cannot run
+    here because an end's compiler or ``spirv-dis`` is not installed, as rust-gpu is only on the Rust leg.
+    """
+    return sorted(
+        {
+            _label(r)
+            for r in results
+            if r.into
+            and r.into != r.feature.language
+            and executable(r)
+            and _attempted(r)
+            and not all(
+                lowering.can_lower(spoken) for spoken in set(languages(r)) - {"spirv"}
+            )
+        }
+    )
+
+
 def idle(results: list[Result]) -> list[str]:
-    """The languages, or translation matrix cells as ``"<source> to <target>"``, with :func:`executable` results of
-    which none ran.
+    """The languages, or translation matrix cells as ``"<source> to <target>"``, with :func:`executable` results that
+    :func:`run` tries to execute and of which none ran.
 
     A runtime that rejects every native probe of a language, as one does for SPIR-V newer than it is told to accept,
-    runs none of them, just as a missing runtime does.
+    runs none of them, just as a missing runtime does. A cell that cannot run here (:func:`unlowered`) is not idle;
+    the caller reports it on its own.
     """
     ran = {_label(r) for r in results if r.runtime}
-    return sorted({_label(r) for r in results if executable(r)} - ran)
+    skipped = set(unlowered(results))
+    tried = {_label(r) for r in results if executable(r) and _attempted(r)}
+    return sorted(tried - skipped - ran)
