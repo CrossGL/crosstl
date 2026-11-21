@@ -537,10 +537,12 @@ class TestHipParser:
 
         function = ast.statements[0]
         assert isinstance(function, FunctionNode)
-        assert function.params == [
-            {"type": "int", "name": "argc"},
-            {"type": "const CLayout", "name": "c_layout"},
+        assert [(param["type"], param["name"]) for param in function.params] == [
+            ("int", "argc"),
+            ("const CLayout", "c_layout"),
         ]
+        assert "default" not in function.params[0]
+        assert function.params[1]["default"] is not None
 
     def test_public_hpc_training_const_static_declarations_parse(self):
         code = """
@@ -2802,7 +2804,7 @@ class TestHipParser:
             {"type": "PFN_vkGetInstanceProcAddr", "name": "loader"}
         ]
 
-    def test_default_parameter_values_are_skipped_in_parameter_lists(self):
+    def test_default_parameter_values_are_kept_in_parameter_lists(self):
         code = """
         VkInstance create_instance(const bool with_validation = true,
                                    const int flags = make_flags(1, 2)) {
@@ -2815,10 +2817,13 @@ class TestHipParser:
         ast = parser.parse()
 
         function = ast.statements[0]
-        assert function.params == [
-            {"type": "const bool", "name": "with_validation"},
-            {"type": "const int", "name": "flags"},
+        assert [(param["type"], param["name"]) for param in function.params] == [
+            ("const bool", "with_validation"),
+            ("const int", "flags"),
         ]
+        assert function.params[0]["default"] == "true"
+        assert isinstance(function.params[1]["default"], FunctionCallNode)
+        assert function.params[1]["default"].name == "make_flags"
 
     def test_resource_keyword_can_be_contextual_variable_name(self):
         code = """
