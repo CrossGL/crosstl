@@ -2009,8 +2009,12 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
         block_struct = self.structs_by_name.get(block_name)
         if block_struct is None:
             return block_name
-        if getattr(block_struct, "interface_layout", None) or getattr(
-            block_struct, "hlsl_cbuffer", False
+        # A uniform block keeps its block name, which is what the host looks it up by (glGetUniformBlockIndex),
+        # also when it has no layout qualifier, as GLSL ES 3.00 blocks usually do; its instance name is local.
+        if (
+            getattr(block_struct, "interface_layout", None)
+            or getattr(block_struct, "hlsl_cbuffer", False)
+            or self.is_descriptor_set_uniform_block_struct(block_struct)
         ):
             return block_name
         if len(uniforms) == 1 and getattr(uniforms[0], "name", None):

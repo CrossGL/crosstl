@@ -130,6 +130,9 @@ so its programs can be translated through CrossGL to the targets above.
      - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
        ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
        ``.rgen``
+   * - WebGL 2 / GLSL ES 3.00
+     - ``opengl``, named as ``webgl``, ``webgl2``, ``essl`` or ``glsl-es``
+     - the GLSL extensions; ``.webgl.glsl`` when the source backend is named
    * - Metal
      - ``metal``
      - ``.metal``, ``.msl``
@@ -169,7 +172,9 @@ are still under development.
      - Source input behavior
    * - WebGL / GLSL ES
      - ``.webgl.glsl``
-     - Rejected as target-only output; use ``.glsl`` or ``.cgl`` as input.
+     - Not read as source by its extension, so translated output is not imported
+       again; pass ``source_backend="webgl"`` (``--source-backend webgl``) to read
+       it, or use a GLSL extension such as ``.frag``.
    * - WebGPU / WGSL
      - ``.wgsl``
      - Rejected until a dedicated WGSL/WESL source frontend lands.
