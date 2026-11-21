@@ -15,11 +15,11 @@ from .array_utils import (
 )
 from .fragment_output_targets import frag_data_attachment_index
 from .metal_buffer_arrays import expand_entry_buffer_array
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_entry_return import (
     metal_entry_return_attribute,
     metal_entry_return_semantic_key,
 )
-from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import (
     metal_semantic_key,
     metal_spirv_builtin_semantic,
