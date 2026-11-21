@@ -13,6 +13,15 @@ overrides without an initializer: WebGPU then refuses to create a pipeline whose
 The overrides are module-scope declarations, so the entries of one module share them: two entries that specialize a
 dimension through different ids, or one id with different defaults, are refused, as are two dimensions of one id.
 WGSL pipeline constant ids are below 65536 (WGSL section 12.3.1.3, ``id``), so a larger id is refused.
+
+A program may also declare the specialization constant of that id itself, ``const uint size @constant_id(0) = 64u;``
+beside ``local_size_x_id = 0``, as GLSL does with ``layout(constant_id = 0)`` and as the WGSL front end writes an
+``override`` named in ``@workgroup_size``. That constant is already the module's ``@id(0) override``, and WGSL
+pipeline constant ids are unique within a module, so ``@workgroup_size`` names it instead of declaring a second
+override of the same id; its default is the constant's, as SPIR-V output's ``WorkgroupSize`` composite reads the
+constant. A ``@workgroup_size`` argument is an ``i32`` or ``u32`` and all of them have one type (WGSL section 9.3.6),
+so the overrides the module declares take that constant's type, and a constant of another type, or two of
+different types, are refused.
 """
 
 from __future__ import annotations
@@ -29,40 +38,70 @@ from .specialized_workgroup_size import (
     workgroup_size_specialization_ids,
 )
 
-__all__ = ["WorkgroupSizeOverrides", "specialized_workgroup_size"]
+__all__ = [
+    "WorkgroupSizeOverrides",
+    "specialized_workgroup_size",
+    "workgroup_size_u32_values",
+]
 
 _MAX_WGSL_ID = 65535
+_ARGUMENT_TYPES = frozenset({"i32", "u32"})
 
 
 def _override_name(axis: str) -> str:
     return f"crossgl_workgroup_size_{axis}"
 
 
-def _u32_default(value: str) -> str:
+def _default(value: str, type_name: str) -> str:
     text = str(value).strip()
     if re.fullmatch(r"[0-9]+", text):
-        return f"{text}u"
-    return f"u32({text})"
+        return f"{text}u" if type_name == "u32" else text
+    return f"{type_name}({text})"
 
 
-def _declaration(name: str, spec_id: int, value) -> str:
+def _declaration(name: str, spec_id: int, value, type_name: str = "u32") -> str:
     if value is None:
-        return f"@id({spec_id})\noverride {name}: u32;"
-    return f"@id({spec_id})\noverride {name}: u32 = {_u32_default(value)};"
+        return f"@id({spec_id})\noverride {name}: {type_name};"
+    return (
+        f"@id({spec_id})\noverride {name}: {type_name} = {_default(value, type_name)};"
+    )
 
 
-def specialized_workgroup_size(config, values):
-    """The ``@workgroup_size`` arguments and the override declarations that specialize them.
+def _argument_type(ids, constants) -> str:
+    """The type of the ``@workgroup_size`` overrides: that of the program constants it names, else ``u32``."""
+    types = {}
+    for axis, spec_id in zip("xyz", ids):
+        if spec_id in constants:
+            name, type_name = constants[spec_id]
+            if type_name not in _ARGUMENT_TYPES:
+                raise SpecializedWorkgroupSizeError(
+                    f"local_size_{axis}_id = {spec_id} names specialization constant '{name}' of type "
+                    f"{type_name or 'unknown'}; a WGSL @workgroup_size argument is an i32 or u32",
+                    target="WGSL",
+                    specialization_ids=(spec_id,),
+                    reason="workgroup-size-constant-type",
+                )
+            types[type_name] = spec_id
+    if len(types) > 1:
+        raise SpecializedWorkgroupSizeError(
+            "the specialization constants that size the workgroup have types "
+            f"{' and '.join(sorted(types))}; WGSL @workgroup_size arguments all have one type",
+            target="WGSL",
+            specialization_ids=tuple(sorted(types.values())),
+            reason="workgroup-size-constant-type",
+        )
+    return next(iter(types), "u32")
 
-    ``values`` are the three default dimensions; a dimension the stage names an id for becomes its override, and a
-    default of ``None`` leaves the override without an initializer.
-    """
+
+def _specialized_axes(config, values, constants=None):
+    """``(argument, spec id, declaration or None)`` of each dimension: ``None`` ids for fixed dimensions."""
+    constants = constants or {}
     ids = workgroup_size_specialization_ids(config, "WGSL")
-    arguments = []
-    declarations = []
+    type_name = _argument_type(ids, constants)
+    axes = []
     for axis, value, spec_id in zip("xyz", values, ids):
         if spec_id is None:
-            arguments.append(value)
+            axes.append((value, None, None))
             continue
         if spec_id > _MAX_WGSL_ID:
             raise SpecializedWorkgroupSizeError(
@@ -71,10 +110,37 @@ def specialized_workgroup_size(config, values):
                 specialization_ids=(spec_id,),
                 reason="specialization-id-out-of-range",
             )
+        if spec_id in constants:
+            # The program's own override of this id is the dimension.
+            axes.append((constants[spec_id][0], spec_id, None))
+            continue
         name = _override_name(axis)
-        arguments.append(name)
-        declarations.append(_declaration(name, spec_id, value))
-    return tuple(arguments), declarations
+        axes.append((name, spec_id, _declaration(name, spec_id, value, type_name)))
+    return axes
+
+
+def specialized_workgroup_size(config, values, constants=None):
+    """The ``@workgroup_size`` arguments and the override declarations that specialize them.
+
+    ``values`` are the three default dimensions; a dimension the stage names an id for becomes its override, and a
+    default of ``None`` leaves the override without an initializer. ``constants`` maps the id of each override the
+    program declares itself to its WGSL name and type; a dimension of such an id names it and declares nothing.
+    """
+    axes = _specialized_axes(config, values, constants)
+    arguments = tuple(argument for argument, _, _ in axes)
+    declarations = [declaration for _, _, declaration in axes if declaration]
+    return arguments, declarations
+
+
+def workgroup_size_u32_values(config, values, constants=None):
+    """The ``@workgroup_size`` arguments as the ``u32`` components ``gl_WorkGroupSize`` reads (``u32(X)`` of i32)."""
+    axes = _specialized_axes(config, values, constants)
+    ids = workgroup_size_specialization_ids(config, "WGSL")
+    signed = _argument_type(ids, constants or {}) == "i32"
+    return tuple(
+        f"u32({argument})" if signed and spec_id is not None else argument
+        for argument, spec_id, _ in axes
+    )
 
 
 class WorkgroupSizeOverrides:
@@ -95,18 +161,12 @@ class WorkgroupSizeOverrides:
             self._host_ids = host_workgroup_size_ids(self._program)
         return host_sized_workgroup_config(config, self._host_ids)
 
-    def new_declarations(self, config, values):
+    def new_declarations(self, config, values, constants=None):
         """The declarations of ``config``'s overrides that the module does not declare yet."""
-        _, declarations = specialized_workgroup_size(config, values)
-        specialized = [
-            (_override_name(axis), spec_id)
-            for axis, spec_id in zip(
-                "xyz", workgroup_size_specialization_ids(config, "WGSL")
-            )
-            if spec_id is not None
-        ]
         fresh = []
-        for (name, spec_id), declaration in zip(specialized, declarations):
+        for name, spec_id, declaration in _specialized_axes(config, values, constants):
+            if declaration is None:
+                continue
             owner = self._names_by_id.get(spec_id)
             previous = self._declared.get(name) or self._declared.get(owner)
             if previous == declaration and owner == name:

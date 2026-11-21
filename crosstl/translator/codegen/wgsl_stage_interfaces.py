@@ -17,7 +17,10 @@ from .fragment_output_targets import frag_data_attribute_index
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .stage_utils import normalize_stage_name
 from .wgsl_primitive_index import refuse_misplaced_primitive_index
-from .wgsl_specialized_workgroup_size import specialized_workgroup_size
+from .wgsl_specialized_workgroup_size import (
+    specialized_workgroup_size,
+    workgroup_size_u32_values,
+)
 from .wgsl_stage_io import (
     entry_parameter_locations,
     refuse_unmapped_system_semantic,
@@ -84,7 +87,11 @@ class WGSLStageInterfaceMixin:
         previous_function_return_type = self._current_function_return_type
         self._current_stage_name = stage_name
         self._current_workgroup_size = (
-            self.stage_workgroup_size_values(stage_node)
+            workgroup_size_u32_values(
+                self.stage_workgroup_size_config(stage_node),
+                self.stage_workgroup_size_defaults(stage_node),
+                self.workgroup_size_constants(),
+            )
             if stage_name == "compute"
             else None
         )
@@ -457,6 +464,7 @@ class WGSLStageInterfaceMixin:
         arguments, _ = specialized_workgroup_size(
             self.stage_workgroup_size_config(stage_node),
             self.stage_workgroup_size_defaults(stage_node),
+            self.workgroup_size_constants(),
         )
         return arguments
 
@@ -465,7 +473,18 @@ class WGSLStageInterfaceMixin:
         return self._workgroup_size_overrides.new_declarations(
             self.stage_workgroup_size_config(stage_node),
             self.stage_workgroup_size_defaults(stage_node),
+            self.workgroup_size_constants(),
         )
+
+    def workgroup_size_constants(self):
+        """``{id: (WGSL name, type)}`` of the program's own ``@id`` overrides, which a specialized dimension names."""
+        return {
+            spec_id: (self.module_identifier_name(name), type_name)
+            for spec_id, (
+                name,
+                type_name,
+            ) in self._specialization_plan.identified_overrides().items()
+        }
 
     def stage_workgroup_size_defaults(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
