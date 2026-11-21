@@ -45,6 +45,7 @@ from .metal_array_arguments import (
 from .metal_buffer_component_stores import (
     metal_glsl_buffer_component_refusal,
 )
+from .metal_grid_quads import collect_metal_grid_quad_widths
 from .metal_matrix_builtins import (
     MetalMatrixBuiltins,
 )
@@ -233,6 +234,7 @@ class MetalProgramStateMixin:
         self.function_stage_parameter_dependencies = {}
         self.function_metal_wave_lane_dependencies = {}
         self.function_metal_wave_lane_parameter_names = {}
+        self.metal_grid_quad_widths = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
@@ -723,6 +725,9 @@ class MetalProgramStateMixin:
         )
         wave_dependency_functions = list(all_functions) + list(
             generic_function_specializations.values()
+        )
+        self.metal_grid_quad_widths = collect_metal_grid_quad_widths(
+            self, ast, wave_dependency_functions
         )
         self.function_metal_wave_lane_dependencies = (
             self.collect_function_metal_wave_lane_dependencies(
