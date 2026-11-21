@@ -13,6 +13,7 @@ import re
 import struct
 from pathlib import Path
 
+from . import metal_textures
 from .process import run
 
 FILES = ("input.bin", "output.bin")
@@ -159,6 +160,8 @@ def execute_metal(job):
         encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
     if constants is not None:
         encoder.setBuffer_offset_atIndex_(constants, 0, block["slot"])
+    # Held until the command buffer completes.
+    textures = metal_textures.bind(Metal, device, encoder, job)
     # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
     # whole workgroups, which is the hazard the partial-threadgroup cases measure.
     encoder.dispatchThreads_threadsPerThreadgroup_(
@@ -167,6 +170,7 @@ def execute_metal(job):
     encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()
+    del textures
     if command.error() is not None:
         raise RuntimeError(f"Metal execution: {command.error()}")
     for _, buffer, filename in buffers:

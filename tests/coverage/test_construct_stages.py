@@ -1,6 +1,6 @@
 """Probes for the geometry, tessellation, mesh, task and ray-tracing stages."""
 
-from tools.coverage import constructs, probes
+from tools.coverage import constructs, probes, runner
 from tools.coverage.templates import (
     meshes,
     primitives,
@@ -513,3 +513,29 @@ def test_geometry_probes_state_each_languages_primitives_instances_and_streams()
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_metal_output_probes_translate_to_the_host_interface_of_the_native_probe():
+    """Metal reflects the arguments and stage-in members of an entry, so a CrossGL probe whose Metal translation has
+    others measures another interface than the native probe's. Metal's intersection function hands its hit back as a
+    result structure and takes no buffer, and its per-primitive colour links by location.
+    """
+    for name, line in (
+        ("intersection", "(float min_distance [[min_distance]]) {"),
+        ("mesh-per-primitive-output", "    float4 color [[user(locn0)]];"),
+    ):
+        feature = construct_feature("metal", name)
+        probe = probes.build(feature, "crossgl")
+        translated = runner.translate(probe.source, probe.suffix, "metal", "cgl")
+        assert line in probes.build(feature, "metal").source, name
+        assert line in translated, name
+        assert "[[buffer(" not in translated, name
+    # The other languages keep the probes their own native probes match.
+    assert "buffer float* outp;" in (
+        probes.build(construct_feature("hlsl", "intersection"), "crossgl").source
+    )
+    assert "vec4 color @ Color0;" in (
+        probes.build(
+            construct_feature("glsl", "mesh-per-primitive-output"), "crossgl"
+        ).source
+    )

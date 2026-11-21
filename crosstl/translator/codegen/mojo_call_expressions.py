@@ -225,6 +225,12 @@ class MojoCallExpressionMixin:
             return self.mojo_sync_call(MOJO_SYNC_BUILTINS[func_name])
         if func_name == "__shfl_down_sync":
             return self.generate_cuda_shuffle_down_call(expr.args)
+        if not self.is_user_defined_function(func_name):
+            if func_name == "__match_any_sync":
+                return self.generate_cuda_match_any_call(expr.args)
+            barrier = None if expr.args else self.mojo_subgroup_barrier_call(func_name)
+            if barrier is not None:
+                return barrier
         bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
         if bit_function is not None:
             return bit_function

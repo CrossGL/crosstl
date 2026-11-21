@@ -40,6 +40,9 @@ from crosstl.backend.Metal.deduction_operand_types import (
     is_unary_sign_position,
     operand_expression_type,
 )
+from crosstl.backend.Metal.defaulted_template_arguments import (
+    primary_template_structs_by_name,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -15129,6 +15132,8 @@ def _metal_find_implicit_template_function_calls(
     )
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
+    # Deduction compares an argument's trailing defaulted template arguments with the declared defaults.
+    template_structs_by_name: dict[str, Any] | None = None
     for function in functions:
         if (
             included is not None
@@ -15206,12 +15211,17 @@ def _metal_find_implicit_template_function_calls(
                 work_budget=work_budget,
                 include_struct_members=False,
             )
+            if template_structs_by_name is None:
+                template_structs_by_name = primary_template_structs_by_name(
+                    preprocessor, source
+                )
             inferred_arguments = _infer_plain_template_helper_arguments(
                 preprocessor,
                 template,
                 arguments,
                 call_type_environment,
                 known_return_types,
+                template_structs_by_name=template_structs_by_name,
                 static_values=preprocessor._local_integral_constants_at(
                     integral_constants,
                     call_position,
@@ -16175,7 +16185,19 @@ def _collect_metal_template_type_bindings(
     ):
         return not actual_args
     if len(expected_args) > len(actual_args):
-        return False
+        # `Tile<float, 1, 1>` names `Tile<float, 1, 1, Frag<float, 8, 8>>`, so a parameter that spells the
+        # defaulted argument deduces it from the completed list ([temp.arg.general]/9).
+        declaration = (template_structs_by_name or {}).get(expected_base.lstrip(":"))
+        completed = (
+            preprocessor._template_arguments_with_resolved_defaults(
+                declaration, list(actual_args)
+            )
+            if declaration is not None
+            else None
+        )
+        if completed is None or len(expected_args) > len(completed):
+            return False
+        actual_args = completed
 
     staged_bindings = dict(bindings)
     for expected_arg, actual_arg in zip(
@@ -27709,6 +27731,7 @@ def _crossgl_ast_for_project_target(
     source_options: Mapping[str, Any],
     source_is_materialized: bool = False,
     frozen_constants: Sequence[Mapping[str, Any]] = (),
+    entry_point: str | None = None,
 ) -> Any:
     register_default_sources()
     source_spec = SOURCE_REGISTRY.get(source_backend)
@@ -27761,7 +27784,7 @@ def _crossgl_ast_for_project_target(
         intermediate.encode("utf-8")
     ).hexdigest()
     ast = fold_frozen_specialization_branches(ast, frozen_constants)
-    apply_rule_carrying(ast, original_source_backend, target)
+    apply_rule_carrying(ast, original_source_backend, target, entry_point)
     return ast
 
 
@@ -30195,6 +30218,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
@@ -30532,6 +30556,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         if dispatch_region is not None:
                             _validate_project_dispatch_region_execution(

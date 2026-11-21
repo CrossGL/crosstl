@@ -36,6 +36,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_fields,
 )
 from .hlsl_bfloat16_vectors import hlsl_bfloat16_vector_helper_sources
+from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .union_lanes import hlsl_lane_helper_definitions
 from .union_layout import UnionLayoutCollector
 
@@ -1254,6 +1255,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                     semantic
                 ) + self.hlsl_payload_access_qualifiers(member)
                 interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
+                vk_location = hlsl_vk_location_prefix(self, member, "    ")
                 precise_prefix = self.hlsl_precise_modifier_prefix(member)
                 precise_prefix += self.hlsl_matrix_orientation_prefix(member)
                 tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
@@ -1268,7 +1270,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                         f"{interpolation_prefix}{precise_prefix}{declaration_type}",
                         member.name,
                     )
-                    code += f"    {declaration}{semantic_attr};\n"
+                    code += f"{vk_location}    {declaration}{semantic_attr};\n"
                 continue
 
             generic_fixed_array_type = None
@@ -1341,6 +1343,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                 semantic
             ) + self.hlsl_payload_access_qualifiers(member)
             interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
+            vk_location = hlsl_vk_location_prefix(self, member, "    ")
             precise_prefix = self.hlsl_precise_modifier_prefix(member)
             precise_prefix += self.hlsl_matrix_orientation_prefix(member)
             tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
@@ -1357,10 +1360,10 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                     f"{interpolation_prefix}{precise_prefix}{member_type}",
                     member.name,
                 )
-                code += f"    {declaration}{semantic_attr};\n"
+                code += f"{vk_location}    {declaration}{semantic_attr};\n"
             else:
                 code += (
-                    f"    {interpolation_prefix}{precise_prefix}{member_type} "
+                    f"{vk_location}    {interpolation_prefix}{precise_prefix}{member_type} "
                     f"{member.name}{array_syntax}{semantic_attr};\n"
                 )
         code += "};\n"

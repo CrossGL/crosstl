@@ -193,11 +193,10 @@ METAL = {
         _LOOP.format(_METAL_SAMPLE.format("tex[k]", "fin[i]")),
         params=_METAL_PARAMS.format("array<texture2d<float>, 2>"),
     ),
-    # Metal indexes an array of textures with any value and has no non-uniform qualifier.
+    # Metal indexes an array of textures with any value and has no non-uniform qualifier. The index converts the
+    # input as the CrossGL probe does: a uint conversion saturates a negative value to 0 where int keeps its sign.
     "array-of-textures-nonuniform-index": Template(
-        _NONUNIFORM.format(
-            "uint", "uint", "u", _METAL_SAMPLE.format("tex[k]", "fin[i]")
-        ),
+        _NONUNIFORM.format("int", "int", "", _METAL_SAMPLE.format("tex[k]", "fin[i]")),
         params=_METAL_PARAMS.format("array<texture2d<float>, 2>"),
     ),
     # Metal reaches a texture array of unknown length through an argument buffer: a pointer to structures that each

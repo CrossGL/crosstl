@@ -11,8 +11,8 @@ The canary runs a handful of workloads of each family through the same tests the
 full tier runs, for every target the family proves, so a change of that kind
 fails on its own pull request. The workloads cover the type paths that share the
 most translator code: bfloat16 library math in several namespaces, float16,
-complex64, narrowing casts, a looped row reduction and a quantized matrix-vector
-product.
+complex64, narrowing casts, a looped row reduction, a boolean or-reduction and a
+quantized matrix-vector product.
 
 Usage, from the repository root, with ``CROSTL_MLX_ROOT`` naming a checkout of
 ``CORPUS_COMMIT`` that holds ``mlx/backend/metal/kernels``::
@@ -84,9 +84,15 @@ FAMILIES = (
     ),
     Family("binary", ("gn2_ArcTan2bfloat16", "vv_Dividecomplex64")),
     Family("copy", ("g3_copybfloat16int8", "g2_copycomplex64uint16")),
+    # The or-reduction's source also defines boolean atomic helpers that no
+    # entry reaches; an entry-scoped translation must leave them out (#4981).
     Family(
         "reduce",
-        ("all_reduce_sumbfloat16", "row_reduce_looped_1_reduce_sumbfloat16"),
+        (
+            "all_reduce_sumbfloat16",
+            "all_reduce_orbfloat16",
+            "row_reduce_looped_1_reduce_sumbfloat16",
+        ),
     ),
     # The complete quantized proof covers the Metal round trip only.
     Family(

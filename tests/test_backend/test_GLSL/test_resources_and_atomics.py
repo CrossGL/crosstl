@@ -16009,7 +16009,8 @@ def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen(target_profile="gles").generate(shader_ast)
+    desktop = GLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "#version" not in hlsl
     assert "#extension" not in hlsl
@@ -16021,10 +16022,17 @@ def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     assert "#include <metal_stdlib>" in metal
 
     # GLSL ES has compute shaders from 3.10 (GLSL ES 3.20, section 1.1.1), so the
-    # emitted version is raised from the source's 3.00.
+    # emitted version is raised from the source's 3.00. GLSL ES 3.10 has separate
+    # shader objects in its core language, so the desktop extension line is left out.
     assert glsl.startswith("#version 310 es\n")
-    assert "#extension GL_ARB_separate_shader_objects : enable" in glsl
+    assert "GL_ARB_separate_shader_objects" not in glsl
     assert "precision highp float;" in glsl
+
+    # The opengl target writes desktop GLSL: compute shaders need GLSL 4.30, and the
+    # desktop extension line is kept.
+    assert desktop.startswith("#version 430 core\n")
+    assert "#extension GL_ARB_separate_shader_objects : enable" in desktop
+    assert "precision highp float;" in desktop
 
 
 def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():
