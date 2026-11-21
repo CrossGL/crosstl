@@ -200,7 +200,7 @@ def test_opencl_vector_component_names_become_crossgl_swizzles(tmp_path):
     for expected in (
         "v.zw",
         "v.xz",
-        "v.yw.y",
+        "var s: f32 = v.w;",
         "v.xy = v.yw",
         "v.xy",
         "v.wz",

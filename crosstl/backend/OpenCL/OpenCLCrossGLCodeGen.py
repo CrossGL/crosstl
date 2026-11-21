@@ -30,6 +30,7 @@ from ..no_contraction import (
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .array_extents import format_opencl_array_extent
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
@@ -37,6 +38,10 @@ from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .vector_components import (  # noqa: F401 - re-exported diagnostic
+    OpenCLVectorComponentMixin,
+    OpenCLVectorComponentUnsupportedError,
+)
 from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
@@ -114,13 +119,8 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
-class OpenCLVectorComponentUnsupportedError(TranslationDiagnostic):
-    """An OpenCL vector component selection that CrossGL cannot represent exactly."""
-
-    code = CODE_PREFIX + "opencl-vector-component-unsupported"
-
-
 class OpenCLToCrossGLConverter(
+    OpenCLVectorComponentMixin,
     OpenCLEnumerationMixin,
     OpenCLSizeofScopeMixin,
     OpenCLPointerResultMixin,
@@ -1363,18 +1363,6 @@ class OpenCLToCrossGLConverter(
             return "int"
         return None
 
-    def visit_MemberAccessNode(self, node):
-        width = self.opencl_vector_width(node.object)
-        swizzle = self.opencl_vector_swizzle(str(node.member), width)
-        if swizzle is not None:
-            return f"{self.visit(node.object)}.{swizzle}"
-        if width is not None and self.is_opencl_vector_component(str(node.member)):
-            raise OpenCLVectorComponentUnsupportedError(
-                f"OpenCL vector component '.{node.member}' cannot be represented "
-                f"exactly for a {width}-component vector"
-            )
-        return super().visit_MemberAccessNode(node)
-
     def expression_declared_type(self, expression):
         declared = super().expression_declared_type(expression)
         if declared is not None or not isinstance(expression, BinaryOpNode):
@@ -1394,15 +1382,6 @@ class OpenCLToCrossGLConverter(
             return left
         return None
 
-    def opencl_vector_width(self, expression):
-        if isinstance(expression, MemberAccessNode):
-            parent_width = self.opencl_vector_width(expression.object)
-            swizzle = self.opencl_vector_swizzle(str(expression.member), parent_width)
-            if swizzle is not None:
-                return len(swizzle)
-        type_name = self.expression_declared_type(expression)
-        return self.opencl_vector_type_width(type_name)
-
     def opencl_vector_type_width(self, type_name):
         if not type_name:
             return None
@@ -1414,39 +1393,6 @@ class OpenCLToCrossGLConverter(
         if match is None:
             return None
         return int(match.group(1) or match.group(2))
-
-    @staticmethod
-    def is_opencl_vector_component(member):
-        return bool(
-            re.fullmatch(r"[sS][0-9a-fA-F]+", member)
-            or member in {"lo", "hi", "even", "odd"}
-        )
-
-    def opencl_vector_swizzle(self, member, width):
-        if width is None or width > 4:
-            return None
-        numeric = re.fullmatch(r"[sS]([0-9a-fA-F]+)", member)
-        if numeric is not None:
-            indices = [int(component, 16) for component in numeric.group(1)]
-        elif member in {"lo", "hi", "even", "odd"}:
-            if width == 3 and member in {"lo", "even"}:
-                indices = [0, 1] if member == "lo" else [0, 2]
-            elif width not in {2, 4}:
-                return None
-            elif member == "lo":
-                indices = list(range(width // 2))
-            elif member == "hi":
-                indices = list(range(width // 2, width))
-            elif member == "even":
-                indices = list(range(0, width, 2))
-            else:
-                indices = list(range(1, width, 2))
-        else:
-            return None
-        if any(index >= width or index >= 4 for index in indices):
-            return None
-        components = "xyzw"
-        return "".join(components[index] for index in indices)
 
     def emit_statement(self, stmt):
         if self.emit_opencl_compare_exchanges(stmt):
@@ -1926,6 +1872,9 @@ class OpenCLToCrossGLConverter(
         else:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def format_crossgl_array_extent(self, size):
+        return format_opencl_array_extent(size, super().format_crossgl_array_extent)
 
     def convert_hip_type_to_crossgl(self, hip_type):
         if hip_type is None:
