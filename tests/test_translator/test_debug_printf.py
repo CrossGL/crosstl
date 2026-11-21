@@ -2,9 +2,9 @@
 
 ``printf(format, values...)`` is CrossGL's debug print with the Vulkan debug printf format. The GLSL and SPIR-V
 importers read GLSL's ``debugPrintfEXT`` and SPIR-V's ``NonSemantic.DebugPrintf`` as it, HLSL and Slang spell it
-``printf`` already. SPIR-V emits ``NonSemantic.DebugPrintf``, GLSL ``debugPrintfEXT`` and Metal
-``os_log_default.log`` with vector conversions written out per component. DXIL, WebGL 2 and WGSL cannot print from
-a shader and refuse it with a typed diagnostic.
+``printf`` already. SPIR-V emits ``NonSemantic.DebugPrintf``, GLSL ``debugPrintfEXT``, HLSL ``printf`` (which DXC
+compiles to SPIR-V) and Metal ``os_log_default.log`` with vector conversions written out per component. WebGL 2 and
+WGSL cannot print from a shader and refuse it with a typed diagnostic.
 """
 
 from __future__ import annotations
@@ -193,11 +193,64 @@ def test_metal_refuses_formats_os_log_cannot_print(tmp_path, body, message):
     assert caught.value.code == "project.translate.metal-debug-printf-unsupported"
 
 
-@pytest.mark.parametrize("backend", ["directx", "dx12", "webgl", "wgsl"])
+@pytest.mark.parametrize("backend", ["webgl", "wgsl"])
 def test_targets_without_a_shader_print_refuse_it(tmp_path, backend):
     with pytest.raises(DebugPrintfUnsupportedError) as caught:
         _translate(tmp_path, "print.hlsl", HLSL_PRINT, backend)
     assert caught.value.code.endswith("-debug-printf-unsupported")
+
+
+def _dxc_spirv(tmp_path, code, profile, entry):
+    # DXC compiles HLSL printf only to SPIR-V; DXIL has no print operation.
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not on PATH")
+    (tmp_path / "out.hlsl").write_text(code, encoding="utf-8")
+    _run(
+        [dxc, "-spirv", "-fspv-target-env=vulkan1.3", "-T", profile, "-E", entry]
+        + ["-HV", "2021", "out.hlsl", "-Fo", "out.spv"],
+        tmp_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "name, source, expected, profile, entry",
+    [
+        (
+            "print.cgl",
+            CROSSGL_PRINT,
+            (
+                'printf("plain %d %u 100%% \\"q\\" \\\\ \\n", 3, id);',
+                'printf("v=%v3f id=%u w=%5.2f", (v * 2.0), id, v.x);',
+            ),
+            "cs_6_9",
+            "CSMain",
+        ),
+        (
+            "print.hlsl",
+            HLSL_PRINT,
+            ('printf("Position = %v3f", pos);',),
+            "vs_6_9",
+            "VSMain",
+        ),
+        (
+            "print.frag",
+            GLSL_PRINT,
+            ('printf("v=%v3f i=%d", input.v, 3);',),
+            "ps_6_9",
+            "PSMain",
+        ),
+    ],
+)
+@pytest.mark.parametrize("backend", ["directx", "dx12"])
+def test_hlsl_prints_through_its_printf_intrinsic(
+    tmp_path, backend, name, source, expected, profile, entry
+):
+    code = _translate(tmp_path, name, source, backend)
+    for line in expected:
+        assert line in code
+    assert "debugPrintfEXT" not in code
+    _dxc_spirv(tmp_path, code, profile, entry)
 
 
 def test_a_program_function_named_printf_is_an_ordinary_call(tmp_path):
