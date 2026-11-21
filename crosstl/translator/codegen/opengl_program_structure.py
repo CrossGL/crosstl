@@ -71,6 +71,7 @@ from .glsl_refusals import stageless_entry_refusal_reason
 from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import unavailable_builtin_reasons
 from .glsl_tessellation_modes import program_control_sources
+from .glsl_view_index import lower_view_index
 from .loop_induction import (
     checked_induction_value,
     init_less_counter_loops,
@@ -1191,6 +1192,7 @@ class OpenGLProgramStructureMixin:
             )
         finally:
             self.written_foreign_type_names = None
+        code = lower_view_index(self, ast, target_stage, code)
         for reason in unavailable_builtin_reasons(
             code,
             self.GLSL_UNAVAILABLE_BUILTINS,
