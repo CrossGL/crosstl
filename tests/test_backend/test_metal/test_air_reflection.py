@@ -321,12 +321,26 @@ def test_a_compute_probe_is_compared_by_running_it_not_by_its_interface(monkeypa
     assert differences == [] and "metal" not in checked
 
 
+def _metal_features():
+    """The Metal feature list from the cached upstream sources; skips when they are not cached, as in a CI job that
+    does not restore the coverage cache."""
+    from tools.coverage import features
+    from tools.coverage.upstream import UpstreamError
+
+    try:
+        return {
+            feature.name: feature for feature in features.load("metal", offline=True)
+        }
+    except UpstreamError:
+        pytest.skip("the Metal feature sources are not cached")
+
+
 @pytest.mark.skipif(not _METAL, reason="the Metal compiler is not installed")
 def test_metal_output_of_every_graphics_probe_keeps_the_native_interface():
-    from tools.coverage import features, probes, runner
+    from tools.coverage import probes, runner
 
     checked = 0
-    for feature in features.load("metal", offline=True):
+    for feature in _metal_features().values():
         if feature.stage == "compute" or feature.name not in {
             "fragment",
             "vertex",
@@ -344,13 +358,9 @@ def test_metal_output_of_every_graphics_probe_keeps_the_native_interface():
 
 @pytest.mark.skipif(not _METAL, reason="the Metal compiler is not installed")
 def test_a_render_target_moved_by_the_translation_is_reported():
-    from tools.coverage import features, probes
+    from tools.coverage import probes
 
-    (feature,) = [
-        f
-        for f in features.load("metal", offline=True)
-        if f.name == "multiple-render-targets"
-    ]
+    feature = _metal_features()["multiple-render-targets"]
     native = probes.build(feature, "metal").source
     moved = native.replace("[[color(1)]]", "[[color(2)]]")
     assert moved != native
