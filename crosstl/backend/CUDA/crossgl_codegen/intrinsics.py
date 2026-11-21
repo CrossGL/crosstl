@@ -199,11 +199,19 @@ class CudaImportIntrinsicMixin:
             return None
 
         display_name = normalized_name.rsplit("::", 1)[-1]
-        return self.format_cuda_time_function_diagnostic(display_name, args)
+        if args:
+            return self.format_cuda_time_function_diagnostic(display_name, args)
+        # clock64() reads the multiprocessor's 64-bit cycle counter, PTX %clock64, as a long long; CrossGL's
+        # clockARB() is that counter (CUDA output writes it as clock64()). clock() reads %clock, the low 32 bits of
+        # %clock64, as an int and returns it widened to clock_t, a long (CUDA C++ Programming Guide, "Time
+        # Function"; PTX ISA, "Special Registers: %clock, %clock_hi, %clock64").
+        if display_name == "clock64":
+            return "i64(clockARB())"
+        return "i64(i32(clock2x32ARB().x))"
 
     def format_cuda_time_function_diagnostic(self, function_name, args):
         return self.refuse_import(
-            f"CUDA time function {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            f"CUDA time function {function_name}({', '.join(args)}) takes no arguments",
             "0",
         )
 

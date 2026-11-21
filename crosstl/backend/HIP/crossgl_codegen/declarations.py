@@ -5,10 +5,7 @@ import re
 from crosstl.translator.refusals import HipSourceRefusal
 
 from ...CUDA.local_memory_spaces import crossgl_zero_value
-from ...device_globals import (
-    device_memory_declaration,
-    is_device_memory,
-)
+from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
 from ..HipAst import (
     CastNode,
@@ -138,8 +135,7 @@ class HipDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.global_resource_binding_for(node),
-                "HIP",
+                lambda: self.global_resource_binding_for(node),
             )
             if declaration is not None:
                 if "__managed__" in qualifiers:

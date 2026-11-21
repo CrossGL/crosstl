@@ -1766,9 +1766,7 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
@@ -1776,17 +1774,14 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
     assert body[1].operation == "atomicMax_block"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    # A device-scoped atomic is atomic for the block too, but not for the host and peer devices.
-    assert "CUDA atomicAdd_system: CrossGL atomics are device-scoped" in message
-    assert "CUDA atomicCAS_system: CrossGL atomics are device-scoped" in message
-    assert "atomicMax_block" not in message
+    # A device-scoped atomic is atomic for the block too, so a block-scoped one imports as the CrossGL atomic. A
+    # system-scoped atomic is also atomic for the host and peer devices: it keeps its CUDA name, which CUDA and HIP
+    # output write back and the other generators refuse.
     assert "/*" not in crossgl
-    assert "atomicAdd(g_odata[0], 10)" in crossgl
+    assert "atomicAdd_system(g_odata[0], 10)" in crossgl
     assert "atomicMax(g_odata[gl_LocalInvocationID.x], old)" in crossgl
-    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
-    assert "atomicAdd_system(" not in crossgl
+    assert "atomicCAS_system(flags, 0u, 1u)" in crossgl
     assert "atomicMax_block(" not in crossgl
-    assert "atomicCAS_system(" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -2488,18 +2483,18 @@ def test_cuda_samples_device_time_functions_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert body[1].value.left.name == "::clock64"
     assert body[2].condition.left.name == "clock64"
     assert body[3].if_body[0].right.name == "clock"
-    # A clock read as 0 turns the timed wait into an endless loop; it is refused.
-    assert "CUDA time function clock64(): CrossGL has no clock counter" in message
-    assert "CUDA time function clock(): CrossGL has no clock counter" in message
-    assert "clock64() + ticks" not in crossgl
-    assert "= clock();" not in crossgl
+    # clock64() reads the 64-bit cycle counter, CrossGL clockARB(); clock() reads its low 32 bits as an int and
+    # widens them to clock_t, a long.
+    assert "timer: array<i64>" in crossgl
+    assert "var endTime: i64 = (i64(clockARB()) + ticks);" in crossgl
+    assert "while ((i64(clockARB()) < endTime))" in crossgl
+    assert "timer[gl_WorkGroupID.x] = i64(i32(clock2x32ARB().x));" in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():

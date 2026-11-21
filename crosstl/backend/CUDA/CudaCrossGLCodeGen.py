@@ -1331,11 +1331,13 @@ class CudaToCrossGLConverter(
             # __syncwarp waits for the 32 lanes of the warp; a subgroup barrier waits for a subgroup of another size
             # on most targets. It stays a CUDA call for crosstl.translator.semantics.warp to emulate or refuse.
             self.emit("__syncwarp();")
+        elif node.sync_type == "__syncwarp" and len(node.args) == 1:
+            # A mask that may name only some lanes stays a CUDA call too: CUDA output writes it back, and
+            # crosstl.translator.semantics.warp refuses it for the targets without CUDA warps.
+            self.emit(f"__syncwarp({self.visit(node.args[0])});")
         elif node.sync_type == "__syncwarp":
             args = ", ".join(self.visit(arg) for arg in node.args)
-            self.refuse_import(
-                f"CUDA __syncwarp({args}): CrossGL has no barrier over a subset of the subgroup"
-            )
+            self.refuse_import(f"CUDA __syncwarp({args}) takes one mask")
         else:
             self.refuse_import(f"CUDA {node.sync_type}() has no CrossGL form")
 
@@ -1434,6 +1436,8 @@ class CudaToCrossGLConverter(
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             **self.VECTOR1_TYPE_MAPPING,
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",

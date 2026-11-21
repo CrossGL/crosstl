@@ -1,9 +1,6 @@
 """Declarations in the CUDA to CrossGL converter: shaders, preprocessor lines, structs, enums, functions, kernels, variables, scoped name registries, packed launch arguments and shared and constant memory."""
 
-from ...device_globals import (
-    device_memory_declaration,
-    is_device_memory,
-)
+from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
 from ..CudaAst import (
     CastNode,
@@ -242,8 +239,7 @@ class CudaImportDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.allocate_global_resource_binding(),
-                "CUDA",
+                self.allocate_global_resource_binding,
             )
             if declaration is not None:
                 self.emit(declaration)

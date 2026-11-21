@@ -415,6 +415,8 @@ class HipTypeConversionMixin:
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             # Vector functions
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",
