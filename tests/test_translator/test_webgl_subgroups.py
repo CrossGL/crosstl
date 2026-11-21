@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl
@@ -33,6 +35,16 @@ def _assert_refuses_without_output(tmp_path, source, *names):
     assert not output.exists()
 
 
+def _emitted_float_helper_name(code, parameters, expression):
+    declaration = re.search(
+        rf"\bfloat (\w+)\({re.escape(parameters)}\) \{{\s*"
+        rf"return {re.escape(expression)};\s*\}}",
+        code,
+    )
+    assert declaration is not None, code
+    return declaration[1]
+
+
 @pytest.mark.parametrize(
     "barrier, desktop_spelling",
     [
@@ -63,8 +75,8 @@ def test_webgl_keeps_user_function_with_subgroup_barrier_name(name):
 
     code = WebGLCodeGen().generate(parse(source))
 
-    assert f"float {name}()" in code
-    assert f"vec4({name}()," in code
+    helper_name = _emitted_float_helper_name(code, "", "0.5")
+    assert f"vec4({helper_name}(), 0.0, 0.0, 1.0)" in code
     assert "GL_KHR_shader_subgroup" not in code
 
 
@@ -255,15 +267,20 @@ void main() {{
         code = crosstl.translate(str(source), backend=backend, format_output=False)
         assert code.startswith(f"#version {version}\n")
         assert "GL_KHR_shader_subgroup" not in code
-        assert f"struct {name} {{" in code
-        assert (
-            f"float {name}_2(float x) {{\n    return (x * {name}(2.0).amount);" in code
+        struct = re.search(r"\bstruct (\w+) \{\s*float amount;\s*\};", code)
+        assert struct is not None, code
+        struct_name = struct[1]
+        unary_name = _emitted_float_helper_name(
+            code, "float x", f"(x * {struct_name}(2.0).amount)"
         )
-        assert f"float {name}_2(float x, float y) {{\n    return (x + y);" in code
-        assert f"float {name}_(float x) {{\n    return (x - 1.0);" in code
-        assert f"{name}_2(gl_FragCoord.x)" in code
-        assert f"{name}_2(gl_FragCoord.y, 1.0)" in code
-        assert f"{name}_(gl_FragCoord.z)" in code
+        binary_name = _emitted_float_helper_name(code, "float x, float y", "(x + y)")
+        other_name = _emitted_float_helper_name(code, "float x", "(x - 1.0)")
+        assert struct_name not in {unary_name, binary_name, other_name}
+        assert other_name not in {unary_name, binary_name}
+        assert (
+            f"vec4({unary_name}(gl_FragCoord.x), {binary_name}(gl_FragCoord.y, 1.0), "
+            f"{other_name}(gl_FragCoord.z), 1.0)" in code
+        )
 
 
 def test_webgl_keeps_user_function_with_simd_alias_name():
@@ -327,8 +344,9 @@ def test_webgl_does_not_shadow_barrier_with_other_stage_helper(target_stage):
     """)
     generator = WebGLCodeGen()
 
-    assert "gl_Position = vec4(subgroupBarrier());" in generator.generate_program(
-        ast, target_stage="vertex"
-    )
+    vertex = generator.generate_program(ast, target_stage="vertex")
+    helper_name = _emitted_float_helper_name(vertex, "", "0.5")
+    assert f"gl_Position = vec4({helper_name}());" in vertex
+    assert "GL_KHR_shader_subgroup" not in vertex
     with pytest.raises(WebGLLoweringRefused, match="'subgroupBarrier'"):
         generator.generate_program(ast, target_stage=target_stage)
