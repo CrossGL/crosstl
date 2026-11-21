@@ -1,4 +1,4 @@
-"""The derivative group of a compute-like SPIR-V entry that takes derivatives or uses quad operations.
+"""The derivative group of a compute-like SPIR-V entry that takes derivatives.
 
 SPV_KHR_compute_shader_derivatives lets ``GLCompute``, ``MeshEXT`` and ``TaskEXT`` entries take derivatives and
 query an implicit level of detail. The entry declares how its invocations form quads:
@@ -16,22 +16,29 @@ The workgroup size is part of the dispatch contract: the host sizes its grid by 
 ``gl_GlobalInvocationID`` and workgroup memory are indexed by it. It is therefore never changed to fit a mode; a
 size that fits neither mode is refused.
 
-The mode also decides which invocations a quad operation (``OpGroupNonUniformQuadSwap`` and
-``OpGroupNonUniformQuadBroadcast``) reads in these execution models: the Vulkan specification forms compute quads by
-the declared derivative group, and otherwise from four consecutive subgroup invocations. HLSL Shader Model 6.6 forms
-the quads of its quad operations by the derivative rule above, and DXC declares the same mode for an entry that uses
-one, so an entry that reaches a quad operation declares the group as an entry that takes derivatives does. A
-workgroup that fits neither mode has no HLSL quad layout (DXC's DXIL output accepts such a kernel and forms its quads
-from wave lanes, and its SPIR-V output fails validation), so its quad operations keep Vulkan's subgroup quads and
-the size is not refused.
+A CrossGL stage can also declare its group with ``layout(derivative_group_quadsKHR) in;`` or
+``layout(derivative_group_linearKHR) in;`` (GL_KHR_compute_shader_derivatives; the NV spellings mean the same). The
+group decides which invocations form the quads of its derivatives and of its quad operations
+(``OpGroupNonUniformQuadSwap``, ``OpGroupNonUniformQuadBroadcast`` and the SPV_KHR_quad_control votes): the Vulkan
+specification forms compute quads by the declared group, and otherwise from four consecutive subgroup invocations,
+which is what a CrossGL stage without the layout means (#4840). A declared group therefore takes precedence over the
+rule above, and a stage whose quad operations need no derivatives declares no group.
 """
 
 from __future__ import annotations
 
-DERIVATIVES = "compute derivatives"
-QUAD_OPERATIONS = "quad operations in compute, mesh and task entries"
+from .stage_utils import stage_layout_entries
+
 QUADS = ("DerivativeGroupQuadsKHR", "ComputeDerivativeGroupQuadsKHR")
 LINEAR = ("DerivativeGroupLinearKHR", "ComputeDerivativeGroupLinearKHR")
+
+# The CrossGL stage layouts that declare a group, by the lower-case name stage_utils normalizes them to.
+DECLARED_GROUPS = {
+    "derivative_group_quadskhr": QUADS,
+    "derivative_group_quadsnv": QUADS,
+    "derivative_group_linearkhr": LINEAR,
+    "derivative_group_linearnv": LINEAR,
+}
 
 
 def compute_derivative_group(size):
@@ -44,61 +51,59 @@ def compute_derivative_group(size):
     return None
 
 
-def mark_quad_operation(generator):
-    """Record that the function being generated uses a quad operation."""
-    if generator.current_function_id is not None:
-        generator.quad_operation_function_ids.add(generator.current_function_id)
-
-
-def record_function_call(generator, callee_id):
-    """Record that the function being generated calls the function ``callee_id``."""
-    if generator.current_function_id is not None:
-        generator.function_callee_ids.setdefault(
-            generator.current_function_id, set()
-        ).add(callee_id)
-
-
-def entry_uses_quad_operations(generator, function_id) -> bool:
-    """Whether the entry ``function_id``, or a function it calls, uses a quad operation."""
-    pending = [function_id]
-    visited = set()
-    while pending:
-        current = pending.pop()
-        if current in visited:
-            continue
-        visited.add(current)
-        if current in generator.quad_operation_function_ids:
-            return True
-        pending.extend(sorted(generator.function_callee_ids.get(current, ())))
-    return False
-
-
-def entry_derivative_group_purpose(generator, function_id):
-    """Why the entry ``function_id`` needs a derivative group, or None when it needs none."""
-    if generator.requires_compute_derivatives:
-        return DERIVATIVES
-    if entry_uses_quad_operations(generator, function_id):
-        return QUAD_OPERATIONS
-    return None
-
-
-def emit_compute_derivative_group(generator, function_id, size, purpose=DERIVATIVES):
-    """Declare the derivative group of the entry ``function_id`` of workgroup ``size``.
-
-    Derivatives need a group, so a size that fits neither is refused; quad operations keep Vulkan's subgroup quads.
-    """
+def emit_compute_derivative_group(generator, function_id, size):
+    """Declare the derivative group of the entry ``function_id`` of workgroup ``size``, or refuse the size."""
     group = compute_derivative_group(size)
     if group is None:
-        if purpose == QUAD_OPERATIONS:
-            return
         x, y, z = size
         generator.refuse_lowering(
-            f"SPIR-V {purpose} need a workgroup with even x and y dimensions "
+            f"SPIR-V compute derivatives need a workgroup with even x and y dimensions "
             f"(DerivativeGroupQuadsKHR) or a multiple of four invocations (DerivativeGroupLinearKHR); "
             f"the {x}x{y}x{z} workgroup has neither, and changing it would change the dispatch"
         )
         return
     mode, capability = group
-    generator.require_extension("SPV_KHR_compute_shader_derivatives")
     generator.require_capability(capability)
+    generator.emit(f"OpExecutionMode %{function_id.id} {mode}")
+
+
+def declared_derivative_group(generator, stage):
+    """The ``(execution mode, capability)`` the stage's ``layout(derivative_group_*) in;`` declares, or None."""
+    groups = []
+    for entry in stage_layout_entries(stage, "in"):
+        group = DECLARED_GROUPS.get(str(getattr(entry, "name", "")).lower())
+        if group is not None and group not in groups:
+            groups.append(group)
+    if len(groups) > 1:
+        generator.refuse_lowering(
+            "a stage declares both layout(derivative_group_quadsKHR) and layout(derivative_group_linearKHR); "
+            "SPIR-V forms its quads one way"
+        )
+        return None
+    return groups[0] if groups else None
+
+
+def emit_declared_derivative_group(generator, function_id, group, size):
+    """Declare the group ``group`` the entry ``function_id`` names, or refuse a workgroup ``size`` it cannot divide.
+
+    ``size`` is None for a size the pipeline specializes, whose values the host must fit to the declared group, as
+    GLSL leaves them.
+    """
+    mode, capability = group
+    if size is not None:
+        x, y, z = size
+        if group == QUADS and (x % 2 or y % 2):
+            generator.refuse_lowering(
+                f"layout(derivative_group_quadsKHR) forms 2x2 quads, which need even workgroup x and y "
+                f"dimensions; the {x}x{y}x{z} workgroup has none, and changing it would change the dispatch"
+            )
+            return
+        if group == LINEAR and (x * y * z) % 4:
+            generator.refuse_lowering(
+                f"layout(derivative_group_linearKHR) forms quads of four consecutive invocations, which need a "
+                f"multiple of four invocations; the {x}x{y}x{z} workgroup has {x * y * z}"
+            )
+            return
+    generator.require_capability(capability)
+    generator.require_extension("SPV_KHR_compute_shader_derivatives")
     generator.emit(f"OpExecutionMode %{function_id.id} {mode}")

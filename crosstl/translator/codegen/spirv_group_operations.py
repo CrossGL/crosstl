@@ -10,8 +10,6 @@ from ..ast import (
     FunctionCallNode,
     MeshOpNode,
 )
-from .spirv_compute_derivative_groups import mark_quad_operation
-from .spirv_quad_votes import QUAD_VOTE_OPCODES, lower_spirv_quad_vote
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_values import (
     SPIRVAtomicFenceLoweringError,
@@ -944,9 +942,6 @@ class SpirvGroupOperationMixin:
         }:
             return self.call_group_non_uniform_quad(operation, argument_exprs, args)
 
-        if operation in QUAD_VOTE_OPCODES:
-            return lower_spirv_quad_vote(self, operation, args)
-
         self.refuse_lowering(f"{operation} is not supported by the SPIR-V backend yet")
         return self.wave_result_default(operation, args)
 
@@ -1433,7 +1428,6 @@ class SpirvGroupOperationMixin:
                 directions[operation], self.register_primitive_type("uint")
             )
             self.require_group_non_uniform("GroupNonUniformQuad")
-            mark_quad_operation(self)
             scope = self.subgroup_scope_id()
             id_value = self.get_id()
             self.emit(
@@ -1459,7 +1453,6 @@ class SpirvGroupOperationMixin:
 
         lane = self.register_constant(lane_value, self.register_primitive_type("uint"))
         self.require_group_non_uniform("GroupNonUniformQuad")
-        mark_quad_operation(self)
         scope = self.subgroup_scope_id()
         id_value = self.get_id()
         self.emit(

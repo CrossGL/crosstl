@@ -8,7 +8,6 @@ from typing import (
 )
 
 from .spirv_atomic_load_store import SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS
-from .spirv_compute_derivative_groups import record_function_call
 from .spirv_values import (
     SpirvId,
     SpirvType,
@@ -35,7 +34,6 @@ class SpirvTextureCallMixin:
         self.merge_function_interface_variables_from_callee(
             function_name, function_id.id
         )
-        record_function_call(self, function_id.id)
         value_array_indices = self.function_value_array_parameter_indices_by_id.get(
             function_id.id, set()
         )

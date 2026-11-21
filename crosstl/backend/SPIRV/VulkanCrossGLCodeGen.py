@@ -658,7 +658,30 @@ class VulkanToCrossGLConverter:
                 return "vertex"
         return "fragment"
 
+    # SPV_KHR_compute_shader_derivatives groups (the NV names are aliases) and their CrossGL stage layouts. The
+    # group also forms the quads of the entry's quad operations, so it is kept even without derivatives (#4840).
+    SPIRV_DERIVATIVE_GROUP_LAYOUTS = {
+        "DerivativeGroupQuadsKHR": "derivative_group_quadsKHR",
+        "DerivativeGroupQuadsNV": "derivative_group_quadsKHR",
+        "DerivativeGroupLinearKHR": "derivative_group_linearKHR",
+        "DerivativeGroupLinearNV": "derivative_group_linearKHR",
+    }
+
+    def spirv_derivative_group_layouts(self, node):
+        """``layout(derivative_group_quadsKHR) in;`` or the linear form for the entry's derivative group."""
+        names = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            name = self.SPIRV_DERIVATIVE_GROUP_LAYOUTS.get(mode.get("mode"))
+            if name is not None and name not in names:
+                names.append(name)
+        return [LayoutNode([(name, None)], layout_type="in") for name in names]
+
     def spirv_compute_execution_layouts(self, node):
+        return self.spirv_workgroup_size_layouts(
+            node
+        ) + self.spirv_derivative_group_layouts(node)
+
+    def spirv_workgroup_size_layouts(self, node):
         dimensions = getattr(node, "spirv_workgroup_size", None)
         if dimensions is not None:
             return [
