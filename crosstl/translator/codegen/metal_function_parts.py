@@ -18,6 +18,7 @@ from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
 )
+from .metal_raster_order_groups import metal_raster_order_group_attribute
 from .metal_varyings import (
     metal_varying_attribute,
 )
@@ -395,6 +396,9 @@ class MetalFunctionPartsMixin:
                     }
                 )
                 continue
+            param_attr += metal_raster_order_group_attribute(
+                p, shader_type, declaration
+            )
             params.append(f"{declaration}{param_attr}")
             if self.is_structured_buffer_type(
                 raw_param_type
@@ -723,7 +727,7 @@ class MetalFunctionPartsMixin:
                     )
                 )
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
+                params_str, self.current_function_name, func, shader_type="fragment"
             )
             if stage_output_parameters:
                 stage_output_struct_name = self.unique_return_wrapper_struct_name(
