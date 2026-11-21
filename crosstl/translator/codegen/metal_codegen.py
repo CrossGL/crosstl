@@ -7319,8 +7319,17 @@ class MetalCodeGen(
             # such as ``input[64]`` is that element's address in the other
             # generators, but ``simdgroup_load`` and ``simdgroup_store`` take
             # a ``device``/``threadgroup`` pointer, so take the address here.
+            # An element that is itself an array, such as ``tile[1]`` of a
+            # ``float tile[4][64]``, already decays to the pointer.
             pointer_index = 1 if operation == "load" else 0
-            if isinstance(arguments[pointer_index], ArrayAccessNode):
+            pointer = arguments[pointer_index]
+            pointee = str(self.expression_result_type(pointer) or "")
+            if (
+                isinstance(pointer, ArrayAccessNode)
+                and "[" not in pointee
+                and "*" not in pointee
+                and not pointee.startswith("ptr<")
+            ):
                 rendered[pointer_index] = f"&{rendered[pointer_index]}"
         if operation == "store":
             rendered = [rendered[1], rendered[0], *rendered[2:]]

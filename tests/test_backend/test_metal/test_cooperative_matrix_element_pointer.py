@@ -16,10 +16,13 @@ shader ElementPointer {
         layout(set = 0, binding = 0) buffer float* input;
         layout(set = 0, binding = 1) buffer float* output;
         void main() {
+            threadgroup float tile[4][64];
             CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified> m;
             cooperative_matrix_load(m, input[64], 8);
             cooperative_matrix_store(output[128], m, 8);
             cooperative_matrix_store(output, m, 8);
+            cooperative_matrix_store(tile[1], m, 8);
+            cooperative_matrix_load(m, tile[1], 8);
         }
     }
 }
@@ -36,6 +39,9 @@ def test_element_pointer_operands_take_the_element_address():
     assert "simdgroup_store(m, &output[128], 8);" in generated
     # A plain buffer pointer is already a pointer and stays unchanged.
     assert "simdgroup_store(m, output, 8);" in generated
+    # A row of a two-dimensional array decays to its first element's pointer.
+    assert "simdgroup_store(m, tile[1], 8);" in generated
+    assert "simdgroup_load(m, tile[1], 8);" in generated
 
 
 def _metal_compiler_available():
