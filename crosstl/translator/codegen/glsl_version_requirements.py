@@ -404,6 +404,9 @@ _STAGE_REQUIREMENTS = {
         ("GL_EXT_tessellation_shader", "GL_OES_tessellation_shader"),
     ),
     "compute": GLSLRequirement("the compute stage", 430, 310, _COMPUTE),
+    # GL_EXT_mesh_shader applies to GLSL 4.50 and GLSL ES 3.20.
+    "mesh": GLSLRequirement("the mesh stage", 450, 320),
+    "task": GLSLRequirement("the task stage", 450, 320),
 }
 
 # Arrays of arrays arrived in GLSL 4.30 and GLSL ES 3.10 (section 4.1.9 of both); GLSL ES has no extension for
@@ -616,6 +619,9 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
     ``stage_names`` are the stages the program defines and ``guard_macros`` maps a stage name to the macro the
     emitter guards that stage's declarations with when one artifact carries several stages.
     """
+    # Imported here: the interface tables are built from this module's GLSLRequirement.
+    from .glsl_interface_versions import interface_line_requirements, sampler_array_names
+
     stage_names = [stage for stage in stage_names if stage is not None]
     default_stage = stage_names[0] if len(stage_names) == 1 else _UNKNOWN_STAGE
     guard_stages = {macro: stage for stage, macro in (guard_macros or {}).items()}
@@ -624,6 +630,9 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
     found = {}
     body = _COMMENTS.sub("", str(code or ""))
     struct_names = frozenset(_STRUCT_NAME.findall(body))
+    sampler_arrays = sampler_array_names(body)
+    # GL_KHR_vulkan_glsl gives push-constant block members offsets at every version.
+    in_push_constants = False
     for line in body.splitlines():
         # A varying's SPIR-V location expands to nothing in an OpenGL compilation.
         stripped = strip_spirv_location_macro(line.strip())
@@ -632,6 +641,7 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
             continue
         if declares_array_of_arrays(stripped, struct_names):
             found.setdefault(ARRAYS_OF_ARRAYS, None)
+        ids = None
         if stripped.startswith("layout"):
             ids, declaration = _split_layout(stripped)
             if ids is not None:
@@ -645,6 +655,15 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
             found.setdefault(BUILTIN_FUNCTION_REQUIREMENTS[match.group(1)], None)
         for match in _TYPE_USE.finditer(stripped):
             found.setdefault(TYPE_REQUIREMENTS[match.group(1)], None)
+        if ids is not None and "push_constant" in ids:
+            in_push_constants = True
+        elif in_push_constants and stripped.startswith("}"):
+            in_push_constants = False
+        member_ids = None if in_push_constants else ids
+        for requirement in interface_line_requirements(
+            stripped, stage, member_ids, sampler_arrays
+        ):
+            found.setdefault(requirement, None)
     for requirement in stage_requirements(stage_names):
         found.setdefault(requirement, None)
     return list(found)

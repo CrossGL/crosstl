@@ -40,6 +40,11 @@ from .glsl_compute_derivative_groups import compute_derivative_group_extension_l
 from .glsl_fragment_interlock import fragment_interlock_extension_lines
 from .glsl_scalar_block_layout import scalar_block_layout_extension_line
 from .glsl_tessellation_modes import remember_scoped_control_sources
+from .glsl_version_floor import (
+    LOWEST_DESKTOP_VERSION_LINE,
+    RAY_TRACING_VERSION_LINE,
+    glsl_version_may_rise,
+)
 from .glsl_version_requirements import (
     generated_program_requirements,
     program_extensions,
@@ -479,11 +484,12 @@ class OpenGLProgramOptionMixin:
         return stage_names
 
     def default_glsl_version_line(self, ast, target_stage=None):
+        """The lowest version of desktop GLSL, from which output rises per construct (:mod:`.glsl_version_floor`)."""
         if self.glsl_stage_names(
             ast, target_stage
         ) & self.RAY_STAGE_NAMES or self.uses_ray_extension_type(ast, target_stage):
-            return "#version 460 core"
-        return "#version 450 core"
+            return RAY_TRACING_VERSION_LINE
+        return LOWEST_DESKTOP_VERSION_LINE
 
     def glsl_version_number(self, version_line):
         parts = str(version_line or "").strip().split()
@@ -496,6 +502,9 @@ class OpenGLProgramOptionMixin:
 
     def glsl_resource_binding_layouts_supported(self, version_line):
         if self.glsl_extension_enabled("GL_ARB_shading_language_420pack"):
+            return True
+        if glsl_version_may_rise(self):
+            # The binding layout raises the version line to one that has it.
             return True
 
         version_number = self.glsl_version_number(version_line)
