@@ -734,6 +734,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             *extension_methods,
             *exported_functions,
         ]
+        self.module_has_explicit_stage_entries = any(
+            self.has_explicit_stage_attribute(func) for func in functions
+        )
         local_structs = self.collect_function_local_structs(functions)
         exported_structs = [
             exp.item
@@ -970,7 +973,15 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return qualifier
         if getattr(func, "numthreads", None):
             return "compute"
+        if getattr(self, "module_has_explicit_stage_entries", False):
+            return None
         return self.stage_from_result_semantic(func) or qualifier
+
+    @staticmethod
+    def has_explicit_stage_attribute(func):
+        return bool(
+            getattr(func, "qualifier", None) or getattr(func, "numthreads", None)
+        )
 
     @staticmethod
     def stage_from_result_semantic(func):
@@ -1379,14 +1390,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
     def is_entry_like_function(self, func):
         return bool(
             self.effective_function_qualifier(func)
-            or getattr(func, "semantic", None)
             or getattr(func, "name", None) == "main"
         )
 
     def should_preserve_slang_stage_entry_name(self, func, function_qualifier):
-        return bool(
-            function_qualifier == "compute" and getattr(func, "name", None) != "main"
-        )
+        return bool(function_qualifier and getattr(func, "name", None) != "main")
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
         names = {
