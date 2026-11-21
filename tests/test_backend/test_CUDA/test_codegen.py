@@ -8384,6 +8384,71 @@ class TestCudaCodeGen:
         assert "CUDA delete q: CrossGL has no device heap" in message
         assert "delete" not in result
 
+    def test_device_new_malloc_free_are_refused(self):
+        # Device-side heap allocation has no CrossGL form, so it is refused
+        # with the same typed diagnostic as `delete` (#4684) instead of
+        # being written as calls CrossGL does not define.
+        code = """
+        struct P { float x; __device__ P(float v) : x(v) {} };
+        __global__ void k(float* o) {
+            P* p = new P(o[0]);
+            float* a = new float(o[0]);
+            float* b = new float[4];
+            float* c = (float*)malloc(16);
+            free(c);
+            auto q = std::make_unique<float>(o[0]);
+            o[0] = p->x + a[0] + b[0] + *q;
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "CUDA new P(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new f32(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new[] f32(4): CrossGL has no device heap" in message
+        assert "CUDA malloc(16): CrossGL has no device heap" in message
+        assert "CUDA free(c): CrossGL has no device heap" in message
+        assert (
+            "CUDA std::make_unique<float>(o[0]): CrossGL has no device heap" in message
+        )
+
+    def test_device_new_is_refused_through_translate(self, tmp_path):
+        # The import refusal fires before any target runs, so `--backend cgl`
+        # fails closed instead of emitting `new<P>(...)` (#4684).
+        source = tmp_path / "new.cu"
+        source.write_text(
+            "struct P { float x; __device__ P(float v) : x(v) {} };\n"
+            "__global__ void k(float* o) {\n"
+            "    P* p = new P(o[0]);\n"
+            "    o[1] = p->x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("cgl", "metal"):
+            with pytest.raises(CudaImportRefused) as refusal:
+                translate(str(source), backend=backend)
+            assert refusal.value.code == CudaImportRefused.code
+            assert "CUDA new P(o[0]): CrossGL has no device heap" in str(refusal.value)
+
+    def test_user_defined_device_malloc_and_free_are_not_refused(self):
+        # A program's own __device__ malloc and free are ordinary calls, not
+        # device heap calls, so they translate (#4684).
+        code = """
+        __device__ float free(float v) { return v * 2.0f; }
+        __device__ float malloc(float v) { return v + 1.0f; }
+        __global__ void k(float* o) {
+            o[0] = free(o[0]) + malloc(o[1]);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "f32 free(f32 v) {" in result
+        assert "f32 malloc(f32 v) {" in result
+        assert "o[0] = (free(o[0]) + malloc(o[1]));" in result
+
     def test_unique_ptr_host_allocation_conversion(self):
         code = """
         void host(int n) {

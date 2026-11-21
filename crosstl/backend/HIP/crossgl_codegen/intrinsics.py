@@ -69,6 +69,10 @@ class HipIntrinsicMixin:
         if bit_intrinsic is not None:
             return bit_intrinsic
 
+        device_heap_call = self.format_device_heap_call(func_name, args)
+        if device_heap_call is not None:
+            return device_heap_call
+
         make_unique = self.format_make_unique_call(func_name, args)
         if make_unique is not None:
             return make_unique
@@ -137,6 +141,34 @@ class HipIntrinsicMixin:
         ):
             crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_device_heap_call(self, function_name, args):
+        """Refuse ``malloc``/``free`` in device code, like ``delete`` (#4684).
+
+        CrossGL has no device heap, so a device-side heap call has no faithful
+        form. Host code keeps the ordinary call; a user-defined ``malloc`` or
+        ``free`` is not a heap call either.
+        """
+        if not self.in_device_code or not isinstance(function_name, str):
+            return None
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name not in {
+            "malloc",
+            "free",
+            "std::malloc",
+            "std::free",
+        }:
+            return None
+        if self.is_user_defined_function(
+            function_name
+        ) or self.is_user_defined_function(normalized_name):
+            return None
+        return self.refuse_import(
+            f"HIP {normalized_name}({', '.join(args)}): CrossGL has no device heap",
+            "0",
+        )
 
     def format_concrete_alias_constructor_call(self, func_name, args_str):
         """Write ``real(x)`` through an erased alias as a call of the aliased type.
