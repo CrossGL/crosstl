@@ -231,6 +231,7 @@ from .hlsl_extension_builtins import (
 from .hlsl_function_body_scans import HlslFunctionBodyScans
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters
 from .hlsl_groupshared_atomics import hlsl_groupshared_variable_names
+from .hlsl_groupshared_word_views import lower_groupshared_word_views
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
@@ -1051,6 +1052,9 @@ class HLSLCodeGen(
             if getattr(node, "is_type_alias", False)
             and node.name not in self.METAL_TYPE_ALIAS_GLOBALS
         }
+        # Groupshared arrays cannot alias another element type, so views of
+        # another width share one array of 32-bit words.
+        ast = lower_groupshared_word_views(ast)
         # Typed binary16 loads, stores and selections may change NaN payloads.
         ast = lower_half_private_storage(ast, self.map_type)
         self.hlsl_groupshared_variable_names = hlsl_groupshared_variable_names(ast)
