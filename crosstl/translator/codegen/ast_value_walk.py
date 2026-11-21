@@ -15,9 +15,10 @@ Order and timing:
   as before.
 * ``None``, strings, numbers and Booleans are skipped, as are objects without a ``__dict__`` such as dictionaries.
   The ``parent`` and ``annotations`` attributes are never followed.
-* A value may be reached along several paths and is then produced once per path. A value that contains itself has
-  no finite walk; the recursive form ran out of frames on it, and this walk raises ``RecursionError`` as soon as a
-  value recurs inside itself. Nesting deeper than the interpreter's recursion limit is walked normally.
+* A value held by one node under two attribute names (an alias such as ``FunctionCallNode.args`` of
+  ``arguments``) is followed once, under the first name. A value reached along several other paths is produced once
+  per path. A value that contains itself has no finite walk; the recursive form ran out of frames on it, and this
+  walk raises ``RecursionError`` as soon as a value recurs inside itself. Nesting deeper than the interpreter's recursion limit is walked normally.
 """
 
 from __future__ import annotations
@@ -32,9 +33,16 @@ _SKIPPED_ATTRIBUTES = frozenset({"parent", "annotations"})
 
 
 def _attribute_values(node: Any) -> Iterator[Any]:
+    # A node keeps some children under two attribute names (``FunctionCallNode.arguments`` and ``args``,
+    # ``AssignmentNode.target`` and ``left``). Following both would produce that child twice per node, and a walk
+    # over calls nested d deep would grow as 2**d.
+    seen: set[int] = set()
     for key, value in vars(node).items():
-        if key not in _SKIPPED_ATTRIBUTES:
-            yield value
+        if key in _SKIPPED_ATTRIBUTES or id(value) in seen:
+            continue
+        if not (value is None or isinstance(value, _SCALAR_TYPES)):
+            seen.add(id(value))
+        yield value
 
 
 def iter_ast_values(root: Any) -> Iterator[Any]:
