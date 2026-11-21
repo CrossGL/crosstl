@@ -38,6 +38,10 @@ class OpenCLArrayExtentUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-array-extent-unsupported"
 
 
+class _NotConstant(Exception):
+    """Signals, within this module, an extent that is not a foldable integer constant expression."""
+
+
 def _decimal_literal(match):
     body = match.group("body")
     if body.lower().startswith("0x"):
@@ -72,7 +76,7 @@ def _evaluate(node):
             return left * right
         if isinstance(op, (ast.Div, ast.FloorDiv, ast.Mod)):
             if right == 0:
-                raise ValueError("division by zero")
+                raise _NotConstant("division by zero")
             quotient = abs(left) // abs(right)
             if (left < 0) != (right < 0):
                 quotient = -quotient
@@ -87,7 +91,7 @@ def _evaluate(node):
             return left | right
         if isinstance(op, ast.BitXor):
             return left ^ right
-    raise ValueError("not an integer constant expression")
+    raise _NotConstant("not an integer constant expression")
 
 
 def fold_integer_constant_expression(text):
@@ -99,7 +103,7 @@ def fold_integer_constant_expression(text):
     python_text = python_text.replace("/", "//")
     try:
         return _evaluate(ast.parse(python_text, mode="eval"))
-    except (SyntaxError, ValueError, RecursionError):
+    except (SyntaxError, _NotConstant, RecursionError):
         return None
 
 
