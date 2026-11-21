@@ -46,6 +46,7 @@ from .generic_pointer_spaces import (
     refuse_written_generic_pointers,
 )
 from .generic_struct_utils import generic_struct_specialized_fields
+from .metal_argument_tables import assign_metal_argument_tables
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -419,6 +420,7 @@ class MetalProgramEntryMixin:
         ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
         ast = lower_metal_post_tessellation(ast, self)
+        ast = assign_metal_argument_tables(ast, self)
         ast = rename_metal_shadowing_declarations(ast, self)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)

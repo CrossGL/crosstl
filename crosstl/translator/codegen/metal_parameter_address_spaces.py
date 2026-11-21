@@ -39,6 +39,8 @@ class MetalParameterAddressSpaceMixin:
             else None
         )
         for cbuffer in self.cbuffer_variables:
+            if not self.metal_current_entry_takes(cbuffer):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -48,6 +50,8 @@ class MetalParameterAddressSpaceMixin:
                 getattr(cbuffer, "name", "<anonymous>"),
             )
         for texture_variable, binding, _, _ in self.texture_variables:
+            if not self.metal_current_entry_takes(texture_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -62,6 +66,8 @@ class MetalParameterAddressSpaceMixin:
             _,
             _,
         ) in self.acceleration_structure_variables:
+            if not self.metal_current_entry_takes(acceleration_structure_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -76,6 +82,8 @@ class MetalParameterAddressSpaceMixin:
             _,
             _,
         ) in self.visible_function_table_variables:
+            if not self.metal_current_entry_takes(visible_function_table_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -90,6 +98,8 @@ class MetalParameterAddressSpaceMixin:
             _,
             _,
         ) in self.intersection_function_table_variables:
+            if not self.metal_current_entry_takes(intersection_function_table_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -99,6 +109,8 @@ class MetalParameterAddressSpaceMixin:
                 getattr(intersection_function_table_variable, "name", "<anonymous>"),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_variables:
+            if not self.metal_current_entry_takes(buffer_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -114,6 +126,8 @@ class MetalParameterAddressSpaceMixin:
             array_size,
             _,
         ) in self.metal_buffer_resource_variables:
+            if not self.metal_current_entry_takes(buffer_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -123,6 +137,8 @@ class MetalParameterAddressSpaceMixin:
                 getattr(buffer_variable, "name", "<anonymous>"),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_length_variables:
+            if not self.metal_current_entry_takes(buffer_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -134,6 +150,8 @@ class MetalParameterAddressSpaceMixin:
                 ),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_counter_variables:
+            if not self.metal_current_entry_takes(buffer_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -145,6 +163,8 @@ class MetalParameterAddressSpaceMixin:
                 ),
             )
         for buffer_variable, binding, _, _ in self.glsl_buffer_block_variables:
+            if not self.metal_current_entry_takes(buffer_variable):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "Metal",
@@ -154,6 +174,8 @@ class MetalParameterAddressSpaceMixin:
                 getattr(buffer_variable, "name", "<anonymous>"),
             )
         for sampler_variable, binding, array_size in self.sampler_variables:
+            if not self.metal_current_entry_takes(sampler_variable):
+                continue
             sampler_name = getattr(sampler_variable, "name", None)
             if dependencies is not None and sampler_name not in dependencies:
                 continue
