@@ -249,9 +249,9 @@ def _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path):
 
     generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
 
-    assert "if (((int(exp) & 1) != 0))" in generated
+    assert "if (((int(exp_) & 1) != 0))" in generated
     assert "result = ((int(result) * int(base)) != 0);" in generated
-    assert "exp = ((int(exp) >> 1) != 0);" in generated
+    assert "exp_ = ((int(exp_) >> 1) != 0);" in generated
     assert "base = ((int(base) * int(base)) != 0);" in generated
     assert "value = notEqual((ivec3(value) * ivec3(factor)), ivec3(0));" in generated
     assert "value = notEqual((ivec3(value) >> 1), ivec3(0));" in generated
