@@ -4427,10 +4427,9 @@ class HLSLCodeGen(
                 )
             param_type = self.directx_resource_declaration_type(param_type)
             self.current_hlsl_parameter_resource_types[p.name] = param_type
-            node_declaration = self.hlsl_work_graph_parameter_declaration(
+            if node_declaration := self.hlsl_work_graph_parameter_declaration(
                 p, param_type, effective_shader_type, param_list
-            )
-            if node_declaration is not None:
+            ):
                 params.append(node_declaration)
                 continue
             if self.is_texture_type(raw_param_type) or self.is_image_type(
@@ -4707,18 +4706,9 @@ class HLSLCodeGen(
                     f"{helper_name}({group_index_name});",
                 )
         elif effective_shader_type == "node":
-            for (
-                builtin_name,
-                name,
-                param_type,
-                semantic,
-            ) in self.required_hlsl_node_builtin_parameters(func):
-                self.current_identifier_aliases[builtin_name] = name
-                params_str = self.append_hlsl_parameter_declaration(
-                    params_str, f"{param_type} {name} : {semantic}"
-                )
-                param_names.add(name)
-                self.local_variable_types[name] = param_type
+            params_str = self.append_hlsl_node_builtin_parameters(
+                func, params_str, param_names
+            )
         elif effective_shader_type == "vertex":
             explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
                 param_list
@@ -5028,18 +5018,9 @@ class HLSLCodeGen(
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
-            if effective_shader_type == "node":
-                code += self.generate_hlsl_node_attributes(
-                    func,
-                    execution_config,
-                    self.hlsl_function_declaration_name(func, entry_name),
-                )
-            else:
-                code += self.generate_hlsl_stage_attributes(
-                    func,
-                    effective_shader_type,
-                    stage_node=stage_node,
-                )
+            code += self.generate_hlsl_entry_attributes(
+                func, effective_shader_type, stage_node, execution_config, entry_name
+            )
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             if shader_attr:

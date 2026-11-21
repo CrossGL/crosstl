@@ -259,6 +259,20 @@ class HlslWorkGraphNodeMixin:
             "'@node_launch' takes one of broadcasting, coalescing and thread"
         )
 
+    def generate_hlsl_entry_attributes(
+        self, func, stage, stage_node, execution_config, entry_name
+    ):
+        """The stage attribute lines of entry ``func``: a node's (below), or any other stage's."""
+        if stage != HLSL_NODE_STAGE:
+            return self.generate_hlsl_stage_attributes(
+                func, stage, stage_node=stage_node
+            )
+        return self.generate_hlsl_node_attributes(
+            func,
+            execution_config,
+            self.hlsl_function_declaration_name(func, entry_name),
+        )
+
     def generate_hlsl_node_attributes(self, func, execution_config, declared_name):
         """The attribute lines of node entry ``func``: launch first, then the node's identity, grid and group.
 
@@ -295,6 +309,22 @@ class HlslWorkGraphNodeMixin:
             return f"[NumThreads({values[0]}, {values[1]}, {values[2]})]"
         numthreads = self.generate_compute_numthreads(execution_config).strip()
         return numthreads.replace("[numthreads(", "[NumThreads(", 1)
+
+    def append_hlsl_node_builtin_parameters(self, func, params_str, param_names):
+        """``params_str`` with a parameter for each thread-position value node entry ``func`` reads."""
+        for (
+            builtin,
+            name,
+            param_type,
+            semantic,
+        ) in self.required_hlsl_node_builtin_parameters(func):
+            self.current_identifier_aliases[builtin] = name
+            params_str = self.append_hlsl_parameter_declaration(
+                params_str, f"{param_type} {name} : {semantic}"
+            )
+            param_names.add(name)
+            self.local_variable_types[name] = param_type
+        return params_str
 
     def required_hlsl_node_builtin_parameters(self, func):
         """``(builtin, parameter, type, semantic)`` for each thread-position value node entry ``func`` reads.
