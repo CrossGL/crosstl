@@ -8,6 +8,7 @@ from ..import_exact_lookups import (
     constant_or_literal,
     keyword_safe_identifier,
 )
+from ..matrix_order_import import ROW_MAJOR_ATTRIBUTE, member_is_row_major
 from ..ray_tracing_import import (
     SpirvInstructionUnsupportedError,
     ray_variable_locations,
@@ -453,6 +454,10 @@ class VulkanGlobalMixin:
                     member_node.declaration_qualifiers = (
                         self.spirv_declaration_qualifiers(member_layout_decorations)
                     )
+                if member_is_row_major(member_decorations, type_id, member_key):
+                    member_node.declaration_qualifiers = list(
+                        getattr(member_node, "declaration_qualifiers", None) or []
+                    ) + [ROW_MAJOR_ATTRIBUTE]
                 members.append(member_node)
 
             if members:

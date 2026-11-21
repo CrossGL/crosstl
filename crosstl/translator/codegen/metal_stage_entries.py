@@ -11,6 +11,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import metal_semantic_index
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_stage_refusals import refuse_metal_stages
@@ -583,6 +584,9 @@ class MetalStageEntryMixin:
         self, member, default_member_semantics, struct_name=None
     ):
         if struct_name in self.metal_fragment_entry_output_struct_names:
+            depth = metal_conservative_depth_semantic(member)
+            if depth is not None:
+                return depth
             color = metal_fragment_output_color_semantic(self, member)
             if color is not None:
                 return color

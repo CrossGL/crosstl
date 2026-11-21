@@ -22,6 +22,7 @@ from ..MetalAst import (
     TernaryOpNode,
     VariableNode,
 )
+from ..ordered_atomics import refuse_unfenced_atomic_call
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
 from ..static_member_calls import unresolved_static_member_call_owner
 from .support import (
@@ -266,6 +267,7 @@ class MetalExpressionMixin:
         )
         if sync_call is not None:
             return sync_call
+        refuse_unfenced_atomic_call(self, expr)
         atomic_call = self.metal_atomic_function_call(
             expr.name, expr.args, is_main, getattr(expr, "source_location", None)
         )

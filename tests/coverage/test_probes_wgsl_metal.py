@@ -210,9 +210,10 @@ def test_metal_ballots_are_read_as_their_vote_integer():
     assert (
         "uint r = static_cast<quad_vote::vote_t>(quad_active_threads_mask());" in source
     )
-    # CrossGL has no mask type to read, so the operation is an IR gap, not an untested probe.
-    with pytest.raises(probes.NoSpelling, match="no type for Metal's quad_vote"):
-        probes.build(mask, "crossgl")
+    # CrossGL reads the mask its spelling computes as the same vote_t integer.
+    assert (
+        "uint r = quad_active_threads_mask();" in probes.build(mask, "crossgl").source
+    )
 
 
 def test_metal_half_arguments_are_read_from_float_buffers():
@@ -259,6 +260,14 @@ def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
     crossgl = probes.build(wide, "crossgl").source
     assert "buffer uint64_t* outp;" in crossgl
     assert "atomicMin(outp[i], a1);" in crossgl
+
+
+def test_metal_atomic_fetch_sub_probe_adds_the_negated_operand_in_crossgl():
+    (sub,) = metal.parse("metal_atomic atomic_fetch_sub int(inout int, int)\n")
+    assert "atomic_fetch_sub(&outp[i], a1);" in probes.build(sub, "metal").source
+    crossgl = probes.build(sub, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicAdd(outp[i], -(a1));" in crossgl
 
 
 def test_metal_memory_flag_probes_call_the_crossgl_operations_the_importer_writes():

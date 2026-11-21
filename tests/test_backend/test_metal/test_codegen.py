@@ -5715,7 +5715,7 @@ def test_codegen_fragment_output_attributes_canonicalize_high_mrt_and_depth_mode
     result = convert(code)
 
     assert "vec4 color @gl_FragColor7;" in result
-    assert "float depth @gl_FragDepth;" in result
+    assert f"float depth @gl_FragDepth @depth_{depth_mode};" in result
     assert "@color(7" not in result
     assert f"@depth({depth_mode})" not in result
     assert parse_crossgl(result) is not None

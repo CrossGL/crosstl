@@ -32,9 +32,11 @@ from .spirv_compute_derivative_groups import (
     emit_compute_derivative_group,
     emit_declared_derivative_group,
 )
+from .spirv_conservative_depth import depth_layout_execution_modes
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_entry_interfaces import complete_entry_point_interfaces
 from .spirv_entry_workgroup_sizes import emit_entry_local_size_id
+from .spirv_fragment_interlock import fragment_interlock_execution_mode
 from .spirv_geometry_streams import (
     geometry_output_streams,
     stream_decorations,
@@ -87,6 +89,9 @@ class SpirvModuleAssemblyMixin:
             entry_function = getattr(stage, "entry_point", None)
             if requests_early_fragment_tests(entry_function, stage):
                 self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
+            interlock_mode = fragment_interlock_execution_mode(self, function_id.id)
+            if interlock_mode is not None:
+                self.emit(f"OpExecutionMode %{function_id.id} {interlock_mode}")
             # A stage-level output variable is created before its entry function, so the interface, not the
             # function being generated when the built-in was registered, says which outputs the entry writes.
             interface_builtins = {
@@ -99,6 +104,15 @@ class SpirvModuleAssemblyMixin:
                 or "FragDepth" in interface_builtins
             ):
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
+            for mode in depth_layout_execution_modes(
+                self,
+                (
+                    variable
+                    for variable in interface_variables
+                    if variable.type.storage_class == "Output"
+                ),
+            ):
+                self.emit(f"OpExecutionMode %{function_id.id} {mode}")
             if (
                 function_id.id in self.fragment_stencil_ref_replacing_function_ids
                 or "FragStencilRefEXT" in interface_builtins
