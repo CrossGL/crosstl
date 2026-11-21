@@ -13,6 +13,7 @@ from ..integer_signedness_import import (
 from ..narrow_integer_import import (
     spirv_narrow_integer_result,
 )
+from ..operation_locals import bind_operation_local
 from ..ray_tracing_import import (
     SpirvInstructionUnsupportedError,
 )
@@ -627,6 +628,16 @@ class VulkanFunctionBodyOperationMixin:
                 expression_type_ids.get(operands[2]) or constant_types.get(operands[2]),
                 types,
                 self.spirv_vector_type_name,
+                bind=lambda role, type_name, value: bind_operation_local(
+                    self,
+                    result_id,
+                    role,
+                    type_name,
+                    value,
+                    statements,
+                    names,
+                    decorations,
+                ),
             )
             if expression is None:
                 expression = BinaryOpNode(
