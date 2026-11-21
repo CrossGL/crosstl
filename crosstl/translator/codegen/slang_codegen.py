@@ -109,6 +109,7 @@ from .slang_expression_parts import SlangExpressionPartsMixin
 from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
 from .slang_glsl_buffer_access import SlangGlslBufferAccessMixin
+from .slang_glsl_ray_interfaces import lower_slang_glsl_ray_interfaces
 from .slang_image_resources import SlangImageResourcesMixin
 from .slang_mesh_outputs import SlangMeshOutputsMixin
 from .slang_numeric_types import slang_unrepresentable_type_reason
@@ -441,6 +442,7 @@ class SlangCodeGen(
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
+        lower_slang_glsl_ray_interfaces(ast)
         try:
             return self.refusals.run(self.generate_checked_program, ast)
         finally:
