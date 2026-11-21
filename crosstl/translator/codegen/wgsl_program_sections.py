@@ -32,6 +32,9 @@ from .wgsl_generic_functions import (
 from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_helpers,
 )
+from .wgsl_matrix_resize import (
+    wgsl_matrix_resize_helpers,
+)
 from .wgsl_primitive_index import (
     PRIMITIVE_INDEX_ENABLE_DIRECTIVE,
 )
@@ -46,6 +49,10 @@ from .wgsl_specialized_workgroup_size import (
 )
 from .wgsl_stage_io import (
     vertex_output_interpolation,
+)
+from .wgsl_uniform_registers import (
+    plan_uniform_registers,
+    wgsl_uniform_register_helpers,
 )
 
 
@@ -97,6 +104,8 @@ class WGSLProgramSectionMixin:
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
+        self._matrix_resize_helpers = {}
+        self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -120,7 +129,7 @@ class WGSLProgramSectionMixin:
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
-        self._primitive_index_int_members = set()
+        self._int_builtin_members = {}
 
     def collect_wgsl_program_tables(
         self,
@@ -301,11 +310,20 @@ class WGSLProgramSectionMixin:
                 global_variable_nodes, all_function_nodes
             )
         )
+        # Blocks whose typed declaration WGSL would lay out elsewhere are read from registers
+        # (wgsl_uniform_registers); only the typed blocks need uniform forms of their structs.
+        self._uniform_registers = plan_uniform_registers(self, cbuffers, structs)
+        register_blocks = (
+            self._uniform_registers.blocks if self._uniform_registers else {}
+        )
+        typed_cbuffers = [
+            cbuffer for cbuffer in cbuffers if cbuffer.name not in register_blocks
+        ]
         self._uniform_buffer_struct_names = self.uniform_buffer_struct_names(
-            cbuffers, global_variable_nodes, stage_resource_parameters
+            typed_cbuffers, global_variable_nodes, stage_resource_parameters
         )
         self._uniform_scalar_array_wrappers = self.uniform_scalar_array_wrapper_names(
-            cbuffers, structs
+            typed_cbuffers, structs
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
@@ -432,6 +450,12 @@ class WGSLProgramSectionMixin:
         matrix_inverse_helpers = wgsl_matrix_inverse_helpers(self)
         if matrix_inverse_helpers:
             emitted_sections.append(matrix_inverse_helpers)
+        matrix_resize_helpers = wgsl_matrix_resize_helpers(self)
+        if matrix_resize_helpers:
+            emitted_sections.append(matrix_resize_helpers)
+        uniform_register_helpers = wgsl_uniform_register_helpers(self)
+        if uniform_register_helpers:
+            emitted_sections.append(uniform_register_helpers)
         half_conversion_helpers = self.generate_half_conversion_helpers()
         if half_conversion_helpers:
             emitted_sections.append(half_conversion_helpers)

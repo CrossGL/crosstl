@@ -105,8 +105,9 @@ class WGSLTypeNameMixin:
         return str(vtype)
 
     def uniform_buffer_member_type_name(self, vtype):
-        if self.is_bool_type(vtype):
-            return "u32"
+        bool_lanes = self.uniform_bool_lanes(vtype)
+        if bool_lanes is not None:
+            return "u32" if bool_lanes == 1 else f"vec{bool_lanes}<u32>"
         wrapper_name = self.uniform_scalar_array_wrapper_name(vtype)
         if wrapper_name is None:
             return self.type_name_string(vtype)

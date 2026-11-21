@@ -31,6 +31,10 @@ CURATED: dict[str, str] = {
     "hip/function/fmaxf": "GLSL.std.450:NMax",
     "metal/function/fmin": "GLSL.std.450:NMin",
     "metal/function/fmax": "GLSL.std.450:NMax",
+    # HLSL's shader execution reordering call with a coherence hint and its bit count (Shader Model 6.9), which DXC
+    # does not lower to SPIR-V ("MaybeReorderThread intrinsic function unimplemented"). It is the instruction that
+    # SPV_EXT_shader_invocation_reorder defines with the same operands, as Slang's ReorderThread lowers to.
+    "hlsl/function/dx::MaybeReorderThread": "OpReorderThreadWithHintEXT",
 }
 # Languages whose functions, or some of them, have no id of their own. They take the id of the function of the named
 # language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
@@ -44,6 +48,36 @@ BORROWED = {
     "rust": "glsl",
     "webgl": "glsl",
     "wgsl": "glsl",
+}
+# Metal's SIMD-group and quad-group functions, which CrossGL spells as Metal does, so they cannot borrow by their
+# CrossGL spelling. Each takes the id of the GLSL function that SPIRV-Cross writes it for when it compiles that
+# function's SPIR-V to MSL (spirv_msl.cpp, SPIRV-Cross vulkan-sdk-1.4.363.0). tests/coverage/test_semantic.py checks
+# every pair against SPIRV-Cross when it is installed.
+CROSS_COMPILED = {
+    "metal": {
+        "simd_sum": "subgroupAdd",
+        "simd_product": "subgroupMul",
+        "simd_min": "subgroupMin",
+        "simd_max": "subgroupMax",
+        "simd_and": "subgroupAnd",
+        "simd_or": "subgroupOr",
+        "simd_xor": "subgroupXor",
+        "simd_prefix_inclusive_sum": "subgroupInclusiveAdd",
+        "simd_prefix_exclusive_sum": "subgroupExclusiveAdd",
+        "simd_prefix_inclusive_product": "subgroupInclusiveMul",
+        "simd_prefix_exclusive_product": "subgroupExclusiveMul",
+        "simd_broadcast": "subgroupBroadcast",
+        "simd_broadcast_first": "subgroupBroadcastFirst",
+        "simd_is_first": "subgroupElect",
+        "simd_shuffle": "subgroupShuffle",
+        "simd_shuffle_xor": "subgroupShuffleXor",
+        "simd_shuffle_up": "subgroupShuffleUp",
+        "simd_shuffle_down": "subgroupShuffleDown",
+        "simd_shuffle_rotate_down": "subgroupRotate",
+        "quad_broadcast": "subgroupQuadBroadcast",
+        "quad_all": "subgroupQuadAll",
+        "quad_any": "subgroupQuadAny",
+    }
 }
 # Feature groups whose SPIR-V does not identify them: glam writes Vec3's methods in plain Rust arithmetic, so
 # ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
@@ -100,10 +134,16 @@ _BUILTIN = re.compile(r"^\s*OpDecorate\s+(%\w+)\s+BuiltIn\s+(\w+)")
 _READS = frozenset({"OpLoad", "OpAccessChain", "OpInBoundsAccessChain"})
 
 
-def instructions(assembly: str) -> Counter:
+def canonical(opcode: str) -> str:
+    """The instruction ``opcode`` is counted as: the core instruction of a :data:`_ALIASES` entry, otherwise itself."""
+    return _ALIASES.get(opcode, opcode)
+
+
+def instructions(assembly: str, aliases: bool = True) -> Counter:
     """The instructions inside function bodies, with extended instructions named ``set:instruction``. A read of a
     built-in variable also counts as ``BuiltIn:<name>``, since a function such as HLSL ``WorldRayOrigin`` lowers to
-    that read alone."""
+    that read alone. With ``aliases``, an instruction is counted as its :func:`canonical` one.
+    """
     sets: dict[str, str] = {}
     constants: dict[str, str] = {}
     builtins: dict[str, str] = {}
@@ -131,7 +171,7 @@ def instructions(assembly: str) -> Counter:
         if opcode == "OpFunctionEnd":
             inside = False
         words = operands.split()
-        token = _token(opcode, words, sets, constants)
+        token = _token(canonical(opcode) if aliases else opcode, words, sets, constants)
         if token:
             found[token] += 1
         if opcode in _READS and len(words) > 1 and words[1] in builtins:
@@ -147,7 +187,6 @@ def _token(
             return opcode
         library = sets.get(words[1], words[1])
         return "" if library.startswith("NonSemantic.") else f"{library}:{words[2]}"
-    opcode = _ALIASES.get(opcode, opcode)
     if opcode in _CONSTANT_OPERANDS:
         return f"{opcode}({','.join(constants[w] for w in words if w in constants)})"
     operation = next(

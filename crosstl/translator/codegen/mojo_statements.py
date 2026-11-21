@@ -605,6 +605,8 @@ class MojoStatementMixin:
         elif isinstance(stmt, SwitchNode):
             return self.generate_switch(stmt, indent)
         elif isinstance(stmt, ReturnNode):
+            if stmt.value is None:
+                return f"{indent_str}return\n"
             if isinstance(stmt.value, list):
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
@@ -880,11 +882,17 @@ class MojoStatementMixin:
                 for item in node.init
                 if item is not None
             )
+        elif node.init is None:
+            code = ""
         else:
             init = self.generate_statement(node.init, 0).strip()
             code = f"{indent_str}{init}\n"
-        condition = self.generate_expression(node.condition)
-        self.validate_condition_scalar(node.condition, "for condition")
+        if node.condition is None:
+            # ``for (init;; update)`` runs until a ``break``, like ``while (true)``.
+            condition = "True"
+        else:
+            condition = self.generate_expression(node.condition)
+            self.validate_condition_scalar(node.condition, "for condition")
         entry_alias_state = self.resource_access_alias_state()
 
         code += f"{indent_str}while {condition}:\n"

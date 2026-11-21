@@ -37,6 +37,7 @@ from .spirv_geometry_streams import (
 )
 from .spirv_per_vertex_builtins import lower_per_vertex_builtin_arrays
 from .spirv_specialized_workgroup_size import declare_specialized_workgroup_size
+from .spirv_union_storage import lower_union_storage
 from .spirv_values import (
     SpirvId,
     UnsupportedSPIRVFeatureError,
@@ -430,6 +431,7 @@ class SpirvModuleAssemblyMixin:
                 f"SPIR-V generation needs a ShaderNode, got {type(ast).__name__}"
             )
 
+        ast = lower_union_storage(ast, "vulkan")
         source_ast, fixed_samplers = ast, fixed_sampler_records(ast)
         validate_recursion_free(ast, "vulkan")
         separate_builtin_overloads(ast)

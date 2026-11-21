@@ -21,6 +21,7 @@ from .directx_values import (
     DirectXWorkgroupPointerError,
 )
 from .generic_function_utils import generic_function_call_name
+from .hlsl_conservative_depth import hlsl_conservative_depth_semantic
 from .hlsl_image_formats import dxc_vulkan_image_format_prefix
 from .hlsl_semantic_attributes import (
     hlsl_argument_semantic_name,
@@ -1138,6 +1139,9 @@ class DirectXAtomicResourceMixin:
         return ""
 
     def semantic_from_node(self, node):
+        conservative_depth = hlsl_conservative_depth_semantic(node)
+        if conservative_depth is not None:
+            return conservative_depth
         semantic = getattr(node, "semantic", None)
         if semantic is not None:
             return semantic
@@ -1171,6 +1175,9 @@ class DirectXAtomicResourceMixin:
         return None
 
     def hlsl_function_return_semantic(self, func):
+        conservative_depth = hlsl_conservative_depth_semantic(func)
+        if conservative_depth is not None:
+            return conservative_depth
         semantic = getattr(func, "semantic", None)
         if semantic is not None:
             return semantic
