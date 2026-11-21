@@ -599,7 +599,10 @@ class DirectedRoundingLibrary:
         return _ARITHMETIC[stem][1] if stem in _ARITHMETIC else 1
 
     def call(self, intrinsic, args):
-        """The CrossGL call of ``intrinsic`` on the rendered ``args``, converted to its parameter types as C++ does."""
+        """The CrossGL call of ``intrinsic`` on the rendered ``args``, converted to its parameter types as C++ does.
+
+        The caller has checked that ``args`` has :meth:`arity` items.
+        """
         intrinsic = str(intrinsic).lstrip(":")
         stem, mode = _split_intrinsic(intrinsic)
         if stem in _ARITHMETIC:
@@ -607,12 +610,12 @@ class DirectedRoundingLibrary:
             parameters = [parameter_type] * _ARITHMETIC[stem][1]
         else:
             parameters = [_CONVERSIONS[stem][0]]
-        if len(args) != len(parameters):
-            raise ValueError(f"{intrinsic} takes {len(parameters)} arguments")
         wrapper = self.wrappers.get(intrinsic)
         if wrapper is None:
             wrapper = self.wrappers[intrinsic] = self.name(intrinsic[2:])
-        converted = ", ".join(f"{t}({a})" for t, a in zip(parameters, args))
+        converted = ", ".join(
+            f"{t}({a})" for t, a in zip(parameters, args, strict=True)
+        )
         return f"{wrapper}({converted})"
 
     def name(self, base):
@@ -667,9 +670,14 @@ class DirectedRoundingLibrary:
                 renames[word] = candidate
         if not renames:
             return text
-        return _IDENTIFIER.sub(
-            lambda match: renames.get(match.group(0), match.group(0)), text
+        renamed = re.compile(
+            r"(?<![0-9A-Za-z_])("
+            + "|".join(
+                re.escape(word) for word in sorted(renames, key=lambda w: (-len(w), w))
+            )
+            + r")(?![0-9A-Za-z_])"
         )
+        return renamed.sub(lambda match: renames[match.group(1)], text)
 
     def ordered(self, closure):
         order = [("msb", "f64")]
