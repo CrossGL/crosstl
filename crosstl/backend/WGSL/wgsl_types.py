@@ -486,7 +486,8 @@ def crossgl_type(type_, line=None, struct_names=None) -> str:
     if isinstance(type_, Array):
         return crossgl_type(type_.elem, line, names)
     if isinstance(type_, StructType):
-        return names.get(type_.name, type_.name)
+        # A structure the module declares; ``names`` renames one whose name CrossGL reserves.
+        return names[type_.name] if type_.name in names else type_.name
     if isinstance(type_, Atomic):
         return _CROSSGL_SCALARS[type_.elem.name]
     if isinstance(type_, Sampler):

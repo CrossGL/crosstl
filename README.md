@@ -84,7 +84,7 @@ name whose extension names no language CrossTL writes is refused. `python -m cro
 | HLSL | `directx` | measured | measured |
 | Metal | `metal` | measured | measured |
 | SPIR-V assembly | `vulkan` | measured | measured |
-| WGSL | `wgsl` | measured | not offered |
+| WGSL | `wgsl` | measured | measured |
 | GLSL ES 3.00 (WebGL 2) | `webgl` | measured | measured |
 | CUDA | `cuda` | measured | measured |
 | HIP | `hip` | measured | measured |

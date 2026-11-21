@@ -13,11 +13,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from crosstl.translator.diagnostics import CODE_PREFIX
+from crosstl.translator.refusals import SourceSyntaxError
+
 __all__ = ["KEYWORDS", "Token", "WgslLexer", "WgslSyntaxError", "discover_templates"]
 
 
-class WgslSyntaxError(ValueError):
+class WgslSyntaxError(SourceSyntaxError):
     """Text that is not a WGSL module, with the line it was found on."""
+
+    code = f"{CODE_PREFIX}wgsl-syntax-error"
+    source_name = "wgsl"
 
     def __init__(self, message: str, line: int | None = None):
         self.line = line

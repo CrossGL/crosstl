@@ -116,6 +116,8 @@ _ATOMICS = {
     "atomicXor": "atomicXor",
     "atomicExchange": "atomicExchange",
 }
+# Every atomic function and its CrossGL name: CrossGL's atomic functions are GLSL's, with WGSL's names.
+_ATOMIC_CALLS = {**_ATOMICS, "atomicLoad": "atomicLoad", "atomicStore": "atomicStore"}
 _TEXTURE_FUNCTIONS = frozenset(
     """textureDimensions textureGather textureGatherCompare textureLoad textureNumLayers textureNumLevels
     textureNumSamples textureSample textureSampleBias textureSampleCompare textureSampleCompareLevel
@@ -468,7 +470,8 @@ def _emit_builtin(converter, node, arg_types, want):
                     ),
                 )
             ]
-        return f"{_RENAMED_SAME_TYPE.get(name, name)}({', '.join(args)})"
+        crossgl_name = _RENAMED_SAME_TYPE[name] if name in _RENAMED_SAME_TYPE else name
+        return f"{crossgl_name}({', '.join(args)})"
     if name in _INT_RESULT_SAME_TYPE:
         args = _emit_args(converter, node, arg_types, scalar)
         call = f"{_INT_RESULT_SAME_TYPE[name]}({', '.join(args)})"
@@ -574,7 +577,7 @@ def _emit_memory_builtin(converter, node, arg_types, result):
             )
             for arg in node.args[1:]
         ]
-        return f"{_ATOMICS.get(name, name)}({', '.join([target, *values])})"
+        return f"{_ATOMIC_CALLS[name]}({', '.join([target, *values])})"
     if name == "workgroupUniformLoad":
         return converter.hoist_uniform_load(node, result)
     if name in _TEXTURE_FUNCTIONS:

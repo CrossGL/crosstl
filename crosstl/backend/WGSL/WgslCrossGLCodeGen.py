@@ -209,7 +209,9 @@ class WgslToCrossGLConverter(ExpressionMixin):
 
     def name(self, name: str) -> str:
         """The CrossGL spelling of a name the module declares: a CrossGL keyword or ``gl_`` name is renamed."""
-        return self.renames.get(name, name)
+        if name in self.renames:
+            return self.renames[name]
+        return name
 
     def fresh(self, base: str) -> str:
         name, index = base, 0
